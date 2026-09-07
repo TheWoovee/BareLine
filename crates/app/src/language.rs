@@ -42,7 +42,8 @@ impl LanguageConfiguration {
 }
 enum WorkerResult {
     Saved,
-    Completion(CompletionResult),
+    Completion(CompletionResult, Option<String>),
+    Signatures(Vec<bareline_editor_surface::completion::Signature>),
     Folds(DocumentSnapshot, Vec<bareline_syntax::folding::Fold>, bool),
     Udl(
         bareline_syntax::udl::Definition,
@@ -64,6 +65,10 @@ impl ItemSource for Rows {
     }
 }
 pub struct LanguageController {
+    completion_generation: u64,
+    word_indexes: Arc<std::sync::Mutex<Vec<WordIndex>>>,
+    signatures: Vec<bareline_editor_surface::completion::Signature>,
+    pub signature_hint: Option<String>,
     definitions: std::collections::BTreeMap<String, Arc<bareline_syntax::udl::Definition>>,
     pub open: bool,
     pub title: String,
@@ -83,6 +88,10 @@ pub struct LanguageController {
 impl Default for LanguageController {
     fn default() -> Self {
         Self {
+            completion_generation: 0,
+            word_indexes: Default::default(),
+            signatures: Vec::new(),
+            signature_hint: None,
             open: false,
             title: String::new(),
             status: String::new(),
@@ -114,7 +123,10 @@ impl LanguageController {
     pub fn busy(&self) -> bool {
         self.receiver.is_some()
     }
-    pub fn cancel_folds(&mut self) { self.fold_cancel.cancel(); self.fold_receiver=None; }
+    pub fn cancel_folds(&mut self) {
+        self.fold_cancel.cancel();
+        self.fold_receiver = None;
+    }
     pub fn validate_definition(
         &mut self,
         snapshot: DocumentSnapshot,
@@ -196,7 +208,11 @@ impl LanguageController {
                 )
                 .collect(),
         );
-        self.rows.0.extend(self.definitions.values().map(|definition| definition.name.clone()));
+        self.rows.0.extend(
+            self.definitions
+                .values()
+                .map(|definition| definition.name.clone()),
+        );
         self.list.selected = Some(0);
     }
     pub fn close(&mut self) {
@@ -245,45 +261,97 @@ impl LanguageController {
         language: Language,
         notify: Arc<dyn Fn() + Send + Sync>,
     ) {
+        self.request_completion_configured(
+            snapshot,
+            caret,
+            language,
+            notify,
+            LanguageConfiguration::default(),
+            Vec::new(),
+            None,
+        );
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub fn request_completion_configured(
+        &mut self,
+        snapshot: DocumentSnapshot,
+        caret: usize,
+        language: Language,
+        notify: Arc<dyn Fn() + Send + Sync>,
+        config: LanguageConfiguration,
+        open_documents: Vec<DocumentSnapshot>,
+        verified_syntax: Option<bareline_syntax::SyntaxResult>,
+    ) {
+        if !config.policy.completion {
+            self.open = true;
+            self.status = "Completion is disabled for this language".into();
+            return;
+        }
+        if self.title == "Completion" {
+            self.cancel.cancel();
+            self.receiver = None;
+        }
+        self.completion_generation = self.completion_generation.wrapping_add(1);
+        let generation = self.completion_generation;
+        let indexes = self.word_indexes.clone();
+        let signatures = self.signatures.clone();
+        self.signature_hint = None;
         self.launch("Completion", notify, move |cancel| {
-            let mut start = caret.saturating_sub(128 << 10);
-            while !snapshot.is_boundary(TextOffset(start)) {
-                start += 1;
-            }
-            let mut end = (start + 256 * 1024).min(snapshot.len());
-            while !snapshot.is_boundary(TextOffset(end)) {
-                end -= 1;
-            }
-            let mut words = WordIndex::default();
-            words
-                .update(
-                    &snapshot,
-                    TextOffset(start)..TextOffset(end),
-                    CompletionLimits::default(),
-                    &cancel,
-                )
-                .map_err(|e| format!("{e:?}"))?;
-            let syntax = if start == 0 {
-                bareline_syntax::lex(
-                    snapshot.clone(),
-                    language,
-                    TextOffset(0)..TextOffset(end),
-                    None,
-                    &cancel,
-                )
-                .ok()
-            } else {
-                None
+            let limits=CompletionLimits::default();
+            let mut start=caret.saturating_sub(128<<10);
+            while !snapshot.is_boundary(TextOffset(start)) { start+=1; }
+            let mut end=(start+limits.max_scan_bytes).min(snapshot.len());
+            while !snapshot.is_boundary(TextOffset(end)) {end-=1;}
+            let range=TextOffset(start)..TextOffset(end);
+            let mut cache=indexes.lock().map_err(|_|"Completion index unavailable")?;
+            let found=cache.iter().position(|index|index.covers(&snapshot,&range));
+            let index=if let Some(index)=found {index} else {
+                let mut index=WordIndex::default();
+                index.update(&snapshot,range,limits,&cancel).map_err(|e|format!("{e:?}"))?;
+                if cache.len()>=8 {cache.remove(0);}
+                cache.push(index);cache.len()-1
             };
-            words
-                .complete(
-                    &snapshot,
-                    TextOffset(caret),
-                    language,
-                    syntax.as_ref(),
-                    CompletionLimits::default(),
-                )
-                .map(WorkerResult::Completion)
+            let syntax=if let Some(syntax)=verified_syntax.filter(|syntax|syntax.is_current(&snapshot)) {Some(syntax)} else if start==0 {
+                if let Some(definition)=config.definition.clone() {bareline_syntax::lex_udl(snapshot.clone(),definition,TextOffset(0)..TextOffset(end),None,&cancel).ok()} else {bareline_syntax::lex(snapshot.clone(),language,TextOffset(0)..TextOffset(end),None,&cancel).ok()}
+            } else {None};
+            let mut result=cache[index].complete(&snapshot,TextOffset(caret),language,syntax.as_ref(),limits).map_err(|e|format!("{e:?}"))?;
+            result.provider_generation=generation;
+            let prefix=snapshot.read(result.replacement.clone(),limits.max_scan_bytes).map_err(|e|format!("{e:?}"))?;
+            if prefix.chars().count()<config.policy.min_chars as usize {result.items.clear();return Ok(WorkerResult::Completion(result,None));}
+            let supported=syntax.as_ref().is_some_and(|syntax| syntax.range.start<=result.replacement.start && TextOffset(caret)<=syntax.range.end && !syntax.spans.iter().any(|span|span.range.start.0<=caret && caret<span.range.end.0 && matches!(span.kind,bareline_syntax::StyleKind::String|bareline_syntax::StyleKind::Comment)));
+            let mut extra=Vec::new();
+            if supported {
+                if let Some(definition)=&config.definition { extra.extend(definition.keywords.iter().cloned().map(|word|(word,bareline_editor_surface::completion::CompletionKind::Keyword,None))); }
+                extra.extend(signatures.iter().map(|signature|(signature.name.clone(),bareline_editor_surface::completion::CompletionKind::Function,Some(signature.display.clone()))));
+            }
+            if config.policy.include_open_documents {
+                for other in open_documents.into_iter().take(7).filter(|other|!other.same_document(&snapshot)) {
+                    if cancel.is_cancelled() {return Err("Completion cancelled".into());}
+                    let mut end=other.len().min(limits.max_scan_bytes);while !other.is_boundary(TextOffset(end)){end-=1;}
+                    let range=TextOffset(0)..TextOffset(end);
+                    let existing=cache.iter().position(|index|index.covers(&other,&range));
+                    let index=if let Some(index)=existing {index} else {let mut index=WordIndex::default();if index.update(&other,range,limits,&cancel).is_err(){continue;}if cache.len()>=8{cache.remove(0);}cache.push(index);cache.len()-1};
+                    extra.extend(cache[index].words().filter(|word|word.starts_with(&prefix)).take(limits.max_items).map(|word|(word.to_owned(),bareline_editor_surface::completion::CompletionKind::DocumentWord,None)));
+                }
+                result.partial=true;
+            }
+            bareline_editor_surface::completion::extend_result(&mut result,&snapshot,extra,limits).map_err(|e|format!("{e:?}"))?;
+            let hint=if config.policy.parameter_hints {bareline_editor_surface::completion::parameter_hint(&snapshot,TextOffset(caret),syntax.as_ref(),&signatures).map_err(|e|format!("{e:?}"))?.map(|(signature,argument)|format!("{} · argument {}",signature.display,argument+1))}else{None};
+            Ok(WorkerResult::Completion(result,hint))
+        });
+    }
+    pub fn import_signatures(&mut self, path: PathBuf, notify: Arc<dyn Fn() + Send + Sync>) {
+        self.launch("Static signatures", notify, move |_| {
+            use std::io::Read;
+            let mut bytes = Vec::new();
+            std::fs::File::open(path)
+                .map_err(|e| e.to_string())?
+                .take(128 * 1024 + 1)
+                .read_to_end(&mut bytes)
+                .map_err(|e| e.to_string())?;
+            let text = std::str::from_utf8(&bytes).map_err(|e| e.to_string())?;
+            bareline_editor_surface::completion::load_signatures(text, 128 * 1024, 2048)
+                .map(WorkerResult::Signatures)
                 .map_err(|e| format!("{e:?}"))
         });
     }
@@ -384,24 +452,11 @@ impl LanguageController {
             file.take(128 * 1024 + 1)
                 .read_to_end(&mut bytes)
                 .map_err(|e| e.to_string())?;
-            if cancel.is_cancelled() {
-                return Err("Import cancelled".into());
-            }
-            if bytes.len() > 128 * 1024 {
-                return Err("Language definition exceeds 128 KiB".into());
-            }
-            let text = String::from_utf8(bytes).map_err(|e| e.to_string())?;
-            let (definition, report) = if text.trim_start().starts_with('<') {
-                bareline_syntax::udl::import_notepad_xml(&text).map_err(|e| format!("{e:?}"))?
-            } else {
-                (
-                    bareline_syntax::udl::Definition::from_json(&text)
-                        .map_err(|e| format!("{e:?}"))?,
-                    Vec::new(),
-                )
-            };
-            Ok(WorkerResult::Udl(definition, report, None))
+            parse_udl_bytes(bytes,&cancel)
         });
+    }
+    pub fn import_udl_bytes(&mut self, bytes:Vec<u8>, notify:Arc<dyn Fn()+Send+Sync>) {
+        self.launch("Import Language",notify,move |cancel|parse_udl_bytes(bytes,&cancel));
     }
     pub fn poll(&mut self) -> bool {
         self.poll_definition(None)
@@ -409,18 +464,38 @@ impl LanguageController {
     pub fn poll_definition(&mut self, current: Option<&DocumentSnapshot>) -> bool {
         let primary_result = self.receiver.as_ref().and_then(|rx| rx.try_recv().ok());
         let is_fold = primary_result.is_none();
-        let Some(result) = primary_result.or_else(|| self.fold_receiver.as_ref().and_then(|rx| rx.try_recv().ok())) else {
+        let Some(result) = primary_result.or_else(|| {
+            self.fold_receiver
+                .as_ref()
+                .and_then(|rx| rx.try_recv().ok())
+        }) else {
             return false;
         };
         if !matches!(&result, Ok(WorkerResult::Folds(_, _, true))) {
-            if is_fold { self.fold_receiver = None; } else { self.receiver = None; }
+            if is_fold {
+                self.fold_receiver = None;
+            } else {
+                self.receiver = None;
+            }
         }
-        if if is_fold { self.fold_cancel.is_cancelled() } else { self.cancel.is_cancelled() } {
+        if if is_fold {
+            self.fold_cancel.is_cancelled()
+        } else {
+            self.cancel.is_cancelled()
+        } {
             return false;
         }
         match result {
             Ok(WorkerResult::Saved) => self.status = "Language definition exported".into(),
-            Ok(WorkerResult::Completion(result)) => {
+            Ok(WorkerResult::Signatures(signatures)) => {
+                self.status = format!("Loaded {} static signatures", signatures.len());
+                self.signatures = signatures;
+            }
+            Ok(WorkerResult::Completion(result, hint)) => {
+                if result.provider_generation != self.completion_generation {
+                    return false;
+                }
+                self.signature_hint = hint;
                 self.rows = Rows(result.items.iter().map(|i| i.text.clone()).collect());
                 self.status = if result.partial {
                     "Partial local index · select a suggestion before Enter/Tab"
@@ -428,6 +503,9 @@ impl LanguageController {
                     "Select a suggestion before Enter/Tab"
                 }
                 .into();
+                if let Some(hint) = &self.signature_hint {
+                    self.status = hint.clone();
+                }
                 self.completion = Some(result);
             }
             Ok(WorkerResult::Folds(snapshot, folds, partial)) => {
@@ -454,7 +532,9 @@ impl LanguageController {
                     return true;
                 }
                 if self.definitions.len() >= 128 && !self.definitions.contains_key(&definition.id) {
-                    self.status="Language catalog limit reached; existing definitions retained".into(); return true;
+                    self.status =
+                        "Language catalog limit reached; existing definitions retained".into();
+                    return true;
                 }
                 self.status = format!(
                     "Imported {} · {} mapping notes",
@@ -467,8 +547,9 @@ impl LanguageController {
                         .map(|r| format!("{:?}: {} — {}", r.kind, r.field, r.reason))
                         .collect(),
                 );
-                let definition=Arc::new(definition);
-                self.definitions.insert(definition.id.clone(),definition.clone());
+                let definition = Arc::new(definition);
+                self.definitions
+                    .insert(definition.id.clone(), definition.clone());
                 self.definition = Some(definition);
             }
             Err(error) => self.status = error,
@@ -487,8 +568,13 @@ impl LanguageController {
             let n = self.list.selected?;
             if self.choosing {
                 if n > bareline_syntax::catalog::CATALOG.len() {
-                    let definition = self.definitions.values().nth(n-bareline_syntax::catalog::CATALOG.len()-1)?.clone();
-                    self.close(); return Some(LanguageEffect::ChooseDefinition(definition));
+                    let definition = self
+                        .definitions
+                        .values()
+                        .nth(n - bareline_syntax::catalog::CATALOG.len() - 1)?
+                        .clone();
+                    self.close();
+                    return Some(LanguageEffect::ChooseDefinition(definition));
                 }
                 let language = if n == 0 {
                     Language::PlainText
@@ -506,6 +592,85 @@ impl LanguageController {
             None
         }
     }
+    pub fn accessibility_nodes(&self) -> Vec<bareline_platform::accessibility::AccessibilityNode> {
+        use bareline_platform::accessibility::{AccessibilityNode, AccessibilityRole};
+        if !self.open {
+            return Vec::new();
+        }
+        let node =
+            |id, parent, role, name: String, bounds: Rect, selected, focusable, invokable| {
+                AccessibilityNode {
+                    id,
+                    parent,
+                    role,
+                    name,
+                    value: None,
+                    bounds: [
+                        bounds.x as f64,
+                        bounds.y as f64,
+                        bounds.width as f64,
+                        bounds.height as f64,
+                    ],
+                    disabled: false,
+                    selected,
+                    expanded: None,
+                    focusable,
+                    invokable,
+                }
+            };
+        let mut nodes = vec![node(
+            70_000,
+            1,
+            AccessibilityRole::List,
+            self.title.clone(),
+            self.list.bounds,
+            false,
+            true,
+            false,
+        )];
+        for index in self.list.visible(&self.rows) {
+            nodes.push(node(
+                70_001 + index as u64,
+                70_000,
+                AccessibilityRole::ListItem,
+                self.rows.0[index].clone(),
+                self.list.row_bounds(index),
+                self.list.selected == Some(index),
+                true,
+                self.choosing || self.completion.is_some(),
+            ));
+        }
+        nodes.push(node(
+            79_999,
+            70_000,
+            AccessibilityRole::Status,
+            self.status.clone(),
+            Rect::default(),
+            false,
+            false,
+            false,
+        ));
+        nodes
+    }
+    pub fn accessibility_focus(&self) -> Option<u64> {
+        self.open.then(|| {
+            self.list
+                .selected
+                .map_or(70_000, |index| 70_001 + index as u64)
+        })
+    }
+    pub fn accessibility_select(&mut self, id: u64, invoke: bool) -> Option<LanguageEffect> {
+        let index = usize::try_from(id.checked_sub(70_001)?).ok()?;
+        if !self.open || index >= self.rows.0.len() {
+            return None;
+        }
+        self.list.selected = Some(index);
+        if invoke {
+            self.event(UiEvent::Key(Key::Enter))
+        } else {
+            None
+        }
+    }
     pub fn pointer(&mut self, p: Point) -> Option<LanguageEffect> {
         self.event(UiEvent::PointerDown(p))
     }
@@ -519,6 +684,9 @@ impl LanguageController {
             .completion
             .as_ref()
             .ok_or("Completion is unavailable")?;
+        if result.provider_generation != self.completion_generation {
+            return Err("Completion provider changed".into());
+        }
         let edit = bareline_editor_surface::completion::accept(
             snapshot,
             result,
@@ -564,6 +732,26 @@ impl LanguageController {
         );
     }
 }
+fn parse_udl_bytes(bytes:Vec<u8>,cancel:&Cancellation)->Result<WorkerResult,String> {
+            if cancel.is_cancelled() {
+                return Err("Import cancelled".into());
+            }
+            if bytes.len() > 128 * 1024 {
+                return Err("Language definition exceeds 128 KiB".into());
+            }
+            let text = String::from_utf8(bytes).map_err(|e| e.to_string())?;
+            let (definition, report) = if text.trim_start().starts_with('<') {
+                bareline_syntax::udl::import_notepad_xml(&text).map_err(|e| format!("{e:?}"))?
+            } else {
+                (
+                    bareline_syntax::udl::Definition::from_json(&text)
+                        .map_err(|e| format!("{e:?}"))?,
+                    Vec::new(),
+                )
+            };
+            Ok(WorkerResult::Udl(definition, report, None))
+
+}
 pub fn register_commands(registry: &mut bareline_commands::CommandRegistry) {
     use bareline_commands::{Action, CommandId, CommandSpec};
     for (id, title, key) in [
@@ -573,6 +761,11 @@ pub fn register_commands(registry: &mut bareline_commands::CommandRegistry) {
         ("language.udl.export", "Export User-defined Language…", ""),
         ("language.udl.preview", "Preview User-defined Language", ""),
         ("editor.completion.show", "Show Completion", "Ctrl+Space"),
+        (
+            "language.signatures.import",
+            "Import Static Signatures…",
+            "",
+        ),
         ("view.fold.all", "Fold All Known Regions", ""),
         ("view.fold.unfoldAll", "Unfold All", ""),
         ("view.fold.toggleCurrent", "Toggle Current Fold", ""),
@@ -595,5 +788,103 @@ pub fn register_commands(registry: &mut bareline_commands::CommandRegistry) {
                 action: Action::Contributed(id),
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn source(text: &str) -> DocumentSnapshot {
+        bareline_document::Document::from_utf8(
+            text,
+            bareline_document::Budget::new(1 << 20),
+            bareline_document::Budget::new(1 << 20),
+        )
+        .unwrap()
+        .snapshot()
+    }
+    #[test]
+    fn completion_policy_index_reuse_and_accessibility_invoke() {
+        let snapshot = source("foobar foo");
+        let mut controller = LanguageController::default();
+        let (tx, rx) = mpsc::channel();
+        let notify: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            let _ = tx.send(());
+        });
+        for _ in 0..2 {
+            controller.request_completion(
+                snapshot.clone(),
+                snapshot.len(),
+                Language::Rust,
+                notify.clone(),
+            );
+            rx.recv_timeout(std::time::Duration::from_secs(3)).unwrap();
+            assert!(controller.poll());
+            assert!(
+                controller
+                    .completion
+                    .as_ref()
+                    .unwrap()
+                    .items
+                    .iter()
+                    .any(|item| item.text == "foobar")
+            );
+        }
+        assert_eq!(controller.word_indexes.lock().unwrap().len(), 1);
+        controller.draw(800.0, 600.0, &mut Vec::new());
+        let rows = controller.accessibility_nodes();
+        assert!(rows.iter().any(|node| node.name == "foobar"));
+        assert!(matches!(
+            controller.accessibility_select(70_001, true),
+            Some(LanguageEffect::Accept(0))
+        ));
+        controller.close();
+        assert!(controller.accessibility_nodes().is_empty());
+        let mut config = LanguageConfiguration::default();
+        config.policy.completion = false;
+        controller.request_completion_configured(
+            snapshot,
+            10,
+            Language::Rust,
+            notify,
+            config,
+            Vec::new(),
+            None,
+        );
+        assert!(!controller.busy());
+        assert!(controller.completion.is_none());
+    }
+    #[test]
+    fn stale_provider_generation_cannot_accept() {
+        let snapshot = source("foobar foo");
+        let mut controller = LanguageController::default();
+        let cancel = Cancellation::default();
+        let mut words = WordIndex::default();
+        words
+            .update(
+                &snapshot,
+                TextOffset(0)..TextOffset(snapshot.len()),
+                CompletionLimits::default(),
+                &cancel,
+            )
+            .unwrap();
+        controller.completion = Some(
+            words
+                .complete(
+                    &snapshot,
+                    TextOffset(snapshot.len()),
+                    Language::Rust,
+                    None,
+                    CompletionLimits::default(),
+                )
+                .unwrap(),
+        );
+        controller.completion_generation = 1;
+        let set = bareline_editor_surface::Selection {
+            anchor: snapshot.len(),
+            caret: snapshot.len(),
+        }
+        .into();
+        assert!(controller.accept(&snapshot, &set, 0).is_err());
     }
 }

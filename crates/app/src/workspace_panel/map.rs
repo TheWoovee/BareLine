@@ -21,6 +21,33 @@ pub struct DocumentMap {
     bounds: Rect,
     viewport: Range<TextOffset>,
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bareline_document::{Budget, Document, DocumentBuilder};
+    #[test]
+    fn partial_map_navigation_uses_bytes_and_rejects_other_documents() {
+        let mut builder = DocumentBuilder::new(Budget::new(4096), Budget::new(4096)).unwrap();
+        builder.append("aλb\ntext").unwrap();
+        let source = builder.prefix();
+        let mut map = DocumentMap::default();
+        map.open = true;
+        map.source = Some(source.clone());
+        map.viewport = TextOffset(0)..TextOffset(4);
+        let bounds = Rect { x: 0.0, y: 0.0, width: 64.0, height: 100.0 };
+        let mut ops = Vec::new();
+        map.draw(bounds, &mut ops);
+        assert!(ops.iter().any(|op| matches!(op, DrawOp::Text { text, .. } if text == "Partial")));
+        let target = map.pointer(Point { x: 1.0, y: 25.0 }, &source).unwrap();
+        assert!(source.is_boundary(target));
+        assert_eq!(map.density.len(), 256);
+        let other = Document::from_utf8("aλb\ntext", Budget::new(4096), Budget::new(4096)).unwrap().snapshot();
+        assert_eq!(map.pointer(Point { x: 1.0, y: 25.0 }, &other), None);
+        map.clear();
+        assert!(map.cancel.load(Ordering::Relaxed));
+        assert!(map.source.is_none());
+    }
+}
 impl Default for DocumentMap {
     fn default() -> Self {
         Self {
@@ -133,6 +160,7 @@ impl DocumentMap {
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(_) => {
                     self.pending = None;
+                    changed = true;
                     break;
                 }
             }
@@ -196,13 +224,13 @@ impl DocumentMap {
                 theme.focus,
                 1.0,
             ));
-            if !source.is_complete() {
+            if !source.is_complete() || self.density.iter().any(Option::is_none) {
                 ops.push(DrawOp::Text {
                     origin: Point {
                         x: bounds.x + 2.0,
                         y: bounds.y + 2.0,
                     },
-                    text: "Partial".into(),
+                    text: if self.pending.is_some() { "Sampling" } else { "Partial" }.into(),
                     size: 10.0,
                     color: theme.text,
                 });

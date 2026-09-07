@@ -279,7 +279,7 @@ pub fn preview_disk_files(
 }
 
 struct OpenEntry {
-    id: u64,
+    active: Arc<AtomicBool>,
     path: PathBuf,
     volume: u64,
     file: u64,
@@ -287,16 +287,11 @@ struct OpenEntry {
 #[derive(Clone, Default)]
 pub struct OpenFileRegistry(Arc<Mutex<Vec<OpenEntry>>>);
 pub struct OpenFileLease {
-    registry: OpenFileRegistry,
-    id: u64,
+    active: Arc<AtomicBool>,
 }
 impl Drop for OpenFileLease {
     fn drop(&mut self) {
-        self.registry
-            .0
-            .lock()
-            .unwrap()
-            .retain(|entry| entry.id != self.id);
+        self.active.store(false, Ordering::Release);
     }
 }
 impl OpenFileRegistry {
@@ -317,21 +312,18 @@ impl OpenFileRegistry {
             }
             Err(_) => return Err(io::Error::other("file admission unavailable")),
         };
+        entries.retain(|entry| entry.active.load(Ordering::Acquire));
         if entries.len() >= 4096 {
             return Err(io::Error::other("open file admission limit"));
         }
-        static NEXT: AtomicU64 = AtomicU64::new(1);
-        let id = NEXT.fetch_add(1, Ordering::Relaxed);
+        let active = Arc::new(AtomicBool::new(true));
         entries.push(OpenEntry {
-            id,
+            active: active.clone(),
             path: canonical,
             volume: identity.volume,
             file: identity.file,
         });
-        Ok(OpenFileLease {
-            registry: self.clone(),
-            id,
-        })
+        Ok(OpenFileLease { active })
     }
 }
 #[derive(Clone, Copy)]
@@ -516,9 +508,10 @@ pub fn apply_disk_files(
             .lock()
             .map_err(|_| io::Error::other("open-file registry unavailable"))?;
         if admission.iter().any(|entry| {
-            entry.path == file.path
-                || (entry.volume == file.fingerprint.identity.volume
-                    && entry.file == file.fingerprint.identity.file)
+            entry.active.load(Ordering::Acquire)
+                && (entry.path == file.path
+                    || (entry.volume == file.fingerprint.identity.volume
+                        && entry.file == file.fingerprint.identity.file))
         }) {
             receipt.files[index].state =
                 ReceiptState::Skipped("File is open; review its document revision".into());
@@ -658,9 +651,10 @@ pub fn rollback_receipt(
             let (current, _target_ancestors) =
                 open(approved(&target, trust, true)?, platform, job)?;
             if admission.iter().any(|entry| {
-                entry.path == target
-                    || (entry.volume == current.fingerprint.identity.volume
-                        && entry.file == current.fingerprint.identity.file)
+                entry.active.load(Ordering::Acquire)
+                    && (entry.path == target
+                        || (entry.volume == current.fingerprint.identity.volume
+                            && entry.file == current.fingerprint.identity.file))
             }) {
                 return Err(io::Error::other("Target is open; close it before rollback"));
             }

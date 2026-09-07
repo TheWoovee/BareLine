@@ -7,11 +7,14 @@ mod language;
 mod launch;
 mod lifecycle;
 mod macros;
+mod migration;
 mod performance;
 mod power;
 mod recovery;
+mod search;
 mod session;
 mod settings;
+mod shell_integration;
 mod shortcuts;
 mod toolbar;
 mod update;
@@ -48,6 +51,7 @@ struct Shell {
     renderer: Option<WindowsRenderer>,
     platform: Option<WindowsPlatform>,
     accessibility: Option<bareline_platform_windows::WindowsAccessibility>,
+    shell_integration: shell_integration::ShellIntegrationRuntime,
     window: Option<Window>,
     app: App,
     palette: bareline_app::palette::PaletteController,
@@ -90,6 +94,8 @@ struct Shell {
     performance: performance::PerformanceRuntime,
     power: power::PowerRuntime,
     utilities: utilities::UtilitiesRuntime,
+    migration: migration::MigrationRuntime,
+    search: search::SearchRuntime,
 }
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut ledger = StartupLedger::default();
@@ -126,10 +132,16 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let startup_paths = launch.paths.clone();
     let mut builder = EventLoop::<usize>::with_user_event();
     let (tx, rx) = std::sync::mpsc::channel();
+    let (tray_tx, tray_rx) = std::sync::mpsc::channel();
     builder.with_msg_hook(move |message| {
         // SAFETY: winit supplies a valid MSG pointer during the hook invocation.
         if let Some(id) = unsafe { WindowsPlatform::command_message(message) } {
             let _ = tx.send(id);
+        }
+        if let Some(action) =
+            unsafe { bareline_platform_windows::shell_integration::tray_message(message) }
+        {
+            let _ = tray_tx.send(action);
         }
         false
     });
@@ -149,6 +161,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         renderer: None,
         platform: None,
         accessibility: None,
+        shell_integration: Default::default(),
         window: None,
         app: App::default(),
         palette: Default::default(),
@@ -191,7 +204,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         performance: Default::default(),
         power: Default::default(),
         utilities: Default::default(),
+        migration: Default::default(),
+        search: Default::default(),
     };
+    shell.shell_integration.portable = launch.portable;
     shell.performance.configure(launch.performance.clone());
     shell.recovery.configure(launch.recovery_path.clone());
     shell.macros.configure(
@@ -252,7 +268,11 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     bareline_settings::register_commands(&mut shell.app.commands)
         .expect("unique settings commands");
-    for command in update::commands() {
+    for command in update::commands()
+        .into_iter()
+        .chain(migration::commands())
+        .chain(shell_integration::commands())
+    {
         shell
             .app
             .commands
@@ -266,6 +286,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     lifecycle::register(&mut shell.app.commands);
     power::register(&mut shell.app.commands);
     utilities::register(&mut shell.app.commands);
+    search::register(&mut shell.app.commands);
     compare::register(&mut shell.app.commands);
     views::register(&mut shell.app.commands);
     bareline_app::macros::register_commands(&mut shell.app.commands);
@@ -284,6 +305,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     struct Handler {
         shell: Shell,
         commands: std::sync::mpsc::Receiver<usize>,
+        tray_actions:
+            std::sync::mpsc::Receiver<bareline_platform_windows::shell_integration::TrayAction>,
     }
     impl ApplicationHandler<usize> for Handler {
         fn user_event(&mut self, el: &ActiveEventLoop, _: usize) {
@@ -304,6 +327,11 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     window.request_redraw();
                 }
             }
+            if self.shell.search_pump() {
+                if let Some(window) = &self.shell.window {
+                    window.request_redraw();
+                }
+            }
             self.shell.shortcuts_pump(el);
             self.shell.record_acknowledged_inputs();
             self.shell.instance_pump(el);
@@ -311,6 +339,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             self.shell.session_pump(el);
             self.shell.recovery_pump(el);
             self.shell.lifecycle_pump(el);
+            self.shell.migration_pump(el);
+            self.shell.shell_recent_pump();
             self.shell.performance_pump(el);
             self.shell.power_pump();
             self.shell.utilities_pump(el);
@@ -356,6 +386,29 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             self.shell.window_event(el, id, event);
         }
         fn about_to_wait(&mut self, el: &ActiveEventLoop) {
+            if self.shell.search_pump() {
+                if let Some(window) = &self.shell.window {
+                    window.request_redraw();
+                }
+            }
+            while let Ok(action) = self.tray_actions.try_recv() {
+                use bareline_platform_windows::shell_integration::TrayAction;
+                if let Some(window) = &self.shell.window {
+                    window.set_visible(true);
+                    window.set_minimized(false);
+                    window.focus_window();
+                }
+                match action {
+                    TrayAction::Restore => {}
+                    TrayAction::New => self.shell.dispatch(el, Action::New),
+                    TrayAction::Open => self.shell.dispatch(el, Action::Open),
+                    TrayAction::Find => self.shell.dispatch(el, Action::Find),
+                    TrayAction::Exit => {
+                        self.shell.shell_integration.keep_in_tray = false;
+                        self.shell.request_close(el);
+                    }
+                }
+            }
             while let Ok(id) = self.commands.try_recv() {
                 if let Some(action) = self
                     .shell
@@ -404,6 +457,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut handler = Handler {
         shell,
         commands: rx,
+        tray_actions: tray_rx,
     };
     event_loop.run_app(&mut handler)?;
     if !handler.shell.failed {
@@ -674,6 +728,18 @@ impl Shell {
         self.toolbar.annotate_context(&mut context);
         self.lifecycle
             .annotate_context(&mut context, self.workspace.as_ref(), self.app.active);
+        self.migration.annotate_context(&mut context);
+        self.shell_integration.annotate_context(
+            &mut context,
+            self.workspace
+                .as_ref()
+                .and_then(|w| w.path(self.app.active))
+                .is_some(),
+            self.window
+                .as_ref()
+                .and_then(|w| w.is_visible())
+                .unwrap_or(true),
+        );
         self.macros.annotate_context(&mut context);
         context
     }
@@ -729,7 +795,13 @@ impl Shell {
         self.record_acknowledged_inputs();
         if self.settings_text_action(action)
             || self.shortcuts_action(action)
-            || (!self.palette.open && self.power_action(action))
+            || (!self.palette.open
+                && (self.power.open
+                    || self
+                        .workspace
+                        .as_ref()
+                        .is_none_or(|w| !w.find.has_focus() && !w.search_focus))
+                && self.power_action(action))
         {
             return;
         }
@@ -819,6 +891,21 @@ impl Shell {
         }
         match action {
             Action::Contributed(id) => {
+                if id.0 == "search.folder" && !self.ensure_workspace(el) {
+                    return;
+                }
+                if self.search_command(id.0) {
+                    if let Some(window) = &self.window {
+                        window.request_redraw();
+                    }
+                    return;
+                }
+                if self.migration_dispatch(el, id.0) || self.shell_integration_command(id.0) {
+                    if let Some(window) = &self.window {
+                        window.request_redraw();
+                    }
+                    return;
+                }
                 if id.0 == "internal.dynamic.invoke" {
                     if let Some(identity) = self.palette.take_dynamic_activation()
                         && let Err(error) = self.extensions_invoke_contribution(identity)
@@ -1085,7 +1172,10 @@ impl Shell {
                     let platform = self.platform.as_ref().unwrap();
                     if action == Action::Paste {
                         match platform.clipboard_text() {
-                            Ok(text) => editor.commit(text),
+                            Ok(text) => editor.commit_with_origin(
+                                text,
+                                bareline_document::history::EditOrigin::Paste,
+                            ),
                             Err(_) => {
                                 editor.error = Some(
                                     "Clipboard text is unavailable or exceeds the 4 MiB limit."
@@ -1268,6 +1358,7 @@ impl ApplicationHandler for Shell {
         if self.recovery_event(el, &event)
             || self.macros_event(el, &event)
             || self.settings_keymap_event(el, &event)
+            || self.utilities_event(el, &event)
             || self.power_event(el, &event)
             || self.shortcuts_event(el, &event)
             || self.toolbar_event(el, &event)
@@ -1281,7 +1372,11 @@ impl ApplicationHandler for Shell {
             return;
         }
         match event {
-            WindowEvent::CloseRequested => self.request_close(el),
+            WindowEvent::CloseRequested => {
+                if !self.shell_integration.keep_in_tray || self.hide_to_tray().is_err() {
+                    self.request_close(el);
+                }
+            }
             WindowEvent::ModifiersChanged(m) => self.modifiers = m.state(),
             WindowEvent::CursorMoved { position, .. } => {
                 let logical =
@@ -2118,6 +2213,12 @@ impl ApplicationHandler for Shell {
                     size.height as f32 / scale,
                     &mut operations,
                 );
+                if let Some(caret) = self.extensions.ime_caret() {
+                    window.set_ime_cursor_area(
+                        LogicalPosition::new(caret.x as f64, caret.y as f64),
+                        LogicalSize::new(caret.width as f64, caret.height as f64),
+                    );
+                }
                 if let Err(error) = self.language.draw(
                     renderer,
                     size.width as f32 / scale,
@@ -2191,6 +2292,12 @@ impl ApplicationHandler for Shell {
                     size.height as f32 / scale,
                     &mut operations,
                 );
+                self.utilities.draw(
+                    &self.settings,
+                    size.width as f32 / scale,
+                    size.height as f32 / scale,
+                    &mut operations,
+                );
                 if self.palette.open {
                     match self.palette.draw_with_theme(
                         renderer,
@@ -2230,6 +2337,11 @@ impl ApplicationHandler for Shell {
                         if !self.first_frame {
                             let micros = self.ledger.presented();
                             self.first_frame = true;
+                            if !self.smoke && !self.perf && !self.performance.enabled() {
+                                if let Err(error) = bareline_platform_windows::shell_integration::initialize_jump_list(self.shell_integration.portable) {
+                                    eprintln!("event=shell_initialization_unavailable reason={error}");
+                                }
+                            }
                             println!(
                                 "{{\"event\":\"first_frame\",\"microseconds\":{micros},\"software\":{},\"version\":\"0.1.0\"}}",
                                 renderer.software

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 //! One lazy syntax worker per workspace; active-view context is bounded and disposable.
+mod paged;
 use bareline_document::{DocumentSnapshot, TextOffset};
 use bareline_syntax::{
     Checkpoint, Language, MAX_REQUEST_BYTES, SyntaxResult, SyntaxTicket, SyntaxWorker,
@@ -9,8 +10,18 @@ use std::{
     sync::{Arc, mpsc::TryRecvError},
 };
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StylingReceipt {
+    pub identity: (u64, u64),
+    pub language: Language,
+    pub range: Range<TextOffset>,
+    pub ready: bool,
+    pub unavailable: bool,
+}
 #[derive(Default)]
 pub struct Styling {
+    paged: Option<paged::Job>,
+    pub paged_folds: Option<(Vec<bareline_syntax::folding::Fold>, usize, bool)>,
     worker: Option<SyntaxWorker>,
     pending: Option<SyntaxTicket>,
     source: Option<DocumentSnapshot>,
@@ -24,7 +35,93 @@ pub struct Styling {
 }
 
 impl Styling {
+    pub fn receipt(&self) -> Option<StylingReceipt> {
+        if let Some(job) = &self.paged {
+            return Some(StylingReceipt {
+                identity: job.identity,
+                language: job.language,
+                range: job.origin..TextOffset(job.origin.0 + job.local.len()),
+                ready: self.result.as_ref().is_some_and(|result| {
+                    result.is_current(&job.local)
+                        && result.status == bareline_syntax::Status::Complete
+                }),
+                unavailable: self.unavailable,
+            });
+        }
+        let source = self.source.as_ref()?;
+        Some(StylingReceipt {
+            identity: source.identity_token(),
+            language: self.language?,
+            range: self.requested.clone()?,
+            ready: self.result.as_ref().is_some_and(|result| {
+                result.is_current(source) && result.status == bareline_syntax::Status::Complete
+            }),
+            unavailable: self.unavailable,
+        })
+    }
+    pub fn refresh_paged(
+        &mut self,
+        handle: bareline_editor_surface::paged_view::PagedReadHandle,
+        local: &DocumentSnapshot,
+        origin: TextOffset,
+        language: Language,
+        config: crate::language::LanguageConfiguration,
+        notify: Arc<dyn Fn() + Send + Sync>,
+    ) {
+        let current = self.paged.as_ref().is_some_and(|job| {
+            job.identity == handle.snapshot().identity_token()
+                && job.local.same_document(local)
+                && job.local.revision == local.revision
+                && job.origin == origin
+                && job.language == language
+                && job.preference == config.lexer()
+                && match (&job.definition, &config.definition) {
+                    (None, None) => true,
+                    (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                    _ => false,
+                }
+        });
+        if current {
+            return;
+        }
+        self.paged = None;
+        self.source = None;
+        self.requested = None;
+        self.pending = None;
+        self.result = None;
+        self.paged_folds = None;
+        self.unavailable = false;
+        match paged::spawn(
+            handle,
+            local.clone(),
+            origin,
+            language,
+            config.lexer(),
+            config.definition,
+            notify,
+        ) {
+            Ok(job) => self.paged = Some(job),
+            Err(_) => self.unavailable = true,
+        }
+    }
     pub fn pump(&mut self) -> bool {
+        if let Some(job) = &self.paged {
+            return match job.receiver.try_recv() {
+                Ok(Ok(value)) => {
+                    if let Some(syntax) = value.syntax {
+                        self.result = Some(syntax);
+                    }
+                    self.paged_folds = Some((value.folds, value.first_line, value.partial));
+                    true
+                }
+                Ok(Err(_)) => {
+                    self.unavailable = true;
+                    true
+                }
+                Err(_) => false,
+            };
+        }
+
         let Some(ticket) = &self.pending else {
             return false;
         };
@@ -73,6 +170,7 @@ impl Styling {
         notify: Arc<dyn Fn() + Send + Sync>,
         preference: bareline_syntax::LexerPreference,
     ) {
+        self.paged = None;
         if self.preference != preference {
             self.source = None;
             self.preference = preference;
@@ -86,6 +184,7 @@ impl Styling {
         visible: Range<TextOffset>,
         notify: Arc<dyn Fn() + Send + Sync>,
     ) {
+        self.paged = None;
         self.refresh_configured(
             source,
             Language::PlainText,

@@ -21,6 +21,7 @@ pub struct WindowsPlatform {
     command_ids: Vec<CommandId>,
     item_menus: Vec<HMENU>,
     submenu_labels: Vec<(HMENU, u32, String)>,
+    localized_commands: std::cell::RefCell<std::collections::BTreeMap<&'static str, String>>,
 }
 impl WindowsPlatform {
     fn append_model(
@@ -97,6 +98,11 @@ impl WindowsPlatform {
         keymap: &Keymap,
         label_for: impl Fn(&str, &str) -> String,
     ) -> windows::core::Result<()> {
+        // One entry per registered command, replaced on every locale/state refresh.
+        *self.localized_commands.borrow_mut() = registry
+            .entries()
+            .map(|spec| (spec.id.0, label_for(spec.id.0, spec.title)))
+            .collect();
         for (index, id) in self.command_ids.iter().enumerate() {
             let Some(spec) = registry.entries().find(|spec| spec.id == *id) else {
                 continue;
@@ -197,6 +203,7 @@ impl WindowsPlatform {
             command_ids: Vec::new(),
             item_menus: Vec::new(),
             submenu_labels: Vec::new(),
+            localized_commands: Default::default(),
         };
         // SAFETY: menu handles are transferred to the live window after successful SetMenu.
         unsafe {
@@ -236,6 +243,15 @@ impl WindowsPlatform {
     }
     pub fn set_clipboard_text(&self, text: &str) -> windows::core::Result<()> {
         super::clipboard::write(self.hwnd, text)
+    }
+    pub fn set_clipboard_text_with_metadata(&self, text: &str, format: &str, bytes: &[u8]) -> windows::core::Result<()> {
+        super::clipboard::write_with_metadata(self.hwnd, text, format, bytes)
+    }
+    pub fn clipboard_metadata(&self, format: &str, max_bytes: usize) -> windows::core::Result<Option<Vec<u8>>> {
+        super::clipboard::metadata(self.hwnd, format, max_bytes)
+    }
+    pub fn clipboard_text_with_metadata(&self, format: &str, max_bytes: usize) -> windows::core::Result<bareline_platform::clipboard::ClipboardContents> {
+        super::clipboard::read_with_metadata(self.hwnd, format, max_bytes)
     }
     pub fn confirm_discard(&self) -> bool {
         unsafe {
@@ -304,9 +320,13 @@ impl WindowsPlatform {
                     .collect();
                 for (index, spec) in specs.iter().enumerate() {
                     let state = registry.state(spec.id, context).unwrap();
+                    let translated = self.localized_commands.borrow();
                     let label = wide(&format!(
                         "{}\t{}",
-                        state.label.as_deref().unwrap_or(spec.title),
+                        state.label.as_deref().unwrap_or_else(|| translated
+                            .get(spec.id.0)
+                            .map(String::as_str)
+                            .unwrap_or(spec.title)),
                         keymap.shortcut_label(spec.id)
                     ));
                     AppendMenuW(
@@ -412,6 +432,21 @@ impl Drop for WindowsPlatform {
     }
 }
 impl PlatformServices for WindowsPlatform {
+    fn clipboard_text(&self) -> Result<String, String> {
+        WindowsPlatform::clipboard_text(self).map_err(|e| e.to_string())
+    }
+    fn set_clipboard_text(&self, text: &str) -> Result<(), String> {
+        WindowsPlatform::set_clipboard_text(self, text).map_err(|e| e.to_string())
+    }
+    fn set_clipboard_text_with_metadata(&self, text: &str, format: &str, bytes: &[u8]) -> Result<(), String> {
+        WindowsPlatform::set_clipboard_text_with_metadata(self, text, format, bytes).map_err(|e| e.to_string())
+    }
+    fn clipboard_metadata(&self, format: &str, max_bytes: usize) -> Result<Option<Vec<u8>>, String> {
+        WindowsPlatform::clipboard_metadata(self, format, max_bytes).map_err(|e| e.to_string())
+    }
+    fn clipboard_text_with_metadata(&self, format: &str, max_bytes: usize) -> Result<bareline_platform::clipboard::ClipboardContents, String> {
+        WindowsPlatform::clipboard_text_with_metadata(self, format, max_bytes).map_err(|e| e.to_string())
+    }
     fn about(&self) {
         unsafe {
             MessageBoxW(

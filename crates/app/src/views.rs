@@ -89,7 +89,10 @@ impl ViewController {
             .map(|(id, color)| (*id, *color))
             .collect();
         controller.vertical_tabs = manifest.layout.vertical_tabs;
-        controller.tab_sort = manifest.layout.tab_sort.clone();
+        controller.tab_sort = match manifest.layout.tab_sort.as_str() {
+            "name" | "name_descending" | "path" => manifest.layout.tab_sort.clone(),
+            _ => "manual".into(),
+        };
         controller.sync_vertical = manifest.layout.sync_vertical;
         controller.repair_active();
         controller.mru.clear();
@@ -192,13 +195,23 @@ impl ViewController {
         Ok(())
     }
     pub fn sort_by_label(&mut self, labels: &[(u64, String)], descending: bool) {
-        let labels: std::collections::HashMap<_,_> = labels.iter().map(|(id,label)|(*id,label.to_lowercase())).collect();
-        self.tabs.sort_by(|a,b|(!a.pinned).cmp(&(!b.pinned)).then_with(||{
-            let a=labels.get(&a.document_id).map(String::as_str).unwrap_or("");
-            let b=labels.get(&b.document_id).map(String::as_str).unwrap_or("");
-            if descending {b.cmp(a)} else {a.cmp(b)}
-        }));
-        self.tab_sort=if descending {"name_descending"} else {"name"}.into();
+        let labels: std::collections::HashMap<_, _> = labels
+            .iter()
+            .map(|(id, label)| (*id, label.to_lowercase()))
+            .collect();
+        self.tabs.sort_by(|a, b| {
+            (!a.pinned).cmp(&(!b.pinned)).then_with(|| {
+                let a = labels.get(&a.document_id).map(String::as_str).unwrap_or("");
+                let b = labels.get(&b.document_id).map(String::as_str).unwrap_or("");
+                if descending { b.cmp(a) } else { a.cmp(b) }
+            })
+        });
+        self.tab_sort = if descending {
+            "name_descending"
+        } else {
+            "name"
+        }
+        .into();
     }
     pub fn move_to_pane(
         &mut self,
@@ -241,21 +254,33 @@ impl ViewController {
     /// Attach a newly opened document identity to the active pane. The owner has
     /// already created the document service; this allocates view metadata only.
     /// Restore a previously closed view in this process without creating a second tab model.
-    pub fn restore_tab(&mut self, tab: SessionTab, position: usize, color: Option<u32>) -> Result<(), ViewError> {
-        if self.tabs.len() >= 10_000 || self.tabs.iter().any(|existing| existing.id == tab.id) {
+    pub fn restore_tab(
+        &mut self,
+        tab: SessionTab,
+        position: usize,
+        color: Option<u32>,
+    ) -> Result<(), ViewError> {
+        if self.tabs.len() >= 10_000
+            || tab.view.split > 1
+            || self.tabs.iter().any(|existing| existing.id == tab.id)
+        {
             return Err(ViewError::InvalidState);
         }
         let mut probe = tab.clone();
         probe.view.split = 0;
         Self::new(vec![probe], None)?;
-        if color.is_some_and(|color| color > 0xffffff) { return Err(ViewError::InvalidState); }
+        if color.is_some_and(|color| color > 0xffffff) {
+            return Err(ViewError::InvalidState);
+        }
         let next = tab.id.checked_add(1).ok_or(ViewError::IdentityExhausted)?;
         let id = tab.id;
         self.split |= tab.view.split == 1;
         self.tabs.insert(position.min(self.tabs.len()), tab);
         self.tabs.sort_by_key(|tab| !tab.pinned);
         self.next_id = self.next_id.max(next);
-        if let Some(color) = color { self.tab_colors.insert(id, color); }
+        if let Some(color) = color {
+            self.tab_colors.insert(id, color);
+        }
         self.repair_active();
         self.activate(id)
     }
@@ -702,6 +727,18 @@ mod tests {
         views.orientation = Orientation::Horizontal;
         views.ratio = 0.6;
         views.sync_vertical = true;
+        views.sync_horizontal = true;
+        views.vertical_tabs = true;
+        views.color(1, Some(0x36c9c6)).unwrap();
+        views.color(500, Some(0xc678dd)).unwrap();
+        views.sort_by_label(
+            &(1..=500)
+                .map(|id| (id, format!("Document {id:03}")))
+                .collect::<Vec<_>>(),
+            true,
+        );
+        views.activate(499).unwrap();
+        views.activate(1).unwrap();
         let mut manifest = SessionManifest {
             documents: (1..=500)
                 .map(|id| SessionDocument {
@@ -721,6 +758,14 @@ mod tests {
         assert_eq!(restored.orientation, Orientation::Horizontal);
         assert_eq!(restored.ratio, 0.6);
         assert!(restored.sync_vertical);
+        assert!(restored.sync_horizontal);
+        assert!(restored.vertical_tabs);
+        assert_eq!(restored.tab_colors, views.tab_colors);
+        assert_eq!(restored.tab_sort, "name_descending");
+        assert_eq!(
+            restored.mru().collect::<Vec<_>>(),
+            views.mru().collect::<Vec<_>>()
+        );
         let geometry = restored.geometry(rect(10.0, 20.0, 900.0, 700.0));
         let first = geometry.panes[0].unwrap();
         let second = geometry.panes[1].unwrap();
@@ -728,6 +773,34 @@ mod tests {
         assert_eq!(first.height + splitter.height + second.height, 700.0);
         assert_eq!(second.y, splitter.y + splitter.height);
         assert_eq!(restored.mru().count(), 500);
+    }
+    #[test]
+    fn cross_pane_drag_is_atomic_at_pin_boundary_and_closed_metadata_restores() {
+        let mut views = ViewController::new(vec![tab(1, true), tab(2, false)], Some(1)).unwrap();
+        let clone = views.clone_to_other(2).unwrap();
+        let before = views.tabs().to_vec();
+        assert_eq!(
+            views.move_to_pane(1, 1, Some(clone)),
+            Err(ViewError::PinnedBoundary)
+        );
+        assert_eq!(views.tabs(), before);
+        views.color(1, Some(0x123456)).unwrap();
+        let saved = views.tab(1).unwrap().clone();
+        views.close(1, false, false).unwrap();
+        views.restore_tab(saved.clone(), 0, Some(0x123456)).unwrap();
+        assert_eq!(views.tabs()[0], saved);
+        assert_eq!(views.tab_colors.get(&1), Some(&0x123456));
+        assert_eq!(
+            views.restore_tab(saved, 0, None),
+            Err(ViewError::InvalidState)
+        );
+        assert_eq!(
+            views.color(1, Some(0x1000000)),
+            Err(ViewError::InvalidState)
+        );
+        assert_eq!(views.tab_colors.get(&1), Some(&0x123456));
+        views.move_to_pane(2, 1, Some(clone)).unwrap();
+        assert_eq!(views.tab(2).unwrap().view.split, 1);
     }
     #[test]
     fn alignment_spacers_have_no_line_number_and_sync_tokens_do_not_echo() {
@@ -742,6 +815,10 @@ mod tests {
             },
         ])
         .unwrap();
+        assert_eq!(map.spacers_in_window(0, 4, 4), vec![(1, 2)]);
+        assert_eq!(map.spacers_in_window(0, 6, 4), Vec::<(u64, u64)>::new());
+        let adjacent = AlignmentMap::new(vec![AlignmentBlock { left: 0..0, right: 0..2 }, AlignmentBlock { left: 0..0, right: 2..3 }]).unwrap();
+        assert_eq!(adjacent.spacers(0), vec![(0, 3)]);
         assert_eq!(map.document_line(0, 5), None);
         assert_eq!(map.document_line(0, 6), None);
         assert_eq!(map.document_line(0, 7), Some(5));
@@ -816,18 +893,23 @@ pub struct AlignmentMap {
 impl AlignmentMap {
     /// Insert view-only rows before each logical line; document offsets are unchanged.
     pub fn spacers(&self, side: usize) -> Vec<(u64, u64)> {
-        self.blocks
-            .iter()
-            .filter_map(|entry| {
-                let range = if side == 0 {
-                    &entry.block.left
-                } else {
-                    &entry.block.right
-                };
-                let count = entry.height - (range.end - range.start);
-                (count > 0).then_some((range.end, count))
-            })
-            .collect()
+        self.spacers_in_window(side, 0, u64::MAX)
+    }
+    /// Project global alignment rows into a paged viewport's logical line domain.
+    pub fn spacers_in_window(&self, side: usize, first_line: u64, line_count: u64) -> Vec<(u64, u64)> {
+        let end = first_line.saturating_add(line_count);
+        let mut rows: Vec<(u64, u64)> = Vec::new();
+        for entry in &self.blocks {
+            let range = if side == 0 { &entry.block.left } else { &entry.block.right };
+            let count = entry.height - (range.end - range.start);
+            if count == 0 || range.end < first_line || range.end > end { continue; }
+            let line = range.end - first_line;
+            if let Some((previous, total)) = rows.last_mut().filter(|(previous, _)| *previous == line) {
+                let _ = previous;
+                *total = total.saturating_add(count);
+            } else { rows.push((line, count)); }
+        }
+        rows
     }
     pub fn new(blocks: Vec<AlignmentBlock>) -> Result<Self, ViewError> {
         if blocks.len() > 100_000 {

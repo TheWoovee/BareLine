@@ -802,10 +802,24 @@ mod signed_tests {
             installed.component_sha256,
             <[u8; 32]>::from(Sha256::digest(b"safe nonexecuted fixture"))
         );
+        // Retained receipts restore the exact accepted package offline after
+        // metadata expiry; a new install still requires fresh metadata.
+        assert!(matches!(verified.cache(&root), Err(PackageError::HashMismatch)));
+        fs::write(&package_file, &bytes).unwrap();
+        verified.cache(&root).unwrap();
+        let mut later = policy(&key);
+        later.now_unix = 300;
+        let restored = restore_cached(&root, &catalog.entries[0].sha256, &later, &std::sync::atomic::AtomicBool::new(false)).unwrap();
+        assert_eq!(restored.component_sha256, installed.component_sha256);
+        fs::write(installed.directory().join("entry.wasm"), b"tampered extracted component").unwrap();
+        assert!(restore_cached(&root, &catalog.entries[0].sha256, &later, &std::sync::atomic::AtomicBool::new(false)).is_err());
+        fs::write(installed.directory().join("entry.wasm"), b"safe nonexecuted fixture").unwrap();
+        assert!(restore_cached(&root, &catalog.entries[0].sha256, &later, &std::sync::atomic::AtomicBool::new(true)).is_err());
         let retained = installed.directory().to_owned();
         assert!(retained.exists());
         installed.remove().unwrap();
         assert!(!retained.exists());
+        fs::write(&package_file, b"tampered").unwrap();
         assert!(matches!(source.fetch(&request), Err(PackageError::Size)));
         let mut changed = metadata.clone();
         changed[0] ^= 1;
@@ -834,6 +848,7 @@ mod signed_tests {
             Err(PackageError::WrongIdentity)
         ));
         fs::remove_file(package_file).unwrap();
+        fs::remove_file(root.join(format!("{}.receipt.json",catalog.entries[0].sha256))).unwrap();
         fs::remove_dir(root).unwrap();
     }
 }

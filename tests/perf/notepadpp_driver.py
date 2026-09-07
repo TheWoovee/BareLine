@@ -19,6 +19,7 @@ import tempfile
 import time
 import xml.etree.ElementTree as ET
 from windows_process_metrics import OwnedProcessTree, MemorySampler, WinApi
+from cache_protocol import prepare as prepare_cache
 
 SCENARIOS = ('cold_launch', 'warm_launch', 'empty_idle', 'open_10mb', 'open_100mb',
              'open_1gb', 'open_5gb', 'long_line', 'scroll', 'edit_to_paint',
@@ -187,6 +188,8 @@ def run(args):
         raise ValueError('invalid benchmark bounds')
     if args.fixture and (args.expected_text_bytes is None or args.expected_text_bytes < 0):
         raise ValueError('fixture needs expected Scintilla UTF-8-view byte length')
+    if args.fixture and args.scenario in ('cold_launch', 'warm_launch', 'empty_idle'):
+        raise ValueError('launch/empty-idle scenarios do not accept a fixture')
     if args.scenario not in ('cold_launch', 'warm_launch', 'empty_idle') and not args.fixture:
         raise ValueError('scenario needs a pinned fixture')
     with tempfile.TemporaryDirectory(prefix='bareline-npp-benchmark-') as temporary:
@@ -203,6 +206,12 @@ def run(args):
         argv = [str(executable), '-multiInst', '-noPlugin', '-nosession', f'-settingsDir={settings}']
         if fixture:
             argv.append(str(fixture))
+        if args.scenario == 'warm_launch':
+            with OwnedProcessTree(argv, executable.parent) as warm:
+                WindowDriver(warm, time.monotonic() + args.timeout).ready(0)
+        cache_receipt = None
+        if args.scenario == 'cold_launch':
+            cache_receipt = prepare_cache(args.cache_plan, args.cache_plan_sha256, executable, fixture, root)
         started = time.perf_counter_ns(); deadline = time.monotonic() + args.timeout
         with OwnedProcessTree(argv, executable.parent) as tree:
             sampler = MemorySampler(tree).start()
@@ -280,7 +289,8 @@ def run(args):
                                   'provenance':{'application_sha256':args.sha256,'version':actual_version,
                                   'plugins_disabled':True,'config_sha256':args.config_sha256,
                                   'memory_peak_kind':'maximum complete sampled live Job total',
-                                  'paint_completion_measured':False,'cache_state_managed_by_driver':False,
+                                  'paint_completion_measured':False,'cache_preparation':cache_receipt,
+                                  'warmup_launches':int(args.scenario == 'warm_launch'),
                                   'download_counter_scope':'adapter only',
                                   'search_scope':'Scintilla target-search primitive, not Find dialog cancellation'}}))
             finally:
@@ -297,6 +307,7 @@ def main():
     parser.add_argument('--expected-text-bytes', type=int); parser.add_argument('--timeout', type=float, default=60)
     parser.add_argument('--samples', type=int, default=100); parser.add_argument('--idle-seconds', type=float, default=2)
     parser.add_argument('--pattern', default='bareline-benchmark-absent-token'); parser.add_argument('--position', type=int, default=0)
+    parser.add_argument('--cache-plan'); parser.add_argument('--cache-plan-sha256', default='')
     try:
         run(parser.parse_args())
     except (OSError, ValueError, RuntimeError, TimeoutError, ET.ParseError) as error:

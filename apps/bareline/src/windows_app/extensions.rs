@@ -5,8 +5,11 @@ use bareline_app::extensions::{InvocationBroker, InvocationOutput};
 use bareline_document::DocumentSnapshot;
 use bareline_extensions_protocol::{Invocation, broker::ExtensionSession};
 mod readers;
+mod ui;
 use bareline_platform::PlatformServices;
-use bareline_platform_windows::extension_transport::{HostLaunch, run_verified_host};
+use bareline_platform_windows::extension_transport::{
+    HostLaunch, HostLifecycle, run_verified_host_observed,
+};
 use std::{
     path::PathBuf,
     sync::{
@@ -41,7 +44,24 @@ struct Pending {
     cancel: Arc<AtomicBool>,
     result: mpsc::Receiver<Result<InvocationOutput, String>>,
 }
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ExtensionLifecyclePhase {
+    #[default]
+    Idle,
+    Requested,
+    Started,
+    Authenticated,
+    Drained,
+    Rejected,
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ExtensionLifecycleReceipt {
+    pub generation: u64,
+    pub phase: ExtensionLifecyclePhase,
+    pub pid: Option<u32>,
+}
 pub struct ExtensionsRuntime {
+    lifecycle: Arc<std::sync::Mutex<ExtensionLifecycleReceipt>>,
     pending: Option<Pending>,
     enabled: bool,
     root: Option<PathBuf>,
@@ -60,12 +80,14 @@ pub struct ExtensionsRuntime {
     index: ManagerIndex,
     restore_pending: bool,
     permission_review: Option<usize>,
+    deferred_disabled: std::collections::BTreeSet<String>,
     command_selection: usize,
-    arguments: String,
+    ui: ui::ManagerUi,
 }
 impl Default for ExtensionsRuntime {
     fn default() -> Self {
         Self {
+            lifecycle: Arc::new(std::sync::Mutex::new(ExtensionLifecycleReceipt::default())),
             pending: None,
             enabled: true,
             root: None,
@@ -84,12 +106,16 @@ impl Default for ExtensionsRuntime {
             index: ManagerIndex::default(),
             restore_pending: false,
             permission_review: None,
+            deferred_disabled: std::collections::BTreeSet::new(),
             command_selection: 0,
-            arguments: String::new(),
+            ui: ui::ManagerUi::default(),
         }
     }
 }
 impl ExtensionsRuntime {
+    pub fn lifecycle_receipt(&self) -> Option<ExtensionLifecycleReceipt> {
+        self.lifecycle.try_lock().ok().map(|receipt| *receipt)
+    }
     pub fn configure(&mut self, root: Option<PathBuf>, enabled: bool) {
         self.root = root;
         self.trust = compiled_trust();
@@ -121,19 +147,51 @@ impl ExtensionsRuntime {
             return Err("An extension is running; cancel it before starting another".into());
         }
         let mut broker = if job.paged.is_some() {
-            InvocationBroker::new_paged(job.invocation.clone(), job.source, job.session, job.panels)?
-        } else { InvocationBroker::new(job.invocation.clone(), job.source, job.session, job.panels)? };
+            InvocationBroker::new_paged(
+                job.invocation.clone(),
+                job.source,
+                job.session,
+                job.panels,
+            )?
+        } else {
+            InvocationBroker::new(job.invocation.clone(), job.source, job.session, job.panels)?
+        };
         let (send, receive) = mpsc::sync_channel(1);
         let cancel = Arc::new(AtomicBool::new(false));
         let worker_cancel = cancel.clone();
+        let lifecycle = self.lifecycle.clone();
+        {
+            let mut receipt = lifecycle
+                .lock()
+                .map_err(|_| "Extension lifecycle unavailable")?;
+            receipt.generation = receipt
+                .generation
+                .checked_add(1)
+                .ok_or("Extension lifecycle generation exhausted")?;
+            receipt.phase = ExtensionLifecyclePhase::Requested;
+            receipt.pid = None;
+        }
         std::thread::spawn(move || {
-            let readers = std::cell::RefCell::new(readers::Readers::new(job.original, job.paged, worker_cancel.clone(), std::time::Instant::now() + std::time::Duration::from_millis(job.budget.timeout_ms())));
-            let outcome = run_verified_host(HostLaunch { executable: &job.runtime.executable, executable_sha256: job.runtime.executable_sha256, publisher_certificate_sha256: job.runtime.publisher_certificate_sha256, component: &job.component, component_sha256: job.component_sha256, invocation: &job.invocation, budget:job.budget }, worker_cancel.clone(), |message| {
+            let readers = std::cell::RefCell::new(readers::Readers::new(
+                job.original,
+                job.paged,
+                worker_cancel.clone(),
+                std::time::Instant::now()
+                    + std::time::Duration::from_millis(job.budget.timeout_ms()),
+            ));
+            let outcome = run_verified_host_observed(HostLaunch { executable: &job.runtime.executable, executable_sha256: job.runtime.executable_sha256, publisher_certificate_sha256: job.runtime.publisher_certificate_sha256, component: &job.component, component_sha256: job.component_sha256, invocation: &job.invocation, budget:job.budget }, worker_cancel.clone(), |event| {
+                if let Ok(mut receipt) = lifecycle.lock() { let (phase,pid) = match event {HostLifecycle::Started(pid)=>(ExtensionLifecyclePhase::Started,pid),HostLifecycle::Authenticated(pid)=>(ExtensionLifecyclePhase::Authenticated,pid),HostLifecycle::Drained(pid)=>(ExtensionLifecyclePhase::Drained,pid)}; receipt.phase=phase;receipt.pid=Some(pid); }
+            }, |message| {
                 if !job.edits_preserve_original && matches!(message.request, bareline_extensions_protocol::Request::ApplyEdits { .. } | bareline_extensions_protocol::Request::BeginEdits { .. }) {
                     return bareline_extensions_protocol::BrokerResponse { request_id: message.request_id, result: Err("Formatting is unavailable while original undecodable bytes require preservation".into()) };
                 }
                 broker.request_with_text(message, |_, range| readers.borrow_mut().raw(range), |range| readers.borrow_mut().text(range))
             }).map_err(|e| e.to_string());
+            if let Ok(mut receipt) = lifecycle.lock()
+                && receipt.phase == ExtensionLifecyclePhase::Requested
+            {
+                receipt.phase = ExtensionLifecyclePhase::Rejected;
+            }
             let outcome = if worker_cancel.load(Ordering::Acquire) {
                 Err("Extension cancelled; document unchanged".into())
             } else {
@@ -237,185 +295,7 @@ impl ExtensionsRuntime {
         height: f32,
         ops: &mut Vec<bareline_renderer::DrawOp>,
     ) {
-        use bareline_renderer::DrawOp;
-        use bareline_ui::{ACCENT, BORDER, CHROME, ELEVATED, MUTED, TEXT, rect};
-        if !self.open {
-            return;
-        }
-        let y = 82.0;
-        self.bounds = rect(0.0, y, width, (height - y - 24.0).max(0.0));
-        ops.push(DrawOp::Fill(self.bounds, CHROME));
-        let sidebar = (width * 0.186).clamp(140.0, 296.0);
-        ops.push(DrawOp::Stroke(
-            rect(sidebar, y, 0.0, self.bounds.height),
-            BORDER,
-            1.0,
-        ));
-        ops.push(text(20.0, y + 24.0, "Extensions", 16.0, ACCENT));
-        ops.push(DrawOp::FillRounded(
-            rect(10.0, y + 54.0, sidebar - 20.0, 48.0),
-            ELEVATED,
-            6.0,
-        ));
-        ops.push(text(30.0, y + 70.0, "Extensions", 16.0, TEXT));
-        let x = sidebar + 24.0;
-        let available = (width - x - 24.0).max(0.0);
-        ops.push(text(x, y + 20.0, "Extensions", 22.0, TEXT));
-        for (i, label) in ["Installed", "Discover", "Updates", "Disabled"]
-            .iter()
-            .enumerate()
-        {
-            let tab_x = x + i as f32 * 110.0;
-            ops.push(text(
-                tab_x + 12.0,
-                y + 70.0,
-                *label,
-                16.0,
-                if self.tab == i { ACCENT } else { MUTED },
-            ));
-            if self.tab == i {
-                ops.push(DrawOp::Fill(rect(tab_x, y + 98.0, 104.0, 2.0), ACCENT));
-            }
-        }
-        ops.push(DrawOp::StrokeRounded(
-            rect(x, y + 110.0, available, 54.0),
-            BORDER,
-            1.0,
-            8.0,
-        ));
-        ops.push(text(
-            x + 20.0,
-            y + 127.0,
-            "Extensions run isolated in a separate process.",
-            16.0,
-            TEXT,
-        ));
-        ops.push(text(x, y + 183.0, "Runtime", 16.0, TEXT));
-        ops.push(DrawOp::FillRounded(
-            rect(x, y + 210.0, available, 76.0),
-            ELEVATED,
-            8.0,
-        ));
-        ops.push(text(
-            x + 20.0,
-            y + 230.0,
-            if self.running() {
-                "Runtime host running"
-            } else {
-                if self.runtime_package.is_some() {
-                    "Runtime installed; host stopped"
-                } else {
-                    "Runtime not installed"
-                }
-            },
-            17.0,
-            TEXT,
-        ));
-        ops.push(text(
-            x + 20.0,
-            y + 255.0,
-            "A verified offline runtime pack and owner trust policy are required.",
-            13.0,
-            MUTED,
-        ));
-        let empty = match self.tab {
-            1 => "Catalog unavailable offline. No extensions were downloaded.",
-            2 => "No verified updates are available.",
-            3 => "No disabled extensions.",
-            _ => "No installed extensions.",
-        };
-        let labels: Vec<(usize, String)> = if self.tab == 1 {
-            self.catalog
-                .as_ref()
-                .map(|catalog| {
-                    catalog
-                        .entries
-                        .iter()
-                        .enumerate()
-                        .map(|(i, entry)| {
-                            (
-                                i,
-                                format!("{} {} — {}", entry.id, entry.version, entry.publisher),
-                            )
-                        })
-                        .collect()
-                })
-                .unwrap_or_default()
-        } else if self.tab == 2 {
-            vec![]
-        } else {
-            self.installed
-                .iter()
-                .enumerate()
-                .filter(|(_, row)| self.tab != 3 || !row.state.enabled)
-                .map(|(i, row)| {
-                    (
-                        i,
-                        format!(
-                            "{} {} — {} — {}",
-                            row.package.id,
-                            row.package.version,
-                            if row.state.enabled {
-                                "Enabled"
-                            } else {
-                                "Disabled"
-                            },
-                            row.package
-                                .manifest
-                                .capabilities
-                                .iter()
-                                .map(|c| c.name())
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        ),
-                    )
-                })
-                .collect()
-        };
-        if labels.is_empty() {
-            ops.push(text(x, y + 315.0, empty, 16.0, MUTED));
-        }
-        for (position, (index, label)) in labels.iter().take(6).enumerate() {
-            let row_y = y + 310.0 + position as f32 * 32.0;
-            if *index == self.selected {
-                ops.push(DrawOp::FillRounded(
-                    rect(x, row_y - 5.0, available, 30.0),
-                    ELEVATED,
-                    4.0,
-                ));
-            }
-            ops.push(text(
-                x + 8.0,
-                row_y,
-                label,
-                14.0,
-                if *index == self.selected {
-                    ACCENT
-                } else {
-                    TEXT
-                },
-            ));
-        }
-        if let Some(message) = &self.message {
-            ops.push(text(x, y + 520.0, message, 14.0, TEXT));
-        }
-        if !self.panel_output.is_empty() {
-            ops.push(DrawOp::PushClip(rect(
-                x,
-                y + 560.0,
-                available,
-                (height - y - 610.0).max(0.0),
-            )));
-            ops.push(text(x, y + 560.0, &self.panel_output, 14.0, TEXT));
-            ops.push(DrawOp::PopClip);
-        }
-        ops.push(text(
-            x,
-            height - 58.0,
-            "Disabling extensions stops the host. Removing the runtime frees disk space.",
-            13.0,
-            MUTED,
-        ));
+        self.draw_manager(_renderer, width, height, ops);
     }
 }
 impl super::Shell {
@@ -531,6 +411,7 @@ impl super::Shell {
         {
             window.request_redraw();
         }
+        self.extensions.flush_disabled(self.notify.clone());
         if let Some(result) = self.extensions.pump() {
             match result {
                 Ok(output) => {
@@ -569,50 +450,7 @@ impl super::Shell {
         _el: &super::ActiveEventLoop,
         event: &super::WindowEvent,
     ) -> bool {
-        use super::{ElementState, Key, MouseButton, NamedKey, WindowEvent};
-        if !self.extensions.open || self.palette.open {
-            return false;
-        }
-        match event {
-            WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
-                match event.logical_key {
-                    Key::Named(NamedKey::ArrowDown) => {
-                        self.extensions.move_selection(1);
-                    }
-                    Key::Named(NamedKey::ArrowUp) => {
-                        self.extensions.move_selection(-1);
-                    }
-                    Key::Named(NamedKey::Escape) => self.extensions.open = false,
-                    Key::Named(NamedKey::ArrowRight) => {
-                        self.extensions.tab = (self.extensions.tab + 1) % 4
-                    }
-                    Key::Named(NamedKey::ArrowLeft) => {
-                        self.extensions.tab = (self.extensions.tab + 3) % 4
-                    }
-                    _ => {}
-                }
-            }
-            WindowEvent::MouseInput {
-                state: ElementState::Pressed,
-                button: MouseButton::Left,
-                ..
-            } => {
-                let sidebar = (self.extensions.bounds.width * 0.186).clamp(140.0, 296.0);
-                let left = sidebar + 24.0;
-                if self.pointer.y >= 142.0
-                    && self.pointer.y <= 182.0
-                    && self.pointer.x >= left
-                    && self.pointer.x < left + 440.0
-                {
-                    self.extensions.tab = ((self.pointer.x - left) / 110.0) as usize;
-                }
-            }
-            _ => return self.extensions.bounds.contains(self.pointer),
-        }
-        if let Some(window) = &self.window {
-            window.request_redraw();
-        }
-        true
+        self.extensions_ui_event(_el, event)
     }
 }
 
@@ -935,6 +773,7 @@ impl ExtensionsRuntime {
             }
             Err(error) => self.message = Some(error),
         }
+        for row in &mut self.installed { if self.deferred_disabled.contains(&row.package.id) { row.state.enabled=false; } }
         true
     }
 }
@@ -954,6 +793,7 @@ impl super::Shell {
         budget: bareline_extensions_protocol::ExecutionBudget,
     ) -> Result<(), String> {
         use bareline_extensions_protocol::{Capability, Scope, broker::Grant};
+        if !self.extensions.valid_contribution_budget() { return Err("Verified extension contribution limit (1024) exceeded".into()); }
         let runtime = self
             .extensions
             .runtime_package
@@ -994,7 +834,10 @@ impl super::Shell {
         }
         let original = workspace.raw_source_descriptor(self.app.active)?;
         let raw_length = original.as_ref().map_or(0, |source| source.len());
-        let paged = match editor { bareline_app::workspace::WorkspaceEditor::Paged(editor) => Some(editor.read_handle()), _ => None };
+        let paged = match editor {
+            bareline_app::workspace::WorkspaceEditor::Paged(editor) => Some(editor.read_handle()),
+            _ => None,
+        };
         let source = editor.snapshot().clone();
         let mut session =
             ExtensionSession::new(row.package.id.clone()).map_err(|e| format!("{e:?}"))?;
@@ -1019,13 +862,16 @@ impl super::Shell {
         let invocation = Invocation {
             extension_id: row.package.id.clone(),
             command: command.into(),
-            arguments: self.extensions.arguments.clone(),
+            arguments: self.extensions.argument_text()?,
             document: 1,
             revision: source.revision.0,
             // Tokens are scoped to this single authenticated invocation; the
             // original authority is immutable even while editor text is dirty.
             source_generation: 1,
-            text_length: paged.as_ref().map_or(source.len(), |handle| handle.snapshot().len()) as u64,
+            text_length: paged
+                .as_ref()
+                .map_or(source.len(), |handle| handle.snapshot().len())
+                as u64,
             raw_length,
             grant_generation: session.generation(),
         };
@@ -1049,10 +895,7 @@ impl super::Shell {
             panels: row.package.manifest.panels.clone(),
             edits_preserve_original: workspace.extension_edits_preserve_original(self.app.active),
         };
-        self.extensions.start(
-            job,
-            self.notify.clone(),
-        )
+        self.extensions.start(job, self.notify.clone())
     }
 }
 
@@ -1065,19 +908,11 @@ fn compiled_trust() -> Option<OwnerTrust> {
 impl ExtensionsRuntime {
     fn move_selection(&mut self, delta: isize) {
         self.permission_review = None;
-        let indices: Vec<usize> = if self.tab == 1 {
-            self.catalog
-                .as_ref()
-                .map(|c| (0..c.entries.len()).collect())
-                .unwrap_or_default()
-        } else {
-            self.installed
-                .iter()
-                .enumerate()
-                .filter(|(_, row)| self.tab != 3 || !row.state.enabled)
-                .map(|(i, _)| i)
-                .collect()
-        };
+        let indices: Vec<usize> = self
+            .visible_rows()
+            .into_iter()
+            .map(|(index, _)| index)
+            .collect();
         if indices.is_empty() {
             self.selected = 0;
             return;
@@ -1214,13 +1049,28 @@ impl ExtensionsRuntime {
                 row.state.enabled = false;
                 row.state.generation = index.generation;
             }
+            if self.manager_pending.is_some() {
+                self.deferred_disabled.insert(id);
+                self.message=Some("Extension stopped; saving disabled state after current operation".into());
+                return Ok(());
+            }
         }
         self.manager_work(notify, move |_cancel| {
             index.save(&root)?;
             Ok(ManagerResult::Permissions(index))
         })
     }
+    fn flush_disabled(&mut self, notify: Arc<dyn Fn() + Send + Sync>) {
+        if self.manager_pending.is_some() || self.deferred_disabled.is_empty() { return; }
+        let Some(root)=self.root.clone() else{return;};
+        let mut index=self.index.clone();
+        for id in &self.deferred_disabled {
+            if index.entries.iter().any(|entry|entry.id==*id) && let Err(error)=index.set_permission(id,&[],false) {self.message=Some(error);return;}
+        }
+        if self.manager_work(notify,move |_|{index.save(&root)?;Ok(ManagerResult::Permissions(index))}).is_ok(){self.deferred_disabled.clear();}
+    }
     pub fn contributions(&self) -> Vec<bareline_commands::DynamicCommandRecord> {
+        if !self.valid_contribution_budget() { return vec![]; }
         self.installed
             .iter()
             .flat_map(|row| {
@@ -1247,6 +1097,9 @@ impl ExtensionsRuntime {
                 })
             })
             .collect()
+    }
+    fn valid_contribution_budget(&self) -> bool {
+        self.installed.iter().map(|row| row.package.manifest.commands.len()).sum::<usize>() <= 1024
     }
 }
 impl super::Shell {

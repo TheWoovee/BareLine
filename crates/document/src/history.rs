@@ -76,3 +76,27 @@ pub struct HistoryStats {
     pub redo_changes: usize,
     pub charged_payload_bytes: usize,
 }
+
+#[derive(Clone)]
+pub(crate) struct Charge(Vec<std::sync::Arc<crate::Reservation>>);
+impl Charge {
+    pub(crate) fn new(reservation: crate::Reservation) -> Self {
+        Self(vec![std::sync::Arc::new(reservation)])
+    }
+    pub(crate) fn bytes(&self) -> usize {
+        self.0.iter().map(|claim| claim.bytes).sum()
+    }
+    pub(crate) fn add(&mut self, reservation: crate::Reservation) {
+        self.0.push(std::sync::Arc::new(reservation));
+    }
+    pub(crate) fn merge(&mut self, mut other: Self) {
+        self.0.append(&mut other.0);
+    }
+}
+#[derive(Clone)]
+pub(crate) struct OwnedEdit {
+    pub(crate) before_range: std::ops::Range<usize>,
+    pub(crate) after_range: std::ops::Range<usize>,
+    pub(crate) inverse: crate::tree::Root,
+    pub(crate) inserted: crate::tree::Root,
+}

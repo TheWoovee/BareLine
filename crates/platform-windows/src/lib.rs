@@ -55,3 +55,6 @@ pub use workspace_files::{WorkspaceDeleteUndo, retain_deleted_entry, restore_del
 
 #[cfg(windows)]
 mod rename;
+
+#[cfg(windows)]
+pub mod shell_integration;

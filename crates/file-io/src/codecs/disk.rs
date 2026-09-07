@@ -558,6 +558,14 @@ impl DiskDecoded {
                     self.write_source_range_validated(range, target, out, cancel)?;
                 }
                 PagedPiece::Inserted(text) => out.write_all(&encoder.encode_text(text)?)?,
+                PagedPiece::OwnedSource { source, range, original } => {
+                    if let Some((original_source,original_range))=original {
+                        if original_source.generation()!=original_generation {return Err(DiskError::Changed);}
+                        self.write_source_range_validated(original_range,target,out,cancel)?;
+                    } else {
+                        crate::owned_read::visit_utf8::<DiskError>(source,range,cancel,|text|{out.write_all(&encoder.encode_text(text)?)?;Ok(())})?;
+                    }
+                },
             }
         }
         self.validate_sealed(cancel)

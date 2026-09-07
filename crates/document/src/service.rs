@@ -22,6 +22,8 @@ pub struct Completion {
     pub result: Result<Revision, Error>,
     pub snapshot: DocumentSnapshot,
     pub metadata: Option<crate::history::EditMetadata>,
+    pub undo_depth: usize,
+    pub redo_depth: usize,
 }
 struct Request {
     mutation: Mutation,
@@ -198,7 +200,8 @@ impl Scheduler {
                             let Some(request) = actor.queue.pop_front() else {
                                 break;
                             };
-                            let metadata = match &request.mutation {
+                            let applying = matches!(&request.mutation, Mutation::Apply(_));
+                            let mut metadata = match &request.mutation {
                                 Mutation::Apply(_) => request.metadata.clone(),
                                 Mutation::Undo => actor.document.history_metadata(true).cloned(),
                                 Mutation::Redo => actor.document.history_metadata(false).cloned(),
@@ -213,12 +216,18 @@ impl Scheduler {
                                 Mutation::Undo => actor.document.undo(),
                                 Mutation::Redo => actor.document.redo(),
                             };
+                            if applying && result.is_ok() {
+                                metadata = actor.document.history_metadata(true).cloned();
+                            }
+                            let depths = actor.document.history_stats();
                             let snapshot = actor.document.snapshot();
                             actor.published.update(snapshot.clone());
                             let _ = request.reply.try_send(Completion {
                                 result,
                                 snapshot,
                                 metadata,
+                                undo_depth: depths.undo_changes,
+                                redo_depth: depths.redo_changes,
                             });
                             drop(actor);
                             if let Some(notify) = request.notify {
@@ -438,19 +447,50 @@ impl DocumentService {
     pub fn same_document(&self, snapshot: &DocumentSnapshot) -> bool {
         self.document_id == snapshot.document_id
     }
+    /// Capture on a worker: clones immutable current/history roots without performing I/O.
+    pub fn capture_spill(&self) -> Result<crate::spill::SpillPlan, Error> {
+        let actor = self.actor.try_lock().map_err(|_| Error::ActorBusy)?;
+        if actor.retired || actor.scheduled || !actor.queue.is_empty() {
+            return Err(Error::ActorBusy);
+        }
+        crate::spill::SpillPlan::resident(&actor.document)
+    }
+    pub fn migrate_spill(
+        &self,
+        prepared: crate::spill::PreparedSpill,
+    ) -> Result<crate::paged::PagedDocument, Error> {
+        let mut actor = self.actor.try_lock().map_err(|_| Error::ActorBusy)?;
+        if actor.retired || actor.scheduled || !actor.queue.is_empty() {
+            return Err(Error::ActorBusy);
+        }
+        let document = prepared.attach_resident(&actor.document)?;
+        actor.retired = true;
+        Ok(document)
+    }
     /// Attach an independently sealed copy to a clean, history-free actor. Retires this
     /// service atomically; drop it after installing the returned Paged actor to release RAM.
-    pub fn migrate_clean_spill(&self, captured: &DocumentSnapshot, source: crate::source::MemorySource) -> Result<crate::paged::PagedDocument, Error> {
+    pub fn migrate_clean_spill(
+        &self,
+        captured: &DocumentSnapshot,
+        source: crate::source::MemorySource,
+    ) -> Result<crate::paged::PagedDocument, Error> {
         let mut actor = self.actor.try_lock().map_err(|_| Error::ActorBusy)?;
-        if actor.retired || actor.scheduled || !actor.queue.is_empty() { return Err(Error::ActorBusy); }
-        let paged = crate::paged::PagedDocument::from_clean_spill(&actor.document, captured, source)?;
+        if actor.retired || actor.scheduled || !actor.queue.is_empty() {
+            return Err(Error::ActorBusy);
+        }
+        let paged =
+            crate::paged::PagedDocument::from_clean_spill(&actor.document, captured, source)?;
         actor.retired = true;
         Ok(paged)
     }
     /// Roll back a failed controller installation; the retired actor never changed content.
     pub fn cancel_clean_spill(&self, captured: &DocumentSnapshot) -> Result<(), Error> {
         let mut actor = self.actor.try_lock().map_err(|_| Error::ActorBusy)?;
-        if !actor.document.current.same_document(captured) || actor.document.current.revision != captured.revision { return Err(Error::StaleRevision); }
+        if !actor.document.current.same_document(captured)
+            || actor.document.current.revision != captured.revision
+        {
+            return Err(Error::StaleRevision);
+        }
         actor.retired = false;
         Ok(())
     }
@@ -509,7 +549,9 @@ impl DocumentService {
             Ok(actor) => actor,
             Err(_) => return Err((SubmitError::Saturated, mutation)),
         };
-        if actor.retired { return Err((SubmitError::Closed, mutation)); }
+        if actor.retired {
+            return Err((SubmitError::Closed, mutation));
+        }
         let mut state = match self.ready.state.try_lock() {
             Ok(state) => state,
             Err(_) => return Err((SubmitError::Saturated, mutation)),
@@ -569,7 +611,11 @@ mod tests {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         loop {
             match pool.submit_group(mutation, None) {
-                Ok(receiver) => return receiver.recv_timeout(std::time::Duration::from_secs(5)).unwrap(),
+                Ok(receiver) => {
+                    return receiver
+                        .recv_timeout(std::time::Duration::from_secs(5))
+                        .unwrap();
+                }
                 Err((SubmitError::Saturated, returned)) if std::time::Instant::now() < deadline => {
                     mutation = returned;
                     std::thread::yield_now();
@@ -590,12 +636,13 @@ mod tests {
         let second = pool.document(second, 8);
         let mut bad = group_edit(&second, second_snapshot.clone(), "changed");
         bad.transaction.base_revision = Revision(99);
-        let failed = submit_group_retry(&pool,
-                GroupMutation::Apply(vec![
-                    group_edit(&first, first_snapshot.clone(), "changed"),
-                    bad,
-                ]),
-            );
+        let failed = submit_group_retry(
+            &pool,
+            GroupMutation::Apply(vec![
+                group_edit(&first, first_snapshot.clone(), "changed"),
+                bad,
+            ]),
+        );
         assert_eq!(failed.result, Err(Error::StaleRevision));
         assert!(
             failed
@@ -603,12 +650,13 @@ mod tests {
                 .iter()
                 .all(|snapshot| snapshot.revision == Revision(0))
         );
-        let completed = submit_group_retry(&pool,
-                GroupMutation::Apply(vec![
-                    group_edit(&first, first_snapshot, "one"),
-                    group_edit(&second, second_snapshot, "two"),
-                ]),
-            );
+        let completed = submit_group_retry(
+            &pool,
+            GroupMutation::Apply(vec![
+                group_edit(&first, first_snapshot, "one"),
+                group_edit(&second, second_snapshot, "two"),
+            ]),
+        );
         let group = completed.result.unwrap();
         assert!(
             completed
@@ -620,7 +668,11 @@ mod tests {
         let mut mutation = Mutation::Undo;
         let single = loop {
             match first.submit(mutation) {
-                Ok(receiver) => break receiver.recv_timeout(std::time::Duration::from_secs(5)).unwrap(),
+                Ok(receiver) => {
+                    break receiver
+                        .recv_timeout(std::time::Duration::from_secs(5))
+                        .unwrap();
+                }
                 Err((SubmitError::Saturated, returned)) if std::time::Instant::now() < deadline => {
                     mutation = returned;
                     std::thread::yield_now();
@@ -639,12 +691,13 @@ mod tests {
                 snapshot: completed.snapshots[1].clone(),
             },
         ];
-        let undone = submit_group_retry(&pool,
-                GroupMutation::Undo {
-                    group,
-                    participants,
-                },
-            );
+        let undone = submit_group_retry(
+            &pool,
+            GroupMutation::Undo {
+                group,
+                participants,
+            },
+        );
         assert_eq!(undone.result, Ok(group));
         assert_eq!(
             undone.snapshots[0]
@@ -668,12 +721,13 @@ mod tests {
                 snapshot: undone.snapshots[1].clone(),
             },
         ];
-        let redone = submit_group_retry(&pool,
-                GroupMutation::Redo {
-                    group,
-                    participants,
-                },
-            );
+        let redone = submit_group_retry(
+            &pool,
+            GroupMutation::Redo {
+                group,
+                participants,
+            },
+        );
         assert_eq!(redone.result, Ok(group));
         assert_eq!(
             redone.snapshots[0]

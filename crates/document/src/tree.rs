@@ -6,15 +6,15 @@ use std::{ops::Range, sync::Arc};
 const CHUNK: usize = 64 * 1024;
 pub(crate) type Root = Option<Arc<Node>>;
 pub(crate) struct Segment {
-    text: Box<str>,
+    pub(crate) text: Box<str>,
     _reservation: Reservation,
     origin: Option<(MemorySource, Range<u64>)>,
 }
 #[derive(Clone)]
 pub(crate) struct Piece {
-    segment: Arc<Segment>,
-    range: Range<usize>,
-    summary: Summary,
+    pub(crate) segment: Arc<Segment>,
+    pub(crate) range: Range<usize>,
+    pub(crate) summary: Summary,
 }
 impl Piece {
     pub(crate) fn origin(&self) -> Option<(&MemorySource, Range<u64>)> {
@@ -110,6 +110,12 @@ pub(crate) enum Node {
         source: MemorySource,
         range: Range<u64>,
     },
+    OwnedSource {
+        source: MemorySource,
+        range: Range<u64>,
+        original: Option<(MemorySource, Range<u64>)>,
+        summary: Summary,
+    },
     Branch {
         left: Arc<Node>,
         right: Arc<Node>,
@@ -120,13 +126,14 @@ pub(crate) enum Node {
 impl Node {
     fn height(&self) -> u16 {
         match self {
-            Self::Leaf(_) | Self::Source { .. } => 1,
+            Self::Leaf(_) | Self::Source { .. } | Self::OwnedSource { .. } => 1,
             Self::Branch { height, .. } => *height,
         }
     }
     pub fn summary(&self) -> Summary {
         match self {
             Self::Leaf(piece) => piece.summary,
+            Self::OwnedSource { summary, .. } => *summary,
             Self::Source { range, .. } => Summary {
                 bytes: (range.end - range.start) as usize,
                 unknown: true,
@@ -232,6 +239,24 @@ pub(crate) fn split(root: Root, offset: usize) -> (Root, Root) {
         return (Some(node), None);
     }
     match node.as_ref() {
+        Node::OwnedSource {
+            source,
+            range,
+            original,
+            ..
+        } => {
+            let middle = range.start + offset as u64;
+            let left_origin = original
+                .as_ref()
+                .map(|(s, r)| (s.clone(), r.start..r.start + offset as u64));
+            let right_origin = original
+                .as_ref()
+                .map(|(s, r)| (s.clone(), r.start + offset as u64..r.end));
+            (
+                from_owned_source(source.clone(), range.start..middle, left_origin),
+                from_owned_source(source.clone(), middle..range.end, right_origin),
+            )
+        }
         Node::Source { source, range } => {
             let middle = range.start + offset as u64;
             (
@@ -297,6 +322,10 @@ pub(crate) fn own_inverse(
     while cursor < range.end {
         let (count, origin) = match span_at(root, cursor).ok_or(Error::OutOfBounds)? {
             Span::Owned(bytes) => (bytes.len().min(range.end - cursor), None),
+            Span::OwnedSource(_, source_range) => (
+                (source_range.end - source_range.start).min((range.end - cursor) as u64) as usize,
+                None,
+            ),
             Span::Source(source, source_range) => {
                 let count = (source_range.end - source_range.start).min((range.end - cursor) as u64)
                     as usize;
@@ -336,7 +365,26 @@ pub(crate) fn own_inverse(
 pub(crate) fn from_source(source: MemorySource, range: Range<u64>) -> Root {
     (!range.is_empty()).then(|| Arc::new(Node::Source { source, range }))
 }
+pub(crate) fn from_owned_source(
+    source: MemorySource,
+    range: Range<u64>,
+    original: Option<(MemorySource, Range<u64>)>,
+) -> Root {
+    (!range.is_empty()).then(|| {
+        Arc::new(Node::OwnedSource {
+            source,
+            summary: Summary {
+                bytes: (range.end - range.start) as usize,
+                unknown: true,
+                ..Summary::default()
+            },
+            range,
+            original,
+        })
+    })
+}
 pub(crate) enum Span<'a> {
+    OwnedSource(&'a MemorySource, Range<u64>),
     Owned(&'a [u8]),
     Source(&'a MemorySource, Range<u64>),
 }
@@ -346,6 +394,12 @@ pub(crate) fn span_at(root: &Root, mut offset: usize) -> Option<Span<'_>> {
     loop {
         match node {
             Node::Leaf(piece) => return Some(Span::Owned(&piece.text().as_bytes()[offset..])),
+            Node::OwnedSource { source, range, .. } => {
+                return Some(Span::OwnedSource(
+                    source,
+                    range.start + offset as u64..range.end,
+                ));
+            }
             Node::Source { source, range } => {
                 return Some(Span::Source(source, range.start + offset as u64..range.end));
             }
@@ -364,7 +418,7 @@ pub(crate) fn byte_at(root: &Root, mut offset: usize) -> Option<u8> {
     let mut node = root.as_deref()?;
     loop {
         match node {
-            Node::Source { .. } => return None,
+            Node::Source { .. } | Node::OwnedSource { .. } => return None,
             Node::Leaf(piece) => return piece.text().as_bytes().get(offset).copied(),
             Node::Branch { left, right, .. } => {
                 if offset < left.summary().bytes {
@@ -390,7 +444,9 @@ pub(crate) fn line_start(root: &Root, line: usize) -> Option<usize> {
     }
     fn find(node: &Node, mut ordinal: usize, preceding_cr: bool) -> usize {
         match node {
-            Node::Source { .. } => unreachable!("source roots use Pending-aware paged APIs"),
+            Node::Source { .. } | Node::OwnedSource { .. } => {
+                unreachable!("source roots use Pending-aware paged APIs")
+            }
             Node::Leaf(piece) => {
                 let mut previous_cr = preceding_cr;
                 for (i, byte) in piece.text().bytes().enumerate() {
@@ -435,7 +491,9 @@ pub(crate) fn line_at(root: &Root, offset: usize) -> usize {
             return node.summary();
         }
         match node {
-            Node::Source { .. } => unreachable!("source roots use Pending-aware paged APIs"),
+            Node::Source { .. } | Node::OwnedSource { .. } => {
+                unreachable!("source roots use Pending-aware paged APIs")
+            }
             Node::Leaf(piece) => Summary::scan(&piece.text()[..offset]),
             Node::Branch { left, right, .. } => {
                 let middle = left.summary().bytes;
@@ -473,7 +531,7 @@ impl<'a> Iterator for Chunks<'a> {
     fn next(&mut self) -> Option<Self::Item> {
         while let Some((node, range)) = self.stack.pop() {
             match node {
-                Node::Source { .. } => return None,
+                Node::Source { .. } | Node::OwnedSource { .. } => return None,
                 Node::Leaf(piece) => return Some(&piece.text()[range]),
                 Node::Branch { left, right, .. } => {
                     let middle = left.summary().bytes;
@@ -512,4 +570,19 @@ pub(crate) fn assert_balanced(root: &Root) {
     if let Some(node) = root {
         check(node);
     }
+}
+
+pub(crate) fn has_source(root: &Root) -> bool {
+    let mut stack: Vec<&Node> = root.iter().map(|node| node.as_ref()).collect();
+    while let Some(node) = stack.pop() {
+        match node {
+            Node::Source { .. } | Node::OwnedSource { .. } => return true,
+            Node::Leaf(_) => {}
+            Node::Branch { left, right, .. } => {
+                stack.push(left);
+                stack.push(right);
+            }
+        }
+    }
+    false
 }

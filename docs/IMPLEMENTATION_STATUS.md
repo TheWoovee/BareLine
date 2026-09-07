@@ -2,7 +2,7 @@
 
 Updated 2026-09-08. The original blueprint is preserved under `blueprint/`; its NOT_STARTED tables describe the supplied specification. This file tracks the implementation.
 
-Latest [PR closure checkpoint](implementation/INTEGRATION-20260908-BATCH03.md): 318 effective tests, six pure performance-contract tests, architecture guard, scoped foundation Clippy and default native build pass. Ordinary development gaps and manual/foreign-host acceptance remain open.
+Latest [PR closure checkpoint](implementation/INTEGRATION-20260908-BATCH04.md): 354 effective tests, six pure performance-contract tests, architecture guard and default native build pass. Ordinary development gaps and manual/foreign-host acceptance remain open.
 
 | Package | State | Evidence |
 |---|---|---|
@@ -14,19 +14,19 @@ Latest [PR closure checkpoint](implementation/INTEGRATION-20260908-BATCH03.md): 
 | PR-006 | IN_PROGRESS | Power-edit module lane assigned; implementation evidence pending. |
 | PR-007 | IN_PROGRESS | Codec lane assigned; streaming implementation and lifecycle integration evidence pending. |
 | PR-008 | IN_PROGRESS | Syntax-highlighting implementation active in parallel; evidence note and focused verification pending. |
-| PR-009 | IN_PROGRESS | Workspace crate/controller assigned; implementation evidence pending. |
+| PR-009 | IMPLEMENTATION_COMPLETE_PENDING_ACCEPTANCE | [Workspace closure](implementation/PR-009.md): lazy explorer, document list, outline import/export, bounded map and actual semantic consumers delivered; batch04 app70/native14/syntax18/backend40 pass. Large-fixture, upstream-definition and native acceptance pending. |
 | PR-010 | IN_PROGRESS | Views module assigned to controls after the PR-023 checkpoint. |
 | PR-011 | IMPLEMENTATION_COMPLETE_PENDING_ACCEPTANCE | [Whole command UI closure](implementation/PR-011.md): native menus/palette/mapper/toolbar/context projections and atomic keymap persistence delivered; combined136 tests, scoped Clippy and native build pass. Physical input/scaling/visual and foreign-host acceptance pending. |
-| PR-012 | IN_PROGRESS | Settings core assigned to portability lane; settings behavior and integration evidence pending. |
+| PR-012 | IMPLEMENTATION_COMPLETE_PENDING_ACCEPTANCE | [Settings closure](implementation/PR-012.md): validated layered persistence, typed editor, theme/font consumers, localization and native menu/context refresh delivered; batch04 app70/settings16/UI21 pass. Native input, mixed-DPI and visual acceptance pending. |
 | PR-013 | IN_PROGRESS | Completion/syntax follow-on assigned after the power-edit checkpoint. |
 | PR-014 | IMPLEMENTATION_COMPLETE_PENDING_ACCEPTANCE | [Macro/process closure](implementation/PR-014.md): manager/persistence, ordered acknowledged input/power/search replay, workspace interpolation, output links and accessibility connected; mixed persistence/replay regression and batch03 pass. Manual acceptance pending. |
 | PR-015 | IN_PROGRESS | [Path trust/watch/tail](implementation/PR-015.md) backend active; native behavior and consumer integration pending. |
 | PR-016 | IN_PROGRESS | Extension runtime/protocol/native transport assigned; isolation/package acceptance pending. |
 | PR-017 | IN_PROGRESS | Compare/utilities assigned after the diff checkpoint. |
-| PR-018 | IN_PROGRESS | [Distribution evidence](implementation/PR-018.md): CLI/portable roots, authenticated update worker/helper atomic apply and rollback, notices and deterministic local packaging verified. Actual fresh unsigned debug portable checkpoint packaged and byte-verified; app supervision/shell/tray integration and signed installer acceptance remain pending. |
+| PR-018 | IMPLEMENTATION_COMPLETE_PENDING_ACCEPTANCE | [Windows distribution closure](implementation/PR-018.md): CLI/IPC, portable roots, shell/tray, reviewed migration, authenticated update/runtime provider and packaging source integrated; batch04 native14/backend40/distribution7 and default build pass. Signed deployment, packaging execution and clean-VM acceptance pending. |
 | PR-019 | IN_PROGRESS | Benchmark tooling assigned; complete-feature workloads and release measurements remain pending. |
 | PR-022 | IMPLEMENTATION_COMPLETE_PENDING_ACCEPTANCE | [Portability closure](implementation/PR-022.md): adapter skeletons, lossless path/modifier contracts, RecordingBackend probes, derived architecture guard and three-OS CI source complete; guard and negative fixtures pass at 021d8cb. Foreign-host execution and probe acceptance remain pending; no native product port claimed. |
-| PR-023 | IN_PROGRESS | [UI primitives](implementation/PR-023.md) |
+| PR-023 | IMPLEMENTATION_COMPLETE_PENDING_ACCEPTANCE | [Toolkit closure](implementation/PR-023.md): full source audit found no required toolkit gap; batch03 shared controls/focus/theme/virtual-tree tests pass. Native composition, physical input and visual acceptance remain pending. |
 | PR-024 | IN_PROGRESS | [Accessibility adapter](implementation/PR-024.md) active; native assistive-technology acceptance pending. |
 | PR-025 | IMPLEMENTATION_COMPLETE_PENDING_ACCEPTANCE | [Bounded diff core closure](implementation/PR-025.md): AC-025-01/02/03 passed locally; independent source review found no blocking core gap. Cross-platform compile remains pending; no full acceptance claim. |
 | PR-026 | IN_PROGRESS | Workspace replacement assigned as search lane's next slice; integration evidence pending. |
@@ -34,7 +34,7 @@ Latest [PR closure checkpoint](implementation/INTEGRATION-20260908-BATCH03.md): 
 | PR-021 | IN_PROGRESS | [Readiness audit](implementation/PR-021.md) and [native QA evidence](implementation/PR-021-NATIVE-20260906.md); full release gates and acceptance remain open. |
 | PR-027 | IN_PROGRESS | [First-party extension evidence](implementation/PR-027.md): component/formatter harness work active; full integration and acceptance remain open. |
 
-Phase count: 27 specified packages; 21 in progress, 6 implementation complete pending acceptance, 0 not started, 0 fully accepted. Assignment means work has started, not that a compiling or verified slice has been delivered. Delivered slices below are usable implementation, not whole-phase completion or a percentage of product readiness.
+Phase count: 27 specified packages; 17 in progress, 10 implementation complete pending acceptance, 0 not started, 0 fully accepted. Assignment means work has started, not that a compiling or verified slice has been delivered. Delivered slices below are usable implementation, not whole-phase completion or a percentage of product readiness.
 
 Owner requirements: work locally; match current mocks; start each PR with its own document; limit reading to necessary references; avoid redundant tests and repeated full builds.
 
@@ -44,8 +44,8 @@ PR-025 is implementation complete with local AC-025-01/02/03 passing and an inde
 
 | Closure candidate | Source versus acceptance boundary | Required next closure action |
 |---|---|---|
-| PR-022 | Owning note reports source slices implemented and local tests/lint/guard/probe compiles passing. Owner confirmation of no remaining in-scope source gaps is requested before changing the package state. | AC-022-01/03: actual Linux/macOS neutral/shared-UI execution. AC-022-02: Unix native path and session persistence on foreign hosts. Unlocked event-loop probe interaction remains pending; unsupported native port capabilities are declared gaps, not claims of completed ports. |
-| PR-023 | Owner confirms source gaps: Button/TextField/tab-strip painting still uses fixed dark tokens; full visible-item tree/list/tab semantic hierarchy is missing; product views do not uniformly consume EventRouter/FocusChain/adapters; full light/dark/high-contrast RecordingBackend goldens are missing. Sixteen tests/lint do not close these gaps. | Complete that source/integration checklist; separately verify physical IME/AltGr/dead keys, focus/pointer behavior, DPI and actual composed-screen equality when unlocked. Active split-view work is not PR-023 completion evidence. |
+| PR-022 | Required portable contracts, skeletons, architecture guard and CI source are complete; local checks pass. | Run foreign Linux/macOS contracts and native event-loop probes; no native product port is claimed. |
+| PR-023 | Full owning and independent source audits found no remaining required toolkit gap; shared focus/theme/virtual-tree tests pass in batch03 and batch04. | Verify composed native controls, physical IME/AltGr/dead keys, pointer/focus, DPI and screenshot equality when manual acceptance resumes. |
 | PR-025 | Complete neutral core source and local AC-025-01/02/03 evidence reviewed; 23 diff tests plus shared-fold test, explicit full 2 GiB-per-side traversal, active cancellation, collision/apply properties, lint and recorded 10 MiB/1 GiB performance support closure. Independent reviewer inspected source/evidence without rerunning the suite. | Execute the required cross-platform compile and record its result. Native UI is explicitly outside PR-025. No blocking source gap or additional owner-permission gate was identified; full acceptance is not yet claimed. |
 
 Prioritize these concrete closure actions over treating additional module assignments as completed phases.

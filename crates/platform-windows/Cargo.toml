@@ -8,6 +8,7 @@ license.workspace = true
 offscreen = ["windows/Win32_Graphics_Imaging"]
 
 [dependencies]
+bareline-unicode-fold = { path = "../unicode-fold" }
 unicode-segmentation = "=1.13.3"
 bareline-distribution = { path = "../distribution" }
 sha2 = "=0.10.9"

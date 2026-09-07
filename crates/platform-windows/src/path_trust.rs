@@ -16,6 +16,26 @@ use windows::{
 
 #[derive(Default)]
 pub struct WindowsPathTrustProvider;
+impl WindowsPathTrustProvider {
+    /// A follow reader pins the approved directory chain but permits writers and
+    /// rotation of the final file. OPEN_REPARSE_POINT prevents a final-name race from
+    /// authenticating to a substituted remote target.
+    pub fn open_follow_read(&self, path: &Path) -> io::Result<(File, std::sync::Arc<dyn Send + Sync>)> {
+        let name = path.file_name().ok_or_else(denied)?;
+        if reserved_device(name) || name.encode_wide().any(|u| u == 0 || u == b':' as u16) { return Err(denied()); }
+        let parent = path.parent().ok_or_else(denied)?;
+        let guard = self.open_read(parent, PathOrigin::User)?;
+        let file = OpenOptions::new().read(true)
+            .share_mode(FILE_SHARE_READ.0 | FILE_SHARE_WRITE.0 | FILE_SHARE_DELETE.0)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT.0).open(path)?;
+        let mut info = BY_HANDLE_FILE_INFORMATION::default();
+        // SAFETY: file owns the handle and the output buffer lives through the call.
+        unsafe { GetFileInformationByHandle(HANDLE(file.as_raw_handle()), &mut info) }
+            .map_err(|e| io::Error::from_raw_os_error(e.code().0 & 0xffff))?;
+        if info.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT.0 | FILE_ATTRIBUTE_OFFLINE.0 | FILE_ATTRIBUTE_DIRECTORY.0) != 0 { return Err(denied()); }
+        Ok((file, std::sync::Arc::new(guard)))
+    }
+}
 fn denied() -> io::Error {
     io::Error::new(
         io::ErrorKind::PermissionDenied,

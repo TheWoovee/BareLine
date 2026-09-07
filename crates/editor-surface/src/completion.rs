@@ -38,6 +38,7 @@ pub struct CompletionResult {
     pub replacement: Range<TextOffset>,
     pub items: Vec<CompletionItem>,
     pub partial: bool,
+    pub provider_generation: u64,
 }
 impl CompletionResult {
     pub fn is_current(&self, snapshot: &DocumentSnapshot) -> bool {
@@ -48,6 +49,7 @@ impl CompletionResult {
 #[derive(Default)]
 pub struct WordIndex {
     source: Option<DocumentSnapshot>,
+    range: Option<Range<TextOffset>>,
     words: BTreeMap<String, usize>,
     bytes: usize,
     pub partial: bool,
@@ -61,6 +63,12 @@ impl WordIndex {
     }
     pub fn bytes(&self) -> usize {
         self.bytes
+    }
+    pub fn covers(&self, snapshot: &DocumentSnapshot, range: &Range<TextOffset>) -> bool {
+        self.current(snapshot) && self.range.as_ref() == Some(range)
+    }
+    pub fn words(&self) -> impl Iterator<Item = &str> {
+        self.words.keys().map(String::as_str)
     }
     pub fn update(
         &mut self,
@@ -96,6 +104,7 @@ impl WordIndex {
                 words.insert(word.to_owned(), 1);
             }
         }
+        self.range = Some(range.clone());
         self.words = words;
         self.bytes = bytes;
         self.partial =
@@ -103,7 +112,7 @@ impl WordIndex {
         self.source = Some(snapshot.clone());
         Ok(())
     }
-    fn current(&self, snapshot: &DocumentSnapshot) -> bool {
+    pub fn current(&self, snapshot: &DocumentSnapshot) -> bool {
         self.source
             .as_ref()
             .is_some_and(|s| s.same_document(snapshot) && s.revision == snapshot.revision)
@@ -138,13 +147,20 @@ impl CompletionProvider for WordIndex {
             .next()
             .unwrap_or("");
         let replacement = TextOffset(caret.0 - prefix.len())..caret;
-        let supported = !syntax.filter(|s| s.is_current(snapshot)).is_some_and(|s| {
-            s.spans.iter().any(|span| {
-                span.range.start <= caret
-                    && caret < span.range.end
-                    && matches!(span.kind, StyleKind::String | StyleKind::Comment)
+        let supported = syntax
+            .filter(|s| {
+                s.is_current(snapshot)
+                    && s.status == bareline_syntax::Status::Complete
+                    && s.range.start <= replacement.start
+                    && caret <= s.range.end
             })
-        });
+            .is_some_and(|s| {
+                !s.spans.iter().any(|span| {
+                    span.range.start <= caret
+                        && caret < span.range.end
+                        && matches!(span.kind, StyleKind::String | StyleKind::Comment)
+                })
+            });
         let mut items = BTreeMap::<String, CompletionItem>::new();
         let mut bytes = 0;
         if supported {
@@ -189,11 +205,46 @@ impl CompletionProvider for WordIndex {
         }
         Ok(CompletionResult {
             source: snapshot.clone(),
+            provider_generation: 0,
             replacement,
             items: items.into_values().collect(),
             partial: self.partial || !self.current(snapshot),
         })
     }
+}
+/// Add bounded catalog/open-document words to a revisioned completion result.
+pub fn extend_result(
+    result: &mut CompletionResult,
+    snapshot: &DocumentSnapshot,
+    candidates: impl IntoIterator<Item = (String, CompletionKind, Option<String>)>,
+    limits: CompletionLimits,
+) -> Result<(), Error> {
+    if !result.is_current(snapshot) {
+        return Err(Error::StaleRevision);
+    }
+    let prefix = snapshot.read(result.replacement.clone(), limits.max_scan_bytes)?;
+    let mut bytes = result
+        .items
+        .iter()
+        .map(|item| item.text.len() + item.detail.as_ref().map_or(0, String::len))
+        .sum::<usize>();
+    for (text, kind, detail) in candidates {
+        if !text.starts_with(&prefix)
+            || text == prefix
+            || result.items.iter().any(|item| item.text == text)
+        {
+            continue;
+        }
+        let size = text.len() + detail.as_ref().map_or(0, String::len);
+        if result.items.len() >= limits.max_items || bytes + size > limits.max_bytes {
+            result.partial = true;
+            break;
+        }
+        bytes += size;
+        result.items.push(CompletionItem { text, kind, detail });
+    }
+    result.items.sort_by(|a, b| a.text.cmp(&b.text));
+    Ok(())
 }
 pub fn accept(
     snapshot: &DocumentSnapshot,
@@ -242,9 +293,31 @@ pub fn toggle_comment(
     block: bool,
     limits: Limits,
 ) -> Result<PowerEdit, Error> {
-    let tokens = LanguageComments(language)
-        .tokens_for(snapshot)
-        .ok_or(Error::OutOfBounds)?;
+    toggle_comment_with_provider(
+        snapshot,
+        selections,
+        &LanguageComments(language),
+        block,
+        limits,
+    )
+}
+pub struct DefinitionComments<'a>(pub &'a bareline_syntax::udl::Definition);
+impl CommentProvider for DefinitionComments<'_> {
+    fn tokens_for(&self, _: &DocumentSnapshot) -> Option<CommentTokens> {
+        (self.0.line_comment.is_some() || self.0.block_comment.is_some()).then(|| CommentTokens {
+            line: self.0.line_comment.clone(),
+            block: self.0.block_comment.clone(),
+        })
+    }
+}
+pub fn toggle_comment_with_provider(
+    snapshot: &DocumentSnapshot,
+    selections: &SelectionSet,
+    provider: &impl CommentProvider,
+    block: bool,
+    limits: Limits,
+) -> Result<PowerEdit, Error> {
+    let tokens = provider.tokens_for(snapshot).ok_or(Error::OutOfBounds)?;
     let set = power::normalize(snapshot, selections, limits)?;
     let mut edits = Vec::new();
     let mut bytes = 0;
@@ -662,12 +735,20 @@ mod tests {
     fn popup_does_not_accept_without_active_selection_and_loader_bounds() {
         let d = doc("ret");
         let index = WordIndex::default();
+        let syntax = bareline_syntax::lex(
+            d.snapshot(),
+            Language::Rust,
+            TextOffset(0)..TextOffset(3),
+            None,
+            &bareline_syntax::Cancellation::default(),
+        )
+        .unwrap();
         let r = index
             .complete(
                 &d.snapshot(),
                 TextOffset(3),
                 Language::Rust,
-                None,
+                Some(&syntax),
                 Default::default(),
             )
             .unwrap();

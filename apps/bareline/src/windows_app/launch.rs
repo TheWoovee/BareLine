@@ -294,7 +294,7 @@ pub fn parse(
         read_only: options.read_only,
         monitor: options.monitor,
         no_session: options.no_session || performance.is_some(),
-        no_extensions: options.no_extensions || performance.is_some(),
+        no_extensions: options.no_extensions || performance.as_ref().is_some_and(|config| !config.requires_extensions()),
         new_instance: options.new_instance || performance.is_some(),
         help: options.help,
         version: options.version,

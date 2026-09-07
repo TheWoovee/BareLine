@@ -23,6 +23,10 @@ struct Request {
 type PageResolver =
     Box<dyn FnMut(bareline_document::source::PageTicket) -> Result<bool, String> + Send>;
 enum Work {
+    Operation {
+        run: Box<dyn FnOnce(&SearchJob) + Send>,
+        reject: Box<dyn FnOnce() + Send>,
+    },
     Folder {
         scope: super::folders::FolderScope,
         query: SearchQuery,
@@ -75,6 +79,7 @@ impl Request {
     fn reject(self, error: SearchError) {
         self.job.cancel();
         match self.work {
+            Work::Operation { reject, .. } => reject(),
             Work::Folder { reply, .. } => {
                 let _ = reply.try_send(Err(error));
             }
@@ -94,10 +99,12 @@ impl Request {
                 let _ = reply.try_send(Err(ReplaceError::Cancelled));
             }
         }
+        self.job.acknowledge_terminal();
         (self.notify)();
     }
     fn execute(self) {
         match self.work {
+            Work::Operation { run, .. } => run(&self.job),
             Work::Folder {
                 scope,
                 query,
@@ -179,6 +186,7 @@ impl Request {
                 let _ = reply.try_send(result);
             }
         }
+        self.job.acknowledge_terminal();
         (self.notify)();
     }
 }
@@ -224,6 +232,14 @@ impl Drop for FolderSearchTicket {
         self.job.cancel();
     }
 }
+pub struct BackgroundTicket<T> {
+    pub job: SearchJob,
+    receiver: Receiver<Result<T, String>>,
+}
+impl<T> BackgroundTicket<T> {
+    pub fn try_recv(&self) -> Result<Result<T, String>, TryRecvError> { self.receiver.try_recv() }
+}
+impl<T> Drop for BackgroundTicket<T> { fn drop(&mut self) { self.job.cancel(); } }
 pub struct PagedSearchTicket {
     pub job: SearchJob,
     receiver: Receiver<Result<super::paged::PagedResults, SearchError>>,
@@ -283,6 +299,19 @@ impl Drop for SearchTicket {
     }
 }
 impl SearchWorker {
+    /// Shares the same bounded/coalescing worker with search and preview preparation.
+    pub fn operation<T: Send + 'static>(&self, operation: impl FnOnce(&SearchJob) -> Result<T, String> + Send + 'static,
+        notify: Notify) -> BackgroundTicket<T> {
+        let job = SearchJob::default();
+        let (reply, receiver) = mpsc::sync_channel(1);
+        let rejected = reply.clone();
+        self.enqueue(Request { work: Work::Operation {
+            run: Box::new(move |job| { let _ = reply.try_send(operation(job)); }),
+            reject: Box::new(move || { let _ = rejected.try_send(Err("Operation superseded".into())); }),
+        }, job: job.clone(), notify });
+        BackgroundTicket { job, receiver }
+    }
+
     pub fn submit_folder(
         &self,
         scope: super::folders::FolderScope,

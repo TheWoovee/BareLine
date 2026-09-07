@@ -12,6 +12,7 @@ pub struct EditorTheme {
     pub number: Color,
     pub comment: Color,
     pub operator: Color,
+    pub marks: [Color; 5],
 }
 impl Default for EditorTheme {
     fn default() -> Self {
@@ -24,6 +25,13 @@ impl Default for EditorTheme {
             number: Color(0xF5B76B),
             comment: Color(0x9AA3AD),
             operator: Color(0xE6E8EA),
+            marks: [
+                Color(0x1E3A2F),
+                Color(0x3A3420),
+                Color(0x23303F),
+                Color(0x3D2426),
+                Color(0x342740),
+            ],
         }
     }
 }
@@ -51,6 +59,13 @@ impl EditorTheme {
             number: color("syntax.number")?,
             comment: color("syntax.comment")?,
             operator: color("syntax.operator")?,
+            marks: [
+                color("mark.style1")?,
+                color("mark.style2")?,
+                color("mark.style3")?,
+                color("mark.style4")?,
+                color("mark.style5")?,
+            ],
         })
     }
 }

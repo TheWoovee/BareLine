@@ -21,11 +21,12 @@ pub(super) struct PowerRuntime {
     rectangle_drag: Option<(usize,usize)>,
     drag: Option<(usize,u32,bareline_document::DocumentSnapshot,bareline_editor_surface::Selection)>,
     group: Option<(bareline_editor_surface::group_view::SurfaceGroup,usize)>,
+    metric_job: Option<(bareline_document::DocumentSnapshot,Arguments,usize,usize)>,
 }
 impl Default for PowerRuntime {
     fn default() -> Self {
         let fields = ["text","","0","1","0","10","1"].into_iter().map(|value| { let mut field = TextField::default(); field.insert(value); field }).collect();
-        Self { open:false,history_open:false,history:ClipboardHistory::default(),history_limits:(20,16<<20,4<<20),fields,focus:0,selected:0,accessibility_focus:None,bounds:Rect::default(),status:String::new(),rectangle:None,target:None,rectangle_drag:None,drag:None,group:None }
+        Self { open:false,history_open:false,history:ClipboardHistory::default(),history_limits:(20,16<<20,4<<20),fields,focus:0,selected:0,accessibility_focus:None,bounds:Rect::default(),status:String::new(),rectangle:None,target:None,rectangle_drag:None,drag:None,group:None,metric_job:None }
     }
 }
 pub(super) fn register(registry: &mut bareline_commands::CommandRegistry) {
@@ -105,10 +106,16 @@ impl Shell {
         else { let Some(rectangle)=self.power.rectangle else{return;};args=rectangle_arguments(rectangle);for (key,field) in ["mode","text","start","step","width","base","repeat"].iter().zip(&self.power.fields) { args.insert((*key).into(),field.value().into()); } }
         let Some(workspace)=self.workspace.as_mut() else{return;};let Some(editor)=self.views.active_editor_mut(workspace,self.app.active) else{return;};
         if !self.power.target.as_ref().is_some_and(|snapshot| snapshot.same_document(editor.snapshot()) && snapshot.revision==editor.snapshot().revision) {self.power.status="Document changed; reopen this dialog.".into();return;}
+        if !self.power.history_open {
+            let rectangle=self.power.rectangle.unwrap();editor.clear_column_metrics();
+            self.power.metric_job=Some((editor.snapshot().clone(),args,rectangle.first_line,rectangle.last_line));
+            self.power.status="Measuring selected rows… Escape cancels.".into();(self.notify)();return;
+        }
         match editor.execute_power_recorded(id,&args) {Ok(())=>self.power.open=false,Err(e)=>self.power.status=e}
     }
     pub(super) fn power_action(&mut self,action:Action)->bool {
-        if !self.power.open||self.power.history_open {return false;}
+        if !self.power.open {return self.power_clipboard_action(action);}
+        if self.power.history_open {return false;}
         let field=&mut self.power.fields[self.power.focus];
         match action {Action::Paste=>{if let Ok(text)=self.platform.as_ref().unwrap().clipboard_text(){field.commit(&text);}},Action::Copy|Action::Cut=>{if self.platform.as_ref().unwrap().set_clipboard_text(field.selected()).is_ok()&&action==Action::Cut{field.insert("");}},Action::SelectAll=>field.select_all(),Action::Undo=>field.undo(false),Action::Redo=>field.undo(true),_=>return false} true
     }
@@ -140,6 +147,16 @@ impl Shell {
         if let Err(e)=editor.select_rectangle(rectangle){editor.error=Some(e);}else{self.power.rectangle=Some(rectangle);}if let Some(window)=&self.window{window.request_redraw();}true
     }
     pub(super) fn power_pump(&mut self)->bool {
+        if let Some((snapshot,args,mut next,last))=self.power.metric_job.take() {
+            if !self.power.open{return true;}
+            let Some(workspace)=self.workspace.as_mut()else{return true;};let Some(editor)=self.views.active_editor_mut(workspace,self.app.active)else{return true;};let Some(renderer)=self.renderer.as_mut()else{return true;};
+            if !snapshot.same_document(editor.snapshot())||snapshot.revision!=editor.snapshot().revision{self.power.status="Document changed; reopen Column Editor.".into();editor.clear_column_metrics();return true;}
+            let stop=next.saturating_add(8).min(last.saturating_add(1));
+            while next<stop {if let Err(error)=editor.measure_column_row(renderer,next){self.power.status=error;editor.clear_column_metrics();return true;}next+=1;}
+            if next<=last{self.power.metric_job=Some((snapshot,args,next,last));(self.notify)();}
+            else {match editor.execute_power_recorded("editor.column.insert",&args){Ok(())=>self.power.open=false,Err(error)=>self.power.status=error}}
+            if let Some(window)=&self.window{window.request_redraw();}return true;
+        }
         let Some((mut group,index))=self.power.group.take() else{return false;};
         let Some(workspace)=self.workspace.as_mut() else{self.power.group=Some((group,index));return false;};
         let Some(primary)=workspace.editors.get_mut(index) else{self.power.group=Some((group,index));return false;};
@@ -222,6 +239,37 @@ impl Shell {
             AccessibilityAction::Invoke(34021)=>self.power.open=false,
             AccessibilityAction::Invoke(id) if (34100..34120).contains(id)=>{self.power.selected=(*id-34100)as usize;self.power_apply();},
             _=>return false,
+        }
+        if let Some(window)=&self.window{window.request_redraw();}true
+    }
+}
+
+impl Shell {
+    /// One atomic clipboard read/write per editor action, including optional rectangle metadata.
+    pub(super) fn power_clipboard_action(&mut self,action:Action)->bool {
+        if !matches!(action,Action::Copy|Action::Cut|Action::Paste)||self.palette.open{return false;}
+        let Some(workspace)=self.workspace.as_mut()else{return false;};let Some(platform)=self.platform.as_ref()else{return false;};
+        let secondary=self.views.pane()==1;
+        if action==Action::Paste {
+            match platform.clipboard_text_with_metadata(power::consumer::RectangleClipboardMetadata::FORMAT,262_144) {
+                Ok(contents)=>{
+                    let _metadata=contents.metadata.as_deref().and_then(|bytes|power::consumer::RectangleClipboardMetadata::decode(bytes,&contents.text));
+                    if secondary {if let Some(editor)=self.views.secondary.as_mut(){editor.enqueue_with_origin(Input::Insert(contents.text),bareline_document::history::EditOrigin::Paste);}}
+                    else if let Some(editor)=workspace.editors.get_mut(self.app.active){editor.commit_with_origin(contents.text,bareline_document::history::EditOrigin::Paste);}
+                }
+                Err(error)=>workspace.message=Some(error.to_string()),
+            }
+        } else {
+            let copied=if secondary {self.views.secondary.as_ref().map(|editor|editor.selected_text().map(|text|{let metadata=editor.rectangle_clipboard_metadata(&text).ok().flatten();(text,metadata)}))}
+            else {workspace.editors.get(self.app.active).map(|editor|editor.selected_text().map(|text|{let metadata=editor.rectangle_clipboard_metadata(&text).ok().flatten();(text,metadata)}))};
+            match copied {
+                Some(Ok((text,metadata))) if !text.is_empty()=>{
+                    let result=if let Some(metadata)=metadata {platform.set_clipboard_text_with_metadata(&text,power::consumer::RectangleClipboardMetadata::FORMAT,&metadata)}else{platform.set_clipboard_text(&text)};
+                    match result {Ok(())=>{self.power.copied(&text);if action==Action::Cut {if secondary{if let Some(editor)=self.views.secondary.as_mut(){editor.enqueue_with_origin(Input::Insert(String::new()),bareline_document::history::EditOrigin::Command);}}else if let Some(editor)=workspace.editors.get_mut(self.app.active){editor.enqueue_with_origin(Input::Insert(String::new()),bareline_document::history::EditOrigin::Command);}}},Err(error)=>workspace.message=Some(error.to_string())}
+                }
+                Some(Err(error))=>workspace.message=Some(error.into()),
+                _=>{},
+            }
         }
         if let Some(window)=&self.window{window.request_redraw();}true
     }

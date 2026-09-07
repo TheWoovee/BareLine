@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Owned accessibility data. Providers cannot read documents or invoke UI code.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 pub enum AccessibilityRole {
     Window,
     Group,
@@ -23,7 +23,7 @@ pub enum AccessibilityRole {
     Editor,
     Status,
 }
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct AccessibilityNode {
     pub id: u64,
     pub parent: u64,
@@ -37,7 +37,7 @@ pub struct AccessibilityNode {
     pub focusable: bool,
     pub invokable: bool,
 }
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct AccessibilityText {
     pub editor_id: u64,
     pub run_id: u64,
@@ -46,7 +46,7 @@ pub struct AccessibilityText {
     pub character_lengths: Vec<u8>,
     pub selection: Option<(usize, usize)>,
 }
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct AccessibilitySnapshot {
     pub root: u64,
     pub focus: u64,
@@ -56,18 +56,18 @@ pub struct AccessibilitySnapshot {
     /// Visible grapheme boxes from actual shaped layouts, in physical client px.
     pub text_geometry: Vec<AccessibilityTextBox>,
 }
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct AccessibilityTextBox {
     pub start: usize,
     pub end: usize,
     pub bounds: [f64; 4],
 }
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct AccessibilityTextContext {
     /// Identifies the immutable source used for this selection and viewport.
     pub source_identity: (u64, u64),
     pub selection: (usize, usize),
-    /// Preedit is inserted at the selection in the provider's virtual text view;
+    /// Preedit is inserted at the caret in the provider's virtual text view;
     /// it never changes the committed document or its canonical offsets.
     pub composition: Option<String>,
 }

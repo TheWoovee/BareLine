@@ -53,6 +53,7 @@ pub struct SearchPanel {
     worker: Option<SearchWorker>,
     pending: Option<OpenDocumentTicket>,
     folder_pending: Option<bareline_search::service::FolderSearchTicket>,
+    folder_options: Option<(bareline_search::folders::FolderScope, Arc<dyn bareline_platform::PathTrustProvider + Send + Sync>, Arc<dyn bareline_platform::LocalFileSystem>, Arc<dyn Fn() + Send + Sync>)>,
     folder_results: Option<bareline_search::folders::FolderResults>,
     folder_activation: Option<(
         std::path::PathBuf,
@@ -76,6 +77,9 @@ impl SearchPanel {
     pub fn owns_accessibility_id(&self, id: u64) -> bool {
         self.semantics().iter().any(|node| node.id.0 == id)
     }
+    pub fn folder_receipt(&self) -> Option<&bareline_search::folders::FolderResults> { self.folder_results.as_ref() }
+    pub fn folder_searching(&self) -> bool { self.folder_pending.is_some() }
+    pub fn folder_job(&self) -> Option<bareline_search::SearchJob> { self.folder_pending.as_ref().map(|ticket| ticket.job.clone()) }
     pub fn status(&self) -> &str {
         &self.status
     }
@@ -240,7 +244,12 @@ impl SearchPanel {
         query
     }
     pub fn take_search_requested(&mut self) -> bool {
-        std::mem::take(&mut self.search_requested)
+        let requested = std::mem::take(&mut self.search_requested);
+        if requested && let Some((scope, trust, platform, notify)) = self.folder_options.clone() {
+            self.start_folder(scope, self.query(), trust, platform, notify);
+            return false;
+        }
+        requested
     }
     pub fn start(
         &mut self,
@@ -249,6 +258,7 @@ impl SearchPanel {
         notify: Arc<dyn Fn() + Send + Sync>,
     ) {
         self.open = true;
+        self.folder_options = None;
         self.folder_pending = None;
         self.folder_results = None;
         self.folder_activation = None;
@@ -294,6 +304,7 @@ impl SearchPanel {
         platform: Arc<dyn bareline_platform::LocalFileSystem>,
         notify: Arc<dyn Fn() + Send + Sync>,
     ) {
+        self.folder_options = Some((scope.clone(), trust.clone(), platform.clone(), notify.clone()));
         self.open = true;
         self.pending = None;
         self.folder_pending = None;

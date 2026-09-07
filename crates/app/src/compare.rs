@@ -18,19 +18,22 @@ use std::sync::{
 pub enum CompareInput {
     Resident(DocumentSnapshot),
     Paged(bareline_editor_surface::paged_view::PagedReadHandle),
+    /// Display identity is independent from the immutable backing-source resolver.
+    CapturedPaged(bareline_document::paged::PagedSnapshot,bareline_editor_surface::paged_view::PagedReadHandle),
 }
 impl CompareInput {
     pub fn same_document(&self, other:&Self)->bool {match (self,other) {
         (Self::Resident(a),Self::Resident(b))=>a.same_document(b),
-        (Self::Paged(a),Self::Paged(b))=>a.snapshot().same_document(b.snapshot()),_=>false,
+        _=>self.paged_snapshot().zip(other.paged_snapshot()).is_some_and(|(a,b)|a.same_document(b)),
     }}
     pub fn current(&self, other:&Self)->bool {self.same_document(other)&&match (self,other) {
         (Self::Resident(a),Self::Resident(b))=>same(a,b),
-        (Self::Paged(a),Self::Paged(b))=>a.snapshot().revision==b.snapshot().revision&&a.snapshot().content_state==b.snapshot().content_state,_=>false,
+        _=>self.paged_snapshot().zip(other.paged_snapshot()).is_some_and(|(a,b)|a.revision==b.revision&&a.content_state==b.content_state),
     }}
-    pub fn len(&self)->usize {match self {Self::Resident(s)=>s.len(),Self::Paged(s)=>s.snapshot().len()}}
+    fn paged_snapshot(&self)->Option<&bareline_document::paged::PagedSnapshot>{match self{Self::Paged(handle)=>Some(handle.snapshot()),Self::CapturedPaged(snapshot,_)=>Some(snapshot),Self::Resident(_)=>None}}
+    pub fn len(&self)->usize {match self {Self::Resident(s)=>s.len(),Self::Paged(s)=>s.snapshot().len(),Self::CapturedPaged(s,_)=>s.len()}}
     pub fn is_empty(&self)->bool {self.len()==0}
-    pub fn revision(&self)->bareline_document::Revision {match self {Self::Resident(s)=>s.revision,Self::Paged(s)=>s.snapshot().revision}}
+    pub fn revision(&self)->bareline_document::Revision {match self {Self::Resident(s)=>s.revision,Self::Paged(s)=>s.snapshot().revision,Self::CapturedPaged(s,_)=>s.revision}}
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -405,6 +408,7 @@ fn same(a: &DocumentSnapshot, b: &DocumentSnapshot) -> bool {
 
 enum PagedResolver {
     Paged(bareline_editor_surface::paged_view::PagedReadHandle),
+    Captured(bareline_editor_surface::paged_view::PagedReadHandle),
     Resident(DocumentSnapshot,bareline_document::source::SourcePublisher),
 }
 impl PagedResolver {
@@ -412,6 +416,7 @@ impl PagedResolver {
         use bareline_document::{Budget,source::{MemorySource,Generation,SourceKind}};
         match input {
             CompareInput::Paged(handle)=>Ok((handle.snapshot().clone(),Self::Paged(handle.clone()))),
+            CompareInput::CapturedPaged(snapshot,handle)=>Ok((snapshot.clone(),Self::Captured(handle.clone()))),
             CompareInput::Resident(snapshot)=>{
                 if !snapshot.is_complete(){return Err(());}
                 let (source,publisher)=MemorySource::new(snapshot.len() as u64,Generation(1),SourceKind::Paged,64*1024,256*1024,Budget::new(512*1024)).map_err(|_|())?;
@@ -424,6 +429,7 @@ impl PagedResolver {
     fn resolve(&self,ticket:bareline_document::source::PageTicket)->Result<bool,()> {
         match self {
             Self::Paged(handle)=>handle.resolve_page(ticket).map_err(|_|()),
+            Self::Captured(handle)=>handle.resolve_captured_page(ticket).map_err(|_|()),
             Self::Resident(snapshot,publisher)=>{
                 let start=(ticket.page as usize).checked_mul(64*1024).ok_or(())?;
                 let end=start.saturating_add(64*1024).min(snapshot.len());
@@ -463,6 +469,35 @@ fn compare_paged_inputs(left:&CompareInput,right:&CompareInput,options:&CompareO
     }
     if !matches!(output.completeness,CompareCompleteness::Exact|CompareCompleteness::Coarse(_)){output.hunks.clear();}
     output.stats.input_bytes=left.len().saturating_add(right.len());output.stats.peak_accounted_bytes=retained;output
+}
+fn input_text(input:&CompareInput,range:std::ops::Range<TextOffset>,cap:usize,cancel:&CancelToken)->Result<String,ApplyError> {
+    use bareline_document::paged::WindowPoll;
+    if range.end.0.saturating_sub(range.start.0)>cap{return Err(ApplyError::BudgetExceeded);}
+    if let CompareInput::Resident(snapshot)=input{return snapshot.read(range,cap).map_err(|_|ApplyError::InvalidRange);}
+    let (snapshot,resolver)=PagedResolver::prepare(input).map_err(|_|ApplyError::Unavailable)?;
+    let budget=bareline_document::Budget::new(cap.saturating_mul(4));
+    let mut request=snapshot.begin_read(range,cap,&budget).map_err(|_|ApplyError::BudgetExceeded)?;
+    loop {if cancel.is_cancelled(){return Err(ApplyError::Unavailable);}match request.poll(){WindowPoll::Ready(window)=>return Ok(window.text().into()),WindowPoll::Pending(ticket)=>{if !resolver.resolve(ticket).map_err(|_|ApplyError::Unavailable)?{std::thread::sleep(std::time::Duration::from_millis(1));}},_=>return Err(ApplyError::Unavailable)}}
+}
+/// Stage a bounded mixed/paged hunk on the worker, then submit its single returned
+/// transaction through the destination actor. Ignored text uses PR-025 policy.
+pub fn prepare_input_merge(left:&CompareInput,right:&CompareInput,hunk:&DiffHunk,direction:Direction,options:&CompareOptions,policy:MergePolicy,cap:usize,cancel:&CancelToken)->Result<EditTransaction,ApplyError> {
+    if left.revision()!=hunk.left_revision||right.revision()!=hunk.right_revision{return Err(ApplyError::Stale);}
+    let a=input_text(left,hunk.left.clone(),cap,cancel)?;let b=input_text(right,hunk.right.clone(),cap,cancel)?;
+    let (destination,range,source)=match direction{Direction::LeftToRight=>(right,hunk.right.clone(),&a),Direction::RightToLeft=>(left,hunk.left.clone(),&b)};
+    let insert=if matches!(policy,MergePolicy::CopySelectedRange){source.clone()}else{
+        let budget=bareline_document::Budget::new(cap.saturating_mul(12));
+        let mut l=bareline_document::Document::from_utf8(&a,budget.clone(),budget.clone()).map_err(|_|ApplyError::BudgetExceeded)?;
+        let mut r=bareline_document::Document::from_utf8(&b,budget.clone(),budget).map_err(|_|ApplyError::BudgetExceeded)?;
+        let ls=l.snapshot();let rs=r.snapshot();let result=bareline_diff::compare(&ls,&rs,options,cancel);
+        if !matches!(result.completeness,CompareCompleteness::Exact|CompareCompleteness::Coarse(_)){return Err(ApplyError::Unavailable);}
+        let mut edits=Vec::new();for local in &result.hunks{edits.extend(bareline_diff::apply_hunk_with_policy(policy,direction,local,&ls,&rs,cap)?.edits);}
+        let dest=match direction{Direction::LeftToRight=>&mut r,Direction::RightToLeft=>&mut l};
+        if !edits.is_empty(){dest.apply(EditTransaction{base_revision:dest.snapshot().revision,edits}).map_err(|_|ApplyError::BudgetExceeded)?;}
+        let result=dest.snapshot();result.read(TextOffset(0)..TextOffset(result.len()),cap).map_err(|_|ApplyError::BudgetExceeded)?
+    };
+    if cancel.is_cancelled(){return Err(ApplyError::Unavailable);}
+    Ok(EditTransaction{base_revision:destination.revision(),edits:vec![bareline_document::Edit{range,insert}]})
 }
 fn alignment(
     result: &CompareResult,

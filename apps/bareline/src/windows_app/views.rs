@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Native two-pane consumer. Both surfaces address the same document actor when cloned.
 use super::*;
-use bareline_app::workspace::WorkspaceEditor;
 use bareline_app::views::{
     Orientation, ScrollPosition, SessionTab, SharedEditorView, SharedSyntaxView, ViewController,
     ViewSnapshot, ViewState,
 };
+use bareline_app::workspace::WorkspaceEditor;
 use bareline_commands::{CommandId, CommandPresentation, CommandRegistry, CommandSpec};
 use bareline_renderer::{DrawOp, LayoutError, Rect, TextBackend};
 use bareline_ui::{ACCENT, BORDER, CHROME, MUTED, TAB_HEIGHT, TEXT, rect, text};
@@ -14,6 +14,31 @@ use std::collections::VecDeque;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn session_capture_preserves_unavailable_tab_when_temporary_id_collides() {
+        let mut workspace = Workspace::new(std::sync::Arc::new(|| {}), std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem)).unwrap();
+        workspace.new_document().unwrap();
+        let mut views = ViewsRuntime::default();
+        views.sync_documents(&workspace);
+        let mut manifest = bareline_file_io::session::SessionManifest {
+            documents: vec![
+                bareline_file_io::session::SessionDocument { id: 1, path: None, title: "Live".into() },
+                bareline_file_io::session::SessionDocument { id: 2, path: None, title: "Awaiting recovery".into() },
+            ],
+            tabs: vec![
+                SessionTab { id: 7, document_id: 1, pinned: false, view: ViewState::default() },
+                SessionTab { id: 1, document_id: 2, pinned: false, view: ViewState::default() },
+            ],
+            active_tab: Some(7),
+            ..Default::default()
+        };
+        views.capture_session(&workspace, &mut manifest, &[(0, 7)]);
+        manifest.validate().unwrap();
+        assert_eq!(manifest.tabs.len(), 2);
+        assert!(manifest.tabs.iter().any(|tab| tab.document_id == 2));
+        assert_ne!(manifest.tabs[0].id, manifest.tabs[1].id);
+    }
 
     #[test]
     fn queued_edits_in_both_native_panes_share_the_document() {
@@ -51,6 +76,21 @@ mod tests {
                 .unwrap(),
             "first second"
         );
+        workspace.editors[0].set_font_family("Consolas").unwrap();
+        views.pump(&mut workspace);
+        assert_eq!(views.secondary.as_ref().unwrap().font_family(), "Consolas");
+        workspace.editors[0].set_logical_scroll(0, 0.0, 84.0);
+        views
+            .secondary
+            .as_mut()
+            .unwrap()
+            .set_logical_scroll(0, 0.0, 13.0);
+        views.controller.as_mut().unwrap().sync_vertical = true;
+        views.sync_scroll(&mut workspace, 0);
+        assert_eq!(views.secondary.as_ref().unwrap().logical_scroll().2, 13.0);
+        views.controller.as_mut().unwrap().sync_horizontal = true;
+        views.sync_scroll(&mut workspace, 0);
+        assert_eq!(views.secondary.as_ref().unwrap().logical_scroll().2, 84.0);
         views.secondary.as_mut().unwrap().selection.anchor = 6;
         views.secondary.as_mut().unwrap().scroll_y = 40.0;
         views.controller.as_mut().unwrap().ratio = 0.65;
@@ -198,12 +238,14 @@ pub(super) struct ViewsRuntime {
     next_document: u64,
     loaded_tabs: [Option<u64>; 2],
     pending_restore: [Option<ViewState>; 2],
+    pending_view_scroll: [Option<ViewState>; 2],
     tab_hits: Vec<TabHit>,
     tab_strips: [Option<Rect>; 2],
     tab_nav: Vec<(u32, bool, Rect)>,
     tab_offset: [usize; 2],
     tab_drag: Option<TabDrag>,
     mru_popup: Option<MruPopup>,
+    accessibility_focus: Option<u64>,
     pending_close: Option<usize>,
     controller: Option<ViewController>,
     primary: Option<ViewSnapshot>,
@@ -215,6 +257,7 @@ pub(super) struct ViewsRuntime {
     queued: VecDeque<QueuedInput>,
     compare: bool,
     alignment: Option<bareline_app::views::AlignmentMap>,
+    applied_spacers: [Option<Vec<(u64, u64)>>; 2],
 }
 impl ViewsRuntime {
     fn draw_tab_strip(
@@ -364,8 +407,9 @@ impl ViewsRuntime {
         ops.push(DrawOp::Stroke(bounds, workspace.theme.border, 1.0));
         ops.push(DrawOp::PushClip(bounds));
         let titles = workspace.titles();
-        let start = selected.saturating_sub(10);
-        for (row, id) in ids.iter().skip(start).take(12).enumerate() {
+        let visible = mru_visible_rows(bounds);
+        let start = selected.saturating_sub(visible.saturating_sub(1));
+        for (row, id) in ids.iter().skip(start).take(visible).enumerate() {
             let row_bounds = rect(
                 bounds.x,
                 bounds.y + row as f32 * TAB_HEIGHT,
@@ -402,18 +446,43 @@ impl ViewsRuntime {
         self.document_index(workspace, self.controller.as_ref()?.tab(id)?.document_id)
     }
     fn sync_documents(&mut self, workspace: &Workspace) {
-        if self.controller.is_some() && self.documents.len()==workspace.editors.len() && self.documents.iter().zip(&workspace.editors).all(|(binding,editor)|binding.matches(editor)) {return;}
+        if self.controller.is_some()
+            && self.documents.len() == workspace.editors.len()
+            && self
+                .documents
+                .iter()
+                .zip(&workspace.editors)
+                .all(|(binding, editor)| binding.matches(editor))
+        {
+            return;
+        }
         if self.controller.is_none() {
             self.controller = ViewController::new(Vec::new(), None).ok();
         }
         if let Some(controller) = &self.controller {
             for binding in &self.documents {
-                if !workspace.editors.iter().any(|editor| binding.matches(editor)) {
-                    let tabs = controller.tabs().iter().enumerate()
+                if !workspace
+                    .editors
+                    .iter()
+                    .any(|editor| binding.matches(editor))
+                {
+                    let tabs = controller
+                        .tabs()
+                        .iter()
+                        .enumerate()
                         .filter(|(_, tab)| tab.document_id == binding.id())
-                        .map(|(position, tab)| (position, tab.clone(), controller.tab_colors.get(&tab.id).copied())).collect();
+                        .map(|(position, tab)| {
+                            (
+                                position,
+                                tab.clone(),
+                                controller.tab_colors.get(&tab.id).copied(),
+                            )
+                        })
+                        .collect();
                     self.closed_documents.push_back((binding.clone(), tabs));
-                    while self.closed_documents.len() > 20 { self.closed_documents.pop_front(); }
+                    while self.closed_documents.len() > 20 {
+                        self.closed_documents.pop_front();
+                    }
                 }
             }
         }
@@ -425,11 +494,17 @@ impl ViewsRuntime {
         });
         for editor in &workspace.editors {
             if !self.documents.iter().any(|binding| binding.matches(editor)) {
-                if let Some(position) = self.closed_documents.iter().position(|(binding, _)| binding.matches(editor)) {
+                if let Some(position) = self
+                    .closed_documents
+                    .iter()
+                    .position(|(binding, _)| binding.matches(editor))
+                {
                     let (binding, tabs) = self.closed_documents.remove(position).unwrap();
                     self.documents.push(binding);
                     if let Some(controller) = &mut self.controller {
-                        for (position, tab, color) in tabs { let _ = controller.restore_tab(tab, position, color); }
+                        for (position, tab, color) in tabs {
+                            let _ = controller.restore_tab(tab, position, color);
+                        }
                     }
                     continue;
                 }
@@ -447,7 +522,13 @@ impl ViewsRuntime {
         if let Some(controller) = &mut self.controller {
             controller.retain_documents(&live);
         }
-        self.documents.sort_by_key(|binding|workspace.editors.iter().position(|editor|binding.matches(editor)).unwrap_or(usize::MAX));
+        self.documents.sort_by_key(|binding| {
+            workspace
+                .editors
+                .iter()
+                .position(|editor| binding.matches(editor))
+                .unwrap_or(usize::MAX)
+        });
     }
     fn save_view_states(&self, workspace: &Workspace, controller: &mut ViewController) {
         for pane in 0..2 {
@@ -461,7 +542,11 @@ impl ViewsRuntime {
                     .map(|index| &workspace.editors[index])
             };
             if let Some(editor) = editor {
-                let state = self.pending_restore[pane].clone().unwrap_or_else(|| workspace_view_state(editor));
+                let state = self.pending_restore[pane]
+                    .as_ref()
+                    .or(self.pending_view_scroll[pane].as_ref())
+                    .cloned()
+                    .unwrap_or_else(|| workspace_view_state(editor));
                 let _ = controller.set_view_state(id, state);
             }
         }
@@ -488,6 +573,7 @@ impl ViewsRuntime {
             if ids[pane] == self.loaded_tabs[pane] {
                 continue;
             }
+            self.applied_spacers[pane] = None;
             let tab = ids[pane]
                 .and_then(|id| self.controller.as_ref().unwrap().tab(id))
                 .cloned();
@@ -496,6 +582,7 @@ impl ViewsRuntime {
                 .and_then(|tab| self.document_index(workspace, tab.document_id));
             if pane == 0 {
                 self.pending_restore[pane] = None;
+                self.pending_view_scroll[pane] = None;
                 if let (Some(index), Some(tab)) = (index, tab) {
                     self.primary = Some(workspace.editors[index].snapshot().clone());
                     if workspace.editors[index].paged() {
@@ -508,13 +595,18 @@ impl ViewsRuntime {
                 }
             } else {
                 self.pending_restore[pane] = None;
+                self.pending_view_scroll[pane] = None;
                 if let Some(old) = self.secondary.take() {
                     self.retired.push(old);
                 }
                 if let (Some(index), Some(tab)) = (index, tab) {
                     let peer = match &workspace.editors[index] {
-                        WorkspaceEditor::Resident(editor) => Ok(WorkspaceEditor::Resident(editor.clone_view())),
-                        WorkspaceEditor::Paged(editor) => editor.clone_view().map(WorkspaceEditor::Paged),
+                        WorkspaceEditor::Resident(editor) => {
+                            Ok(WorkspaceEditor::Resident(editor.clone_view()))
+                        }
+                        WorkspaceEditor::Paged(editor) => {
+                            editor.clone_view().map(WorkspaceEditor::Paged)
+                        }
                     };
                     match peer {
                         Ok(mut peer) => {
@@ -621,7 +713,12 @@ impl ViewsRuntime {
                 .and_then(|id| controller.tab(id))
                 .is_some_and(|tab| tab.pinned);
         }
-        for id in ["view.close_split", "view.focus_other", "view.sync_vertical"] {
+        for id in [
+            "view.close_split",
+            "view.focus_other",
+            "view.sync_vertical",
+            "view.sync_horizontal",
+        ] {
             let state = context.states.entry(CommandId(id)).or_default();
             state.enabled = self.open();
             if !self.open() {
@@ -661,12 +758,9 @@ impl ViewsRuntime {
         right: usize,
     ) -> bool {
         if self.busy(workspace)
-            || [left, right].iter().any(|&index| {
-                workspace
-                    .editors
-                    .get(index)
-                    .is_none()
-            })
+            || [left, right]
+                .iter()
+                .any(|&index| workspace.editors.get(index).is_none())
         {
             return false;
         }
@@ -696,11 +790,25 @@ impl ViewsRuntime {
         self.bounds
     }
     pub(super) fn compare_snapshots(&self, workspace: &Workspace) -> Option<[ViewSnapshot; 2]> {
-        Some([workspace.editors.get(self.primary_index(workspace)?)?.snapshot().clone(), self.secondary.as_ref()?.snapshot().clone()])
+        Some([
+            workspace
+                .editors
+                .get(self.primary_index(workspace)?)?
+                .snapshot()
+                .clone(),
+            self.secondary.as_ref()?.snapshot().clone(),
+        ])
     }
     pub(super) fn compare_viewport_starts(&self, workspace: &Workspace) -> [usize; 2] {
-        let start = |editor: &WorkspaceEditor| match editor { WorkspaceEditor::Paged(editor) => editor.viewport_start().0, _ => 0 };
-        [self.primary_index(workspace).map_or(0, |index| start(&workspace.editors[index])), self.secondary.as_ref().map_or(0, start)]
+        let start = |editor: &WorkspaceEditor| match editor {
+            WorkspaceEditor::Paged(editor) => editor.viewport_start().0,
+            _ => 0,
+        };
+        [
+            self.primary_index(workspace)
+                .map_or(0, |index| start(&workspace.editors[index])),
+            self.secondary.as_ref().map_or(0, start),
+        ]
     }
     pub(super) fn compare_scroll(&self, workspace: &Workspace) -> [f64; 2] {
         [
@@ -727,14 +835,15 @@ impl ViewsRuntime {
         for (offset, editor) in [
             (
                 left,
-                first
-                    .and_then(|index| workspace.editors.get_mut(index)),
+                first.and_then(|index| workspace.editors.get_mut(index)),
             ),
             (right, self.secondary.as_mut()),
         ] {
             if let Some(editor) = editor {
                 if let WorkspaceEditor::Paged(editor) = editor {
-                    if let Err(error) = editor.restore_selection(offset, offset) { editor.error = Some(error); }
+                    if let Err(error) = editor.restore_selection(offset, offset) {
+                        editor.error = Some(error);
+                    }
                     continue;
                 }
                 let mut offset = offset.0.min(editor.snapshot().len());
@@ -840,10 +949,19 @@ impl ViewsRuntime {
             .iter()
             .filter_map(|old| remap.iter().find(|(id, _)| id == old).map(|(_, id)| *id))
             .collect();
-        for tab in retained {
-            if !manifest.tabs.iter().any(|existing| existing.id == tab.id) {
-                manifest.tabs.push(tab);
+        for mut tab in retained {
+            if manifest.tabs.iter().any(|existing| existing.id == tab.id) {
+                // Failed or deferred restores must retain a tab even if a new live view
+                // reused the temporary capture ID. A bounded free ID avoids overflow.
+                tab.id = (1..=10_001)
+                    .find(|id| !manifest.tabs.iter().any(|existing| existing.id == *id))
+                    .unwrap();
             }
+            tab.view.split = 0;
+            if !manifest.mru.contains(&tab.document_id) {
+                manifest.mru.push(tab.document_id);
+            }
+            manifest.tabs.push(tab);
         }
         manifest.tabs.sort_by_key(|tab| !tab.pinned);
     }
@@ -856,8 +974,13 @@ impl ViewsRuntime {
             .map(|editor| editor.take_acknowledged_inputs())
             .unwrap_or_default()
     }
-    pub(super) fn take_ordered_receipts(&mut self) -> Vec<bareline_editor_surface::power::consumer::OrderedReceipt> {
-        self.secondary.as_mut().map(|editor| editor.take_ordered_receipts()).unwrap_or_default()
+    pub(super) fn take_ordered_receipts(
+        &mut self,
+    ) -> Vec<bareline_editor_surface::power::consumer::OrderedReceipt> {
+        self.secondary
+            .as_mut()
+            .map(|editor| editor.take_ordered_receipts())
+            .unwrap_or_default()
     }
     pub(super) fn take_acknowledged_commands(
         &mut self,
@@ -922,18 +1045,33 @@ impl ViewsRuntime {
                 _ => {}
             }
             peer.theme = workspace.editors[index].theme;
+            let _ = peer.set_font_family(workspace.editors[index].font_family());
         }
         for pane in 0..2 {
             let index = self.primary_index(workspace);
-            let editor = if pane == 1 { self.secondary.as_mut() } else { index.and_then(|index| workspace.editors.get_mut(index)) };
+            let editor = if pane == 1 {
+                self.secondary.as_mut()
+            } else {
+                index.and_then(|index| workspace.editors.get_mut(index))
+            };
             if let Some(editor) = editor {
                 if !editor.busy() {
+                    if let Some(state) = self.pending_view_scroll[pane].take() {
+                        editor.set_logical_scroll(state.scroll_line, 0.0, state.scroll_x as f64);
+                        editor.scroll_y = f64::from_bits(state.scroll_y_bits);
+                        changed = true;
+                    }
                     if let Some(state) = self.pending_restore[pane].take() {
+                        if editor.paged() {
+                            self.pending_view_scroll[pane] = Some(state.clone());
+                        }
                         restore_workspace_view(editor, &state);
                         changed = true;
                     }
                 }
-            } else { self.pending_restore[pane] = None; }
+            } else {
+                self.pending_restore[pane] = None;
+            }
         }
         if self.open() && self.secondary_index(workspace).is_none() {
             self.collapse(workspace, false);
@@ -970,7 +1108,9 @@ impl ViewsRuntime {
     fn input(&mut self, workspace: &mut Workspace, pane: u32, input: Input) {
         self.pump(workspace);
         let document = if pane == 1 {
-            self.secondary.as_ref().map(|editor| DocumentBinding::new(0, editor))
+            self.secondary
+                .as_ref()
+                .map(|editor| DocumentBinding::new(0, editor))
         } else {
             self.primary_index(workspace)
                 .map(|i| DocumentBinding::new(0, &workspace.editors[i]))
@@ -996,13 +1136,8 @@ impl ViewsRuntime {
             workspace.message = Some("Wait for pending edits before changing views.".into());
             return;
         }
-        if workspace
-            .editors
-            .get(index)
-            .is_none()
-        {
-            workspace.message =
-                Some("The document is no longer available.".into());
+        if workspace.editors.get(index).is_none() {
+            workspace.message = Some("The document is no longer available.".into());
             return;
         }
         self.save_current(workspace);
@@ -1034,6 +1169,8 @@ impl ViewsRuntime {
         self.install_views(workspace);
     }
     fn collapse(&mut self, workspace: &mut Workspace, keep_secondary: bool) {
+        for editor in &mut workspace.editors { let _ = editor.set_view_spacers(&[]); }
+        self.applied_spacers = [None, None];
         self.save_current(workspace);
         if let Some(controller) = &mut self.controller {
             if keep_secondary {
@@ -1055,13 +1192,8 @@ impl ViewsRuntime {
             workspace.message = Some("Wait for pending edits before cloning a view.".into());
             return;
         }
-        if workspace
-            .editors
-            .get(app.active)
-            .is_none()
-        {
-            workspace.message =
-                Some("The document is no longer available.".into());
+        if workspace.editors.get(app.active).is_none() {
+            workspace.message = Some("The document is no longer available.".into());
             return;
         }
         self.save_current(workspace);
@@ -1183,11 +1315,43 @@ impl ViewsRuntime {
             if update.pane == 1 {
                 if let Some(peer) = &mut self.secondary {
                     let old = peer.logical_scroll();
-                    peer.set_logical_scroll(if sync_vertical { update.position.line } else { old.0 }, if sync_vertical { update.position.fraction } else { old.1 }, if sync_horizontal { update.position.x } else { old.2 });
+                    peer.set_logical_scroll(
+                        if sync_vertical {
+                            update.position.line
+                        } else {
+                            old.0
+                        },
+                        if sync_vertical {
+                            update.position.fraction
+                        } else {
+                            old.1
+                        },
+                        if sync_horizontal {
+                            update.position.x
+                        } else {
+                            old.2
+                        },
+                    );
                 }
             } else if let Some(index) = self.primary_index(workspace) {
                 let old = workspace.editors[index].logical_scroll();
-                workspace.editors[index].set_logical_scroll(if sync_vertical { update.position.line } else { old.0 }, if sync_vertical { update.position.fraction } else { old.1 }, if sync_horizontal { update.position.x } else { old.2 });
+                workspace.editors[index].set_logical_scroll(
+                    if sync_vertical {
+                        update.position.line
+                    } else {
+                        old.0
+                    },
+                    if sync_vertical {
+                        update.position.fraction
+                    } else {
+                        old.1
+                    },
+                    if sync_horizontal {
+                        update.position.x
+                    } else {
+                        old.2
+                    },
+                );
             }
         }
     }
@@ -1229,7 +1393,6 @@ impl ViewsRuntime {
             .as_ref()
             .is_some_and(|controller| controller.vertical_tabs);
         if !self.open() {
-            for editor in &mut workspace.editors { let _ = editor.set_view_spacers(&[]); }
             let inset = if vertical {
                 176.0f32.min(width * 0.4)
             } else {
@@ -1323,10 +1486,18 @@ impl ViewsRuntime {
             } else {
                 self.secondary.as_mut().unwrap()
             };
-            let spacers = if editor.paged() { Vec::new() } else {
-                self.alignment.as_ref().map(|alignment| alignment.spacers(side)).unwrap_or_default()
+            let spacers = if editor.paged() {
+                Vec::new()
+            } else {
+                self.alignment
+                    .as_ref()
+                    .map(|alignment| alignment.spacers(side))
+                    .unwrap_or_default()
             };
-            let _ = editor.set_view_spacers(&spacers);
+            if self.applied_spacers[side].as_ref() != Some(&spacers) {
+                if let Err(error) = editor.set_view_spacers(&spacers) { editor.error = Some(error); }
+                self.applied_spacers[side] = Some(spacers);
+            }
             // EditorSurface already reserves TAB_HEIGHT for this pane's header.
             editor.top_inset = 0.0;
             editor.bottom_inset = 0.0;
@@ -1464,7 +1635,11 @@ fn translate(op: DrawOp, x: f32, y: f32) -> DrawOp {
         },
         DrawOp::PushClip(a) => DrawOp::PushClip(r(a)),
         DrawOp::PopClip => DrawOp::PopClip,
-        DrawOp::Image { image, destination, opacity } => DrawOp::Image {
+        DrawOp::Image {
+            image,
+            destination,
+            opacity,
+        } => DrawOp::Image {
             image,
             destination: r(destination),
             opacity,
@@ -1503,9 +1678,13 @@ fn restore_workspace_view(editor: &mut WorkspaceEditor, state: &ViewState) {
             if let Err(error) = editor.restore_selection(
                 bareline_document::TextOffset(usize::try_from(state.anchor).unwrap_or(usize::MAX)),
                 bareline_document::TextOffset(usize::try_from(state.caret).unwrap_or(usize::MAX)),
-            ) { editor.error = Some(error); }
+            ) {
+                editor.error = Some(error);
+            }
             editor.surface.scroll_y = f64::from_bits(state.scroll_y_bits);
-            editor.surface.set_logical_scroll(state.scroll_line, 0.0, state.scroll_x as f64);
+            editor
+                .surface
+                .set_logical_scroll(state.scroll_line, 0.0, state.scroll_x as f64);
         }
     }
 }
@@ -1541,6 +1720,269 @@ fn restore_view(editor: &mut SharedEditorView, state: &ViewState) {
     editor.set_logical_scroll(state.scroll_line, 0.0, state.scroll_x as f64);
     editor.scroll_y = f64::from_bits(state.scroll_y_bits);
     editor.restore_folds(&state.folds);
+}
+
+fn mru_visible_rows(bounds: Rect) -> usize {
+    ((bounds.height / TAB_HEIGHT).floor() as usize).clamp(1, 12)
+}
+const ACCESS_TAB_BASE: u64 = 0x1000_0000_0000_0000;
+const ACCESS_NAV_BASE: u64 = 0x2000_0000_0000_0000;
+const ACCESS_MRU_BASE: u64 = 0x3000_0000_0000_0000;
+fn access_tab_id(tab: u64) -> Option<u64> {
+    tab.checked_mul(2)
+        .and_then(|id| id.checked_add(ACCESS_TAB_BASE))
+        .filter(|id| *id < ACCESS_NAV_BASE)
+}
+impl Shell {
+    pub(super) fn views_accessibility_nodes(
+        &self,
+    ) -> Vec<bareline_platform::accessibility::AccessibilityNode> {
+        use bareline_platform::accessibility::{AccessibilityNode, AccessibilityRole};
+        let Some(workspace) = &self.workspace else {
+            return Vec::new();
+        };
+        let Some(controller) = &self.views.controller else {
+            return Vec::new();
+        };
+        let offset = self.editor_bounds();
+        let bounds = |rect: Rect| {
+            [
+                (rect.x + offset.x) as f64,
+                (rect.y + offset.y) as f64,
+                rect.width as f64,
+                rect.height as f64,
+            ]
+        };
+        let titles = workspace.titles();
+        let mut nodes = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for hit in &self.views.tab_hits {
+            if !seen.insert(hit.id) {
+                continue;
+            }
+            let Some(id) = access_tab_id(hit.id) else {
+                continue;
+            };
+            let Some(tab) = controller.tab(hit.id) else {
+                continue;
+            };
+            let Some(index) = self.views.tab_index(workspace, hit.id) else {
+                continue;
+            };
+            let title = titles.get(index).cloned().unwrap_or_default();
+            let name = format!(
+                "{}{}, pane {}{}",
+                title,
+                if tab.pinned { ", pinned" } else { "" },
+                hit.pane + 1,
+                if workspace.editors[index].dirty() {
+                    ", modified"
+                } else {
+                    ""
+                }
+            );
+            nodes.push(AccessibilityNode {
+                id,
+                parent: 1,
+                role: AccessibilityRole::Tab,
+                name,
+                value: controller
+                    .tab_colors
+                    .get(&hit.id)
+                    .map(|color| format!("#{color:06x}")),
+                bounds: bounds(hit.bounds),
+                disabled: self.views.busy(workspace),
+                selected: controller.active_tab(hit.pane) == Some(hit.id),
+                expanded: None,
+                focusable: true,
+                invokable: true,
+            });
+            nodes.push(AccessibilityNode {
+                id: id + 1,
+                parent: id,
+                role: AccessibilityRole::Button,
+                name: format!("Close {title}"),
+                value: None,
+                bounds: bounds(hit.close),
+                disabled: self.views.busy(workspace),
+                selected: false,
+                expanded: None,
+                focusable: true,
+                invokable: true,
+            });
+        }
+        for (pane, forward, rect) in &self.views.tab_nav {
+            let id = ACCESS_NAV_BASE + *pane as u64 * 2 + u64::from(*forward);
+            if nodes.iter().any(|node| node.id == id) {
+                continue;
+            }
+            nodes.push(AccessibilityNode {
+                id,
+                parent: 1,
+                role: AccessibilityRole::Button,
+                name: format!(
+                    "{} tabs in pane {}",
+                    if *forward { "Next" } else { "Previous" },
+                    pane + 1
+                ),
+                value: None,
+                bounds: bounds(*rect),
+                disabled: false,
+                selected: false,
+                expanded: None,
+                focusable: true,
+                invokable: true,
+            });
+        }
+        if let Some(popup) = &self.views.mru_popup {
+            nodes.push(AccessibilityNode {
+                id: ACCESS_MRU_BASE,
+                parent: 1,
+                role: AccessibilityRole::List,
+                name: "Recent documents".into(),
+                value: None,
+                bounds: bounds(popup.bounds),
+                disabled: false,
+                selected: false,
+                expanded: Some(true),
+                focusable: false,
+                invokable: false,
+            });
+            let start = popup
+                .selected
+                .saturating_sub(mru_visible_rows(popup.bounds).saturating_sub(1));
+            for (row, tab) in popup
+                .ids
+                .iter()
+                .skip(start)
+                .take(mru_visible_rows(popup.bounds))
+                .enumerate()
+            {
+                let Some(id) = access_tab_id(*tab).and_then(|id| id.checked_add(ACCESS_MRU_BASE))
+                else {
+                    continue;
+                };
+                let Some(index) = self.views.tab_index(workspace, *tab) else {
+                    continue;
+                };
+                let row_bounds = rect(
+                    popup.bounds.x,
+                    popup.bounds.y + row as f32 * TAB_HEIGHT,
+                    popup.bounds.width,
+                    TAB_HEIGHT.min((popup.bounds.height - row as f32 * TAB_HEIGHT).max(0.0)),
+                );
+                if row_bounds.height == 0.0 {
+                    continue;
+                }
+                nodes.push(AccessibilityNode {
+                    id,
+                    parent: ACCESS_MRU_BASE,
+                    role: AccessibilityRole::ListItem,
+                    name: titles.get(index).cloned().unwrap_or_default(),
+                    value: None,
+                    bounds: bounds(row_bounds),
+                    disabled: self.views.busy(workspace),
+                    selected: start + row == popup.selected,
+                    expanded: None,
+                    focusable: true,
+                    invokable: true,
+                });
+            }
+        }
+        nodes
+    }
+    pub(super) fn views_accessibility_focus(&self) -> Option<u64> {
+        if let Some(popup) = &self.views.mru_popup {
+            return access_tab_id(*popup.ids.get(popup.selected)?)
+                .and_then(|id| id.checked_add(ACCESS_MRU_BASE));
+        }
+        self.views.accessibility_focus.filter(|id| {
+            self.views_accessibility_nodes()
+                .iter()
+                .any(|node| node.id == *id)
+        })
+    }
+    pub(super) fn views_accessibility(
+        &mut self,
+        el: &winit::event_loop::ActiveEventLoop,
+        action: &bareline_platform::accessibility::AccessibilityAction,
+    ) -> bool {
+        use bareline_platform::accessibility::AccessibilityAction;
+        let (id, invoke) = match action {
+            AccessibilityAction::Focus(id) => (*id, false),
+            AccessibilityAction::Invoke(id) => (*id, true),
+            _ => return false,
+        };
+        if let Some(popup) = &mut self.views.mru_popup {
+            if let Some(position) = popup.ids.iter().position(|tab| {
+                access_tab_id(*tab).and_then(|id| id.checked_add(ACCESS_MRU_BASE)) == Some(id)
+            }) {
+                popup.selected = position;
+                if invoke {
+                    let tab = popup.ids[position];
+                    self.views.mru_popup = None;
+                    if let Some(workspace) = &mut self.workspace {
+                        self.views.select_tab(workspace, &mut self.app, tab);
+                    }
+                }
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+                return true;
+            }
+        }
+        if let Some((pane, forward, _)) = self
+            .views
+            .tab_nav
+            .iter()
+            .find(|(pane, forward, _)| {
+                ACCESS_NAV_BASE + *pane as u64 * 2 + u64::from(*forward) == id
+            })
+            .copied()
+        {
+            self.views.accessibility_focus = if invoke { None } else { Some(id) };
+            if invoke {
+                let offset = &mut self.views.tab_offset[pane as usize];
+                *offset = if forward {
+                    offset.saturating_add(1)
+                } else {
+                    offset.saturating_sub(1)
+                };
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+            }
+            return true;
+        }
+        let Some(hit) = self
+            .views
+            .tab_hits
+            .iter()
+            .find(|hit| access_tab_id(hit.id).is_some_and(|base| id == base || id == base + 1))
+            .copied()
+        else {
+            return false;
+        };
+        let Some(workspace) = &mut self.workspace else {
+            return false;
+        };
+        if self.views.busy(workspace) {
+            return true;
+        }
+        self.views.accessibility_focus = if invoke { None } else { Some(id) };
+        if invoke && access_tab_id(hit.id).is_some_and(|base| id == base + 1) {
+            self.views.close_tab(workspace, &mut self.app, hit.id);
+        } else {
+            self.views.select_tab(workspace, &mut self.app, hit.id);
+        }
+        if self.views.pending_close.take().is_some() {
+            self.dispatch(el, Action::Close);
+        }
+        if let Some(window) = &self.window {
+            window.request_redraw();
+        }
+        true
+    }
 }
 
 impl Shell {
@@ -1700,7 +2142,9 @@ impl Shell {
                     ..
                 } => {
                     if popup.bounds.contains(point) {
-                        let start = popup.selected.saturating_sub(10);
+                        let start = popup
+                            .selected
+                            .saturating_sub(mru_visible_rows(popup.bounds).saturating_sub(1));
                         popup.selected = (start
                             + ((point.y - popup.bounds.y) / TAB_HEIGHT) as usize)
                             .min(popup.ids.len().saturating_sub(1));
@@ -1931,6 +2375,7 @@ impl Shell {
             return true;
         }
         if action == Action::Close {
+            self.views.save_current(workspace);
             if let Some(id) = self
                 .views
                 .controller
@@ -2000,6 +2445,15 @@ impl Shell {
         true
     }
     pub(super) fn views_event(&mut self, _el: &ActiveEventLoop, event: &WindowEvent) -> bool {
+        if matches!(
+            event,
+            WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                ..
+            } | WindowEvent::KeyboardInput { .. }
+        ) {
+            self.views.accessibility_focus = None;
+        }
         if self.tabs_event(_el, event) {
             return true;
         }
@@ -2113,8 +2567,16 @@ impl Shell {
                     let horizontal = self.modifiers.shift_key()
                         || matches!(delta,MouseScrollDelta::LineDelta(x,y) if x.abs()>y.abs());
                     let amount = match delta {
-                        MouseScrollDelta::LineDelta(x, _) if horizontal && !self.modifiers.shift_key() => -*x as f64 * 72.0,
-                        MouseScrollDelta::PixelDelta(p) if horizontal && !self.modifiers.shift_key() => -p.x / window.scale_factor(),
+                        MouseScrollDelta::LineDelta(x, _)
+                            if horizontal && !self.modifiers.shift_key() =>
+                        {
+                            -*x as f64 * 72.0
+                        }
+                        MouseScrollDelta::PixelDelta(p)
+                            if horizontal && !self.modifiers.shift_key() =>
+                        {
+                            -p.x / window.scale_factor()
+                        }
                         MouseScrollDelta::LineDelta(_, y) => -*y as f64 * 72.0,
                         MouseScrollDelta::PixelDelta(p) => -p.y / window.scale_factor(),
                     };
@@ -2124,7 +2586,11 @@ impl Shell {
                             if horizontal {
                                 peer.horizontal_scroll(amount);
                             } else {
-                                if amount < 0.0 { if let WorkspaceEditor::Paged(editor) = peer { editor.set_follow_paused(true); } }
+                                if amount < 0.0 {
+                                    if let WorkspaceEditor::Paged(editor) = peer {
+                                        editor.set_follow_paused(true);
+                                    }
+                                }
                                 peer.scroll(amount, height);
                             }
                         }
@@ -2132,7 +2598,13 @@ impl Shell {
                         if horizontal {
                             workspace.editors[index].horizontal_scroll(amount);
                         } else {
-                            if amount < 0.0 { if let WorkspaceEditor::Paged(editor) = &mut workspace.editors[index] { editor.set_follow_paused(true); } }
+                            if amount < 0.0 {
+                                if let WorkspaceEditor::Paged(editor) =
+                                    &mut workspace.editors[index]
+                                {
+                                    editor.set_follow_paused(true);
+                                }
+                            }
                             workspace.editors[index].scroll(amount, height);
                         }
                     }
@@ -2166,6 +2638,44 @@ impl Shell {
             }
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
                 let extend = self.modifiers.shift_key();
+                if matches!(
+                    event.logical_key,
+                    Key::Named(NamedKey::PageDown | NamedKey::PageUp)
+                ) && !self.modifiers.control_key()
+                {
+                    let forward = matches!(event.logical_key, Key::Named(NamedKey::PageDown));
+                    let pane = self.views.pane();
+                    let height =
+                        self.views.bounds[pane as usize].map_or(400.0, |bounds| bounds.height);
+                    let index = self.views.primary_index(workspace);
+                    let editor = if pane == 1 {
+                        self.views.secondary.as_mut()
+                    } else {
+                        index.and_then(|index| workspace.editors.get_mut(index))
+                    };
+                    if let Some(editor) = editor {
+                        if !editor.busy() {
+                            if !forward {
+                                if let WorkspaceEditor::Paged(paged) = editor {
+                                    paged.set_follow_paused(true);
+                                }
+                            }
+                            if !editor.page_by(forward) {
+                                editor.scroll(
+                                    if forward {
+                                        height as f64 * 0.8
+                                    } else {
+                                        -height as f64 * 0.8
+                                    },
+                                    height,
+                                );
+                            }
+                        }
+                    }
+                    self.views.sync_scroll(workspace, pane);
+                    window.request_redraw();
+                    return true;
+                }
                 let input = match &event.logical_key {
                     Key::Named(NamedKey::ArrowLeft) => Some(Input::Left(extend)),
                     Key::Named(NamedKey::ArrowRight) => Some(Input::Right(extend)),

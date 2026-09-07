@@ -128,6 +128,21 @@ impl SettingsController {
         if let Some(error) = &self.error {
             return error.clone();
         }
+        let resolved = config::resolve(
+            &self.user.document,
+            self.workspace.as_ref().map(|w| &w.document),
+            self.workspace_opted_in,
+            None,
+        );
+        if let Some(diagnostic) = resolved.diagnostics.first() {
+            return self
+                .localizer
+                .format(
+                    "settings.invalid",
+                    &[("key", &diagnostic.key), ("reason", &diagnostic.message)],
+                )
+                .unwrap_or_else(|_| format!("{}: {}", diagnostic.key, diagnostic.message));
+        }
         match &self.current().status {
             SaveStatus::Saved => self.label("settings.saved", "All changes saved"),
             SaveStatus::Pending => self.label("settings.unsaved", "Changes not saved"),
@@ -1322,12 +1337,19 @@ impl SettingsController {
             ops,
             self.revert.x,
             self.revert.y + 8.0,
-            "Revert",
+            self.label("settings.revert", "Revert"),
             12.0,
             foreground,
         );
         if matches!(self.current().status, SaveStatus::Failed(_)) {
-            text(ops, self.retry.x, self.retry.y + 8.0, "Retry", 12.0, focus);
+            text(
+                ops,
+                self.retry.x,
+                self.retry.y + 8.0,
+                self.label("settings.retry", "Retry"),
+                12.0,
+                focus,
+            );
         }
         ops.push(DrawOp::StrokeRounded(
             self.reset,
@@ -1339,7 +1361,7 @@ impl SettingsController {
             ops,
             self.reset.x + 12.0,
             self.reset.y + 8.0,
-            "Reset section",
+            self.label("settings.reset_section", "Reset section"),
             12.0,
             foreground,
         );
@@ -1351,7 +1373,37 @@ impl SettingsController {
                 ops,
                 dialog.x + 12.0,
                 dialog.y + 18.0,
-                format!("Reset {} in {:?} settings?", self.category, self.scope),
+                self.localizer
+                    .format(
+                        "settings.reset",
+                        &[
+                            (
+                                "section",
+                                &self.label(
+                                    &format!("settings.category.{}", self.category),
+                                    &self.category,
+                                ),
+                            ),
+                            (
+                                "scope",
+                                &self.label(
+                                    if self.scope == Scope::User {
+                                        "settings.scope.user"
+                                    } else {
+                                        "settings.scope.workspace"
+                                    },
+                                    if self.scope == Scope::User {
+                                        "User"
+                                    } else {
+                                        "Workspace"
+                                    },
+                                ),
+                            ),
+                        ],
+                    )
+                    .unwrap_or_else(|_| {
+                        format!("Reset {} in {:?} settings?", self.category, self.scope)
+                    }),
                 14.0,
                 foreground,
             );
@@ -1359,7 +1411,10 @@ impl SettingsController {
                 ops,
                 dialog.x + 12.0,
                 dialog.y + 54.0,
-                "Enter: reset section   Escape: cancel",
+                self.label(
+                    "settings.reset_hint",
+                    "Enter: reset section   Escape: cancel",
+                ),
                 13.0,
                 muted,
             );
@@ -1378,7 +1433,21 @@ impl SettingsController {
                     4.0,
                     1.0,
                 ));
-                text(ops, x + 8.0, button.y + 6.0, label, 13.0, foreground);
+                text(
+                    ops,
+                    x + 8.0,
+                    button.y + 6.0,
+                    self.label(
+                        if id == 8011 {
+                            "settings.reset_button"
+                        } else {
+                            "settings.cancel"
+                        },
+                        label,
+                    ),
+                    13.0,
+                    foreground,
+                );
             }
         }
         if let Some(popup) = &self.popup {
@@ -1466,7 +1535,23 @@ impl SettingsController {
                     4.0,
                     1.0,
                 ));
-                text(ops, x + 8.0, bounds.y + 6.0, label, 13.0, foreground);
+                text(
+                    ops,
+                    x + 8.0,
+                    bounds.y + 6.0,
+                    self.localizer
+                        .format(
+                            if id == 8009 {
+                                "settings.apply"
+                            } else {
+                                "settings.cancel"
+                            },
+                            &[],
+                        )
+                        .unwrap_or_else(|_| label.into()),
+                    13.0,
+                    foreground,
+                );
             }
         }
         if self.value_edit.is_none() && self.popup.is_none() && !self.reset_pending {
@@ -1495,7 +1580,14 @@ impl SettingsController {
                 Semantics::new(
                     ViewId(id),
                     SemanticRole::Button,
-                    name,
+                    &self.label(
+                        if id == 8011 {
+                            "settings.reset_section"
+                        } else {
+                            "settings.cancel"
+                        },
+                        name,
+                    ),
                     "settings.reset_section",
                     rect(x, dialog.y + 76.0, 72.0, 28.0),
                     ControlState {
@@ -1531,7 +1623,14 @@ impl SettingsController {
                     Semantics::new(
                         ViewId(id),
                         SemanticRole::Button,
-                        label,
+                        &self.label(
+                            if id == 8009 {
+                                "settings.apply"
+                            } else {
+                                "settings.cancel"
+                            },
+                            label,
+                        ),
                         "settings.edit_value",
                         rect(x, edit.bounds.y + edit.bounds.height + 24.0, 72.0, 28.0),
                         ControlState {
@@ -1547,7 +1646,7 @@ impl SettingsController {
         }
         let mut nodes = vec![self.query.semantics(
             ViewId(8000),
-            "Search settings",
+            &self.label("settings.search", "Search settings"),
             "settings.search",
             self.search_bounds,
             ControlState {
@@ -1575,7 +1674,7 @@ impl SettingsController {
                 Semantics::new(
                     ViewId(id),
                     SemanticRole::Button,
-                    label,
+                    &self.label(command, label),
                     command,
                     bounds,
                     ControlState::default(),
@@ -1584,12 +1683,12 @@ impl SettingsController {
                 .action(SemanticAction::Invoke),
             );
         }
-        if self.error.is_some() {
+        if matches!(self.current().status, SaveStatus::Failed(_)) {
             nodes.push(
                 Semantics::new(
                     ViewId(8005),
                     SemanticRole::Button,
-                    "Retry saving",
+                    &self.label("settings.retry", "Retry saving"),
                     "settings.retry",
                     self.retry,
                     ControlState::default(),
@@ -1602,7 +1701,7 @@ impl SettingsController {
             let mut node = Semantics::new(
                 ViewId(8100 + index as u64),
                 SemanticRole::ListItem,
-                category,
+                &self.label(&format!("settings.category.{category}"), category),
                 "settings.category",
                 rect(
                     self.bounds.x,
@@ -1622,7 +1721,7 @@ impl SettingsController {
                 Semantics::new(
                     ViewId(8006),
                     SemanticRole::Checkbox,
-                    "Enable workspace preferences",
+                    &self.label("settings.workspace_opt_in", "Enable workspace preferences"),
                     "settings.workspace_opt_in",
                     self.opt_in,
                     ControlState {
@@ -1767,6 +1866,37 @@ impl SettingSemantic for bareline_ui::controls::SemanticNode {
 mod visual_contract_tests {
     use super::*;
     use bareline_renderer_recording::RecordingBackend;
+    #[test]
+    fn failed_save_exposes_retry_even_without_an_unrelated_controller_error() {
+        let mut controller = SettingsController::new(
+            SettingsDocument::empty(Scope::User),
+            None,
+            SystemAppearance::default(),
+        );
+        controller.show();
+        controller.current_mut().status = SaveStatus::Failed("Disk full".into());
+        assert!(controller.error.is_none());
+        assert!(
+            controller
+                .semantics()
+                .iter()
+                .any(|node| node.id == ViewId(8005)
+                    && node.actions.contains(&SemanticAction::Invoke))
+        );
+        assert!(controller.status_description().contains("Disk full"));
+    }
+    #[test]
+    fn malformed_persisted_value_reports_its_key_without_resetting_other_values() {
+        let document = SettingsDocument::parse(
+            b"schema_version=1\n[editor.font]\nsize=999\nfamily='Consolas'\n",
+            Scope::User,
+        )
+        .unwrap();
+        let controller = SettingsController::new(document, None, SystemAppearance::default());
+        assert!(controller.status_description().contains("editor.font.size"));
+        assert_eq!(controller.effective().editor_font_size_pt, 12.0);
+        assert_eq!(controller.effective().editor_font_family, "Consolas");
+    }
     #[test]
     fn invalid_value_keeps_draft_and_cancel_restores_row_focus() {
         let mut controller = SettingsController::new(

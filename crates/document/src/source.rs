@@ -31,6 +31,11 @@ pub enum SourceRead {
     Pending(PageTicket),
     Unavailable(Unavailable),
 }
+/// Explicit worker-only reader for private immutable owned storage. The loader owns
+/// its sealed backing capability, never a MemorySource (which would create a cycle).
+pub trait OwnedPageLoader: Send + Sync {
+    fn read(&self, offset: u64, output: &mut [u8]) -> std::io::Result<()>;
+}
 pub trait ByteSource: Send + Sync {
     fn len(&self) -> u64;
     fn is_empty(&self) -> bool {
@@ -60,6 +65,7 @@ struct Pages {
 }
 struct Inner {
     owner: Mutex<Option<Arc<dyn Send + Sync>>>,
+    loader: Mutex<Option<Arc<dyn OwnedPageLoader>>>,
     generation: Generation,
     length: u64,
     page_size: usize,
@@ -112,6 +118,7 @@ impl MemorySource {
         }
         let inner = Arc::new(Inner {
             owner: Mutex::new(None),
+            loader: Mutex::new(None),
             generation,
             length,
             page_size,
@@ -131,9 +138,53 @@ impl MemorySource {
     }
     /// Retains private backing-store ownership for every snapshot containing this source.
     /// Attach before publishing the source; a second owner is refused.
+    pub fn has_owned_loader(&self) -> bool {
+        self.0
+            .loader
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .is_some()
+    }
+    pub fn attach_owned_loader(&self, loader: Arc<dyn OwnedPageLoader>) -> Result<(), Error> {
+        let mut slot = self.0.loader.lock().unwrap_or_else(|p| p.into_inner());
+        if slot.is_some() {
+            return Err(Error::WrongDocument);
+        }
+        *slot = Some(loader);
+        Ok(())
+    }
+    /// Resolve a private owned ticket on an I/O worker. UI read() remains nonblocking.
+    /// False means this source has no owned loader and needs its original producer.
+    pub fn resolve_owned(&self, ticket: PageTicket) -> Result<bool, Error> {
+        if ticket.generation != self.0.generation {
+            return Err(Error::StaleRevision);
+        }
+        let loader = self
+            .0
+            .loader
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone();
+        let Some(loader) = loader else {
+            return Ok(false);
+        };
+        let publisher = SourcePublisher(self.0.clone());
+        let mut buffer = publisher.prepare_page(ticket)?;
+        let offset = ticket
+            .page
+            .checked_mul(self.0.page_size as u64)
+            .ok_or(Error::OutOfBounds)?;
+        loader
+            .read(offset, buffer.bytes_mut())
+            .map_err(|_| Error::IncompleteSource)?;
+        publisher.publish_buffer(buffer, self.0.generation)?;
+        Ok(true)
+    }
     pub fn retain_owner(&self, owner: Arc<dyn Send + Sync>) -> Result<(), Error> {
         let mut slot = self.0.owner.lock().unwrap_or_else(|p| p.into_inner());
-        if slot.is_some() { return Err(Error::WrongDocument); }
+        if slot.is_some() {
+            return Err(Error::WrongDocument);
+        }
         *slot = Some(owner);
         Ok(())
     }
@@ -146,7 +197,9 @@ impl MemorySource {
     pub fn page_size(&self) -> usize {
         self.0.page_size
     }
-    pub fn generation(&self) -> Generation { self.0.generation }
+    pub fn generation(&self) -> Generation {
+        self.0.generation
+    }
     pub fn sealed(&self) -> bool {
         self.0.sealed.load(Ordering::Acquire)
     }

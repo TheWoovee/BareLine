@@ -13,6 +13,30 @@ pub const PAGE_NEXT_ID: u64 = u64::MAX - 2;
 pub const COMPOSITION_ID: u64 = u64::MAX - 3;
 pub const EDITOR_ERROR_ID: u64 = u64::MAX - 4;
 pub const TAB_ID_BASE: u64 = 1_000_000;
+pub fn status(editor: &crate::workspace::WorkspaceEditor, width: f64, height: f64) -> Vec<AccessibilityNode> {
+    use crate::workspace::WorkspaceEditor;
+    let (size, position, eol) = match editor {
+        WorkspaceEditor::Resident(e) => {
+            let snapshot = e.snapshot();
+            let line = snapshot.line_at(bareline_document::TextOffset(e.selection.caret)).ok();
+            let position = line.map(|line| {
+                let column = snapshot.line_range(line).ok().and_then(|range| snapshot.read(range.start..bareline_document::TextOffset(e.selection.caret), MAX_ACCESSIBLE_TEXT_BYTES).ok()).map(|text| (text.graphemes(true).count()+1).to_string()).unwrap_or_else(|| "indexing".into());
+                format!("Line {}, column {column}", line+1)
+            }).unwrap_or_else(|| "Position unavailable".into());
+            let size = if snapshot.is_complete() { format!("{} bytes, {} lines",snapshot.len(),snapshot.line_count()) } else { format!("{} bytes loaded, indexing",snapshot.len()) };
+            (size,position,snapshot.eol_label().to_owned())
+        }
+        WorkspaceEditor::Paged(e) => {
+            let lines = match e.snapshot().line_count() { bareline_document::paged::LineCount::Known(count) => format!("{count} lines"), bareline_document::paged::LineCount::Unknown => "lines indexing".into() };
+            (format!("{} bytes, {lines}",e.snapshot().len()), format!("Byte {}, line and column indexing",e.viewport_start().0+e.surface.selection.caret), "EOL indexing".into())
+        }
+    };
+    let values = [("Language",editor.language.label().to_owned()),("Document size",size),("Caret position",position),("Line endings",eol),("Encoding",editor.encoding_label.clone()),("Editing mode",if editor.read_only(){"Read only"}else{"Insert"}.into())];
+    values.into_iter().enumerate().map(|(index,(name,value))| AccessibilityNode {
+        id: 90_001_000+index as u64, parent: WINDOW_ID, role: AccessibilityRole::Status,
+        name:name.into(),value:Some(value),bounds:[width*index as f64/6.0,(height-24.0).max(0.0),width/6.0,24.0],disabled:false,selected:false,expanded:None,focusable:false,invokable:false,
+    }).collect()
+}
 /// The full source identity, including for a paged editor whose rendered surface
 /// is only a local window. Recheck this immediately before applying queued UIA.
 pub fn source_identity(editor: &crate::workspace::WorkspaceEditor) -> (u64, u64) {

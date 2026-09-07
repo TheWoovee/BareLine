@@ -11,10 +11,12 @@ pub struct PrintOptions {
     pub header: bool,
     pub footer: bool,
     pub syntax_colors: bool,
+    pub foreground: u32,
+    pub background: u32,
 }
 impl Default for PrintOptions {
     fn default() -> Self { Self { title:"Bareline document".into(),font_family:"Consolas".into(),font_size_pt:10.0,
-        margin_mm:12.0,line_numbers:true,header:true,footer:true,syntax_colors:true } }
+        margin_mm:12.0,line_numbers:true,header:true,footer:true,syntax_colors:true,foreground:0,background:0xffffff } }
 }
 impl PrintOptions {
     pub fn validate(&self)->Result<(),PrintError> {

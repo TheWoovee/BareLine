@@ -6,6 +6,7 @@ pub mod line_lookup;
 pub mod paged;
 pub mod service;
 pub mod source;
+pub mod spill;
 mod tree;
 use std::{
     ops::Range,
@@ -103,7 +104,9 @@ pub struct DocumentSnapshot {
 }
 impl DocumentSnapshot {
     /// Opaque source token for validating queued external actions; forks have distinct identities.
-    pub fn identity_token(&self) -> (u64, u64) { (self.document_id, self.revision.0) }
+    pub fn identity_token(&self) -> (u64, u64) {
+        (self.document_id, self.revision.0)
+    }
     pub fn is_complete(&self) -> bool {
         self.complete
     }
@@ -185,7 +188,8 @@ struct History {
     after: tree::Root,
     before_state: ContentStateId,
     after_state: ContentStateId,
-    _undo_reservation: Reservation,
+    _undo_reservation: history::Charge,
+    edits: Vec<history::OwnedEdit>,
     group: Option<group::GroupTag>,
     metadata: history::EditMetadata,
     typing_insert: bool,
@@ -357,12 +361,11 @@ impl Document {
                 return Err(Error::InvalidBoundary);
             }
         }
-        let mut metadata_charge = self.history.reserve(
+        let metadata_charge = self.history.reserve(
             (metadata.before.len() + metadata.after.len())
                 * std::mem::size_of::<history::Selection>(),
         )?;
-        prepared.entry._undo_reservation.bytes += metadata_charge.bytes;
-        metadata_charge.bytes = 0;
+        prepared.entry._undo_reservation.add(metadata_charge);
         prepared.entry.metadata = metadata;
         prepared.entry.typing_insert = typing_insert;
         self.commit_prepared(prepared)
@@ -401,7 +404,7 @@ impl Document {
                 .undo
                 .iter()
                 .chain(&self.redo)
-                .map(|entry| entry._undo_reservation.bytes)
+                .map(|entry| entry._undo_reservation.bytes())
                 .sum(),
         }
     }
@@ -437,6 +440,27 @@ impl Document {
             .iter()
             .map(|e| tree::from_text(&e.insert, &self.bytes))
             .collect::<Result<Vec<_>, _>>()?;
+        let mut owned_edits = Vec::with_capacity(transaction.edits.len());
+        let mut before_cursor = 0usize;
+        let mut after_cursor = 0usize;
+        for (edit, inserted) in transaction.edits.iter().zip(&inserts) {
+            let start = after_cursor
+                .checked_add(edit.range.start.0 - before_cursor)
+                .ok_or(Error::BudgetExceeded)?;
+            let end = start
+                .checked_add(edit.insert.len())
+                .ok_or(Error::BudgetExceeded)?;
+            let (prefix, _) = tree::split(self.current.root.clone(), edit.range.end.0);
+            let (_, inverse) = tree::split(prefix, edit.range.start.0);
+            owned_edits.push(history::OwnedEdit {
+                before_range: edit.range.start.0..edit.range.end.0,
+                after_range: start..end,
+                inverse,
+                inserted: inserted.clone(),
+            });
+            before_cursor = edit.range.end.0;
+            after_cursor = end;
+        }
         let mut root = self.current.root.clone();
         for (edit, inserted) in transaction.edits.iter().zip(inserts).rev() {
             let (left_and_deleted, right) = tree::split(root, edit.range.end.0);
@@ -453,7 +477,8 @@ impl Document {
                 after: root.clone(),
                 before_state: self.current.content_state,
                 after_state: state,
-                _undo_reservation: reservation,
+                _undo_reservation: history::Charge::new(reservation),
+                edits: owned_edits,
                 group: None,
                 metadata: history::EditMetadata::default(),
                 typing_insert: false,
@@ -476,7 +501,7 @@ impl Document {
             .map_err(|_| Error::BudgetExceeded)?;
         Ok(self.commit_prepared_unchecked(prepared))
     }
-    fn commit_prepared_unchecked(&mut self, mut prepared: PreparedEdit) -> Revision {
+    fn commit_prepared_unchecked(&mut self, prepared: PreparedEdit) -> Revision {
         self.redo.clear();
         self.current.root = prepared.entry.after.clone();
         self.current.content_state = prepared.entry.after_state;
@@ -499,8 +524,13 @@ impl Document {
             last.after_state = prepared.entry.after_state;
             last.metadata.after = prepared.entry.metadata.after;
             last.metadata.monotonic_ms = prepared.entry.metadata.monotonic_ms;
-            last._undo_reservation.bytes += prepared.entry._undo_reservation.bytes;
-            prepared.entry._undo_reservation.bytes = 0;
+            last.edits[0].inserted = tree::concat(
+                last.edits[0].inserted.clone(),
+                prepared.entry.edits[0].inserted.clone(),
+            );
+            last.edits[0].after_range.end = prepared.entry.edits[0].after_range.end;
+            last._undo_reservation
+                .merge(prepared.entry._undo_reservation);
         } else {
             self.undo.push(prepared.entry);
         }

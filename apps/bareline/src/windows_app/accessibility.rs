@@ -27,7 +27,7 @@ impl Shell {
         let mut focus = 2;
         let editor_bounds = self.editor_bounds();
         let mut chrome = Vec::new();
-        semantic_group(&mut chrome, 90_000_001, "Document tabs", bareline_app::accessibility::tabs(&self.app, width as f32));
+        semantic_group(&mut chrome, 90_000_001, "Document tabs", self.views_accessibility_nodes());
         semantic_group(&mut chrome, 90_000_002, "Command palette",
             self.palette
                 .semantics()
@@ -38,6 +38,11 @@ impl Shell {
             .workspace
             .as_ref()
             .and_then(|w| w.editors.get(self.app.active));
+        if let Some(editor) = editor {
+            let mut status = bareline_app::accessibility::status(editor, editor_bounds.width as f64, editor_bounds.height as f64);
+            for node in &mut status { node.bounds[0] += editor_bounds.x as f64; node.bounds[1] += editor_bounds.y as f64; }
+            semantic_group(&mut chrome, 90_000_020, "Status bar", status);
+        }
         let mut settings_nodes = Vec::new();
         for semantic in self.settings.controller.semantics() {
             if semantic.focused {
@@ -126,9 +131,16 @@ impl Shell {
         semantic_group(&mut chrome, 90_000_003, "Toolbar", toolbar_nodes);
         chrome.extend(self.recovery_accessibility_nodes());
         chrome.extend(self.compare_accessibility_nodes());
+        chrome.extend(self.panels_accessibility_nodes());
+        chrome.extend(self.extensions_accessibility_nodes());
+        chrome.extend(self.language_accessibility_nodes());
         if !self.settings.controller.open {
+            if let Some(id) = self.views_accessibility_focus() { focus = id; }
             if let Some(id) = self.recovery_accessibility_focus() { focus = id; }
             if let Some(id) = self.compare_accessibility_focus() { focus = id; }
+            if let Some(id) = self.panels_accessibility_focus() { focus = id; }
+            if let Some(id) = self.extensions_accessibility_focus() { focus = id; }
+            if let Some(id) = self.language_accessibility_focus() { focus = id; }
         }
         let mut manager = Vec::new();
         let mut output = Vec::new();
@@ -156,8 +168,35 @@ impl Shell {
             height,
             editor.map(|v| &**v),
             chrome,
-            if self.palette.open { 11000 } else { focus },
+            if self.palette.open { self.palette.semantics().iter().find(|n|n.focused).map_or(11000, |n|n.id.0) } else { focus },
         );
+        let active_layer = if self.palette.open { Some(90_000_002) }
+            else if self.shortcuts.open { Some(90_000_004) }
+            else if self.power.open { Some(90_000_006) }
+            else if self.settings.controller.open { Some(90_000_012) }
+            else if self.extensions.open { Some(60_000) }
+            else if self.macros.controller.manager.open { Some(90_000_014) }
+            else { None };
+        if let Some(layer) = active_layer {
+            let parents: std::collections::BTreeMap<_,_> = snapshot.nodes.iter().map(|n|(n.id,n.parent)).collect();
+            let belongs = |mut id| {
+                for _ in 0..parents.len() {
+                    if id == layer { return true; }
+                    let Some(parent) = parents.get(&id) else { break; };
+                    id = *parent;
+                    if id == 1 { break; }
+                }
+                false
+            };
+            for node in &mut snapshot.nodes {
+                if node.id != 1 && !belongs(node.id) {
+                    node.disabled = true; node.focusable = false; node.invokable = false;
+                }
+            }
+            if !belongs(snapshot.focus) {
+                snapshot.focus = snapshot.nodes.iter().find(|n| belongs(n.id) && n.focusable && !n.disabled).map_or(layer, |n|n.id);
+            }
+        }
         if let (Some(editor), Some(renderer)) = (editor, self.renderer.as_ref()) {
             snapshot.text_geometry = editor.accessibility_geometry(renderer, editor_bounds.width, editor_bounds.height).into_iter().map(|(range, rect)| bareline_platform::accessibility::AccessibilityTextBox {
                 start: range.start, end: range.end,
@@ -201,9 +240,20 @@ impl Shell {
             .as_mut()
             .map_or_else(Vec::new, |p| p.drain_actions());
         for action in actions {
+            if self.palette.open {
+                let id = match &action {
+                    AccessibilityAction::Focus(id) | AccessibilityAction::Invoke(id) | AccessibilityAction::SetValue { id, .. } => Some(*id),
+                    _ => None,
+                };
+                if !id.is_some_and(|id| self.palette.semantics().iter().any(|n|n.id.0==id && !n.disabled)) { continue; }
+            }
             if self.power_accessibility(&action) { continue; }
+            if self.power.open && !self.palette.open { continue; }
             if !self.palette.open && !self.power.open && !self.settings.controller.open {
-                if self.recovery_accessibility(el, &action) || self.compare_accessibility(el, &action) { continue; }
+                if self.extensions_accessibility(el, &action) { continue; }
+                if self.extensions.open { continue; }
+                if self.language_accessibility(el, &action) { continue; }
+                if !self.macros.controller.manager.open && (self.views_accessibility(el, &action) || self.recovery_accessibility(el, &action) || self.compare_accessibility(el, &action) || self.panels_accessibility(el, &action)) { continue; }
             }
             if !self.palette.open && !self.power.open && !self.settings.controller.open {
                 let target = match &action {
@@ -215,10 +265,12 @@ impl Shell {
                 if let Some((id, invoke, value)) = target {
                     if self.macros_accessibility(el, id, invoke, value) { continue; }
                 }
+                if self.macros.controller.manager.open { continue; }
             }
             if self.shortcuts_accessibility(&action) {
                 continue;
             }
+            if self.shortcuts.open && !self.palette.open { continue; }
             let toolbar_target = match &action {
                 AccessibilityAction::Focus(id) | AccessibilityAction::Invoke(id) => self
                     .toolbar
@@ -228,7 +280,7 @@ impl Shell {
                     .any(|node| node.id.0 == *id),
                 _ => false,
             };
-            if toolbar_target && !self.palette.open {
+            if toolbar_target && !self.palette.open && !self.settings.controller.open && !self.macros.controller.manager.open {
                 let (id, invoke) = match action {
                     AccessibilityAction::Focus(id) => (id, false),
                     AccessibilityAction::Invoke(id) => (id, true),
@@ -338,15 +390,6 @@ impl Shell {
                 AccessibilityAction::Focus(id) if id == EDITOR_ID => {
                     self.palette.dismiss();
                     self.app.palette = false;
-                    if let Some(workspace) = &mut self.workspace {
-                        workspace.find.blur();
-                        workspace.search_focus = false;
-                    }
-                }
-                AccessibilityAction::Focus(id) | AccessibilityAction::Invoke(id)
-                    if id >= TAB_ID_BASE && id < TAB_ID_BASE + self.app.tabs.len() as u64 =>
-                {
-                    self.app.active = (id - TAB_ID_BASE) as usize;
                     if let Some(workspace) = &mut self.workspace {
                         workspace.find.blur();
                         workspace.search_focus = false;

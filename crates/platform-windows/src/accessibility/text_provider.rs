@@ -86,9 +86,6 @@ impl Life {
         let (mut boxes, origin) = {
             let shared = self.shared.lock().unwrap_or_else(|e| e.into_inner());
             if shared.snapshot.text_context.as_ref().map(|c| c.source_identity) != Some(view.source.identity()) { return Err(unavailable()); }
-            // Committed layouts do not describe the IME overlay. Do not publish
-            // misleading rectangles while composition replaces those glyphs.
-            if view.overlay.is_some() { return Ok(Vec::new()); }
             let node = shared.snapshot.nodes.iter().find(|n| n.id == 2).ok_or_else(unavailable)?;
             (shared.snapshot.text_geometry.clone(), (node.bounds[0], node.bounds[1]))
         };
@@ -104,12 +101,15 @@ impl Life {
         let source = self.source.read().unwrap_or_else(|e| e.into_inner()).clone().ok_or_else(unavailable)?;
         let shared = self.shared.lock().unwrap_or_else(|e| e.into_inner());
         let context = shared.snapshot.text_context.as_ref().ok_or_else(unavailable)?;
+        if shared.snapshot.nodes.iter().any(|node| node.id == 2 && node.disabled) { return Err(unavailable()); }
         // Source and tree publication can straddle a UIA call. A mixed pair is
         // unavailable, never a new document with the old document's selection.
         if context.source_identity != source.identity() { return Err(unavailable()); }
         let (a, c) = context.selection;
         if a > source.len() || c > source.len() { return Err(unavailable()); }
-        let overlay = context.composition.as_ref().map(|text| Overlay { start: a.min(c), end: a.max(c), text: text.clone() });
+        // The renderer displays preedit inserted at the caret. Selection is only
+        // replaced on commit; describe the actual current virtual text domain.
+        let overlay = context.composition.as_ref().map(|text| Overlay { start: c, end: c, text: text.clone() });
         let visible = shared.snapshot.text.as_ref().map(|t| (t.start_byte, t.start_byte + t.value.len())).unwrap_or((c,c));
         Ok(View { source, overlay, selection: (a,c), visible, page: visible.1.saturating_sub(visible.0).clamp(1024, LIMIT) })
     }
@@ -137,30 +137,48 @@ impl View {
             _ => Ok(offset),
         }
     }
-    /// A virtual preedit segment is part of the same provider text domain. Read
-    /// stops at its seam, so crossing a huge replaced selection never reads it.
+    fn source_read(&self, start: usize, limit: usize) -> Result<(usize,String)> {
+        match self.source.read(start, limit) {
+            AccessibleRead::Ready { start: actual, text } => {
+                if actual < start || actual.saturating_add(text.len()) > start.saturating_add(limit) {return Err(unavailable());}
+                Ok((actual,text))
+            }
+            AccessibleRead::Pending => Err(pending()),
+            AccessibleRead::Unavailable => Err(unavailable()),
+        }
+    }
+    /// One bounded source read plus the already-owned preedit. The virtual text
+    /// remains continuous across both composition seams without reading a file
+    /// into memory or reporting the seam as the end of the document.
     fn read(&self, start: usize, limit: usize) -> Result<(usize, String)> {
         if start > self.len() { return Err(invalid()); }
         let limit = limit.min(self.page).min(LIMIT);
         if let Some(o) = &self.overlay {
+            if start < o.start {
+                let (actual,mut text)=self.source_read(start,limit)?;
+                if actual<=o.start && actual+text.len()>=o.start {text.insert_str(o.start-actual,&o.text);}
+                let mut end=text.len().min(limit);
+                while !text.is_char_boundary(end) {end-=1;}
+                text.truncate(end);
+                return Ok((actual,text));
+            }
             if start >= o.start && start < o.start + o.text.len() {
                 let mut a = start-o.start;
                 let mut b = (a+limit).min(o.text.len());
                 while a < b && !o.text.is_char_boundary(a) { a+=1; }
                 while b > a && !o.text.is_char_boundary(b) { b-=1; }
-                return Ok((o.start+a, o.text[a..b].to_owned()));
+                let mut text=o.text[a..b].to_owned();
+                if b==o.text.len() && text.len()<limit {
+                    let (_,tail)=self.source_read(o.end,limit-text.len())?;
+                    text.push_str(&tail);
+                }
+                return Ok((o.start+a,text));
             }
+            let committed=self.committed(start)?;
+            let (actual,text)=self.source_read(committed,limit)?;
+            return Ok((start+(actual-committed),text));
         }
-        let committed = self.committed(start)?;
-        let limit = self.overlay.as_ref().filter(|o| start < o.start).map_or(limit, |o| limit.min(o.start-start));
-        match self.source.read(committed, limit) {
-            AccessibleRead::Ready { start: actual, text } => {
-                if text.len() > limit || actual < committed || actual > committed.saturating_add(limit) { return Err(unavailable()); }
-                Ok((self.virtual_offset(actual), text))
-            },
-            AccessibleRead::Pending => Err(pending()),
-            AccessibleRead::Unavailable => Err(unavailable()),
-        }
+        self.source_read(start,limit)
     }
 }
 #[implement(ITextProvider, ITextProvider2, ITextEditProvider)]
@@ -272,8 +290,21 @@ fn positions(view: &View, at: usize, unit: TextUnit) -> Result<Vec<usize>> {
     if matches!(unit, TextUnit_Document | TextUnit_Page) { return Ok(vec![0,view.len()]); }
     let start = at.saturating_sub(view.page/2);
     let (start,text) = view.read(start,view.page)?;
+    if matches!(unit,TextUnit_Character|TextUnit_Format) {
+        if at<start || at>start+text.len() || !text.is_char_boundary(at-start) {return Err(unsupported());}
+        let mut offsets=Vec::new();
+        let mut cursor=unicode_segmentation::GraphemeCursor::new(at,view.len(),true);
+        match cursor.is_boundary(&text,start) {
+            Ok(true)=>offsets.push(at),Ok(false)=>(),Err(_)=>return Err(unsupported()),
+        }
+        let mut forward=unicode_segmentation::GraphemeCursor::new(at,view.len(),true);
+        while let Ok(Some(offset))=forward.next_boundary(&text,start) {offsets.push(offset);}
+        let mut backward=unicode_segmentation::GraphemeCursor::new(at,view.len(),true);
+        while let Ok(Some(offset))=backward.prev_boundary(&text,start) {offsets.push(offset);}
+        offsets.sort_unstable();offsets.dedup();
+        return Ok(offsets);
+    }
     let mut positions: Vec<_> = match unit {
-        TextUnit_Character | TextUnit_Format => text.grapheme_indices(true).map(|(i,_)| start+i).collect(),
         TextUnit_Word => text.split_word_bound_indices().map(|(i,_)| start+i).collect(),
         TextUnit_Line | TextUnit_Paragraph => {
             let mut values = vec![start];
@@ -286,6 +317,50 @@ fn positions(view: &View, at: usize, unit: TextUnit) -> Result<Vec<usize>> {
     if start+text.len() == view.len() { positions.push(view.len()); }
     positions.sort_unstable(); positions.dedup();
     Ok(positions)
+}
+/// Fold a bounded window while retaining original UTF-8 scalar boundaries.
+/// Expanded folds (ß→ss, ligatures) never produce half-scalar endpoints.
+fn find_literal(value: &str, needle: &str, backward: bool, ignore_case: bool) -> Option<(usize,usize)> {
+    if !ignore_case {
+        return (if backward { value.rfind(needle) } else { value.find(needle) }).map(|start| (start,start+needle.len()));
+    }
+    let mut folded = String::new();
+    let mut boundaries = Vec::new();
+    let mut buffer = [0u8; 12];
+    for (offset,c) in value.char_indices() {
+        boundaries.push((folded.len(),offset));
+        folded.push_str(bareline_unicode_fold::character(c,&mut buffer));
+    }
+    boundaries.push((folded.len(),value.len()));
+    let needle = bareline_unicode_fold::fold(needle);
+    if needle.is_empty() { return None; }
+    let original = |start: usize| {
+        let a = boundaries.binary_search_by_key(&start, |p|p.0).ok()?;
+        let b = boundaries.binary_search_by_key(&(start+needle.len()), |p|p.0).ok()?;
+        Some((boundaries[a].1,boundaries[b].1))
+    };
+    let pattern = needle.as_bytes();
+    let mut prefix = vec![0;pattern.len()];
+    for index in 1..pattern.len() {
+        let mut matched = prefix[index-1];
+        while matched>0 && pattern[index]!=pattern[matched] {matched=prefix[matched-1];}
+        if pattern[index]==pattern[matched] {matched+=1;}
+        prefix[index]=matched;
+    }
+    let mut matched=0;
+    let mut found=None;
+    for (index,byte) in folded.bytes().enumerate() {
+        while matched>0 && byte!=pattern[matched] {matched=prefix[matched-1];}
+        if byte==pattern[matched] {matched+=1;}
+        if matched==pattern.len() {
+            if let Some(range)=original(index+1-pattern.len()) {
+                if !backward {return Some(range);}
+                found=Some(range);
+            }
+            matched=prefix[matched-1];
+        }
+    }
+    found
 }
 impl ITextRangeProvider_Impl for TextRange_Impl {
     fn Clone(&self) -> Result<ITextRangeProvider> { self.view()?; let (a,b)=self.endpoints(); Ok(self.new_range(a,b)) }
@@ -307,11 +382,13 @@ impl ITextRangeProvider_Impl for TextRange_Impl {
     fn FindText(&self, text: &BSTR, backward: BOOL, ignore_case: BOOL) -> Result<ITextRangeProvider> {
         let view=self.view()?; let (a,b)=self.endpoints();
         let (start,value)=view.read(if backward.as_bool() { b.saturating_sub(view.page).max(a) } else { a }, b.saturating_sub(a))?;
-        // Unicode case folding can change offsets; exact bounded search is safe.
-        if ignore_case.as_bool() { return Err(unsupported()); }
-        let needle=text.to_string(); if needle.is_empty() { return Err(invalid()); }
-        let found=if backward.as_bool() {value.rfind(&needle)} else {value.find(&needle)};
-        match found {Some(i)=>Ok(self.new_range(start+i,start+i+needle.len())),None=>Err(Error::empty())}
+        if text.len() > LIMIT { return Err(invalid()); }
+        let needle=text.to_string(); if needle.is_empty() || needle.len() > LIMIT { return Err(invalid()); }
+        match find_literal(&value,&needle,backward.as_bool(),ignore_case.as_bool()) {
+            Some((a,b))=>Ok(self.new_range(start+a,start+b)),
+            None if start>a || start+value.len()<b => Err(unsupported()),
+            None=>Err(Error::empty()),
+        }
     }
     fn GetAttributeValue(&self, _id: UIA_TEXTATTRIBUTE_ID) -> Result<VARIANT> { self.view()?; Ok(unsafe { UiaGetReservedNotSupportedValue()? }.into()) }
     fn GetBoundingRectangles(&self) -> Result<*mut SAFEARRAY> {
@@ -367,6 +444,55 @@ impl ITextRangeProvider_Impl for TextRange_Impl {
 #[cfg(test)]
 mod identity_tests {
     use super::*;
+    struct Text(&'static str);
+    impl AccessibilityTextSource for Text {
+        fn identity(&self)->(u64,u64){(90,1)}
+        fn len(&self)->usize{self.0.len()}
+        fn read(&self,start:usize,limit:usize)->AccessibleRead{
+            assert!(limit<=LIMIT);
+            let mut a=start;let mut b=(start+limit).min(self.len());
+            while a<b && !self.0.is_char_boundary(a){a+=1;}
+            while b>a && !self.0.is_char_boundary(b){b-=1;}
+            AccessibleRead::Ready{start:a,text:self.0[a..b].into()}
+        }
+    }
+    #[test]
+    fn unicode_find_preserves_expanded_original_boundaries_and_overlap() {
+        assert_eq!(find_literal("sß","SS",false,true),Some((1,3)));
+        assert_eq!(find_literal("ß","s",false,true),None);
+        assert_eq!(find_literal("Straße Σς","STRASSE",false,true),Some((0,7)));
+        assert_eq!(find_literal("Σς","σ",true,true),Some((2,4)));
+        assert_eq!(find_literal("aaa","aa",true,false),Some((1,3)));
+    }
+    #[test]
+    fn virtual_preedit_read_crosses_both_seams_without_changing_source() {
+        let view=View{source:Arc::new(Text("ab")),overlay:Some(Overlay{start:1,end:1,text:"界".into()}),selection:(1,1),visible:(0,2),page:1024};
+        assert_eq!(view.read(0,LIMIT).unwrap(),(0,"a界b".into()));
+        assert_eq!(view.read(1,4).unwrap(),(1,"界b".into()));
+        assert_eq!(view.read(4,1).unwrap(),(4,"b".into()));
+        assert_eq!(view.source.len(),2);
+        assert_eq!(view.committed(4).unwrap(),1);
+        assert!(view.committed(2).is_err());
+    }
+    #[test]
+    fn five_gib_range_window_is_bounded_at_an_offscreen_offset() {
+        struct Generated;
+        impl AccessibilityTextSource for Generated {
+            fn identity(&self)->(u64,u64){(91,1)}
+            fn len(&self)->usize{5*1024*1024*1024}
+            fn read(&self,start:usize,limit:usize)->AccessibleRead {
+                assert!(limit<=2048);
+                AccessibleRead::Ready{start,text:"x".repeat(limit.min(self.len()-start))}
+            }
+        }
+        let view=View{source:Arc::new(Generated),overlay:None,selection:(0,0),visible:(0,2048),page:2048};
+        let start=4*1024*1024*1024;
+        let (at,text)=view.read(start,usize::MAX).unwrap();
+        assert_eq!(at,start);assert_eq!(text.len(),2048);
+        let offsets=positions(&view,start,TextUnit_Character).unwrap();
+        assert!(offsets.iter().any(|offset|*offset>start));
+        assert!(offsets.len()<=2048);
+    }
     struct Source((u64, u64));
     impl AccessibilityTextSource for Source {
         fn identity(&self) -> (u64, u64) { self.0 }

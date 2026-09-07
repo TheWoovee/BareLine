@@ -428,6 +428,28 @@ mod tests {
     use super::*;
     use bareline_document::{Budget, Document};
     #[test]
+    fn document_switch_discards_old_batches_and_semantic_actions() {
+        let old = Document::from_utf8("fn first() {}", Budget::new(4096), Budget::new(4096)).unwrap().snapshot();
+        let new = Document::from_utf8("[second]", Budget::new(4096), Budget::new(4096)).unwrap().snapshot();
+        let mut panel = OutlinePanel::default();
+        panel.open = true;
+        panel.source = Some(old.clone());
+        panel.symbols = vec![Symbol { name: "first".into(), kind: "fn", offset: TextOffset(3), end: TextOffset(13), depth: 0 }];
+        panel.rebuild();
+        panel.bounds = Rect { x: 0.0, y: 0.0, width: 240.0, height: 280.0 };
+        let stale_id = panel.semantics(bareline_ui::ViewId(1), 100, true)[0].node.id.0;
+        let (tx, rx) = mpsc::sync_channel(1);
+        panel.pending = Some(rx);
+        panel.clear();
+        assert!(tx.send(Batch { symbols: vec![], finished: true, status: "old".into() }).is_err());
+        panel.source = Some(new.clone());
+        panel.symbols = toml_symbols("[second]", 0, &mut None);
+        panel.rebuild();
+        assert_eq!(panel.accessibility_action(stale_id, 100, true, &new), None);
+        assert_eq!(panel.activate(&old), None);
+        assert_eq!(panel.activate(&new), Some(TextOffset(1)));
+    }
+    #[test]
     fn lexical_outline_ignores_comment_functions_and_rejects_other_document() {
         let source = Document::from_utf8(
             "// fn fake() {}\nfn real() {}\n",

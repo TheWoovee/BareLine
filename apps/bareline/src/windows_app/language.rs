@@ -7,6 +7,7 @@ use bareline_ui::controls::{Key as UiKey, UiEvent};
 #[derive(Default)]
 pub(super) struct LanguageRuntime {
     pub controller: LanguageController,
+    completion_source: Option<((u64, u64), usize)>,
     restored: Option<bareline_document::DocumentSnapshot>,
     restored_language: Option<bareline_syntax::Language>,
     restored_definition: Option<std::sync::Arc<bareline_syntax::udl::Definition>>,
@@ -15,17 +16,8 @@ pub(super) struct LanguageRuntime {
     definition_target: Option<bareline_document::DocumentSnapshot>,
     definition_editor: Option<bareline_document::DocumentSnapshot>,
     validated_revision: Option<u64>,
-    detection: Option<
-        std::sync::mpsc::Receiver<
-            Result<
-                (
-                    bareline_document::DocumentSnapshot,
-                    bareline_syntax::Language,
-                ),
-                String,
-            >,
-        >,
-    >,
+    detection:
+        Option<std::sync::mpsc::Receiver<Result<((u64, u64), bareline_syntax::Language), String>>>,
 }
 impl LanguageRuntime {
     pub fn draw(
@@ -115,22 +107,61 @@ impl Shell {
                     }
                 }
             }
+            "language.signatures.import" => match self.platform.as_ref().unwrap().open_file() {
+                Ok(Some(path)) => self
+                    .language
+                    .controller
+                    .import_signatures(path, self.notify.clone()),
+                Ok(None) => (),
+                Err(error) => self.language.controller.status = error.to_string(),
+            },
             "editor.completion.show" => {
-                if let Some(editor) = self
-                    .workspace
-                    .as_ref()
-                    .and_then(|w| w.editors.get(self.app.active))
+                if let Some(workspace) = &self.workspace
+                    && let Some(editor) = workspace.editors.get(self.app.active)
                 {
-                    if editor.paged() {
+                    let syntax = workspace
+                        .syntax_result()
+                        .filter(|syntax| syntax.is_current(editor.snapshot()))
+                        .cloned();
+                    if editor.paged() && syntax.is_none() {
                         self.language.controller.open = true;
                         self.language.controller.status =
-                            "Completion is unavailable for this paged text window".into();
+                            "Syntax for this source window is still being prepared".into();
                     } else {
-                        self.language.controller.request_completion(
+                        self.language.completion_source = Some((
+                            bareline_app::accessibility::source_identity(editor),
+                            match editor {
+                                bareline_app::workspace::WorkspaceEditor::Paged(paged) => {
+                                    paged.viewport_start().0
+                                }
+                                _ => 0,
+                            },
+                        ));
+                        let documents = workspace
+                            .editors
+                            .iter()
+                            .filter(|other| !other.paged())
+                            .take(8)
+                            .map(|other| other.snapshot().clone())
+                            .collect();
+                        self.language.controller.request_completion_configured(
                             editor.snapshot().clone(),
                             editor.selection.caret,
                             editor.language,
                             self.notify.clone(),
+                            LanguageConfiguration {
+                                policy: self.settings.effective().language_policy(
+                                    editor
+                                        .udl
+                                        .as_ref()
+                                        .map_or(editor.language.metadata().id, |definition| {
+                                            definition.id.as_str()
+                                        }),
+                                ),
+                                definition: editor.udl.clone(),
+                            },
+                            documents,
+                            syntax,
                         );
                     }
                 }
@@ -160,10 +191,14 @@ impl Shell {
                             level,
                             self.notify.clone(),
                             LanguageConfiguration {
-                                policy: self
-                                    .settings
-                                    .effective()
-                                    .language_policy(editor.udl.as_ref().map_or(editor.language.metadata().id, |definition| definition.id.as_str())),
+                                policy: self.settings.effective().language_policy(
+                                    editor
+                                        .udl
+                                        .as_ref()
+                                        .map_or(editor.language.metadata().id, |definition| {
+                                            definition.id.as_str()
+                                        }),
+                                ),
                                 definition: editor.udl.clone(),
                             },
                         );
@@ -189,8 +224,7 @@ impl Shell {
                 Ok((source, language)) => {
                     if let Some(editor) = self.workspace.as_mut().and_then(|w| {
                         w.editors.iter_mut().find(|editor| {
-                            editor.snapshot().same_document(&source)
-                                && editor.snapshot().revision == source.revision
+                            bareline_app::accessibility::source_identity(editor) == source
                         })
                     }) {
                         editor.detected_language = Some(language);
@@ -202,11 +236,16 @@ impl Shell {
         if self.language.detection.is_none()
             && let Some(workspace) = &self.workspace
             && let Some(editor) = workspace.editors.get(self.app.active)
-            && !editor.paged()
             && editor.detected_language.is_none()
             && editor.language_override.is_none()
         {
             let source = editor.snapshot().clone();
+            let identity = bareline_app::accessibility::source_identity(editor);
+            let paged = match editor {
+                bareline_app::workspace::WorkspaceEditor::Paged(paged) => Some(paged.read_handle()),
+                _ => None,
+            };
+            let associations = self.settings.effective().language_associations.clone();
             let path = workspace
                 .path(self.app.active)
                 .map_or_else(std::path::PathBuf::new, std::path::Path::to_path_buf);
@@ -217,6 +256,37 @@ impl Shell {
                 .name("bareline-language-detect".into())
                 .spawn(move || {
                     let result = (|| {
+                        let association = associations.iter().find_map(|(pattern, id)| {
+                            let name = path.file_name()?.to_str()?;
+                            let matched = pattern.eq_ignore_ascii_case(name)
+                                || pattern.strip_prefix("*.").is_some_and(|extension| {
+                                    path.extension()
+                                        .and_then(|value| value.to_str())
+                                        .is_some_and(|actual| {
+                                            actual.eq_ignore_ascii_case(extension)
+                                        })
+                                });
+                            matched
+                                .then(|| bareline_syntax::Language::from_id(id))
+                                .flatten()
+                        });
+                        if let Some(handle) = paged {
+                            let prefix = read_detection_window(&handle, 0)?;
+                            let suffix = read_detection_window(
+                                &handle,
+                                handle.snapshot().len().saturating_sub(8192),
+                            )?;
+                            return Ok((
+                                identity,
+                                bareline_syntax::Language::detect_with_regions(
+                                    &path,
+                                    &prefix,
+                                    &suffix,
+                                    None,
+                                    association,
+                                ),
+                            ));
+                        }
                         let mut end = source.len().min(8192);
                         while !source.is_boundary(bareline_document::TextOffset(end)) {
                             end -= 1;
@@ -240,9 +310,13 @@ impl Shell {
                             )
                             .map_err(|e| format!("{e:?}"))?;
                         let language = bareline_syntax::Language::detect_with_regions(
-                            &path, &prefix, &suffix, None, None,
+                            &path,
+                            &prefix,
+                            &suffix,
+                            None,
+                            association,
                         );
-                        Ok((source, language))
+                        Ok((identity, language))
                     })();
                     let _ = tx.send(result);
                     notify();
@@ -274,10 +348,15 @@ impl Shell {
             && !editor.paged()
             && (editor.language != bareline_syntax::Language::PlainText || editor.udl.is_some())
             && !self.language.restored.as_ref().is_some_and(|s| {
-                s.same_document(editor.snapshot()) && s.revision == editor.snapshot().revision
+                s.same_document(editor.snapshot())
+                    && s.revision == editor.snapshot().revision
                     && self.language.restored_language == Some(editor.language)
                     && self.language.restored_preference == editor.syntax_preference
-                    && match (&self.language.restored_definition, &editor.udl) { (None,None) => true, (Some(a),Some(b)) => std::sync::Arc::ptr_eq(a,b), _ => false }
+                    && match (&self.language.restored_definition, &editor.udl) {
+                        (None, None) => true,
+                        (Some(a), Some(b)) => std::sync::Arc::ptr_eq(a, b),
+                        _ => false,
+                    }
             })
         {
             self.language.restored = Some(editor.snapshot().clone());
@@ -290,10 +369,14 @@ impl Shell {
                 0,
                 self.notify.clone(),
                 LanguageConfiguration {
-                    policy: self
-                        .settings
-                        .effective()
-                        .language_policy(editor.udl.as_ref().map_or(editor.language.metadata().id, |definition| definition.id.as_str())),
+                    policy: self.settings.effective().language_policy(
+                        editor
+                            .udl
+                            .as_ref()
+                            .map_or(editor.language.metadata().id, |definition| {
+                                definition.id.as_str()
+                            }),
+                    ),
                     definition: editor.udl.clone(),
                 },
             );
@@ -402,25 +485,74 @@ impl Shell {
         };
         let effect = self.language.controller.event(ui);
         let accepted = effect.is_some();
-        if let Some(effect) = effect
-            && let Some(editor) = self
-                .workspace
-                .as_mut()
-                .and_then(|w| w.editors.get_mut(self.app.active))
-        {
-            match effect {
-                LanguageEffect::ChooseDefinition(definition) => {
-                    self.language.definition_target=Some(editor.snapshot().clone());
-                    self.language.applied_definition=Some(definition.clone());
-                    self.language.controller.definition=Some(definition.clone());
-                    editor.udl=Some(definition);
+        if let Some(effect) = effect {
+            self.language_apply_effect(effect);
+        }
+        if let Some(window) = &self.window {
+            window.request_redraw();
+        }
+        // Enter/Tab without an active suggestion retains ordinary editor semantics.
+        accepted || !matches!(ui, UiEvent::Key(UiKey::Enter))
+    }
+    fn language_apply_effect(&mut self, effect: LanguageEffect) {
+        let Some(editor) = self
+            .workspace
+            .as_mut()
+            .and_then(|workspace| workspace.editors.get_mut(self.app.active))
+        else {
+            return;
+        };
+        match effect {
+            LanguageEffect::ChooseDefinition(definition) => {
+                self.language.definition_target = Some(editor.snapshot().clone());
+                self.language.applied_definition = Some(definition.clone());
+                self.language.controller.definition = Some(definition.clone());
+                editor.udl = Some(definition);
+            }
+            LanguageEffect::Choose(language) => {
+                editor.udl = None;
+                editor.language_override = Some(language);
+                editor.language = language;
+            }
+            LanguageEffect::Accept(index) => {
+                let origin = match editor {
+                    bareline_app::workspace::WorkspaceEditor::Paged(paged) => {
+                        paged.viewport_start().0
+                    }
+                    _ => 0,
+                };
+                if self.language.completion_source
+                    != Some((bareline_app::accessibility::source_identity(editor), origin))
+                {
+                    self.language.controller.close();
+                    self.language.controller.status = "Completion source changed".into();
+                    return;
                 }
-                LanguageEffect::Choose(language) => {
-                    editor.udl = None;
-                    editor.language_override = Some(language);
-                    editor.language = language;
-                }
-                LanguageEffect::Accept(index) => {
+                if let bareline_app::workspace::WorkspaceEditor::Paged(paged) = editor {
+                    let Some(result) = self
+                        .language
+                        .controller
+                        .completion
+                        .as_ref()
+                        .filter(|result| result.is_current(paged.surface.snapshot()))
+                    else {
+                        return;
+                    };
+                    let Some(item) = result.items.get(index) else {
+                        return;
+                    };
+                    if paged.busy()
+                        || paged.surface.selection.anchor != paged.surface.selection.caret
+                        || paged.surface.selection.caret != result.replacement.end.0
+                        || paged.surface.selection_set().selections.len() != 1
+                    {
+                        return;
+                    }
+                    let text = item.text.clone();
+                    paged.surface.selection.anchor = result.replacement.start.0;
+                    paged.enqueue(Input::Insert(text));
+                    self.language.controller.close();
+                } else {
                     let result = self
                         .language
                         .controller
@@ -432,10 +564,64 @@ impl Shell {
                 }
             }
         }
+    }
+    pub(super) fn language_accessibility_nodes(
+        &self,
+    ) -> Vec<bareline_platform::accessibility::AccessibilityNode> {
+        self.language.controller.accessibility_nodes()
+    }
+    pub(super) fn language_accessibility_focus(&self) -> Option<u64> {
+        self.language.controller.accessibility_focus()
+    }
+    pub(super) fn language_accessibility(
+        &mut self,
+        _el: &ActiveEventLoop,
+        action: &bareline_platform::accessibility::AccessibilityAction,
+    ) -> bool {
+        use bareline_platform::accessibility::AccessibilityAction;
+        let (id, invoke) = match action {
+            AccessibilityAction::Focus(id) => (*id, false),
+            AccessibilityAction::Invoke(id) => (*id, true),
+            _ => return false,
+        };
+        if !self
+            .language
+            .controller
+            .accessibility_nodes()
+            .iter()
+            .any(|node| node.id == id && (node.focusable || node.invokable))
+        {
+            return false;
+        }
+        if let Some(effect) = self.language.controller.accessibility_select(id, invoke) {
+            self.language_apply_effect(effect);
+        }
         if let Some(window) = &self.window {
             window.request_redraw();
         }
-        // Enter/Tab without an active suggestion retains ordinary editor semantics.
-        accepted || !matches!(ui, UiEvent::Key(UiKey::Enter))
+        true
     }
+}
+
+fn read_detection_window(
+    handle: &bareline_editor_surface::paged_view::PagedReadHandle,
+    start: usize,
+) -> Result<String, String> {
+    use bareline_document::{Budget, TextOffset, paged::WindowPoll};
+    let mut request = handle
+        .snapshot()
+        .begin_viewport(TextOffset(start), 8192, &Budget::new(8192))
+        .map_err(|e| format!("{e:?}"))?;
+    for _ in 0..4096 {
+        match request.poll() {
+            WindowPoll::Ready(window) => return Ok(window.text().to_owned()),
+            WindowPoll::Pending(ticket) => {
+                if !handle.resolve_page(ticket)? {
+                    std::thread::yield_now();
+                }
+            }
+            _ => return Err("Language detection source unavailable".into()),
+        }
+    }
+    Err("Language detection source busy".into())
 }

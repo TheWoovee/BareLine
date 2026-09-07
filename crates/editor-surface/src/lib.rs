@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 pub mod completion;
 pub mod group_view;
+pub mod search_marks;
 pub mod paged_view;
 pub mod power;
 use bareline_document::{
@@ -71,7 +72,9 @@ struct Pending {
     after: power::SelectionSet,
     before: power::SelectionSet,
     bookmarks_before: power::Bookmarks,
+    marks_before: search_marks::SearchMarks,
     bookmarks_after: power::Bookmarks,
+    marks_after: search_marks::SearchMarks,
     history: HistoryMove,
 }
 #[derive(Clone)]
@@ -81,7 +84,9 @@ struct SelectionHistory {
     before: power::SelectionSet,
     after: power::SelectionSet,
     bookmarks_before: power::Bookmarks,
+    marks_before: search_marks::SearchMarks,
     bookmarks_after: power::Bookmarks,
+    marks_after: search_marks::SearchMarks,
     group: Option<bareline_document::group::UndoGroup>,
 }
 struct LineLayout {
@@ -103,6 +108,8 @@ pub struct EditorSurface {
     pub error: Option<String>,
     pending: Option<Pending>,
     queue: VecDeque<Input>,
+    queue_origins: VecDeque<bareline_document::history::EditOrigin>,
+    history_boundary: u64,
     acknowledged: VecDeque<Input>,
     ordered_receipts: VecDeque<power::consumer::OrderedReceipt>,
     acknowledged_commands: VecDeque<(String, BTreeMap<String, String>)>,
@@ -110,6 +117,9 @@ pub struct EditorSurface {
     manual_hidden: Vec<std::ops::RangeInclusive<usize>>,
     scroll_x: f64,
     power_rectangle: Option<power::Rectangle>,
+    column_maps: BTreeMap<usize,power::DisplayColumnMap>,
+    column_maps_revision: Option<bareline_document::Revision>,
+    column_map_bytes: usize,
     notify: Arc<dyn Fn() + Send + Sync>,
     layouts: BTreeMap<usize, LineLayout>,
     layout_revision: Option<u64>,
@@ -118,6 +128,7 @@ pub struct EditorSurface {
     redo_selection: Vec<SelectionHistory>,
     selections: power::SelectionSet,
     pub bookmarks: power::Bookmarks,
+    search_marks: search_marks::SearchMarks,
     pub language: bareline_syntax::Language,
     pub language_override: Option<bareline_syntax::Language>,
     pub detected_language: Option<bareline_syntax::Language>,
@@ -181,6 +192,8 @@ impl EditorSurface {
             error: None,
             pending: None,
             queue: VecDeque::new(),
+            queue_origins: VecDeque::new(),
+            history_boundary: power::consumer::next_receipt_sequence(),
             acknowledged: VecDeque::new(),
             ordered_receipts: VecDeque::new(),
             acknowledged_commands: VecDeque::new(),
@@ -188,6 +201,9 @@ impl EditorSurface {
             manual_hidden: Vec::new(),
             scroll_x: 0.0,
             power_rectangle: None,
+            column_maps: BTreeMap::new(),
+            column_maps_revision: None,
+            column_map_bytes: 0,
             notify,
             layouts: BTreeMap::new(),
             layout_revision: None,
@@ -196,6 +212,7 @@ impl EditorSurface {
             redo_selection: Vec::new(),
             selections: Selection::default().into(),
             bookmarks: power::Bookmarks::default(),
+            search_marks: search_marks::SearchMarks::default(),
             language: bareline_syntax::Language::PlainText,
             language_override: None,
             detected_language: None,
@@ -370,7 +387,9 @@ impl EditorSurface {
         highlight_current_line: bool,
         whitespace: &str,
     ) {
-        self.font_pixels = (font_size_pt.clamp(6.0, 72.0) * 96.0 / 72.0) as f32;
+        let next_font=(font_size_pt.clamp(6.0,72.0)*96.0/72.0)as f32;
+        if self.font_pixels!=next_font||self.tab_width!=usize::from(tab_width.clamp(1,16)){self.clear_column_metrics();}
+        self.font_pixels = next_font;
         self.tab_width = usize::from(tab_width.clamp(1, 16));
         self.line_numbers = line_numbers;
         self.highlight_current_line = highlight_current_line;
@@ -454,6 +473,7 @@ impl EditorSurface {
         }
     }
     pub fn set_selections(&mut self, selections: power::SelectionSet) -> Result<(), String> {
+        self.history_boundary=power::consumer::next_receipt_sequence();
         let selections = power::normalize(&self.snapshot, &selections, self.power_limits())
             .map_err(|error| format!("Selection unavailable: {error:?}"))?;
         self.selection = selections.primary();
@@ -473,14 +493,11 @@ impl EditorSurface {
             command,
             "editor.comment.toggleLine" | "editor.comment.toggleBlock"
         ) {
-            let prepared = completion::toggle_comment(
-                &self.snapshot,
-                &set,
-                self.language,
-                command.ends_with("toggleBlock"),
-                limits,
-            )
-            .map_err(error)?;
+            let prepared = if let Some(definition)=self.udl.as_deref() {
+                completion::toggle_comment_with_provider(&self.snapshot,&set,&completion::DefinitionComments(definition),command.ends_with("toggleBlock"),limits)
+            } else {
+                completion::toggle_comment(&self.snapshot,&set,self.language,command.ends_with("toggleBlock"),limits)
+            }.map_err(error)?;
             return self.submit_power(prepared).map_err(str::to_owned);
         }
         if let Some(transform) = power::transform_for_command(command) {
@@ -564,6 +581,7 @@ impl EditorSurface {
         Ok(())
     }
     fn submit_power(&mut self, prepared: power::PowerEdit) -> Result<(), &'static str> {
+        self.history_boundary=power::consumer::next_receipt_sequence();
         if prepared.transaction.edits.is_empty() {
             return Ok(());
         }
@@ -571,6 +589,7 @@ impl EditorSurface {
         bookmarks_after.map_edits(&prepared.transaction);
         let folds_before = self.fold_anchors();
         let folds_after = self.mapped_folds(&prepared.transaction);
+        let marks_after = self.search_marks.mapped(&prepared.transaction);
         let receiver = self
             .service
             .as_ref()
@@ -588,7 +607,9 @@ impl EditorSurface {
             before: self.selection_set(),
             after: prepared.selections,
             bookmarks_before: self.bookmarks.clone(),
+            marks_before: self.search_marks.clone(),
             bookmarks_after,
+            marks_after,
             history: HistoryMove::Edit,
         });
         Ok(())
@@ -679,6 +700,7 @@ impl EditorSurface {
         bookmarks_after.map_edits(&transaction);
         let folds_before = self.fold_anchors();
         let folds_after = self.mapped_folds(&transaction);
+        let marks_after = self.search_marks.mapped(&transaction);
         let receiver = self
             .service
             .as_ref()
@@ -697,7 +719,9 @@ impl EditorSurface {
             .into(),
             before: self.selection_set(),
             bookmarks_before: self.bookmarks.clone(),
+            marks_before: self.search_marks.clone(),
             bookmarks_after,
+            marks_after,
             history: HistoryMove::Edit,
         });
         self.search_selection = false;
@@ -721,7 +745,7 @@ impl EditorSurface {
     }
     pub fn commit(&mut self, value: String) {
         self.cancel_composition();
-        self.enqueue(Input::Insert(value));
+        self.enqueue_with_origin(Input::Insert(value),bareline_document::history::EditOrigin::Command);
     }
     pub fn take_acknowledged_inputs(&mut self) -> Vec<Input> { self.acknowledged.drain(..).collect() }
     fn acknowledge(&mut self, input: Input) {
@@ -730,6 +754,10 @@ impl EditorSurface {
         self.acknowledged.push_back(input);
     }
     pub fn enqueue(&mut self, input: Input) {
+        let origin=if matches!(&input,Input::Insert(text) if text.chars().count()==1) {bareline_document::history::EditOrigin::Typing}else{bareline_document::history::EditOrigin::Command};
+        self.enqueue_with_origin(input,origin);
+    }
+    pub fn enqueue_with_origin(&mut self, input: Input, origin:bareline_document::history::EditOrigin) {
         if self.read_only()
             && matches!(
                 input,
@@ -748,6 +776,7 @@ impl EditorSurface {
             return;
         }
         self.queue.push_back(input);
+        self.queue_origins.push_back(origin);
         self.pump();
     }
     pub fn pump(&mut self) -> bool {
@@ -769,17 +798,25 @@ impl EditorSurface {
                             self.selection = pending.after.primary();
                             self.selections = pending.after.clone();
                             self.bookmarks = pending.bookmarks_after.clone();
+                            self.search_marks = pending.marks_after.clone();
                             match pending.history {
                                 HistoryMove::Edit => {
-                                    self.undo_selection.push(SelectionHistory {
+                                    let merged=completion.metadata.as_ref().is_some_and(|metadata| metadata.origin==bareline_document::history::EditOrigin::Typing && self.undo_selection.last().is_some_and(|entry|power::consumer::history_selections(&entry.before)==metadata.before));
+                                    let entry=SelectionHistory {
                                         folds_before: pending.folds_before,
                                         folds_after: pending.folds_after,
                                         before: pending.before,
                                         after: pending.after,
                                         bookmarks_before: pending.bookmarks_before,
+                                        marks_before: pending.marks_before,
                                         bookmarks_after: pending.bookmarks_after,
+                                        marks_after: pending.marks_after,
                                         group: None,
-                                    });
+                                    };
+                                    if merged {
+                                        let previous=self.undo_selection.last_mut().unwrap();
+                                        previous.after=entry.after;previous.bookmarks_after=entry.bookmarks_after;previous.folds_after=entry.folds_after;previous.marks_after=entry.marks_after;
+                                    }else{self.undo_selection.push(entry);}
                                     self.redo_selection.clear();
                                 }
                                 HistoryMove::Undo => {
@@ -793,12 +830,14 @@ impl EditorSurface {
                                     }
                                 }
                             }
+                            if self.undo_selection.len()>completion.undo_depth {self.undo_selection.drain(..self.undo_selection.len()-completion.undo_depth);}
+                            if self.redo_selection.len()>completion.redo_depth {self.redo_selection.drain(..self.redo_selection.len()-completion.redo_depth);}
                             self.error = None;
                         }
                         Err(error) => {
                             self.pending_command = None;
                             self.error = Some(format!("Edit was not applied: {error:?}"));
-                            self.queue.clear();
+                            self.queue.clear(); self.queue_origins.clear();
                         }
                     }
                     changed = true;
@@ -807,7 +846,7 @@ impl EditorSurface {
                 Err(TryRecvError::Disconnected) => {
                     self.pending = None;
                     self.pending_command = None;
-                    self.queue.clear();
+                    self.queue.clear(); self.queue_origins.clear();
                     self.error = Some("Document worker stopped.".into());
                     return true;
                 }
@@ -817,6 +856,9 @@ impl EditorSurface {
             let Some(input) = self.queue.pop_front() else {
                 break;
             };
+            let mut origin=self.queue_origins.pop_front().unwrap_or_default();
+            if self.selection_set().selections.len()>1 {origin=bareline_document::history::EditOrigin::MultiCursor;}
+            if origin!=bareline_document::history::EditOrigin::Typing {self.history_boundary=power::consumer::next_receipt_sequence();}
             if matches!(input, Input::SetCaret(..)) { self.power_rectangle = None; }
             let before = self.selection_set();
             let smart = self.smart_typing && self.language != bareline_syntax::Language::PlainText;
@@ -856,12 +898,14 @@ impl EditorSurface {
             let folds_before = self.fold_anchors();
             let mut folds_after = folds_before.clone();
             let mut bookmarks_after = bookmarks_before.clone();
+            let marks_before = self.search_marks.clone();
+            let mut marks_after = marks_before.clone();
             let mutation = if let Some(operation) = operation {
                 let prepared = match operation {
                     Ok(prepared) => prepared,
                     Err(error) => {
                         self.error = Some(format!("Edit was not applied: {error:?}"));
-                        self.queue.clear();
+                        self.queue.clear(); self.queue_origins.clear();
                         break;
                     }
                 };
@@ -875,6 +919,7 @@ impl EditorSurface {
                 }
                 after = prepared.selections;
                 bookmarks_after.map_edits(&prepared.transaction);
+                marks_after = self.search_marks.mapped(&prepared.transaction);
                 folds_after = self.mapped_folds(&prepared.transaction);
                 Some(Mutation::Apply(prepared.transaction))
             } else {
@@ -884,6 +929,7 @@ impl EditorSurface {
                         let entry = self.undo_selection.last().unwrap();
                         after = entry.before.clone();
                         bookmarks_after = entry.bookmarks_before.clone();
+                        marks_after = entry.marks_before.clone();
                         folds_after = entry.folds_before.clone();
                         Some(Mutation::Undo)
                     }
@@ -892,6 +938,7 @@ impl EditorSurface {
                         let entry = self.redo_selection.last().unwrap();
                         after = entry.after.clone();
                         bookmarks_after = entry.bookmarks_after.clone();
+                        marks_after = entry.marks_after.clone();
                         folds_after = entry.folds_after.clone();
                         Some(Mutation::Redo)
                     }
@@ -899,11 +946,17 @@ impl EditorSurface {
                 }
             };
             if let Some(mutation) = mutation {
-                match self
-                    .service
-                    .as_ref()
-                    .expect("mutations are rejected for loading previews")
-                    .submit_with_notify(mutation, Some(self.notify.clone()))
+                let service=self.service.as_ref().expect("mutations are rejected for loading previews");
+                let submission=match mutation {
+                    Mutation::Apply(transaction) if before.selections.len()<=1024 && after.selections.len()<=1024 => {
+                        let metadata=bareline_document::history::EditMetadata {
+                            before:power::consumer::history_selections(&before),after:power::consumer::history_selections(&after),origin,boundary:self.history_boundary,monotonic_ms:power::consumer::monotonic_ms(),
+                        };
+                        service.submit_with_metadata(transaction,metadata,Some(self.notify.clone())).map_err(|(error,transaction,_)|(error,Mutation::Apply(transaction)))
+                    }
+                    mutation=>service.submit_with_notify(mutation,Some(self.notify.clone())),
+                };
+                match submission
                 {
                     Ok(receiver) => {
                         self.pending = Some(Pending {
@@ -915,16 +968,19 @@ impl EditorSurface {
                             before,
                             bookmarks_before,
                             bookmarks_after,
+                            marks_before,
+                            marks_after,
                             history,
                         })
                     }
                     Err((SubmitError::Saturated, _)) => {
                         self.queue.push_front(input);
+                        self.queue_origins.push_front(origin);
                         break;
                     }
                     Err((SubmitError::Closed | SubmitError::InvalidGroup, _)) => {
                         self.error = Some("Document service closed.".into());
-                        self.queue.clear();
+                        self.queue.clear(); self.queue_origins.clear();
                         break;
                     }
                 }
@@ -1061,18 +1117,31 @@ impl EditorSurface {
     pub fn accessibility_geometry(&self, backend: &impl TextBackend, width: f32, height: f32) -> Vec<(std::ops::Range<usize>, Rect)> {
         let mut result = Vec::new();
         let mut remaining = MAX_LAYOUT_BYTES;
+        let composition = self.composition.as_ref().map(|(text,_)| text.as_str());
+        let caret = self.selection.caret;
+        let caret_line = self.snapshot.line_at(TextOffset(caret)).ok();
         for (line, layout) in &self.layouts {
             let start = layout.start.max(self.visible_text.start.0);
             let end = layout.end.min(self.visible_text.end.0);
-            if start >= end || end-start > remaining { continue; }
-            let Ok(text) = self.snapshot.read(TextOffset(start)..TextOffset(end), remaining) else { continue; };
+            if start > end || end-start > remaining { continue; }
+            let Ok(mut text) = self.snapshot.read(TextOffset(start)..TextOffset(end), remaining) else { continue; };
             remaining -= text.len();
+            let composed = composition.is_some() && caret_line == Some(*line);
+            let draw_id = if composed {
+                let (Some(id), Some(preedit)) = (self.composition_layout, composition) else { continue; };
+                if caret < start || caret > end || preedit.len() > remaining { continue; }
+                text.insert_str(caret-start, preedit);
+                remaining -= preedit.len();
+                id
+            } else { layout.id };
+            let shift = if !composed && start >= caret { composition.map_or(0,str::len) } else { 0 };
             let origin_y = self.top() + (self.visual_line(*line) as f64 * self.line_height() as f64-self.scroll_y) as f32;
             for (offset, grapheme) in text.grapheme_indices(true) {
                 if result.len() >= 4096 { return result; }
-                let a = start+offset;
+                let a = start+shift+offset;
                 let b = a+grapheme.len();
-                let Ok(rects) = backend.range_rects(layout.id, a-layout.start..b-layout.start) else { continue; };
+                let local = start-layout.start+offset;
+                let Ok(rects) = backend.range_rects(draw_id, local..local+grapheme.len()) else { continue; };
                 for r in rects {
                     let x = r.x+LEFT-self.scroll_x as f32;
                     let y = r.y+origin_y;
@@ -1324,6 +1393,12 @@ impl EditorSurface {
             }
             if self.known_folds.iter().any(|fold| fold.header == number) {
                 text(ops, 40.0, y, if self.fold_state.collapsed.contains(&number) { "+" } else { "−" }, self.font_pixels, self.theme.gutter);
+            }
+            for (style,marked) in self.search_marks.iter() {
+                let a=marked.start.0.max(start);let b=marked.end.0.min(end);
+                if a<b {for r in backend.range_rects(layout.id,a-start..b-start)? {
+                    ops.push(DrawOp::Fill(rect(LEFT-self.scroll_x as f32+r.x,y+r.y,r.width,r.height),self.theme.marks[(style-1)as usize]));
+                }}
             }
             for selection in self.selection_set().selections {
                 let selected = selection.range();

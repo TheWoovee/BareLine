@@ -9,6 +9,7 @@ default = []
 perf-spans = ["bareline-renderer/perf-spans", "bareline-diagnostics/perf-spans"]
 
 [dependencies]
+bareline-search = { path = "../../crates/search" }
 bareline-app = { path = "../../crates/app" }
 bareline-commands = { path = "../../crates/commands" }
 bareline-diagnostics = { path = "../../crates/diagnostics" }

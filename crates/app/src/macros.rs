@@ -949,8 +949,14 @@ impl MacroExecutor for WorkspaceExecutor<'_> {
                         .find
                         .next(editor.snapshot(), at, backwards)
                         .ok_or("Search has no current match")?;
-                    editor.enqueue(Input::SetCaret(range.start.0, false));
-                    editor.enqueue(Input::SetCaret(range.end.0, true));
+                    editor.enqueue_with_origin(
+                        Input::SetCaret(range.start.0, false),
+                        bareline_document::history::EditOrigin::Macro,
+                    );
+                    editor.enqueue_with_origin(
+                        Input::SetCaret(range.end.0, true),
+                        bareline_document::history::EditOrigin::Macro,
+                    );
                 }
                 crate::workspace::WorkspaceEditor::Paged(editor) => {
                     let at = editor.viewport_start().0.saturating_add(at);
@@ -1101,7 +1107,7 @@ impl MacroExecutor for WorkspaceExecutor<'_> {
             }
         };
         editor.error = None;
-        editor.enqueue(input);
+        editor.enqueue_with_origin(input, bareline_document::history::EditOrigin::Macro);
         Ok(())
     }
 }

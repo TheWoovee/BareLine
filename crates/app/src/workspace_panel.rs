@@ -77,6 +77,7 @@ impl TreeSource for Model {
 struct DirectoryCursor {
     entries: std::fs::ReadDir,
     _guard: Option<Box<dyn Send>>,
+    root: PathBuf,
 }
 struct Listing {
     parent: NodeId,
@@ -219,9 +220,11 @@ impl WorkspacePanel {
             self.message = Some("Folder discovery busy; try again when ready".into());
             return;
         }
+        if self.model.nodes.get(&id.0).is_none_or(|node| !node.directory || (!replace && node.children.is_some() && node.cursor.is_none())) { return; }
         // Continuation replaces the previous page at the resident-node ceiling.
         // The live ReadDir cursor advances, so every entry remains reachable.
         let Some(target) = self.model.nodes.get(&id.0).map(|n| n.path.clone()) else { return; };
+        let root = self.model.roots.iter().filter_map(|id| self.model.nodes.get(&id.0)).filter(|n| target.starts_with(&n.path)).max_by_key(|n| n.path.components().count()).map(|n| n.path.clone()).unwrap_or_else(|| target.clone());
         while NODE_LIMIT.saturating_sub(self.model.nodes.len()) < ENTRY_LIMIT {
             let candidate = self.model.nodes.iter()
                 .filter(|(candidate, n)| **candidate != id.0 && !target.starts_with(&n.path) && n.children.as_ref().is_some_and(|c| !c.is_empty()))
@@ -268,6 +271,7 @@ impl WorkspacePanel {
                         Ok(DirectoryCursor {
                             entries: std::fs::read_dir(&path)?,
                             _guard: retained,
+                            root,
                         })
                     })(),
                 };
@@ -323,9 +327,22 @@ impl WorkspacePanel {
         self.message = listing.status;
         let old = self.model.nodes[&listing.parent.0].children.clone().unwrap_or_default();
         let mut resident: BTreeMap<_, _> = old.iter().filter_map(|id| self.model.nodes.get(&id.0).map(|n| (n.path.clone(), (*id, n.directory)))).collect();
+        if replace {
+            let incoming: BTreeSet<_> = listing.entries.iter().map(|(path, _)| path).collect();
+            let removed: Vec<_> = resident.iter().filter(|(path, _)| !incoming.contains(path)).map(|(path, (id, _))| (path.clone(), *id)).collect();
+            for (path, id) in removed {
+                self.release_children(id);
+                self.model.nodes.remove(&id.0);
+                self.dirty.remove(&id.0); self.expanded.remove(&id.0);
+                if self.selected == Some(id) { self.selected = Some(listing.parent); }
+                resident.remove(&path);
+            }
+        }
         let mut children = if replace { Vec::new() } else { old.clone() };
         let mut retained: BTreeSet<_> = children.iter().map(|id| id.0).collect();
+        let mut page_paths = BTreeSet::new();
         for (path, directory) in listing.entries {
+            if !page_paths.insert(path.clone()) { continue; }
             let id = if let Some((id, old_directory)) = resident.remove(&path) {
                 if old_directory != directory {
                     self.release_children(id);
@@ -392,6 +409,9 @@ impl WorkspacePanel {
     }
     pub fn accessibility_action(&mut self, id: NodeId, action: bareline_ui::widgets::SemanticAction) -> Option<PanelAction> {
         self.tree.state.focused = true;
+        let action = if action == bareline_ui::widgets::SemanticAction::Invoke && self.model.nodes.get(&id.0).is_some_and(|n| n.directory) {
+            if self.expanded.contains(&id.0) { bareline_ui::widgets::SemanticAction::Collapse } else { bareline_ui::widgets::SemanticAction::Expand }
+        } else { action };
         let action = self.tree.accessibility_action(&self.model, id, action);
         self.action(action)
     }
@@ -507,7 +527,7 @@ fn enumerate_page(
             Ok((path, kind)) => {
                 if !excludes
                     .iter()
-                    .any(|s| path.file_name().is_some_and(|n| glob_matches(s, &n.to_string_lossy())))
+                    .any(|s| excluded(s, &path, &cursor.root))
                 {
                     result
                         .entries
@@ -525,6 +545,13 @@ fn enumerate_page(
         .entries
         .sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
     result
+}
+fn excluded(pattern: &str, path: &std::path::Path, root: &std::path::Path) -> bool {
+    if pattern.contains(['/', '\\']) {
+        let relative = path.strip_prefix(root).unwrap_or(path).to_string_lossy().replace('\\', "/");
+        let pattern = pattern.replace('\\', "/");
+        glob_matches(&pattern, &relative) || pattern.strip_suffix("/**").is_some_and(|folder| glob_matches(folder, &relative))
+    } else { path.file_name().is_some_and(|name| glob_matches(pattern, &name.to_string_lossy())) }
 }
 fn glob_matches(pattern: &str, name: &str) -> bool {
     let pattern: Vec<_> = pattern.chars().collect();
@@ -544,12 +571,13 @@ fn glob_matches(pattern: &str, name: &str) -> bool {
 }
 #[cfg(test)]
 fn enumerate(parent: NodeId, path: PathBuf, capacity: usize) -> Listing {
-    match std::fs::read_dir(path) {
+    match std::fs::read_dir(&path) {
         Ok(entries) => enumerate_page(
             parent,
             DirectoryCursor {
                 entries,
                 _guard: None,
+                root: path,
             },
             capacity,
             &[],
@@ -566,6 +594,69 @@ fn enumerate(parent: NodeId, path: PathBuf, capacity: usize) -> Listing {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn listing(parent: NodeId, entries: Vec<(PathBuf, bool)>) -> Listing {
+        Listing { parent, entries, status: None, cursor: None }
+    }
+    #[test]
+    fn incremental_refresh_preserves_survivors_and_other_branches() {
+        let mut panel = WorkspacePanel::new(Arc::new(|| {}));
+        let root = PathBuf::from("root");
+        panel.add_root(root.clone());
+        panel.add_root(PathBuf::from("other"));
+        let parent = panel.model.roots[0];
+        let other = panel.model.roots[1];
+        panel.apply_listing(listing(parent, vec![(root.join("a"), false), (root.join("b"), true)]), false);
+        let survivor = panel.model.nodes[&parent.0].children.as_ref().unwrap()[1];
+        panel.apply_listing(listing(survivor, vec![(root.join("b/child"), false)]), false);
+        let child = panel.model.nodes[&survivor.0].children.as_ref().unwrap()[0];
+        panel.apply_listing(listing(parent, vec![(root.join("b"), true), (root.join("c"), false)]), true);
+        assert_eq!(panel.model.nodes[&parent.0].children.as_ref().unwrap()[0], survivor);
+        assert!(panel.model.nodes.contains_key(&child.0));
+        assert!(panel.model.nodes.contains_key(&other.0));
+        assert!(!panel.model.nodes.values().any(|n| n.path == root.join("a")));
+        panel.directory_changed(&root);
+        panel.directory_changed(&root);
+        assert_eq!(panel.dirty.len(), 1);
+    }
+    #[test]
+    fn cancelled_discovery_cannot_publish_or_start_concurrent_work() {
+        let mut panel = WorkspacePanel::new(Arc::new(|| {}));
+        panel.add_root(PathBuf::from("root"));
+        let parent = panel.model.roots[0];
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let cancel = Arc::new(AtomicBool::new(false));
+        panel.pending = Some(PendingListing { receiver, cancel: cancel.clone(), replace: false });
+        panel.hide();
+        assert!(cancel.load(Ordering::Relaxed));
+        assert!(panel.pending.is_some());
+        assert!(sender.send(listing(parent, vec![(PathBuf::from("stale"), false)])).is_ok());
+        assert!(panel.pump());
+        assert_eq!(panel.model.nodes.len(), 1);
+        assert!(panel.dirty.contains(&parent.0));
+    }
+    #[test]
+    fn continuation_visits_excluded_entries_and_retains_position() {
+        let root = std::env::temp_dir().join(format!("bareline-explorer-pages-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        for index in 0..9 { std::fs::write(root.join(format!("file{index}.tmp")), []).unwrap(); }
+        let cursor = DirectoryCursor { entries: std::fs::read_dir(&root).unwrap(), _guard: None, root: root.clone() };
+        let first = enumerate_page(NodeId(1), cursor, 3, &["*.tmp".into()], &AtomicBool::new(false));
+        assert!(first.entries.is_empty());
+        assert!(first.cursor.is_some());
+        let mut cursor = first.cursor;
+        let mut seen = BTreeSet::new();
+        while let Some(next) = cursor {
+            let page = enumerate_page(NodeId(1), next, 3, &[], &AtomicBool::new(false));
+            for (path, _) in page.entries { assert!(seen.insert(path)); }
+            cursor = page.cursor;
+        }
+        assert_eq!(seen.len(), 6);
+        assert!(glob_matches("f?le*.tmp", "fileλ.tmp"));
+        assert!(!glob_matches("*.rs", "file.toml"));
+        assert!(excluded("target/**", &root.join("target"), &root));
+        assert!(excluded("src/*.tmp", &root.join("src/cache.tmp"), &root));
+        std::fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn discovery_is_shallow_bounded_and_reports_missing_paths() {
         let root = std::env::temp_dir().join(format!("bareline-explorer-{}", std::process::id()));
@@ -605,6 +696,7 @@ pub fn register_commands(registry: &mut bareline_commands::CommandRegistry) {
         (bareline_commands::CommandId("outline.importFunctionList"), "Import Notepad++ Function List…"),
         (bareline_commands::CommandId("outline.loadDefinition"), "Load Outline Definition…"),
         (bareline_commands::CommandId("outline.exportDefinition"), "Export Outline Definition…"),
+        (bareline_commands::CommandId("outline.cancelImport"), "Cancel Outline Import"),
         (
             bareline_commands::CommandId("view.documents"),
             "Toggle Document List",

@@ -187,17 +187,36 @@ impl SparseLineIndex {
 }
 #[derive(Clone)]
 pub struct PagedSnapshot {
-    root: tree::Root,
+    pub(crate) root: tree::Root,
     pub revision: Revision,
     pub content_state: ContentStateId,
-    document_id: u64,
-    _structure: Option<std::sync::Arc<crate::BudgetClaim>>,
+    pub(crate) document_id: u64,
+    pub(crate) _structure: Option<std::sync::Arc<crate::BudgetClaim>>,
 }
 impl PagedSnapshot {
     /// Opaque source token for validating queued external actions; forks have distinct identities.
-    pub fn identity_token(&self) -> (u64, u64) { (self.document_id, self.revision.0) }
+    pub fn identity_token(&self) -> (u64, u64) {
+        (self.document_id, self.revision.0)
+    }
+    /// A historical/read-only presentation owns a distinct identity while retaining bytes.
+    pub fn fork_identity(&self) -> Self {
+        let mut snapshot = self.clone();
+        snapshot.document_id = crate::unique();
+        snapshot
+    }
     pub fn same_document(&self, other: &Self) -> bool {
         self.document_id == other.document_id
+    }
+    /// Explicit worker-only owned-page resolution; false routes to the original producer.
+    pub fn resolve_owned(&self, ticket: PageTicket) -> Result<bool, Error> {
+        for piece in self.pieces() {
+            if let PagedPiece::OwnedSource { source, .. } = piece
+                && source.generation() == ticket.generation
+            {
+                return source.resolve_owned(ticket);
+            }
+        }
+        Ok(false)
     }
     pub fn pieces(&self) -> Pieces<'_> {
         Pieces {
@@ -281,6 +300,11 @@ impl PagedSnapshot {
     }
 }
 pub enum PagedPiece<'a> {
+    OwnedSource {
+        source: &'a MemorySource,
+        range: Range<u64>,
+        original: Option<(&'a MemorySource, Range<u64>)>,
+    },
     Original {
         source: &'a MemorySource,
         range: Range<u64>,
@@ -301,6 +325,20 @@ impl<'a> Iterator for Pieces<'a> {
     fn next(&mut self) -> Option<Self::Item> {
         while let Some(node) = self.stack.pop() {
             match node {
+                tree::Node::OwnedSource {
+                    source,
+                    range,
+                    original,
+                    ..
+                } => {
+                    return Some(PagedPiece::OwnedSource {
+                        source,
+                        range: range.clone(),
+                        original: original
+                            .as_ref()
+                            .map(|(source, range)| (source, range.clone())),
+                    });
+                }
                 tree::Node::Source { source, range } => {
                     return Some(PagedPiece::Original {
                         source,
@@ -355,30 +393,26 @@ pub struct OwnedDelta {
     pub removed: String,
     pub inserted: String,
 }
-struct PagedHistory {
-    typing_insert: bool,
-    metadata: crate::history::EditMetadata,
-    edits: Vec<OwnedEdit>,
-    before_state: ContentStateId,
-    after_state: ContentStateId,
-    _reservation: Reservation,
+#[derive(Clone)]
+pub(crate) struct PagedHistory {
+    pub(crate) typing_insert: bool,
+    pub(crate) metadata: crate::history::EditMetadata,
+    pub(crate) edits: Vec<OwnedEdit>,
+    pub(crate) before_state: ContentStateId,
+    pub(crate) after_state: ContentStateId,
+    pub(crate) _reservation: crate::history::Charge,
 }
-struct OwnedEdit {
-    before_range: Range<usize>,
-    after_range: Range<usize>,
-    inverse: tree::Root,
-    inserted: tree::Root,
-}
+use crate::history::OwnedEdit;
 /// Source-backed edits share the same balanced piece tree as Resident documents.
 /// Callers materialize bounded windows before submitting edits; no actor lock spans I/O.
 pub struct PagedDocument {
-    current: PagedSnapshot,
-    saved_state: ContentStateId,
-    bytes: Budget,
-    history: Budget,
-    history_policy: crate::history::HistoryPolicy,
-    undo: Vec<PagedHistory>,
-    redo: Vec<PagedHistory>,
+    pub(crate) current: PagedSnapshot,
+    pub(crate) saved_state: ContentStateId,
+    pub(crate) bytes: Budget,
+    pub(crate) history: Budget,
+    pub(crate) history_policy: crate::history::HistoryPolicy,
+    pub(crate) undo: Vec<PagedHistory>,
+    pub(crate) redo: Vec<PagedHistory>,
 }
 impl PagedDocument {
     pub fn new(snapshot: PagedSnapshot, bytes: Budget, history: Budget) -> Self {
@@ -394,13 +428,30 @@ impl PagedDocument {
     }
     /// Storage owner has sealed an exact copy of `captured`. Refuse dirty/history state
     /// rather than dropping undo. The old service must be retired before using this actor.
-    pub(crate) fn from_clean_spill(document: &crate::Document, captured: &crate::DocumentSnapshot, source: MemorySource) -> Result<Self, Error> {
-        if !document.current.same_document(captured) { return Err(Error::WrongDocument); }
-        if document.current.revision != captured.revision { return Err(Error::StaleRevision); }
-        if document.dirty() || !document.undo.is_empty() || !document.redo.is_empty() { return Err(Error::ActorBusy); }
-        if !captured.is_complete() || source.len() != captured.len() as u64 { return Err(Error::IncompleteSource); }
-        let snapshot = PagedSnapshot { root: tree::from_source(source.clone(), 0..source.len()),
-            revision: captured.revision, content_state: captured.content_state, document_id: captured.document_id, _structure: None };
+    pub(crate) fn from_clean_spill(
+        document: &crate::Document,
+        captured: &crate::DocumentSnapshot,
+        source: MemorySource,
+    ) -> Result<Self, Error> {
+        if !document.current.same_document(captured) {
+            return Err(Error::WrongDocument);
+        }
+        if document.current.revision != captured.revision {
+            return Err(Error::StaleRevision);
+        }
+        if document.dirty() || !document.undo.is_empty() || !document.redo.is_empty() {
+            return Err(Error::ActorBusy);
+        }
+        if !captured.is_complete() || source.len() != captured.len() as u64 {
+            return Err(Error::IncompleteSource);
+        }
+        let snapshot = PagedSnapshot {
+            root: tree::from_source(source.clone(), 0..source.len()),
+            revision: captured.revision,
+            content_state: captured.content_state,
+            document_id: captured.document_id,
+            _structure: None,
+        };
         let mut paged = Self::new(snapshot, document.bytes.clone(), document.history.clone());
         paged.history_policy = document.history_policy;
         Ok(paged)
@@ -540,13 +591,13 @@ impl PagedDocument {
         self.undo
             .try_reserve(1)
             .map_err(|_| Error::BudgetExceeded)?;
-        let mut entry = PagedHistory {
+        let entry = PagedHistory {
             typing_insert,
             metadata,
             edits: owned_edits,
             before_state: self.current.content_state,
             after_state: state,
-            _reservation: reservation,
+            _reservation: crate::history::Charge::new(reservation),
         };
         let merge = self.undo.last().is_some_and(|last| {
             last.typing_insert
@@ -567,8 +618,7 @@ impl PagedDocument {
             last.after_state = entry.after_state;
             last.metadata.after = entry.metadata.after;
             last.metadata.monotonic_ms = entry.metadata.monotonic_ms;
-            last._reservation.bytes += entry._reservation.bytes;
-            entry._reservation.bytes = 0;
+            last._reservation.merge(entry._reservation);
         } else {
             self.undo.push(entry);
         }
@@ -612,6 +662,17 @@ impl PagedDocument {
         snapshot.root = root;
         snapshot.revision = revision;
         Ok(Self::new(snapshot, bytes, history))
+    }
+    pub fn saved_content_state(&self) -> ContentStateId {
+        self.saved_state
+    }
+    pub fn capture_spill(&self) -> Result<crate::spill::SpillPlan, Error> {
+        crate::spill::SpillPlan::paged(self)
+    }
+    pub fn attach_spill(&mut self, prepared: crate::spill::PreparedSpill) -> Result<(), Error> {
+        let next = prepared.attach_paged(self)?;
+        *self = next;
+        Ok(())
     }
     pub fn mark_saved(&mut self, snapshot: &PagedSnapshot) -> Result<(), Error> {
         if !self.current.same_document(snapshot) {
@@ -685,7 +746,7 @@ impl PagedDocument {
                 .undo
                 .iter()
                 .chain(&self.redo)
-                .map(|entry| entry._reservation.bytes)
+                .map(|entry| entry._reservation.bytes())
                 .sum(),
         }
     }
@@ -695,6 +756,58 @@ impl PagedDocument {
     pub fn can_redo(&self) -> bool {
         !self.redo.is_empty()
     }
+    pub fn history_delta_request(
+        &self,
+        undo: bool,
+        max_bytes: usize,
+        budget: Budget,
+    ) -> Result<HistoryDeltaRequest, Error> {
+        let entry = (if undo {
+            self.undo.last()
+        } else {
+            self.redo.last()
+        })
+        .ok_or(Error::EmptyHistory)?;
+        let total = entry
+            .edits
+            .iter()
+            .try_fold(0usize, |total, edit| {
+                total
+                    .checked_add(tree::summary(&edit.inverse).bytes)?
+                    .checked_add(tree::summary(&edit.inserted).bytes)
+            })
+            .ok_or(Error::BudgetExceeded)?;
+        if total > max_bytes {
+            return Err(Error::BudgetExceeded);
+        }
+        let charge = budget.claim(
+            total
+                .checked_add(
+                    entry
+                        .edits
+                        .len()
+                        .checked_mul(std::mem::size_of::<OwnedDelta>())
+                        .ok_or(Error::BudgetExceeded)?,
+                )
+                .ok_or(Error::BudgetExceeded)?,
+        )?;
+        Ok(HistoryDeltaRequest {
+            snapshot: self.current.clone(),
+            edits: entry.edits.clone(),
+            undo,
+            index: 0,
+            inserted_phase: false,
+            cursor: 0,
+            removed: String::new(),
+            text: String::new(),
+            output: Vec::with_capacity(entry.edits.len()),
+            window: None,
+            budget,
+            charge: Some(charge),
+            cancelled: false,
+            finished: false,
+        })
+    }
     pub fn history_delta(&self, undo: bool) -> Result<Vec<OwnedDelta>, Error> {
         let entry = if undo {
             self.undo.last()
@@ -702,6 +815,13 @@ impl PagedDocument {
             self.redo.last()
         }
         .ok_or(Error::EmptyHistory)?;
+        if entry
+            .edits
+            .iter()
+            .any(|edit| tree::has_source(&edit.inverse) || tree::has_source(&edit.inserted))
+        {
+            return Err(Error::IncompleteSource);
+        }
         let owned_text = |root: &tree::Root| {
             tree::chunks(root, 0..tree::summary(root).bytes).collect::<String>()
         };
@@ -775,6 +895,143 @@ fn replace_root(root: tree::Root, range: Range<usize>, inserted: tree::Root) -> 
     let (prefix, _) = tree::split(prefix, range.start);
     tree::concat(tree::concat(prefix, inserted), suffix)
 }
+/// The payload budget stays charged until the recovery journal consumer releases it.
+pub struct MaterializedHistory {
+    pub deltas: Vec<OwnedDelta>,
+    _charge: crate::BudgetClaim,
+}
+pub enum HistoryDeltaPoll {
+    Ready(MaterializedHistory),
+    Pending(PageTicket),
+    Progress,
+    Unavailable(Unavailable),
+    Failed(Error),
+    Cancelled,
+    Finished,
+}
+pub struct HistoryDeltaRequest {
+    snapshot: PagedSnapshot,
+    edits: Vec<OwnedEdit>,
+    undo: bool,
+    index: usize,
+    inserted_phase: bool,
+    cursor: usize,
+    removed: String,
+    text: String,
+    output: Vec<OwnedDelta>,
+    window: Option<WindowRequest>,
+    budget: Budget,
+    charge: Option<crate::BudgetClaim>,
+    cancelled: bool,
+    finished: bool,
+}
+impl HistoryDeltaRequest {
+    pub fn matches_snapshot(&self, snapshot: &PagedSnapshot) -> bool {
+        self.snapshot.same_document(snapshot)
+            && self.snapshot.revision == snapshot.revision
+            && self.snapshot.content_state == snapshot.content_state
+    }
+    pub fn cancel(&mut self) {
+        self.cancelled = true;
+        self.window = None;
+        self.output = Vec::new();
+        self.text = String::new();
+        self.removed = String::new();
+        self.charge = None;
+    }
+    pub fn resolve_owned(&self, ticket: PageTicket) -> Result<bool, Error> {
+        let Some(edit) = self.edits.get(self.index) else {
+            return Ok(false);
+        };
+        let mut snapshot = self.snapshot.clone();
+        snapshot.root = if self.inserted_phase != self.undo {
+            edit.inserted.clone()
+        } else {
+            edit.inverse.clone()
+        };
+        snapshot.resolve_owned(ticket)
+    }
+    pub fn poll(&mut self) -> HistoryDeltaPoll {
+        if self.cancelled {
+            return HistoryDeltaPoll::Cancelled;
+        }
+        if self.finished {
+            return HistoryDeltaPoll::Finished;
+        }
+        let result = self.step();
+        if matches!(
+            result,
+            HistoryDeltaPoll::Failed(_) | HistoryDeltaPoll::Unavailable(_)
+        ) {
+            self.cancel();
+            self.finished = true;
+        }
+        result
+    }
+    fn step(&mut self) -> HistoryDeltaPoll {
+        let Some(edit) = self.edits.get(self.index) else {
+            self.finished = true;
+            return HistoryDeltaPoll::Ready(MaterializedHistory {
+                deltas: std::mem::take(&mut self.output),
+                _charge: self.charge.take().expect("history payload charge"),
+            });
+        };
+        let root = if self.inserted_phase != self.undo {
+            &edit.inserted
+        } else {
+            &edit.inverse
+        };
+        let len = tree::summary(root).bytes;
+        if self.cursor == len {
+            if !self.inserted_phase {
+                self.removed = std::mem::take(&mut self.text);
+                self.inserted_phase = true;
+                self.cursor = 0;
+            } else {
+                let range = if self.undo {
+                    &edit.after_range
+                } else {
+                    &edit.before_range
+                };
+                self.output.push(OwnedDelta {
+                    range: TextOffset(range.start)..TextOffset(range.end),
+                    removed: std::mem::take(&mut self.removed),
+                    inserted: std::mem::take(&mut self.text),
+                });
+                self.index += 1;
+                self.inserted_phase = false;
+                self.cursor = 0;
+            }
+            return HistoryDeltaPoll::Progress;
+        }
+        if self.window.is_none() {
+            if self.cursor == 0 {
+                self.text = String::with_capacity(len);
+            }
+            let mut snapshot = self.snapshot.clone();
+            snapshot.root = root.clone();
+            match snapshot.begin_viewport(TextOffset(self.cursor), 64 * 1024, &self.budget) {
+                Ok(window) => self.window = Some(window),
+                Err(error) => return HistoryDeltaPoll::Failed(error),
+            }
+        }
+        match self.window.as_mut().expect("history window").poll() {
+            WindowPoll::Ready(window) => {
+                if window.range.start.0 != self.cursor || window.text.is_empty() {
+                    return HistoryDeltaPoll::Failed(Error::InvalidBoundary);
+                }
+                self.cursor = window.range.end.0;
+                self.text.push_str(&window.text);
+                self.window = None;
+                HistoryDeltaPoll::Progress
+            }
+            WindowPoll::Pending(ticket) => HistoryDeltaPoll::Pending(ticket),
+            WindowPoll::Unavailable(reason) => HistoryDeltaPoll::Unavailable(reason),
+            WindowPoll::InvalidUtf8 => HistoryDeltaPoll::Failed(Error::InvalidBoundary),
+            WindowPoll::Finished => HistoryDeltaPoll::Failed(Error::IncompleteSource),
+        }
+    }
+}
 pub enum WindowPoll {
     Ready(TextWindow),
     Pending(PageTicket),
@@ -809,7 +1066,9 @@ impl WindowRequest {
                     self.cursor += count;
                     continue;
                 }
-                tree::Span::Source(source, range) => (source, range),
+                tree::Span::Source(source, range) | tree::Span::OwnedSource(source, range) => {
+                    (source, range)
+                }
             };
             let page_remaining =
                 source.page_size() as u64 - range.start % source.page_size() as u64;

@@ -51,6 +51,13 @@ impl ManifestBuilder {
         self.manifest.panels.push(id.into());
         Ok(self)
     }
+    /// Signed eligibility only; the editor still requires an explicit background
+    /// invocation and owns the deadline/fuel policy.
+    pub fn background_command(mut self, id: &str) -> Result<Self, &'static str> {
+        if !self.manifest.commands.iter().any(|command| command == id) { return Err("declare the command before its background eligibility"); }
+        if !self.manifest.background_commands.iter().any(|command|command == id) { self.manifest.background_commands.push(id.into()); }
+        Ok(self)
+    }
     pub fn build(self) -> ExtensionManifest {
         self.manifest
     }

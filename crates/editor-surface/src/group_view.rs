@@ -23,7 +23,9 @@ struct ViewState {
     before: SelectionSet,
     after: SelectionSet,
     bookmarks_before: Bookmarks,
+    marks_before: crate::search_marks::SearchMarks,
     bookmarks_after: Bookmarks,
+    marks_after: crate::search_marks::SearchMarks,
 }
 pub struct SurfaceGroup {
     receiver: Receiver<GroupCompletion>,
@@ -60,7 +62,9 @@ impl SurfaceGroup {
                 before: view.selection_set(),
                 after: edit.selections,
                 bookmarks_before: view.bookmarks.clone(),
+                marks_before: view.search_marks.clone(),
                 bookmarks_after,
+                marks_after: view.search_marks.mapped(&edit.transaction),
             });
             edits.push(GroupEdit {
                 participant: GroupParticipant {
@@ -122,6 +126,8 @@ impl SurfaceGroup {
                     entry.before.clone()
                 },
                 bookmarks_before: view.bookmarks.clone(),
+                marks_before: view.search_marks.clone(),
+                marks_after: if redo {entry.marks_after.clone()}else{entry.marks_before.clone()},
                 bookmarks_after: if redo {
                     entry.bookmarks_after.clone()
                 } else {
@@ -221,6 +227,7 @@ impl SurfaceGroup {
                 view.selection = state.after.primary();
                 view.selections = state.after.clone();
                 view.bookmarks = state.bookmarks_after.clone();
+            view.search_marks = state.marks_after.clone();
                 view.reveal_caret = true;
                 match self.direction {
                     Direction::Apply => {
@@ -230,7 +237,9 @@ impl SurfaceGroup {
                             before: state.before.clone(),
                             after: state.after.clone(),
                             bookmarks_before: state.bookmarks_before.clone(),
+                            marks_before: state.marks_before.clone(),
                             bookmarks_after: state.bookmarks_after.clone(),
+                            marks_after: state.marks_after.clone(),
                             group: Some(group),
                         });
                         view.redo_selection.clear();

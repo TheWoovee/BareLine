@@ -344,6 +344,12 @@ pub fn column_insert(
     insert: ColumnInsert,
     limits: Limits,
 ) -> Result<PowerEdit, Error> {
+    column_insert_mapped(snapshot,rectangle,insert,limits,None)
+}
+pub fn column_insert_mapped(
+    snapshot:&DocumentSnapshot,rectangle:Rectangle,insert:ColumnInsert,limits:Limits,
+    maps:Option<&std::collections::BTreeMap<usize,DisplayColumnMap>>,
+)->Result<PowerEdit,Error> {
     if rectangle.first_line > rectangle.last_line || rectangle.last_line >= snapshot.line_count() {
         return Err(Error::OutOfBounds);
     }
@@ -355,7 +361,8 @@ pub fn column_insert(
     for (row, n) in (rectangle.first_line..=rectangle.last_line).enumerate() {
         let (start, text) = line(snapshot, n, limits)?;
         let body = content(&text);
-        let map = DisplayColumnMap::new(body, limits.tab_width);
+        let fallback;
+        let map = if let Some(maps)=maps {maps.get(&n).ok_or(Error::OutOfBounds)?}else{fallback=DisplayColumnMap::new(body,limits.tab_width);&fallback};
         let left = rectangle.start_column.min(rectangle.end_column);
         let right = rectangle.start_column.max(rectangle.end_column);
         let (a, mut pad) = map.at(left);
@@ -1304,6 +1311,9 @@ pub fn rectangle_paste(
     text: &str,
     limits: Limits,
 ) -> Result<PowerEdit, Error> {
+    rectangle_paste_mapped(snapshot,rectangle,text,limits,None)
+}
+pub fn rectangle_paste_mapped(snapshot:&DocumentSnapshot,rectangle:Rectangle,text:&str,limits:Limits,maps:Option<&std::collections::BTreeMap<usize,DisplayColumnMap>>)->Result<PowerEdit,Error> {
     if text.len() > limits.max_bytes {
         return Err(Error::BudgetExceeded);
     }
@@ -1325,7 +1335,7 @@ pub fn rectangle_paste(
         let value = rows
             .get(if rows.len() > 1 { row } else { 0 })
             .map_or("", |(s, _)| *s);
-        let projected = column_insert(
+        let projected = column_insert_mapped(
             snapshot,
             Rectangle {
                 first_line: rectangle.first_line + row,
@@ -1334,6 +1344,7 @@ pub fn rectangle_paste(
             },
             ColumnInsert::Text(value.into()),
             limits,
+            maps,
         )?;
         for edit in &projected.transaction.edits {
             charge(&mut total, edit.insert.len(), limits)?;

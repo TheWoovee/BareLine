@@ -25,7 +25,7 @@ const COLOR_CONTROLS: [(&str, &str); 15] = [
     ("compare.gutterCurrent", "diff.current.gutter"),
 ];
 fn compare_input(editor:&bareline_app::workspace::WorkspaceEditor)->CompareInput {
-    match editor {bareline_app::workspace::WorkspaceEditor::Resident(e)=>CompareInput::Resident(e.snapshot().clone()),bareline_app::workspace::WorkspaceEditor::Paged(e)=>CompareInput::Paged(e.read_handle())}
+    match editor {bareline_app::workspace::WorkspaceEditor::Resident(e)=>CompareInput::Resident(e.snapshot().clone()),bareline_app::workspace::WorkspaceEditor::Paged(e)=>if e.surface.user_read_only{CompareInput::CapturedPaged(e.snapshot().clone(),e.read_handle())}else{CompareInput::Paged(e.read_handle())}}
 }
 
 pub(super) fn register(registry: &mut CommandRegistry) {
@@ -96,9 +96,13 @@ pub(super) struct CompareRuntime {
     color_field: bareline_ui::text_field::TextField,
     color_blind: bool,
     saved: Vec<(DocumentSnapshot, String)>,
+    saved_paged: Vec<(bareline_editor_surface::paged_view::PagedReadHandle,String)>,
     pending_source: Option<PendingSource>,
     overview: [Option<Rect>;2],
+    pending_merge: Option<PendingMerge>,
 }
+struct PendingMerge {source:CompareInput,cancel:bareline_diff::CancelToken,result:std::sync::mpsc::Receiver<Result<bareline_document::EditTransaction,bareline_diff::ApplyError>>}
+impl Drop for PendingMerge{fn drop(&mut self){self.cancel.cancel();}}
 struct PendingSource {
     left: CompareInput,
     path: PathBuf,
@@ -357,6 +361,18 @@ impl Shell {
             return false;
         }
         if id == "compare.lastSaved" {
+            if let Some(workspace)=&mut self.workspace {
+                if let Some(bareline_app::workspace::WorkspaceEditor::Paged(editor))=workspace.editors.get(self.app.active) {
+                    let captured=self.compare.saved_paged.iter().find(|(handle,_)|handle.snapshot().same_document(editor.snapshot())).cloned();
+                    if let Some((handle,label))=captured {
+                        match workspace.add_paged_snapshot_preview(self.app.active,&handle,format!("{label} (last saved)")) {
+                            Ok(right)=>{let left=self.app.active;if self.compare_start_pair(left,right){if let Some(c)=&mut self.compare.controller{c.sources[1].origin=CompareOrigin::LastSaved(label);}}},
+                            Err(error)=>workspace.message=Some(error),
+                        }
+                    }else{workspace.message=Some("The last saved source is not available yet".into());}
+                    self.compare_redraw();return true;
+                }
+            }
             let saved = self
                 .workspace
                 .as_ref()
@@ -519,8 +535,10 @@ impl Shell {
                 self.compare.color_field.release(renderer);
             }
             let saved = std::mem::take(&mut self.compare.saved);
+            let saved_paged=std::mem::take(&mut self.compare.saved_paged);
             self.compare = CompareRuntime {
                 saved,
+                saved_paged,
                 ..Default::default()
             };
             self.compare_redraw();
@@ -575,7 +593,7 @@ impl Shell {
                     self.notify.clone(),
                 );
             }
-            "compare.cancel" => controller.cancel(),
+            "compare.cancel" => {controller.cancel();self.compare.pending_merge=None;},
             "compare.options" => {
                 self.compare.options_open = !self.compare.options_open;
                 if !self.compare.options_open
@@ -595,6 +613,16 @@ impl Shell {
                 } else {
                     Direction::RightToLeft
                 };
+                if inputs.iter().any(|input|!matches!(input,CompareInput::Resident(_))) {
+                    if self.compare.pending_merge.is_some(){return true;}
+                    controller.visible_input_hunks(&inputs[0],&inputs[1]);
+                    let Some(hunk)=controller.current_hunk().cloned()else{return true;};
+                    if workspace.editors[indices[side]].read_only()||workspace.editors[indices[side]].busy(){workspace.message=Some("Destination is read-only or busy".into());return true;}
+                    let options=controller.options().clone();let cancel=bareline_diff::CancelToken::default();let worker_cancel=cancel.clone();let captured=inputs[side].clone();let notify=self.notify.clone();let (send,result)=std::sync::mpsc::sync_channel(1);
+                    let spawned=std::thread::Builder::new().name("compare-merge".into()).spawn(move||{let result=bareline_app::compare::prepare_input_merge(&inputs[0],&inputs[1],&hunk,direction,&options,MergePolicy::PreserveIgnoredDestination,1024*1024,&worker_cancel);let _=send.send(result);notify();});
+                    if spawned.is_ok(){controller.invalidate();controller.state=CompareState::Running;self.compare.pending_merge=Some(PendingMerge{source:captured,cancel,result});workspace.message=Some("Preparing difference · Cancel stops staging".into());}else{workspace.message=Some("Could not start merge worker; retry".into());}
+                    return true;
+                }
                 match controller.merge(
                     direction,
                     &snapshots[0],
@@ -675,6 +703,23 @@ impl Shell {
         let Some(workspace) = &mut self.workspace else {
             return;
         };
+        if let Some(pending)=&self.compare.pending_merge {
+            let received=match pending.result.try_recv(){Ok(result)=>Some(result),Err(std::sync::mpsc::TryRecvError::Empty)=>None,Err(_)=>Some(Err(bareline_diff::ApplyError::Unavailable))};
+            if let Some(received)=received {
+                let pending=self.compare.pending_merge.take().unwrap();
+                let result=received.map_err(|e|format!("Merge could not be staged: {e:?}. Select a difference below 1 MiB or retry."));
+                let message=match result {
+                    Ok(transaction)=>match workspace.editors.iter_mut().find(|e|compare_input(e).same_document(&pending.source)) {
+                        Some(editor)=>match (editor,&pending.source){(bareline_app::workspace::WorkspaceEditor::Resident(editor),CompareInput::Resident(source))=>editor.apply_prepared(source,transaction).map_err(String::from),(bareline_app::workspace::WorkspaceEditor::Paged(editor),CompareInput::Paged(source))=>editor.apply_prepared(source.snapshot(),transaction),(bareline_app::workspace::WorkspaceEditor::Paged(editor),CompareInput::CapturedPaged(source,_))=>editor.apply_prepared(source,transaction),_=>Err("Destination changed".into())}.map_or_else(|e|e,|()|"Difference queued as one undoable edit; destination remains unsaved".into()),
+                        None=>"Destination closed; difference was not applied".into(),
+                    },Err(e)=>e,
+                };
+                workspace.message=Some(message);if let Some(controller)=&mut self.compare.controller{controller.invalidate();}
+            }
+        }
+        self.compare.saved_paged.retain(|(saved,_)|workspace.editors.iter().any(|e|match e{bareline_app::workspace::WorkspaceEditor::Paged(p)=>p.snapshot().same_document(saved.snapshot()),_=>false}));
+        let paged_titles=workspace.titles();
+        for (index,editor) in workspace.editors.iter().enumerate(){if let bareline_app::workspace::WorkspaceEditor::Paged(paged)=editor{if workspace.path(index).is_some()&&!paged.dirty()&&!paged.busy(){if let Some((saved,_))=self.compare.saved_paged.iter_mut().find(|(saved,_)|saved.snapshot().same_document(paged.snapshot())){*saved=paged.read_handle();}else if self.compare.saved_paged.len()<4096{self.compare.saved_paged.push((paged.read_handle(),paged_titles[index].clone()));}}}}
         self.compare.saved.retain(|(saved, _)| {
             workspace
                 .editors

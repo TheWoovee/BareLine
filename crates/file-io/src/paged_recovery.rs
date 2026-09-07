@@ -188,7 +188,7 @@ impl PagedRecovery {
                 .lock()
                 .map_err(|_| "Recovery writer stopped".to_owned())?;
             let receipt = writer.append(revision, edits).map_err(|e| e.to_string())?;
-            write_root(&self.directory, snapshot, self.platform.as_ref())
+            write_root(&self.directory, snapshot, self.platform.as_ref(), &self.cancellation)
                 .map_err(|e| e.to_string())?;
             writer
                 .checkpoint(self.platform.as_ref())
@@ -233,6 +233,7 @@ fn write_root(
     directory: &Path,
     snapshot: &bareline_document::paged::PagedSnapshot,
     platform: &dyn LocalFileSystem,
+    cancel: &Cancellation,
 ) -> std::io::Result<()> {
     use sha2::{Digest, Sha256};
     use std::io::{Read, Write};
@@ -243,27 +244,26 @@ fn write_root(
         .open(directory.join(&name))?;
     file.write_all(b"[")?;
     let mut first = true;
-    for (index, piece) in snapshot.pieces().enumerate() {
-        if index >= 65536 {
-            return Err(std::io::Error::other("Recovery piece limit"));
-        }
-        if !first {
-            file.write_all(b",")?;
-        }
-        first = false;
-        let piece = match piece {
-            bareline_document::paged::PagedPiece::Original { range, .. }
-            | bareline_document::paged::PagedPiece::OriginalOwned { range, .. } => {
-                RootPiece::Original {
-                    start: range.start,
-                    end: range.end,
-                }
+    let mut count=0usize;
+    let mut emit=|piece:RootPiece|->std::io::Result<()> {
+        cancel.check().map_err(|_|std::io::Error::new(std::io::ErrorKind::Interrupted,"Recovery cancelled"))?;
+        if count>=65536 {return Err(std::io::Error::other("Recovery piece limit"));}
+        count+=1;
+        if !first {file.write_all(b",")?;}first=false;
+        serde_json::to_writer(&mut file,&piece).map_err(std::io::Error::other)?;
+        if file.metadata()?.len()>128*1024*1024 {return Err(std::io::Error::other("Recovery recipe size limit"));}
+        Ok(())
+    };
+    for piece in snapshot.pieces() {
+        use bareline_document::paged::PagedPiece;
+        match piece {
+            PagedPiece::Original {range,..}|PagedPiece::OriginalOwned {range,..}=>emit(RootPiece::Original{start:range.start,end:range.end})?,
+            PagedPiece::Inserted(text)=>emit(RootPiece::Inserted{text:text.to_owned()})?,
+            PagedPiece::OwnedSource {source,range,original}=>{
+                if let Some((_,original_range))=original {emit(RootPiece::Original{start:original_range.start,end:original_range.end})?;}
+                else {crate::owned_read::visit_utf8::<std::io::Error>(source,range,cancel,|text|emit(RootPiece::Inserted{text:text.to_owned()}))?;}
             }
-            bareline_document::paged::PagedPiece::Inserted(text) => RootPiece::Inserted {
-                text: text.to_owned(),
-            },
-        };
-        serde_json::to_writer(&mut file, &piece).map_err(std::io::Error::other)?;
+        }
     }
     file.write_all(b"]")?;
     if file.metadata()?.len() > 128 * 1024 * 1024 {
@@ -480,6 +480,7 @@ impl std::io::Read for SnapshotRead {
         let mut start = 0;
         for piece in self.snapshot.pieces() {
             let length = match &piece {
+                bareline_document::paged::PagedPiece::OwnedSource {range,..}=>(range.end-range.start) as usize,
                 bareline_document::paged::PagedPiece::Original { range, .. }
                 | bareline_document::paged::PagedPiece::OriginalOwned { range, .. } => {
                     (range.end - range.start) as usize
@@ -493,6 +494,7 @@ impl std::io::Read for SnapshotRead {
             let local = self.offset - start;
             let count = (length - local).min(out.len());
             match piece {
+                bareline_document::paged::PagedPiece::OwnedSource {source,range,..}=>crate::owned_read::read_exact(source,range.start+local as u64,&mut out[..count],&self.cancellation)?,
                 bareline_document::paged::PagedPiece::Original { range, .. }
                 | bareline_document::paged::PagedPiece::OriginalOwned { range, .. } => {
                     self.source

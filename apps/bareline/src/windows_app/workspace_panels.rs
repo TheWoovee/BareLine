@@ -39,6 +39,7 @@ pub struct WorkspacePanelsRuntime {
     deleted: Vec<bareline_platform_windows::WorkspaceDeleteUndo>,
     restoring: bool,
     outline_import: Option<Receiver<Result<(bareline_syntax::outline::Definition, String, String), String>>>,
+    import_cancel: bareline_syntax::outline::OutlineJob,
     document_filter: String,
     outline_filter: String,
     excludes: Vec<String>,
@@ -60,10 +61,21 @@ impl Default for WorkspacePanelsRuntime {
             deleted: Vec::new(),
             restoring: false,
             outline_import: None,
+            import_cancel: Default::default(),
             document_filter: String::new(),
             outline_filter: String::new(),
             excludes: Vec::new(),
         }
+    }
+}
+impl Drop for WorkspacePanelsRuntime {
+    fn drop(&mut self) { self.import_cancel.cancel(); }
+}
+fn receive_job<T>(receiver: &Option<Receiver<Result<T, String>>>) -> Option<Result<T, String>> {
+    match receiver.as_ref()?.try_recv() {
+        Ok(result) => Some(result),
+        Err(mpsc::TryRecvError::Empty) => None,
+        Err(mpsc::TryRecvError::Disconnected) => Some(Err("Workspace worker stopped before completing".into())),
     }
 }
 impl WorkspacePanelsRuntime {
@@ -390,6 +402,10 @@ impl Shell {
             "view.documentMap" => self.panels.map.open = !self.panels.map.open,
             "workspace.loadMore" => self.panels.explorer().load_more(),
             "workspace.refresh" => self.panels.explorer().refresh_tree(),
+            "outline.cancelImport" => {
+                self.panels.import_cancel.cancel();
+                self.panels.outline.status = "Cancelling outline import…".into();
+            }
             "outline.importFunctionList" | "outline.loadDefinition" => {
                 if self.panels.outline_import.is_some() { return true; }
                 let path = self.platform.as_ref().and_then(|p| p.open_file().ok().flatten());
@@ -397,23 +413,27 @@ impl Shell {
                 let extension = self.workspace.as_ref().and_then(|w| w.path(self.app.active))
                     .and_then(|p| p.extension()).and_then(|e| e.to_str()).unwrap_or("").to_owned();
                 let xml = id == "outline.importFunctionList";
+                self.panels.import_cancel = Default::default();
+                let cancel = self.panels.import_cancel.clone();
                 let (tx, rx) = mpsc::sync_channel(1);
                 let notify = self.notify.clone();
                 match std::thread::Builder::new().name("outline-definition-import".into()).spawn(move || {
                     use std::io::Read;
                     let result = (|| -> Result<_, String> {
+                        let _guard = bareline_platform_windows::WindowsPathTrustProvider.open_read(&path, PathOrigin::User).map_err(|e| e.to_string())?;
                         let file = bareline_platform_windows::WindowsFileSystem.open_sealed_read(&path).map_err(|e| e.to_string())?;
                         let mut bytes = Vec::new();
                         file.take(256 * 1024 + 1).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
                         if bytes.len() > 256 * 1024 { return Err("Outline definition exceeds 256 KiB".into()); }
                         let text = std::str::from_utf8(&bytes).map_err(|e| e.to_string())?;
                         let (definition, report) = if xml {
-                            let (definition, report) = bareline_syntax::outline::import_function_list(text)?;
+                            let (definition, report) = bareline_syntax::outline::import_function_list_with_job(text, &cancel)?;
                             let report = report.iter().map(|m| format!("{:?}: {} — {}", m.kind, m.field, m.reason)).collect::<Vec<_>>().join("\n");
                             (definition, report)
                         } else {
                             (bareline_syntax::outline::Definition::from_toml(text)?, "Outline definition loaded".into())
                         };
+                        if cancel.is_cancelled() { return Err("Outline import cancelled".into()); }
                         Ok((definition, extension, report))
                     })();
                     let _ = tx.send(result); notify();
@@ -494,6 +514,8 @@ impl Shell {
                         .is_ok()
                     {
                         self.panels.root = Some(rx);
+                    } else {
+                        self.panels.explorer().message = Some("Could not start workspace authorization worker".into());
                     }
                 }
             }
@@ -579,6 +601,8 @@ impl Shell {
                 {
                     self.panels.operation = Some(rx);
                     self.panels.restoring = id == "workspace.undoDelete";
+                } else {
+                    self.panels.explorer().message = Some("Could not start workspace file operation".into());
                 }
             }
             _ => return false,
@@ -608,7 +632,7 @@ impl Shell {
             self.panels.explorer().set_excludes(excludes);
         }
         let mut changed = self.panels.outline.pump() | self.panels.map.pump();
-        if let Some(result) = self.panels.outline_import.as_ref().and_then(|rx| rx.try_recv().ok()) {
+        if let Some(result) = receive_job(&self.panels.outline_import) {
             self.panels.outline_import = None;
             changed = true;
             match result {
@@ -629,7 +653,7 @@ impl Shell {
         if let Some(p) = &mut self.panels.explorer {
             changed |= p.pump();
         }
-        let root = self.panels.root.as_ref().and_then(|rx| rx.try_recv().ok());
+        let root = receive_job(&self.panels.root);
         if let Some(result) = root {
             self.panels.root = None;
             changed = true;
@@ -647,19 +671,14 @@ impl Shell {
                 }
             }
         }
-        let operation = self
-            .panels
-            .operation
-            .as_ref()
-            .and_then(|rx| rx.try_recv().ok());
+        let operation = receive_job(&self.panels.operation);
         if let Some(result) = operation {
             self.panels.operation = None;
             changed = true;
-            if let Some(p) = &mut self.panels.explorer {
-                p.message = Some(match result {
+            let message = match result {
                     Ok(undo) => {
                         if self.panels.restoring { self.panels.deleted.pop(); }
-                        p.refresh_tree();
+                        if let Some(panel) = &mut self.panels.explorer { panel.refresh_tree(); }
                         if let Some(undo) = undo {
                             let message = format!("Deleted · Undo Delete available · retained at {}", undo.retained.display());
                             self.panels.deleted.push(undo);
@@ -667,8 +686,9 @@ impl Shell {
                         } else { "File operation completed".into() }
                     }
                     Err(error) => format!("File operation failed: {error}"),
-                });
-            }
+                };
+            self.panels.explorer().message = Some(message.clone());
+            if let Some(workspace) = &mut self.workspace { workspace.message = Some(message); }
         }
         if changed && let Some(w) = &self.window {
             w.request_redraw();
@@ -826,5 +846,35 @@ impl Shell {
             w.request_redraw();
         }
         handled
+    }
+}
+#[cfg(test)]
+mod workspace_panel_regressions {
+    use super::*;
+    #[test]
+    fn disconnected_worker_is_a_terminal_error() {
+        let (sender, receiver) = mpsc::sync_channel::<Result<(), String>>(1);
+        let pending = Some(receiver);
+        assert!(receive_job(&pending).is_none());
+        drop(sender);
+        assert!(receive_job(&pending).unwrap().is_err());
+    }
+    #[test]
+    fn retained_folder_delete_restores_contents_and_refuses_collision() {
+        let root = std::env::temp_dir().join(format!("bareline-explorer-retain-{}", std::process::id()));
+        let original = root.join("folder");
+        std::fs::create_dir_all(&original).unwrap();
+        std::fs::write(original.join("child"), b"retained bytes").unwrap();
+        let fs = bareline_platform_windows::WindowsFileSystem;
+        let undo = bareline_platform_windows::retain_deleted_entry(&fs, &original).unwrap();
+        assert!(!original.exists());
+        assert_eq!(std::fs::read(undo.retained.join("child")).unwrap(), b"retained bytes");
+        std::fs::create_dir(&original).unwrap();
+        assert!(bareline_platform_windows::restore_deleted_entry(&fs, &undo).is_err());
+        assert!(undo.retained.join("child").exists());
+        std::fs::remove_dir(&original).unwrap();
+        bareline_platform_windows::restore_deleted_entry(&fs, &undo).unwrap();
+        assert_eq!(std::fs::read(original.join("child")).unwrap(), b"retained bytes");
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

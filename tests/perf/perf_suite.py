@@ -152,15 +152,15 @@ def run(manifest_path, destination):
     if not manifest.get("configuration") or not manifest.get("machine_id"):
         raise ValueError("configuration and machine_id are required")
     apps = manifest["applications"]
-    if set(apps) != {"bareline", "notepadpp"}:
-        raise ValueError("paired runs require bareline and notepadpp")
+    if set(apps) not in ({"bareline", "notepadpp"}, {"bareline"}):
+        raise ValueError("runs require Bareline alone or a Bareline/Notepad++ pair")
     for app in apps.values():
         app["executable"] = str((base / app["executable"]).resolve())
         if digest(app["executable"]) != app["sha256"].lower():
             raise ValueError("application executable hash mismatch")
         if not app.get("version") or not app.get("settings"):
             raise ValueError("pin application version and settings")
-    if apps["notepadpp"]["settings"].get("plugins_disabled") is not True:
+    if "notepadpp" in apps and apps["notepadpp"]["settings"].get("plugins_disabled") is not True:
         raise ValueError("Notepad++ plugins_disabled must be true")
     scenarios = manifest["scenarios"]
     names = [s["name"] for s in scenarios]
@@ -189,7 +189,7 @@ def run(manifest_path, destination):
                     raise ValueError("driver support file hash mismatch")
     destination = Path(destination).resolve() / (time.strftime("%Y%m%dT%H%M%S") + "-" + uuid.uuid4().hex)
     destination.mkdir(parents=True)
-    envelope = {"schema_version": 1, "kind": "paired_performance", "manifest": manifest,
+    envelope = {"schema_version": 1, "kind": "paired_performance" if len(apps) == 2 else "native_performance", "manifest": manifest,
                 "manifest_sha256": digest(manifest_path), "environment": {
                     "os": platform.platform(), "architecture": platform.machine(),
                     "logical_cpus": os.cpu_count(), "python": platform.python_version()},
@@ -199,6 +199,7 @@ def run(manifest_path, destination):
     for scenario in scenarios:
         for pair in range(repetitions):
             order = ["bareline", "notepadpp"] if pair % 2 == 0 else ["notepadpp", "bareline"]
+            order = [application for application in order if application in apps]
             for position, app_id in enumerate(order):
                 argv = [arg.replace("{application}", apps[app_id]["executable"])
                         for arg in scenario["drivers"][app_id]["argv"]]
@@ -228,10 +229,11 @@ def report(directory, destination):
     directory = Path(directory)
     provenance = read_json(directory / "provenance.json")
     manifest = provenance["manifest"]
+    applications = tuple(manifest.get("applications", {"bareline": {}, "notepadpp": {}}))
     records = []
     for scenario in manifest["scenarios"]:
         for pair in range(manifest["repetitions"]):
-            for app in ("bareline", "notepadpp"):
+            for app in applications:
                 path = directory / f'{scenario["name"]}-{pair}-{app}.json'
                 if not path.exists():
                     continue
@@ -249,7 +251,7 @@ def report(directory, destination):
         selected = [r for r in records if r["scenario"] == scenario["name"]]
         metrics = sorted({m for r in selected for m in (r.get("metrics") or {})})
         for metric in metrics:
-            for application in ("bareline", "notepadpp"):
+            for application in applications:
                 values = [r["metrics"][metric] for r in selected if r["application"] == application
                           and r["status"] == "ok" and metric in (r.get("metrics") or {})]
                 observations.append({"scenario": scenario["name"], "application": application,
@@ -276,7 +278,7 @@ def report(directory, destination):
                          "p50_ratio": stats["bareline"]["p50"] / denominator if denominator else None})
     write_new(destination, {"schema_version": 1, "provenance": provenance, "rows": rows, "observations": observations,
                             "failures": [r for r in records if r["status"] != "ok"],
-                            "missing_trials": len(manifest["scenarios"]) * manifest["repetitions"] * 2 - len(records),
+                            "missing_trials": len(manifest["scenarios"]) * manifest["repetitions"] * len(applications) - len(records),
                             "claims_eligible": False,
                             "claim_review": "Review pinned comparable settings, actual driver semantics and complete evidence before any claim",
                             "percentile_method": "nearest rank; complete matched pairs only"})

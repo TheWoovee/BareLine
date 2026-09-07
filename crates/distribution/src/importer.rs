@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 #[derive(Clone,Debug,Default)]pub struct ImportReport{
     pub preferences:BTreeMap<String,Preference>,pub shortcuts:Vec<(&'static str,String)>,pub paths:Vec<String>,pub user_language:bool,pub notes:Vec<String>,
 }
-impl ImportReport{pub fn render(&self)->String{let mut text=String::from("Notepad++ Import Review\n\nNothing has been applied. Choose Apply Reviewed Import to apply mapped preferences/shortcuts/UDL; file paths remain an explicit separate open action.\n\n");for(key,value)in &self.preferences{text.push_str(&format!("Map {key}: {value:?}\n"));}for(id,key)in &self.shortcuts{text.push_str(&format!("Shortcut {id}: {key}\n"));}for path in &self.paths{text.push_str(&format!("Local file candidate: {path}\n"));}for note in &self.notes{text.push_str(&format!("{note}\n"));}text}}
+impl ImportReport{pub fn render(&self)->String{let mut text=String::from("Notepad++ Import Review\n\nReview maps below. Apply Reviewed Import submits preferences/shortcuts/UDL through normal validation; submission results appear in the report notes. File paths remain an explicit separate open action.\n\n");for(key,value)in &self.preferences{text.push_str(&format!("Map {key}: {value:?}\n"));}for(id,key)in &self.shortcuts{text.push_str(&format!("Shortcut {id}: {key}\n"));}for path in &self.paths{text.push_str(&format!("Local file candidate: {path}\n"));}for note in &self.notes{text.push_str(&format!("{note}\n"));}text}}
 pub fn parse(bytes:&[u8])->Result<ImportReport,String>{
     use quick_xml::{Reader,events::Event};
     if bytes.len()>1024*1024{return Err("Import exceeds 1 MiB".into());}
@@ -13,7 +13,7 @@ pub fn parse(bytes:&[u8])->Result<ImportReport,String>{
     let mut reader=Reader::from_str(text);reader.config_mut().check_end_names=true;
     let mut xml_version=quick_xml::XmlVersion::Implicit1_0;let mut report=ImportReport::default();let mut depth=0usize;let mut count=0usize;let mut roots=0usize;
     loop{let next=reader.read_event().map_err(|e|e.to_string())?;let is_start=matches!(&next,Event::Start(_));match next{
-        Event::Decl(ref declaration)=>{xml_version=match declaration.version().map_err(|e|e.to_string())?.as_ref(){b"1.0"=>quick_xml::XmlVersion::Explicit1_0,b"1.1"=>quick_xml::XmlVersion::Explicit1_1,_=>return Err("Unsupported XML version".into())};},
+        Event::Decl(ref declaration)=>{if roots!=0{return Err("XML declaration must precede the root".into());}xml_version=match declaration.version().map_err(|e|e.to_string())?.as_ref(){b"1.0"=>quick_xml::XmlVersion::Explicit1_0,b"1.1"=>quick_xml::XmlVersion::Explicit1_1,_=>return Err("Unsupported XML version".into())};},
         Event::DocType(_)|Event::GeneralRef(_)=>return Err("DTD and general entities are not imported".into()),
         Event::Start(ref event)|Event::Empty(ref event)=>{
             count+=1;if count>16384{return Err("Import element limit".into());}
@@ -47,8 +47,10 @@ pub fn parse(bytes:&[u8])->Result<ImportReport,String>{
             if is_start{depth+=1;if depth>32{return Err("Import nesting limit".into());}}
         },
         Event::End(_)=>{depth=depth.checked_sub(1).ok_or("Unbalanced XML")?;},
+        Event::Text(ref text) if depth==0 && text.as_ref().iter().any(|b| !b.is_ascii_whitespace())=>return Err("Text outside XML root".into()),
+        Event::CData(_) if depth==0=>return Err("CDATA outside XML root".into()),
         Event::Eof=>break,_=>(),
     }}
     if depth!=0||roots!=1{return Err("Incomplete XML document".into());}report.paths.sort();report.paths.dedup();Ok(report)
 }
-#[cfg(test)]mod tests{use super::*;#[test]fn safe_mapping_and_hostile_input(){let report=parse(br#"<NotepadPlus><GUIConfig name="TabSetting" size="4" replaceBySpace="yes"/><File filename="\\evil\x"/><File filename="C:\local.txt"/></NotepadPlus>"#).unwrap();assert_eq!(report.paths,vec!["C:\\local.txt"]);assert!(matches!(report.preferences.get("editor.tab.width"),Some(Preference::Integer(4))));assert!(parse(b"<!DOCTYPE x><x/>").is_err());assert!(parse(b"<x><y></x>").is_err());}}
+#[cfg(test)]mod tests{use super::*;#[test]fn safe_mapping_and_hostile_input(){let report=parse(br#"<NotepadPlus><GUIConfig name="TabSetting" size="4" replaceBySpace="yes"/><File filename="\\evil\x"/><File filename="C:\local.txt"/></NotepadPlus>"#).unwrap();assert_eq!(report.paths,vec!["C:\\local.txt"]);assert!(matches!(report.preferences.get("editor.tab.width"),Some(Preference::Integer(4))));assert!(parse(b"<!DOCTYPE x><x/>").is_err());assert!(parse(b"junk<x/>").is_err());assert!(parse(b"<x/>junk").is_err());assert!(parse(b"<x><y></x>").is_err());}}

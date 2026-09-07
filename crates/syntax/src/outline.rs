@@ -3,6 +3,7 @@
 //! engine's PCRE2 limits; definitions never execute code or resolve XML entities.
 use bareline_document::{Budget, Document, DocumentSnapshot, TextOffset};
 use bareline_search::{Completeness, SearchJob, SearchMode, SearchQuery, scan};
+pub use bareline_search::SearchJob as OutlineJob;
 use std::{collections::BTreeMap, ops::Range};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -51,8 +52,14 @@ fn regex_ranges(source: &DocumentSnapshot, pattern: &str, bounds: Option<Range<T
 }
 impl Definition {
     pub fn validate(&self) -> Result<(), String> {
+        self.validate_with_job(&SearchJob::default())
+    }
+    fn validate_with_job(&self, job: &SearchJob) -> Result<(), String> {
         if self.version != 1 || self.id.is_empty() || self.id.len() > 128 || self.rules.len() > 128 {
             return Err("Invalid outline definition/version or budget exceeded".into());
+        }
+        if self.rules.iter().flat_map(|r| std::iter::once(&r.pattern).chain(&r.names)).try_fold(0usize, |sum, pattern| sum.checked_add(pattern.len())).is_none_or(|bytes| bytes > 256 * 1024) {
+            return Err("Outline definition aggregate budget exceeded".into());
         }
         let empty = Document::from_utf8("", Budget::new(4096), Budget::new(4096)).map_err(|e| format!("{e:?}"))?.snapshot();
         for rule in &self.rules {
@@ -61,7 +68,8 @@ impl Definition {
             }
             for pattern in std::iter::once(&rule.pattern).chain(&rule.names) {
                 if pattern.is_empty() || pattern.len() > 16 * 1024 { return Err("Pattern budget exceeded".into()); }
-                regex_ranges(&empty, pattern, None, &SearchJob::default())?;
+                if job.is_cancelled() { return Err("Outline import cancelled".into()); }
+                regex_ranges(&empty, pattern, None, job)?;
             }
         }
         Ok(())
@@ -91,6 +99,7 @@ impl Definition {
         let version = doc.get("version").and_then(|v| v.as_integer()).ok_or("Missing version")?;
         let id = doc.get("id").and_then(|v| v.as_str()).ok_or("Missing id")?.to_owned();
         let mut rules = Vec::new();
+        if doc.get("rules").is_some_and(|v| v.as_array_of_tables().is_none()) { return Err("Rules must be an array of tables".into()); }
         if let Some(tables) = doc.get("rules").and_then(|v| v.as_array_of_tables()) {
             for table in tables {
                 if table.iter().any(|(k, _)| !matches!(k, "kind" | "pattern" | "names")) { return Err("Unknown rule key".into()); }
@@ -136,6 +145,9 @@ impl Definition {
 }
 
 pub fn import_function_list(xml: &str) -> Result<(Definition, Vec<Mapping>), String> {
+    import_function_list_with_job(xml, &SearchJob::default())
+}
+pub fn import_function_list_with_job(xml: &str, job: &SearchJob) -> Result<(Definition, Vec<Mapping>), String> {
     if xml.len() > 256 * 1024 { return Err("XML budget exceeded".into()); }
     let mut definition = Definition { version: 1, id: String::new(), rules: Vec::new() };
     let mut report = Vec::new();
@@ -143,6 +155,7 @@ pub fn import_function_list(xml: &str) -> Result<(Definition, Vec<Mapping>), Str
     let mut cursor = 0;
     let mut parser_seen = false;
     while cursor < xml.len() {
+        if job.is_cancelled() { return Err("Outline import cancelled".into()); }
         let remaining = &xml[cursor..];
         if remaining.trim().is_empty() { break; }
         let start = cursor + remaining.find('<').ok_or("Malformed XML")?;
@@ -206,7 +219,8 @@ pub fn import_function_list(xml: &str) -> Result<(Definition, Vec<Mapping>), Str
     let mut accepted = Vec::new();
     for (index, rule) in definition.rules.drain(..).enumerate() {
         let candidate = Definition { version: 1, id: definition.id.clone(), rules: vec![rule.clone()] };
-        match candidate.validate() {
+        if job.is_cancelled() { return Err("Outline import cancelled".into()); }
+        match candidate.validate_with_job(job) {
             Ok(()) => {
                 report.push(Mapping { field: format!("rule.{index}"), kind: if rule.kind == "class" { MappingKind::Approximated } else { MappingKind::Imported }, reason: if rule.kind == "class" { "Class extent is mainExpr; delimiter nesting requires manual mapping" } else { "PCRE2 function and chained name expressions" }.into() });
                 accepted.push(rule);
@@ -215,7 +229,7 @@ pub fn import_function_list(xml: &str) -> Result<(Definition, Vec<Mapping>), Str
         }
     }
     definition.rules = accepted;
-    definition.validate()?;
+    definition.validate_with_job(job)?;
     report.push(Mapping { field: "chunk-boundaries".into(), kind: MappingKind::Approximated, reason: "Progressive extraction uses bounded chunks; cross-chunk expressions may be omitted".into() });
     Ok((definition, report))
 }
@@ -232,6 +246,7 @@ fn attributes(mut text: &str) -> Result<BTreeMap<String, String>, String> {
         let end = text.find(quote).ok_or("Unclosed attribute")?;
         let mut decoded = String::new();
         let mut value = &text[..end];
+        if value.contains('<') { return Err("Unescaped XML attribute delimiter".into()); }
         while let Some(at) = value.find('&') {
             decoded.push_str(&value[..at]);
             let finish = at + value[at..].find(';').ok_or("Unclosed entity")?;
@@ -269,6 +284,25 @@ mod tests {
         let (definition, report) = import_function_list("<parser id='x'><function mainExpr='('/></parser>").unwrap();
         assert!(definition.rules.is_empty());
         assert!(report.iter().any(|m| m.kind == MappingKind::Unsupported));
+    }
+    #[test]
+    fn cancellation_and_three_language_mapping_shapes_are_deterministic() {
+        let cancelled = SearchJob::default();
+        cancelled.cancel();
+        assert!(import_function_list_with_job("<parser id='x'/>", &cancelled).is_err());
+        for (id, pattern, sample, expected) in [
+            ("python", r"def\s+\w+", "def hello():", "hello"),
+            ("javascript", r"function\s+\w+", "function world() {}", "world"),
+            ("rust", r"fn\s+\w+", "fn main() {}", "main"),
+        ] {
+            let xml = format!(r#"<parser id="{id}"><function mainExpr="{pattern}"><functionName><nameExpr expr="\w+$"/></functionName></function></parser>"#);
+            let (definition, report) = import_function_list(&xml).unwrap();
+            assert_eq!(report, import_function_list(&xml).unwrap().1);
+            let doc = Document::from_utf8(sample, Budget::new(4096), Budget::new(4096)).unwrap();
+            assert_eq!(definition.extract(&doc.snapshot(), &SearchJob::default()).unwrap().symbols[0].name, expected);
+            assert!(definition.extract(&doc.snapshot(), &cancelled).is_err());
+        }
+        assert!(Definition::from_toml("version=1\nid='x'\nrules=5").is_err());
     }
 }
 

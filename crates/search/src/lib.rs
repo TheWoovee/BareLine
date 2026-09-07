@@ -15,7 +15,7 @@ use std::{
     ops::Range,
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering},
     },
 };
 
@@ -29,6 +29,7 @@ pub struct SearchJobId(u64);
 pub struct SearchJob {
     pub id: SearchJobId,
     cancelled: Arc<AtomicBool>,
+    terminal: Arc<AtomicU8>,
     io_cancel: bareline_file_io::cancellation::Cancellation,
 }
 impl Default for SearchJob {
@@ -37,11 +38,22 @@ impl Default for SearchJob {
         Self {
             id: SearchJobId(NEXT.fetch_add(1, Ordering::Relaxed)),
             cancelled: Arc::default(),
+            terminal: Arc::default(),
             io_cancel: Default::default(),
         }
     }
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SearchTermination { Finished, Cancelled }
 impl SearchJob {
+    /// Worker acknowledgment, independent from request cancellation and result completeness.
+    pub fn termination(&self) -> Option<SearchTermination> {
+        match self.terminal.load(Ordering::Acquire) { 1 => Some(SearchTermination::Finished), 2 => Some(SearchTermination::Cancelled), _ => None }
+    }
+    pub(crate) fn acknowledge_terminal(&self) {
+        self.terminal.store(if self.is_cancelled() { 2 } else { 1 }, Ordering::Release);
+    }
+
     pub fn is_cancelled(&self) -> bool {
         self.cancelled.load(Ordering::Acquire)
     }

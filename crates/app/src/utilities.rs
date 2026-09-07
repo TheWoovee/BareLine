@@ -435,6 +435,7 @@ pub fn export_language(
     snapshot: &DocumentSnapshot,
     language: bareline_syntax::Language,
     foreground: Rgb,
+    background: Rgb,
     colors: [Rgb; 5],
     format: ExportFormat,
     mut writer: impl Write,
@@ -442,11 +443,11 @@ pub fn export_language(
 ) -> Result<(), UtilityError> {
     if !snapshot.is_complete() { return Err(UtilityError::IncompleteSource); }
     match format {
-        ExportFormat::Html => writer.write_all(b"<!doctype html><meta charset=\"utf-8\"><pre>").map_err(|_|UtilityError::Io)?,
+        ExportFormat::Html => {let Rgb(r,g,b)=background;write!(writer,"<!doctype html><meta charset=\"utf-8\"><pre style=\"background:#{r:02x}{g:02x}{b:02x}\">").map_err(|_|UtilityError::Io)?;},
         ExportFormat::Rtf => {
             writer.write_all(b"{\\rtf1\\ansi\\uc1{\\colortbl;").map_err(|_|UtilityError::Io)?;
-            for Rgb(r,g,b) in std::iter::once(foreground).chain(colors) { write!(writer,"\\red{r}\\green{g}\\blue{b};").map_err(|_|UtilityError::Io)?; }
-            writer.write_all(b"}").map_err(|_|UtilityError::Io)?;
+            for Rgb(r,g,b) in std::iter::once(foreground).chain(colors).chain(Some(background)) { write!(writer,"\\red{r}\\green{g}\\blue{b};").map_err(|_|UtilityError::Io)?; }
+            writer.write_all(b"}\\highlight7 ").map_err(|_|UtilityError::Io)?;
         }
     }
     let mut lexer=bareline_syntax::ForwardLexer::new(snapshot.clone(),language);
@@ -579,6 +580,77 @@ fn export_range(
         writer.write_all(b"</span>").map_err(|_| UtilityError::Io)?;
     }
     Ok(())
+}
+/// Walk complete logical lines from a bounded reader. CRLF remains one terminator
+/// even when the input reader splits it. Reject oversized lines before allocation.
+fn stream_lines(mut reader:impl std::io::BufRead,cancel:&CancelToken,mut line:impl FnMut(&str,usize,usize,bool)->Result<(),UtilityError>)->Result<(),UtilityError> {
+    let mut bytes=Vec::new();let mut origin=0;let mut number=1;
+    loop {
+        check(cancel)?;bytes.clear();
+        loop {
+            let available=reader.fill_buf().map_err(|_|UtilityError::Io)?;
+            if available.is_empty(){break;}
+            let stop=available.iter().position(|b|matches!(*b,b'\r'|b'\n')).map(|i|i+1);
+            let count=stop.unwrap_or(available.len());
+            if bytes.len().saturating_add(count)>256*1024{return Err(UtilityError::BudgetExceeded);}
+            bytes.extend_from_slice(&available[..count]);reader.consume(count);
+            if stop.is_some(){
+                if bytes.last()==Some(&b'\r')&&reader.fill_buf().map_err(|_|UtilityError::Io)?.first()==Some(&b'\n') {
+                    if bytes.len()==256*1024{return Err(UtilityError::BudgetExceeded);}bytes.push(b'\n');reader.consume(1);
+                }
+                break;
+            }
+            check(cancel)?;
+        }
+        let eof=reader.fill_buf().map_err(|_|UtilityError::Io)?.is_empty();
+        let text=std::str::from_utf8(&bytes).map_err(|_|UtilityError::InvalidUtf8)?;
+        let trailing_empty=eof&&bytes.last().is_some_and(|b|matches!(*b,b'\r'|b'\n'));
+        line(text,origin,number,eof&&!trailing_empty)?;
+        origin+=bytes.len();number+=1;
+        if eof {
+            if trailing_empty{line("",origin,number,true)?;}
+            break;
+        }
+    }Ok(())
+}
+pub fn statistics_reader(reader:impl Read,revision:Revision,cancel:&CancelToken,mut progress:impl FnMut(usize))->Result<Statistics,UtilityError> {
+    let mut result=Statistics{bytes:0,characters:0,graphemes:0,words:0,lines:0,revision};
+    stream_lines(std::io::BufReader::with_capacity(64*1024,reader),cancel,|text,origin,_,_| {
+        result.bytes=origin+text.len();result.characters+=text.chars().count();result.graphemes+=text.graphemes(true).count();result.words+=text.unicode_words().count();result.lines+=1;progress(result.bytes);Ok(())
+    })?;Ok(result)
+}
+/// Full paged syntax export, with verified lexical state spanning bounded lines.
+pub fn export_reader(reader:impl Read,language:bareline_syntax::Language,foreground:Rgb,background:Rgb,colors:[Rgb;5],format:ExportFormat,mut writer:impl Write,cancel:&CancelToken,mut progress:impl FnMut(usize))->Result<(),UtilityError> {
+    let mut lexer=bareline_syntax::stream::StreamLexer::new(language,bareline_syntax::LexerPreference::Lexilla,None);
+    let syntax_cancel=bareline_syntax::Cancellation::default();
+    match format {
+        ExportFormat::Html=>{let Rgb(r,g,b)=background;write!(writer,"<!doctype html><meta charset=\"utf-8\"><pre style=\"background:#{r:02x}{g:02x}{b:02x}\">").map_err(|_|UtilityError::Io)?;},
+        ExportFormat::Rtf=>{writer.write_all(b"{\\rtf1\\ansi\\uc1{\\colortbl;").map_err(|_|UtilityError::Io)?;for Rgb(r,g,b) in std::iter::once(foreground).chain(colors).chain(Some(background)){write!(writer,"\\red{r}\\green{g}\\blue{b};").map_err(|_|UtilityError::Io)?;}writer.write_all(b"}\\highlight7 ").map_err(|_|UtilityError::Io)?;}
+    }
+    let mut previous_cr=false;
+    stream_lines(std::io::BufReader::with_capacity(64*1024,reader),cancel,|text,origin,_,eof|{
+        let syntax=lexer.advance(text,TextOffset(origin),eof,&syntax_cancel).map_err(|_|UtilityError::IncompleteSource)?;
+        let document=bareline_document::Document::from_utf8(text,bareline_document::Budget::new(2*1024*1024),bareline_document::Budget::new(0)).map_err(|_|UtilityError::BudgetExceeded)?;
+        let snapshot=document.snapshot();let styles=ExportStyles{revision:snapshot.revision,spans:&syntax.syntax.spans,foreground,colors};let mut at=TextOffset(0);
+        for span in styles.spans {if span.range.start<at||span.range.end.0>text.len(){return Err(UtilityError::StaleStyles);}if span.range.start>at{export_range(&snapshot,at..span.range.start,0,&styles,(format,&mut previous_cr),&mut writer,cancel)?;}export_range(&snapshot,span.range.clone(),color_index(span.kind),&styles,(format,&mut previous_cr),&mut writer,cancel)?;at=span.range.end;}
+        if at.0<text.len(){export_range(&snapshot,at..TextOffset(text.len()),0,&styles,(format,&mut previous_cr),&mut writer,cancel)?;}progress(origin+text.len());Ok(())
+    })?;check(cancel)?;writer.write_all(match format{ExportFormat::Html=>b"</pre>" as &[u8],ExportFormat::Rtf=>b"}"}).map_err(|_|UtilityError::Io)
+}
+pub fn print_reader(reader:impl Read,range:Range<TextOffset>,language:bareline_syntax::Language,colors:[Rgb;5],mut target:Box<dyn bareline_platform::printing::PrintTarget>,cancel:&CancelToken,print_cancel:&std::sync::atomic::AtomicBool,mut progress:impl FnMut(usize))->Result<bareline_platform::printing::PrintSummary,String> {
+    use bareline_platform::printing::{PrintLine,PrintSpan};
+    let mut lexer=bareline_syntax::stream::StreamLexer::new(language,bareline_syntax::LexerPreference::Lexilla,None);let syntax_cancel=bareline_syntax::Cancellation::default();
+    let mut printer_error=None;
+    let walked=stream_lines(std::io::BufReader::with_capacity(64*1024,reader.take(range.end.0 as u64)),cancel,|text,origin,number,eof| {
+        let syntax=lexer.advance(text,TextOffset(origin),eof,&syntax_cancel).map_err(|_|UtilityError::IncompleteSource)?;
+        let a=range.start.0.saturating_sub(origin).min(text.len());let b=range.end.0.saturating_sub(origin).min(text.len());
+        if origin<=range.end.0&&origin+text.len()>=range.start.0&&a<=b&&(a<b||range.is_empty()) {
+            let selected=text.get(a..b).ok_or(UtilityError::InvalidRange)?;
+            let spans:Vec<_>=syntax.syntax.spans.iter().filter_map(|s|{let start=s.range.start.0.max(a);let end=s.range.end.0.min(b);if start>=end{return None;}let Rgb(r,g,b)=colors[color_index(s.kind)-1];Some(PrintSpan{bytes:start-a..end-a,rgb:((r as u32)<<16)|((g as u32)<<8)|b as u32})}).collect();
+            if let Err(error)=target.write_line(PrintLine{number,text:selected,spans:&spans},print_cancel){printer_error=Some(format!("{error:?}"));return Err(UtilityError::Io);}
+        }
+        progress(origin+text.len());Ok(())
+    });
+    if let Some(error)=printer_error{return Err(error);}walked.map_err(|e|format!("{e:?}"))?;target.finish(print_cancel).map_err(|e|format!("{e:?}"))
 }
 pub fn register_commands(registry: &mut bareline_commands::CommandRegistry) {
     use bareline_commands::*;
@@ -749,5 +821,33 @@ mod tests {
             Err(UtilityError::Cancelled)
         ));
         assert_eq!(calls, 1);
+    }
+    #[test]
+    fn stream_lines_preserve_split_crlf_unicode_and_final_empty_line() {
+        let text="a\r\n🙂\rb\n";let mut lines=Vec::new();
+        stream_lines(std::io::BufReader::with_capacity(1,text.as_bytes()),&CancelToken::default(),|text,origin,number,_|{lines.push((text.to_string(),origin,number));Ok(())}).unwrap();
+        assert_eq!(lines,vec![("a\r\n".into(),0,1),("🙂\r".into(),3,2),("b\n".into(),8,3),("".into(),10,4)]);
+        let stats=statistics_reader(text.as_bytes(),Revision(0),&CancelToken::default(),|_|{}).unwrap();
+        assert_eq!(stats.bytes,text.len());assert_eq!(stats.lines,4);assert_eq!(stats.characters,text.chars().count());
+    }
+    #[test]
+    fn stream_export_escapes_source_and_preserves_theme_and_multiline_state() {
+        let source="/* opening\n<script>🙂 & closing */\n";let mut output=Vec::new();
+        export_reader(source.as_bytes(),bareline_syntax::Language::C,Rgb(240,240,240),Rgb(16,24,32),[Rgb(10,20,30);5],ExportFormat::Html,&mut output,&CancelToken::default(),|_|{}).unwrap();
+        let output=String::from_utf8(output).unwrap();assert!(output.contains("background:#101820"));assert!(!output.contains("<script>"));assert!(output.contains("&lt;script&gt;🙂 &amp;"));assert!(output.ends_with("</pre>"));
+    }
+    #[test]
+    fn stream_export_writer_error_and_oversize_line_fail_without_source_mutation() {
+        struct Denied;impl Write for Denied{fn write(&mut self,_:&[u8])->std::io::Result<usize>{Err(std::io::Error::other("injected"))}fn flush(&mut self)->std::io::Result<()>{Ok(())}}
+        assert_eq!(export_reader("source".as_bytes(),bareline_syntax::Language::PlainText,Rgb(0,0,0),Rgb(255,255,255),[Rgb(0,0,0);5],ExportFormat::Html,Denied,&CancelToken::default(),|_|{}),Err(UtilityError::Io));
+        assert_eq!(statistics_reader(std::io::repeat(b'a').take(256*1024+1),Revision(0),&CancelToken::default(),|_|{}),Err(UtilityError::BudgetExceeded));
+    }
+    #[test]
+    fn print_driver_error_propagates_and_selection_is_exact() {
+        use bareline_platform::printing::*;
+        struct Driver;impl PrintTarget for Driver{fn write_line(&mut self,line:PrintLine<'_>,_:&std::sync::atomic::AtomicBool)->Result<(),PrintError>{assert_eq!(line.text,"🙂");Err(PrintError::Driver("injected".into()))}fn finish(self:Box<Self>,_:&std::sync::atomic::AtomicBool)->Result<PrintSummary,PrintError>{panic!("failed job must not finish")}}
+        let source="a🙂z";
+        let result=print_reader(source.as_bytes(),TextOffset(1)..TextOffset(5),bareline_syntax::Language::PlainText,[Rgb(0,0,0);5],Box::new(Driver),&CancelToken::default(),&std::sync::atomic::AtomicBool::new(false),|_|{});
+        assert!(result.unwrap_err().contains("injected"));assert_eq!(source,"a🙂z");
     }
 }

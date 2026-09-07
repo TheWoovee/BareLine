@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MPL-2.0
+pub mod clipboard;
 use std::path::{Path, PathBuf};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StorageKind {
@@ -65,6 +66,17 @@ pub trait FilesystemCapability {
     fn report(&self, path: &Path) -> std::io::Result<CapabilityReport>;
 }
 pub trait PlatformServices {
+    fn clipboard_text(&self) -> Result<String, String> { Err("clipboard unavailable".into()) }
+    fn set_clipboard_text(&self, _: &str) -> Result<(), String> { Err("clipboard unavailable".into()) }
+    /// Optional metadata publication may degrade to successful plain-text copy.
+    fn set_clipboard_text_with_metadata(&self, text: &str, _: &str, _: &[u8]) -> Result<(), String> {
+        self.set_clipboard_text(text)
+    }
+    fn clipboard_metadata(&self, _: &str, _: usize) -> Result<Option<Vec<u8>>, String> { Ok(None) }
+    /// Implementations supporting metadata must read both formats under one ownership lock.
+    fn clipboard_text_with_metadata(&self, _: &str, _: usize) -> Result<clipboard::ClipboardContents, String> {
+        Ok(clipboard::ClipboardContents { text: self.clipboard_text()?, metadata: None })
+    }
     fn about(&self);
     fn open_file(&self) -> Result<Option<PathBuf>, String>;
     fn save_file(&self) -> Result<Option<PathBuf>, String>;
@@ -80,6 +92,12 @@ pub struct FileIdentity {
 }
 /// Background file operations; implementations must refuse unsupported replacement semantics.
 pub trait LocalFileSystem: Send + Sync {
+    /// Open a mutable followed file without following a final reparse point; retain
+    /// the verified directory chain while allowing final-file rotation.
+    fn open_follow_read(&self, _: &Path) -> std::io::Result<(std::fs::File,std::sync::Arc<dyn Send+Sync>)> {
+        Err(std::io::Error::new(std::io::ErrorKind::Unsupported,"follow read capability unavailable"))
+    }
+
     /// Hold a verified local directory chain against reparse retargeting during recovery.
     fn guard_directory(&self, _: &Path) -> std::io::Result<std::sync::Arc<dyn Send + Sync>> {
         Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "directory guards unavailable"))

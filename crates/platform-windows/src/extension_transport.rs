@@ -349,6 +349,22 @@ pub struct HostLaunch<'a> {
 pub fn run_verified_host(
     launch: HostLaunch<'_>,
     cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    broker: impl FnMut(
+        bareline_extensions_protocol::Envelope,
+    ) -> bareline_extensions_protocol::BrokerResponse,
+) -> io::Result<()> {
+    run_verified_host_observed(launch, cancelled, |_| {}, broker)
+}
+#[derive(Clone, Copy, Debug)]
+pub enum HostLifecycle {
+    Started(u32),
+    Authenticated(u32),
+    Drained(u32),
+}
+pub fn run_verified_host_observed(
+    launch: HostLaunch<'_>,
+    cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    mut observe: impl FnMut(HostLifecycle),
     mut broker: impl FnMut(
         bareline_extensions_protocol::Envelope,
     ) -> bareline_extensions_protocol::BrokerResponse,
@@ -381,11 +397,12 @@ pub fn run_verified_host(
     if hash(&mut component, 32 * 1024 * 1024)? != launch.component_sha256 {
         return Err(io::Error::other("component hash"));
     }
-    run_host_process(launch, cancelled, &mut broker)
+    run_host_process(launch, cancelled, &mut observe, &mut broker)
 }
 fn run_host_process(
     launch: HostLaunch<'_>,
     cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    observe: &mut impl FnMut(HostLifecycle),
     broker: &mut impl FnMut(
         bareline_extensions_protocol::Envelope,
     ) -> bareline_extensions_protocol::BrokerResponse,
@@ -426,6 +443,8 @@ fn run_host_process(
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     let (mut child, mut guard) = crate::WindowsProcessLauncher.spawn(&mut command)?;
+    let pid = child.id();
+    observe(HostLifecycle::Started(pid));
     let (stop_tx, stop_rx) = mpsc::channel();
     let deadline = Instant::now() + Duration::from_millis(launch.budget.timeout_ms());
     let watchdog = std::thread::spawn(move || {
@@ -442,6 +461,7 @@ fn run_host_process(
     });
     let outcome = (|| {
         let mut pipe = server.accept(child.id(), Duration::from_millis(INTERACTIVE_TIMEOUT_MS))?;
+        observe(HostLifecycle::Authenticated(pid));
         pipe.set_timeout(Duration::from_millis(launch.budget.timeout_ms()));
         let context =
             encode(launch.invocation).map_err(|_| io::Error::other("invocation encoding"))?;
@@ -484,5 +504,6 @@ fn run_host_process(
     let _ = stop_tx.send(());
     let _ = watchdog.join();
     let _ = child.wait();
+    observe(HostLifecycle::Drained(pid));
     outcome
 }

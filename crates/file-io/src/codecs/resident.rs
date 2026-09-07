@@ -341,6 +341,20 @@ impl ResidentEncoding {
     pub fn original_bytes(&self) -> Arc<Vec<u8>> { self.raw.clone() }
     pub fn has_opaque_original(&self) -> bool { self.mapping.iter().any(|span| span.opaque) }
     pub fn original_encoding(&self) -> Encoding { self.original_encoding }
+    /// Pointer identity distinguishes retained original allocation from typed equal text.
+    pub fn spill_original_range(&self, text: &str) -> Option<std::ops::Range<u64>> {
+        let mut offset = 0u64;
+        for chunk in self.baseline.chunks(TextOffset(0)..TextOffset(self.baseline.len())).ok()? {
+            if let Some(local) = (text.as_ptr() as usize).checked_sub(chunk.as_ptr() as usize) {
+                if local <= chunk.len() && text.len() <= chunk.len() - local {
+                    let start = offset + local as u64;
+                    return Some(start..start + text.len() as u64);
+                }
+            }
+            offset += chunk.len() as u64;
+        }
+        None
+    }
     pub fn recovery_pieces(&self, snapshot: &DocumentSnapshot) -> Result<Vec<bareline_document::paged::RestoredPiece>, ResidentError> {
         if !snapshot.same_document(&self.baseline) { return Err(ResidentError::WrongDocument); }
         let mut originals=Vec::new();let mut offset=0;

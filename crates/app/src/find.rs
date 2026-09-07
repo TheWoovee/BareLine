@@ -37,6 +37,7 @@ pub struct FindController {
     pub whole_word: bool,
     pub status: String,
     selection_scope: Option<std::ops::Range<TextOffset>>,
+    cancelled_query: Option<SearchQuery>,
     worker: Option<SearchWorker>,
     pending: Option<SearchTicket>,
     paged_pending: Option<bareline_search::service::PagedSearchTicket>,
@@ -61,6 +62,7 @@ impl Default for FindController {
             whole_word: false,
             status: "Type to find".into(),
             selection_scope: None,
+            cancelled_query: None,
             worker: None,
             pending: None,
             paged_pending: None,
@@ -97,6 +99,7 @@ impl FindController {
         self.requested = None;
         self.results = None;
         self.paged_results = None;
+        self.cancelled_query = None;
         Ok(())
     }
     pub fn completed_paged_results(&self) -> Option<&bareline_search::paged::PagedResults> {
@@ -129,7 +132,7 @@ impl FindController {
         handle: bareline_editor_surface::paged_view::PagedReadHandle,
         notify: Arc<dyn Fn() + Send + Sync>,
     ) {
-        if !self.open || self.field.composing() {
+        if !self.open || self.field.composing() || self.cancelled_query.as_ref() == Some(&self.query()) {
             return;
         }
         let query = self.query();
@@ -207,6 +210,7 @@ impl FindController {
     }
 
     pub fn show(&mut self) {
+        self.cancelled_query = None;
         if self.results.is_none() {
             self.requested = None;
         }
@@ -248,7 +252,14 @@ impl FindController {
             FindAction::Next
         })
     }
+    pub fn cancel_search_tracked(&mut self) -> Option<bareline_search::SearchJob> {
+        let job = self.paged_pending.as_ref().map(|ticket| ticket.job.clone())
+            .or_else(|| self.pending.as_ref().map(|ticket| ticket.job.clone()));
+        self.cancel_search();
+        job
+    }
     pub fn cancel_search(&mut self) {
+        self.cancelled_query = Some(self.query());
         self.paged_pending = None;
         self.paged_requested = None;
         self.pending = None;
@@ -434,7 +445,7 @@ impl FindController {
         self.keyboard_focus
     }
     pub fn refresh(&mut self, snapshot: &DocumentSnapshot, notify: Arc<dyn Fn() + Send + Sync>) {
-        if !self.open || self.field.composing() {
+        if !self.open || self.field.composing() || self.cancelled_query.as_ref() == Some(&self.query()) {
             return;
         }
         if self

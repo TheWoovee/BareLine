@@ -11,9 +11,11 @@ $files=@(Get-ChildItem -LiteralPath $root -File | Where-Object Extension -eq '.e
 if(-not $files.Count){throw 'No executable artifacts'}
 if(Get-ChildItem -LiteralPath $root -Filter '*.zip' -File){throw 'Sign inner executables before ZIP assembly'}
 $before=@();$after=@()
+foreach($file in $files){if($file.Attributes -band [IO.FileAttributes]::ReparsePoint){throw 'Reparse signing target'};$before+= '{0}  {1}' -f (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant(),$file.Name}
+[IO.File]::WriteAllLines((Join-Path $root 'SHA-256SUMS.before-signing'),$before)
 foreach($file in $files){
     if($file.Attributes -band [IO.FileAttributes]::ReparsePoint){throw 'Reparse signing target'}
-    $before+= '{0}  {1}' -f (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant(),$file.Name
+
     & $SignTool sign /fd SHA256 /sha1 $SignerCertificateThumbprint /tr $TimestampUrl /td SHA256 $file.FullName
     if($LASTEXITCODE -ne 0){throw "Signing failed: $($file.Name)"}
     $signature=Get-AuthenticodeSignature -LiteralPath $file.FullName

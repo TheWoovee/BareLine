@@ -55,6 +55,8 @@ enum Action {
     },
 }
 struct Completed {
+    append_receipt: Option<bareline_file_io::tail::AppendReceipt>,
+    generation_owner: Arc<()>,
     peer_epoch: u64,
     saved_state: Option<ContentStateId>,
     save_as_required: bool,
@@ -75,10 +77,20 @@ struct PeerState {
     saved_state: Option<ContentStateId>,
     save_as_required: bool,
 }
+struct RetiredGeneration {
+    owner: Arc<()>,
+    opened: Box<PagedOpened>,
+    tail: Option<bareline_file_io::tail::TailSession>,
+}
 /// Immutable snapshot plus generation-checked page resolver for background consumers.
 /// Never resolve pages on the UI thread. Busy returns without waiting for the actor.
 #[derive(Clone)]
 pub struct PagedReadHandle {
+    _generation: Arc<()>,
+    retired: Arc<Mutex<Vec<RetiredGeneration>>>,
+    _views: Arc<()>,
+    path: PathBuf,
+    fingerprint: Fingerprint,
     tail: Arc<Mutex<Option<bareline_file_io::tail::TailSession>>>,
     actor: Arc<Mutex<Box<PagedOpened>>>,
     snapshot: PagedSnapshot,
@@ -107,7 +119,7 @@ impl PagedReadHandle {
     fn resolve(&self, ticket: bareline_document::source::PageTicket, historical: bool) -> Result<bool, String> {
         let referenced = self.snapshot.pieces().any(|piece| {
             let (source, range) = match piece {
-                bareline_document::paged::PagedPiece::Original { source, range } | bareline_document::paged::PagedPiece::OriginalOwned { source, range, .. } => (source, range),
+                bareline_document::paged::PagedPiece::Original { source, range } | bareline_document::paged::PagedPiece::OriginalOwned { source, range, .. } | bareline_document::paged::PagedPiece::OwnedSource { source, range, .. } => (source, range),
                 bareline_document::paged::PagedPiece::Inserted(_) => return false,
             };
             ticket.generation == source.generation() && ticket.page.checked_mul(source.page_size() as u64).is_some_and(|start| start < range.end && start.saturating_add(source.page_size() as u64) > range.start)
@@ -119,9 +131,19 @@ impl PagedReadHandle {
             Err(std::sync::TryLockError::Poisoned(_)) => return Err("Paged source worker failed".into()),
         };
         let current = opened.transcoded.document.snapshot();
+        if historical && !current.same_document(&self.snapshot) {
+            drop(opened);
+            let mut retired = match self.retired.try_lock() { Ok(retired) => retired, Err(std::sync::TryLockError::WouldBlock) => return Ok(false), Err(_) => return Err("Captured generation owner failed".into()) };
+            let generation = retired.iter_mut().find(|generation| generation.opened.transcoded.document.snapshot().same_document(&self.snapshot)).ok_or("Captured generation is unavailable")?;
+            if self.snapshot.resolve_owned(ticket).map_err(|error| format!("Captured owned source unavailable: {error:?}"))? { return Ok(true); }
+            let handled = match generation.tail.as_mut() { Some(tail) => tail.read_page(ticket).map_err(|e| format!("{e:?}"))?, None => false };
+            if !handled { generation.opened.transcoded.source.read_page(ticket).map_err(|e| format!("Captured source unavailable: {e:?}"))?; }
+            return Ok(true);
+        }
         if !current.same_document(&self.snapshot) || (!historical && current.content_state != self.snapshot.content_state) {
             return Err("Paged source changed; recompare or search again".into());
         }
+        if self.snapshot.resolve_owned(ticket).map_err(|error| format!("Owned source unavailable: {error:?}"))? { return Ok(true); }
         let mut tail = match self.tail.try_lock() { Ok(tail) => tail, Err(std::sync::TryLockError::WouldBlock) => return Ok(false), Err(_) => return Err("Tail worker failed".into()) };
         let handled = match tail.as_mut() { Some(tail) => tail.read_page(ticket).map_err(|e| format!("{e:?}"))?, None => false };
         if !handled { opened.transcoded.source.read_page(ticket).map_err(|error| format!("Paged source unavailable: {error:?}"))?; }
@@ -129,6 +151,13 @@ impl PagedReadHandle {
     }
 }
 pub struct PagedEditorSurface {
+    search_marks: crate::search_marks::SearchMarks,
+    pending_marks: Option<crate::search_marks::SearchMarks>,
+    append_receipt: Option<bareline_file_io::tail::AppendReceipt>,
+    generation_owner: Arc<Mutex<Arc<()>>>,
+    view_generation: Arc<()>,
+    retired: Arc<Mutex<Vec<RetiredGeneration>>>,
+    captured: Option<PagedReadHandle>,
     peer: Arc<Mutex<PeerState>>,
     peer_epoch: u64,
     views: Arc<()>,
@@ -163,7 +192,8 @@ pub struct PagedEditorSurface {
 }
 impl PagedEditorSurface {
     pub fn read_handle(&self) -> PagedReadHandle {
-        PagedReadHandle { actor: self.actor.clone(), tail: self.tail.clone(), snapshot: self.snapshot.clone() }
+        if let Some(captured) = &self.captured { return captured.clone(); }
+        PagedReadHandle { _generation: self.view_generation.clone(), retired: self.retired.clone(), _views: self.views.clone(), path: self.path.clone(), fingerprint: self.fingerprint.clone(), actor: self.actor.clone(), tail: self.tail.clone(), snapshot: self.snapshot.clone() }
     }
     pub fn new(
         opened: Box<PagedOpened>,
@@ -176,7 +206,12 @@ impl PagedEditorSurface {
             .prefix();
         let mut surface = EditorSurface::loading(prefix, notify.clone());
         surface.encoding_label = format!("{:?}", opened.transcoded.store.state.save_target);
+        let generation_owner = Arc::new(());
         let mut view = Self {
+            generation_owner: Arc::new(Mutex::new(generation_owner.clone())), view_generation: generation_owner,
+            search_marks: Default::default(), pending_marks: None,
+            append_receipt: None,
+            retired: Arc::new(Mutex::new(Vec::new())), captured: None,
             peer: Arc::new(Mutex::new(PeerState { epoch: 0, saved_state: opened.recovery_origin.is_none().then_some(snapshot.content_state), save_as_required: opened.recovery_origin.is_some() })),
             peer_epoch: 0,
             views: Arc::new(()),
@@ -215,10 +250,17 @@ impl PagedEditorSurface {
     /// A real peer of the same full paged actor. Only viewport, selection and scrolling
     /// belong to the new view; no resident prefix is substituted for the document.
     pub fn clone_view(&self) -> Result<Self, String> {
+        self.clone_view_inner(self.captured.clone())
+    }
+    pub fn clone_captured_view(&self, handle: &PagedReadHandle) -> Result<Self, String> {
+        if !Arc::ptr_eq(&self.actor, &handle.actor) { return Err("Captured view belongs to another document actor".into()); }
+        self.clone_view_inner(Some(handle.clone()))
+    }
+    fn clone_view_inner(&self, captured: Option<PagedReadHandle>) -> Result<Self, String> {
         let prefix = DocumentBuilder::new(self.budget.clone(), Budget::new(0)).map_err(|e| format!("{e:?}"))?.prefix();
         let mut surface = EditorSurface::loading(prefix, self.notify.clone());
         surface.encoding_label = self.surface.encoding_label.clone();
-        surface.user_read_only = self.surface.user_read_only;
+        surface.user_read_only = captured.is_some() || self.surface.user_read_only;
         surface.theme = self.surface.theme;
         surface.language = self.surface.language;
         surface.language_override = self.surface.language_override;
@@ -231,24 +273,28 @@ impl PagedEditorSurface {
         surface.highlight_current_line = self.surface.highlight_current_line;
         surface.whitespace = self.surface.whitespace.clone();
         let mut view = Self {
+            retired: self.retired.clone(), captured: captured.clone(),
+            search_marks: self.search_marks.clone(), pending_marks: None,
+            append_receipt: self.append_receipt,
+            generation_owner: self.generation_owner.clone(), view_generation: captured.as_ref().map_or_else(|| self.view_generation.clone(), |h| h._generation.clone()),
             peer: self.peer.clone(), peer_epoch: self.peer_epoch, views: self.views.clone(),
-            tail: self.tail.clone(), following: self.following, follow_paused: self.follow_paused,
+            tail: self.tail.clone(), following: captured.is_none() && self.following, follow_paused: self.follow_paused,
             tail_pending: self.tail_pending, tail_changed: self.tail_changed, surface,
-            actor: self.actor.clone(), snapshot: self.snapshot.clone(), saved_state: self.saved_state,
+            actor: self.actor.clone(), snapshot: captured.as_ref().map_or_else(|| self.snapshot.clone(), |h| h.snapshot.fork_identity()), saved_state: captured.as_ref().map_or(self.saved_state, |h| Some(h.snapshot.content_state)),
             recovery_config: self.recovery_config.clone(), save_as_required: self.save_as_required,
             can_undo: self.can_undo, can_redo: self.can_redo, recovery: self.recovery.clone(),
             recovery_status: self.recovery_status.clone(), failed_retirements: self.failed_retirements.clone(),
             budget: self.budget.clone(), pending: None, pending_input: None, cancellation: self.cancellation.clone(),
             notify: self.notify.clone(), viewport_start: self.viewport_start, viewport_valid: false,
             restoring_selection: Some((self.viewport_start + self.surface.selection.anchor, self.viewport_start + self.surface.selection.caret)),
-            fingerprint: self.fingerprint.clone(), path: self.path.clone(), recovery_origin: self.recovery_origin.clone(), error: None,
+            fingerprint: captured.as_ref().map_or_else(|| self.fingerprint.clone(), |h| h.fingerprint.clone()), path: captured.as_ref().map_or_else(|| self.path.clone(), |h| h.path.clone()), recovery_origin: self.recovery_origin.clone(), error: None,
         };
         view.request_viewport(TextOffset(self.viewport_start))?;
         Ok(view)
     }
     /// Nonblocking peer publication check; the next viewport is fetched on the worker.
     pub fn refresh_peer(&mut self) -> bool {
-        if self.busy() { return false; }
+        if self.busy() || self.captured.is_some() { return false; }
         let changed = self.peer.try_lock().is_ok_and(|peer| peer.epoch != self.peer_epoch);
         if !changed { return false; }
         self.viewport_valid = false;
@@ -285,6 +331,21 @@ impl PagedEditorSurface {
     }
     pub fn recovery_origin_path(&self) -> Option<&std::path::Path> { self.recovery_origin.as_deref() }
     pub fn viewport_ready(&self) -> bool { self.viewport_valid && !self.busy() }
+    pub fn set_search_marks(&mut self, style: u8, ranges: Vec<std::ops::Range<TextOffset>>) -> Result<(), String> {
+        if ranges.iter().any(|range| range.end.0 > self.snapshot.len()) { return Err("Mark is outside this paged generation".into()); }
+        self.search_marks.set(style, ranges)?; self.project_search_marks(); Ok(())
+    }
+    pub fn clear_search_marks(&mut self, style: Option<u8>) { self.search_marks.clear(style); self.project_search_marks(); }
+    fn project_search_marks(&mut self) {
+        self.surface.clear_search_marks(None);
+        let start = self.viewport_start;
+        let end = start.saturating_add(self.surface.snapshot.len());
+        for style in 1..=5 {
+            let ranges = self.search_marks.iter().filter(|(s, range)| *s == style && range.start.0 < end && range.end.0 > start).map(|(_, range)| TextOffset(range.start.0.max(start) - start)..TextOffset(range.end.0.min(end) - start)).collect();
+            let _ = self.surface.set_search_marks(style, ranges);
+        }
+    }
+    pub fn append_receipt(&self) -> Option<bareline_file_io::tail::AppendReceipt> { self.append_receipt }
     pub fn follow_status(&self) -> Option<(bool, bool)> { self.following.then_some((self.follow_paused, self.tail_changed)) }
     pub fn follow_banner_text(&self) -> Option<String> {
         self.follow_status().map(|(paused, changed)| {
@@ -429,7 +490,43 @@ impl PagedEditorSurface {
         if self.busy() {
             return Err("A paged operation is already pending.".into());
         }
+        let mapped_marks = match &action {
+            Action::Prepared(transaction) => Some(self.search_marks.mapped(transaction)),
+            Action::Edit { range, insert } => Some(self.search_marks.mapped(&EditTransaction { base_revision: self.snapshot.revision, edits: vec![Edit { range: range.clone(), insert: insert.clone() }] })),
+            _ => None,
+        };
+        if let Some(captured) = self.captured.clone() {
+            let displayed_snapshot = self.snapshot.clone();
+            let Action::Read(start) = action else { return Err("This is a read-only captured generation.".into()); };
+            let budget = self.budget.clone();
+            let cancellation = self.cancellation.clone();
+            let notify = self.notify.clone();
+            let (sender, receiver) = mpsc::sync_channel(1);
+            worker().try_send(Box::new(move || {
+                let result = (|| {
+                    let snapshot = displayed_snapshot;
+                    let start = start.min(snapshot.len());
+                    let mut request = snapshot.begin_viewport(TextOffset(start), WINDOW, &budget).map_err(|e| format!("{e:?}"))?;
+                    let window = loop {
+                        cancellation.check().map_err(|e| format!("{e:?}"))?;
+                        match request.poll() {
+                            WindowPoll::Ready(window) => break Ok(window),
+                            WindowPoll::Pending(ticket) => { if !captured.resolve_captured_page(ticket)? { std::thread::yield_now(); } }
+                            WindowPoll::Unavailable(reason) => break Err(format!("Captured source unavailable: {reason:?}")),
+                            WindowPoll::InvalidUtf8 => break Err("Captured source contains invalid UTF-8".into()),
+                            WindowPoll::Finished => break Err("Captured viewport already finished".into()),
+                        }
+                    };
+                    Ok(Completed { append_receipt: None, generation_owner: captured._generation.clone(), peer_epoch: 0, saved_state: Some(snapshot.content_state), save_as_required: false, following: false, tail_pending: false, source_changed: false, fingerprint: captured.fingerprint.clone(), can_undo: false, can_redo: false, snapshot, window, path: captured.path.clone(), caret: start, saved: None })
+                })();
+                let _ = sender.try_send(result); notify();
+            })).map_err(|_| "Paged worker queue is full; retry.".to_owned())?;
+            self.pending = Some(receiver);
+            return Ok(());
+        }
         let actor = self.actor.clone();
+        let retired = self.retired.clone();
+        let generation_owner = self.generation_owner.clone();
         let peer = self.peer.clone();
         let tail = self.tail.clone();
         let recovery = self.recovery.clone();
@@ -465,6 +562,7 @@ impl PagedEditorSurface {
                     let previously_following = tail.is_some();
                     let mut retry_recovery = false;
                     let mut recovery_edits = Vec::new();
+                    let mut _history_payload = None;
                     match action {
                         Action::Tail { platform, request, follow } => {
                             if tail.is_none() {
@@ -480,7 +578,11 @@ impl PagedEditorSurface {
                         Action::UnlockTail => {
                             let session = tail.as_ref().ok_or("Monitoring is not active")?;
                             let fixed = session.freeze(&opened).map_err(|e| format!("Cannot capture fixed generation: {e:?}"))?;
-                            *opened = fixed; *tail = None;
+                            let previous = std::mem::replace(&mut *opened, fixed);
+                            let old_owner = std::mem::replace(&mut *generation_owner.lock().map_err(|_| "Generation owner failed")?, Arc::new(()));
+                            let mut retained = retired.lock().map_err(|_| "Captured generation owner failed")?;
+                            retained.retain(|generation| Arc::strong_count(&generation.owner) > 1);
+                            retained.push(RetiredGeneration { owner: old_owner, opened: previous, tail: tail.take() });
                             saved = Some(opened.fingerprint.clone());
                         }
                         Action::RetryRecovery => {
@@ -585,43 +687,12 @@ impl PagedEditorSurface {
                                 .map_err(|error| format!("{error:?}"))?;
                             start = start.min(caret);
                         }
-                        Action::Undo => {
-                            recovery_edits = opened
-                                .transcoded
-                                .document
-                                .history_delta(true)
-                                .map_err(|e| format!("{e:?}"))?
-                                .into_iter()
-                                .map(|edit| bareline_file_io::recovery::RecoveryEdit {
-                                    offset: edit.range.start.0 as u64,
-                                    removed: edit.removed.into_bytes(),
-                                    inserted: edit.inserted.into_bytes(),
-                                })
-                                .collect();
-                            opened
-                                .transcoded
-                                .document
-                                .undo()
-                                .map_err(|error| format!("{error:?}"))?;
-                        }
-                        Action::Redo => {
-                            recovery_edits = opened
-                                .transcoded
-                                .document
-                                .history_delta(false)
-                                .map_err(|e| format!("{e:?}"))?
-                                .into_iter()
-                                .map(|edit| bareline_file_io::recovery::RecoveryEdit {
-                                    offset: edit.range.start.0 as u64,
-                                    removed: edit.removed.into_bytes(),
-                                    inserted: edit.inserted.into_bytes(),
-                                })
-                                .collect();
-                            opened
-                                .transcoded
-                                .document
-                                .redo()
-                                .map_err(|error| format!("{error:?}"))?;
+                        Action::Undo | Action::Redo => {
+                            let undo=matches!(action,Action::Undo);
+                            let mut payload=materialize_history(&mut opened,undo,&budget,&cancellation)?;
+                            recovery_edits=std::mem::take(&mut payload.deltas).into_iter().map(|edit|bareline_file_io::recovery::RecoveryEdit{offset:edit.range.start.0 as u64,removed:edit.removed.into_bytes(),inserted:edit.inserted.into_bytes()}).collect();
+                            _history_payload=Some(payload);
+                            if undo {opened.transcoded.document.undo()}else{opened.transcoded.document.redo()}.map_err(|error|format!("{error:?}"))?;
                         }
                         Action::Save {
                             copy_only,
@@ -728,6 +799,8 @@ impl PagedEditorSurface {
                         &cancellation,
                     );
                     Ok(Completed {
+                        append_receipt: tail.as_ref().and_then(|tail| tail.append_receipt()),
+                        generation_owner: generation_owner.lock().map_err(|_| "Generation owner failed")?.clone(),
                         peer_epoch, saved_state: shared_saved_state, save_as_required: shared_save_as_required,
                         following: tail.is_some(),
                         tail_pending: tail.as_ref().is_some_and(|s| s.pending()),
@@ -747,6 +820,7 @@ impl PagedEditorSurface {
             }))
             .map_err(|_| "Paged worker queue is full; retry.".to_owned())?;
         self.pending = Some(receiver);
+        self.pending_marks = mapped_marks;
         Ok(())
     }
     pub fn pump(&mut self) -> bool {
@@ -761,7 +835,12 @@ impl PagedEditorSurface {
         self.pending = None;
         match result {
             Ok(completed) => {
+                if completed.snapshot.content_state != self.snapshot.content_state {
+                    if let Some(marks) = self.pending_marks.take() { self.search_marks = marks; } else { self.search_marks.clear(None); }
+                } else { self.pending_marks = None; }
+                self.append_receipt = completed.append_receipt;
                 self.peer_epoch = completed.peer_epoch;
+                self.view_generation = completed.generation_owner;
                 self.saved_state = completed.saved_state;
                 self.save_as_required = completed.save_as_required;
                 self.fingerprint = completed.fingerprint.clone();
@@ -829,6 +908,7 @@ impl PagedEditorSurface {
                             }
                         }
                         self.surface.selections = self.surface.selection.into();
+                        self.project_search_marks();
                         self.surface.error = Some(format!(
                             "Paged · bytes {}–{} of {} · Lines: indexing…",
                             self.viewport_start,
@@ -841,6 +921,7 @@ impl PagedEditorSurface {
                 }
             }
             Err(error) => {
+                self.pending_marks = None;
                 self.pending_input = None;
                 self.error = Some(error);
             }
@@ -919,6 +1000,7 @@ mod peer_tests {
         let budget = Budget::new(16 * 1024 * 1024);
         let TranscodeOutcome::Complete(opened) = open_paged_encoded(PagedOpenRequest { path, bytes: budget.clone(), history: Budget::new(1024 * 1024), cache: root.clone(), options: DiskOptions { temp_quota_bytes: 1024 * 1024, interpret: None }, source_options: SourceOptions { resident_max_bytes: 0, ..SourceOptions::default() } }, Arc::new(Platform), Cancellation::default(), |_| {}) else { panic!("open failed") };
         let mut first = PagedEditorSurface::new(opened, budget, Arc::new(|| {})).unwrap(); drain(&mut first);
+        let saved = first.read_handle();
         let mut second = first.clone_view().unwrap(); drain(&mut second);
         assert!(first.snapshot().same_document(second.snapshot()));
         second.enqueue(Input::Insert("peer ".into())); drain(&mut second);
@@ -926,9 +1008,37 @@ mod peer_tests {
         assert_eq!(first.snapshot().content_state, second.snapshot().content_state);
         assert!(first.dirty() && second.dirty());
         assert_eq!(first.surface.snapshot.len(), second.surface.snapshot.len());
+        let mut captured = first.clone_captured_view(&saved).unwrap(); drain(&mut captured);
+        assert!(captured.surface.user_read_only);
+        assert_eq!(captured.snapshot().content_state, saved.snapshot().content_state);
+        assert_eq!(captured.surface.snapshot.len(), 14);
         drop(first);
         second.enqueue(Input::Insert("alive ".into())); drain(&mut second);
         assert!(second.surface.snapshot.len() > 14);
-        drop(second); std::fs::remove_dir_all(root).unwrap();
+        drop(second);
+        captured.request_viewport(TextOffset(0)).unwrap(); drain(&mut captured);
+        assert_eq!(captured.surface.snapshot.len(), 14);
+        drop(captured); drop(saved); std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+/// Materialize the complete bounded transaction before changing document/history.
+/// Keep the returned reservation alive until the journal attempt has completed.
+fn materialize_history(opened:&mut PagedOpened,undo:bool,budget:&Budget,cancel:&Cancellation)->Result<bareline_document::paged::MaterializedHistory,String> {
+    use bareline_document::paged::HistoryDeltaPoll;
+    let mut request=opened.transcoded.document.history_delta_request(undo,16*1024*1024,budget.clone()).map_err(|error|format!("{error:?}"))?;
+    loop {
+        cancel.check().map_err(|error|format!("{error:?}"))?;
+        match request.poll() {
+            HistoryDeltaPoll::Ready(payload)=>return Ok(payload),
+            HistoryDeltaPoll::Pending(ticket)=>{
+                if !request.resolve_owned(ticket).map_err(|error|format!("{error:?}"))? {opened.transcoded.source.read_page(ticket).map_err(|error|format!("{error:?}"))?;}
+            }
+            HistoryDeltaPoll::Progress=>{},
+            HistoryDeltaPoll::Unavailable(reason)=>return Err(format!("Undo source unavailable: {reason:?}")),
+            HistoryDeltaPoll::Failed(error)=>return Err(format!("{error:?}")),
+            HistoryDeltaPoll::Cancelled=>return Err("Undo preparation cancelled".into()),
+            HistoryDeltaPoll::Finished=>return Err("Undo preparation already finished".into()),
+        }
     }
 }

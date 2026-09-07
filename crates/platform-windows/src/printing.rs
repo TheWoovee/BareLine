@@ -2,7 +2,7 @@
 //! Native printer selection and a cancellable GDI spool job. No document or filesystem writes.
 use bareline_platform::printing::{PrintError,PrintLine,PrintOptions,PrintSummary,PrintTarget};
 use std::sync::atomic::{AtomicBool,Ordering};
-use windows::{core::{PCWSTR,w},Win32::{Foundation::{COLORREF,HGLOBAL},Graphics::Gdi::*,Storage::Xps::*,
+use windows::{core::{PCWSTR,w},Win32::{Foundation::{COLORREF,HGLOBAL,RECT},Graphics::Gdi::*,Storage::Xps::*,
     System::Memory::{GlobalLock,GlobalSize,GlobalUnlock},UI::Controls::Dialogs::*}};
 
 pub struct PrinterSelection { name:Vec<u16>,mode:Vec<u32> }
@@ -77,14 +77,19 @@ impl WindowsPrintJob {
     }
     fn end_page(&mut self)->Result<(),PrintError> {
         if self.page_open {
-            if self.options.footer {self.output(self.margin_x,self.height-self.margin_y-self.line_height,&format!("Page {}",self.summary.pages),0)?;}
+            if self.options.footer {self.output(self.margin_x,self.height-self.margin_y-self.line_height,&format!("Page {}",self.summary.pages),if self.options.syntax_colors{self.options.foreground}else{0})?;}
             if unsafe{EndPage(self.dc)}<=0{return Err(PrintError::Driver("Printer could not complete the page".into()));}self.page_open=false;
         }Ok(())
     }
     fn next_page(&mut self)->Result<(),PrintError> {
         self.end_page()?;if unsafe{StartPage(self.dc)}<=0{return Err(PrintError::Driver("Printer could not start a page".into()));}
         self.page_open=true;self.summary.pages+=1;self.y=self.margin_y;
-        if self.options.header {self.output(self.margin_x,self.y,&self.options.title,0)?;self.y+=self.line_height*2;}Ok(())
+        if self.options.syntax_colors {
+            let rgb=self.options.background;let brush=unsafe{CreateSolidBrush(COLORREF(((rgb&255)<<16)|(rgb&0xff00)|((rgb>>16)&255)))};
+            if brush.is_invalid(){return Err(PrintError::Driver("Printer page background unavailable".into()));}
+            let filled=unsafe{FillRect(self.dc,&RECT{left:0,top:0,right:self.width,bottom:self.height},brush)};unsafe{let _=DeleteObject(HGDIOBJ(brush.0));}if filled==0{return Err(PrintError::Driver("Printer page background failed".into()));}
+        }
+        if self.options.header {self.output(self.margin_x,self.y,&self.options.title,if self.options.syntax_colors{self.options.foreground}else{0})?;self.y+=self.line_height*2;}Ok(())
     }
 }
 impl PrintTarget for WindowsPrintJob {
@@ -103,8 +108,8 @@ impl PrintTarget for WindowsPrintJob {
             if bytes==0&&!remaining.is_empty(){bytes=remaining.chars().next().unwrap().len_utf8();}
             if bytes<remaining.len(){if let Some((boundary,_))=remaining[..bytes].char_indices().rev().find(|(_,c)|c.is_whitespace()){if boundary>0{bytes=boundary+remaining[boundary..].chars().next().unwrap().len_utf8();}}}
             let end=at+bytes;let mut position=at;
-            if self.options.syntax_colors {for span in line.spans {let start=span.bytes.start.max(at);let stop=span.bytes.end.min(end);if start<stop {if position<start{x+=self.output(x,self.y,&text[position..start],0)?;}x+=self.output(x,self.y,&text[start..stop],span.rgb)?;position=stop;}}}
-            if position<end {self.output(x,self.y,&text[position..end],0)?;}
+            if self.options.syntax_colors {for span in line.spans {let start=span.bytes.start.max(at);let stop=span.bytes.end.min(end);if start<stop {if position<start{x+=self.output(x,self.y,&text[position..start],self.options.foreground)?;}x+=self.output(x,self.y,&text[start..stop],span.rgb)?;position=stop;}}}
+            if position<end {self.output(x,self.y,&text[position..end],if self.options.syntax_colors{self.options.foreground}else{0})?;}
             self.y+=self.line_height;first=false;at=end;if at>=text.len(){break;}
         }self.summary.lines+=1;Ok(())
     }

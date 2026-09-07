@@ -18,6 +18,10 @@ fn io_error(error: windows::core::Error) -> io::Error {
     io::Error::from_raw_os_error(error.code().0 & 0xffff)
 }
 impl LocalFileSystem for WindowsFileSystem {
+    fn open_follow_read(&self,path:&Path)->io::Result<(File,std::sync::Arc<dyn Send+Sync>)> {
+        crate::path_trust::WindowsPathTrustProvider.open_follow_read(path)
+    }
+
     fn guard_directory(&self, path: &Path) -> io::Result<std::sync::Arc<dyn Send + Sync>> {
         use bareline_platform::PathTrustProvider;
         Ok(std::sync::Arc::new(crate::path_trust::WindowsPathTrustProvider.open_read(path, bareline_platform::PathOrigin::User)?))
