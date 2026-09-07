@@ -9,11 +9,99 @@ use bareline_document::{
 const WINDOW: usize = 1024 * 1024;
 pub struct PagedResults {
     pub source: PagedSnapshot,
+    pub query: SearchQuery,
     pub job: SearchJobId,
     pub matches: Vec<SearchMatch>,
     pub completeness: Completeness,
     pub count: usize,
     pub count_complete: bool,
+}
+impl PagedResults {
+    pub fn prepare_replace(
+        &self,
+        current: &PagedSnapshot,
+        replacement: &str,
+        scope: ReplaceScope,
+        job: &SearchJob,
+        mut resolve: impl FnMut(PageTicket) -> Result<bool, String>,
+    ) -> Result<EditTransaction, ReplaceError> {
+        if self.completeness != Completeness::Complete {
+            return Err(ReplaceError::Incomplete);
+        }
+        if !self.source.same_document(current)
+            || self.source.revision != current.revision
+            || self.source.content_state != current.content_state
+        {
+            return Err(ReplaceError::Stale);
+        }
+        if job.is_cancelled() {
+            return Err(ReplaceError::Cancelled);
+        }
+        let template = decode_replacement(replacement, self.query.mode)?;
+        if self.query.mode == SearchMode::Regex {
+            let mut subject = String::with_capacity(current.len());
+            while subject.len() < current.len() {
+                let part =
+                    window(current, subject.len(), WINDOW, job, &mut resolve).map_err(|_| {
+                        if job.is_cancelled() {
+                            ReplaceError::Cancelled
+                        } else {
+                            ReplaceError::Stale
+                        }
+                    })?;
+                if part.text().is_empty() {
+                    return Err(ReplaceError::Stale);
+                }
+                subject.push_str(part.text());
+            }
+            let document = Document::from_utf8(
+                &subject,
+                Budget::new(regex::CONTEXT_LIMIT * 2),
+                Budget::new(1),
+            )
+            .map_err(|_| ReplaceError::StagingLimit)?;
+            drop(subject);
+            let snapshot = document.snapshot();
+            let found = scan(&snapshot, &self.query, job, |_| {});
+            if found.matches() != self.matches {
+                return Err(ReplaceError::Stale);
+            }
+            let mut transaction =
+                found.prepare_replace_scoped(&snapshot, &template, MAX_RESULT_BYTES, scope, job)?;
+            transaction.base_revision = current.revision;
+            return Ok(transaction);
+        }
+        let mut edits = Vec::new();
+        let mut used = 0usize;
+        for found in &self.matches {
+            if let ReplaceScope::One(range) = &scope
+                && range != &found.range
+            {
+                continue;
+            }
+            if job.is_cancelled() {
+                return Err(ReplaceError::Cancelled);
+            }
+            used = used
+                .checked_add(found.range.end.0 - found.range.start.0)
+                .and_then(|bytes| bytes.checked_add(template.len() + std::mem::size_of::<Edit>()))
+                .ok_or(ReplaceError::StagingLimit)?;
+            if used > MAX_RESULT_BYTES {
+                return Err(ReplaceError::StagingLimit);
+            }
+            edits.push(Edit {
+                range: found.range.clone(),
+                insert: template.clone(),
+            });
+        }
+        if edits.is_empty() {
+            return Err(ReplaceError::NoMatch);
+        }
+        Ok(EditTransaction {
+            base_revision: current.revision,
+            edits,
+        })
+    }
 }
 fn window(
     snapshot: &PagedSnapshot,
@@ -51,6 +139,7 @@ pub fn scan_paged(
 ) -> PagedResults {
     let mut result = PagedResults {
         source: snapshot.clone(),
+        query: query.clone(),
         job: job.id,
         matches: Vec::new(),
         completeness: Completeness::Complete,

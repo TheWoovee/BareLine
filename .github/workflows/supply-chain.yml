@@ -81,9 +81,13 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'SBOM tool installation failed' }
           cargo cyclonedx --format json --all --target x86_64-pc-windows-msvc
           if ($LASTEXITCODE -ne 0) { throw 'SBOM generation failed' }
+          # Workspace generation must produce both packaged executable graphs.
+          foreach ($sbom in @('apps/bareline/bom.json', 'apps/update-helper/bom.json')) {
+            if (-not (Test-Path -LiteralPath $sbom -PathType Leaf)) { throw "Missing packaged executable SBOM: $sbom" }
+          }
           git diff --exit-code -- Cargo.lock
           if ($LASTEXITCODE -ne 0) { throw 'SBOM generation changed Cargo.lock' }
-          ./packaging/windows/generate-sbom.ps1 -CargoSbom apps/bareline/bom.json -OutputFile payload/SBOM.json
+          ./packaging/windows/generate-sbom.ps1 -CargoSbom apps/bareline/bom.json -HelperCargoSbom apps/update-helper/bom.json -OutputFile payload/SBOM.json
           $metadata = cargo metadata --locked --offline --format-version 1 | ConvertFrom-Json
           if ($LASTEXITCODE -ne 0) { throw 'Package metadata failed' }
           $version = ($metadata.packages | Where-Object name -eq bareline).version

@@ -51,9 +51,9 @@ impl VerifiedPackage {
             .open(&archive)
         {
             Ok(mut file) => {
-                file.write_all(&self.bytes)
-                    .and_then(|_| file.sync_all())
-                    .map_err(|_| PackageError::Io)?;
+                let result = file.write_all(&self.bytes).and_then(|_| file.sync_all());
+                drop(file);
+                if result.is_err() { let _ = fs::remove_file(&archive); return Err(PackageError::Io); }
             }
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                 let mut bytes = Vec::new();
@@ -499,6 +499,9 @@ impl VerifiedPackage {
             || manifest.commands.iter().any(|c| !valid_id(c))
             || manifest.panels.iter().any(|p| !valid_id(p))
             || manifest.commands.len() > 256
+            || manifest.commands.iter().collect::<std::collections::BTreeSet<_>>().len() != manifest.commands.len()
+            || manifest.panels.iter().collect::<std::collections::BTreeSet<_>>().len() != manifest.panels.len()
+            || manifest.background_commands.iter().collect::<std::collections::BTreeSet<_>>().len() != manifest.background_commands.len()
             || manifest
                 .background_commands
                 .iter()

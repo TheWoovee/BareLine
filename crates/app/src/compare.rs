@@ -12,6 +12,27 @@ use std::sync::{
     mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError},
 };
 
+/// Full immutable source captured for a comparison. Paged view prefixes must never
+/// enter this contract; the handle resolves the captured piece tree on the worker.
+#[derive(Clone)]
+pub enum CompareInput {
+    Resident(DocumentSnapshot),
+    Paged(bareline_editor_surface::paged_view::PagedReadHandle),
+}
+impl CompareInput {
+    pub fn same_document(&self, other:&Self)->bool {match (self,other) {
+        (Self::Resident(a),Self::Resident(b))=>a.same_document(b),
+        (Self::Paged(a),Self::Paged(b))=>a.snapshot().same_document(b.snapshot()),_=>false,
+    }}
+    pub fn current(&self, other:&Self)->bool {self.same_document(other)&&match (self,other) {
+        (Self::Resident(a),Self::Resident(b))=>same(a,b),
+        (Self::Paged(a),Self::Paged(b))=>a.snapshot().revision==b.snapshot().revision&&a.snapshot().content_state==b.snapshot().content_state,_=>false,
+    }}
+    pub fn len(&self)->usize {match self {Self::Resident(s)=>s.len(),Self::Paged(s)=>s.snapshot().len()}}
+    pub fn is_empty(&self)->bool {self.len()==0}
+    pub fn revision(&self)->bareline_document::Revision {match self {Self::Resident(s)=>s.revision,Self::Paged(s)=>s.snapshot().revision}}
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum CompareOrigin {
     OpenDocument(String),
@@ -47,8 +68,8 @@ pub enum CompareError {
     InvalidSession,
 }
 struct Request {
-    left: DocumentSnapshot,
-    right: DocumentSnapshot,
+    left: CompareInput,
+    right: CompareInput,
     options: CompareOptions,
     cancel: CancelToken,
     response: SyncSender<CompareResult>,
@@ -64,8 +85,10 @@ impl Worker {
             .name("bareline-compare".into())
             .spawn(move || {
                 while let Ok(job) = receiver.recv() {
-                    let result =
-                        bareline_diff::compare(&job.left, &job.right, &job.options, &job.cancel);
+                    let result = match (&job.left,&job.right) {
+                        (CompareInput::Resident(left),CompareInput::Resident(right))=>bareline_diff::compare(left,right,&job.options,&job.cancel),
+                        _=>compare_paged_inputs(&job.left,&job.right,&job.options,&job.cancel),
+                    };
                     let _ = job.response.send(result);
                     (job.notify)();
                 }
@@ -74,8 +97,8 @@ impl Worker {
     }
 }
 struct Pending {
-    left: DocumentSnapshot,
-    right: DocumentSnapshot,
+    left: CompareInput,
+    right: CompareInput,
     cancel: CancelToken,
     receiver: Receiver<CompareResult>,
 }
@@ -86,7 +109,7 @@ pub struct CompareController {
     pub pause_automatic: bool,
     pub sync_horizontal: bool,
     result: Option<CompareResult>,
-    snapshots: Option<[DocumentSnapshot; 2]>,
+    snapshots: Option<[CompareInput; 2]>,
     pending: Option<Pending>,
     worker: Option<Worker>,
     current: Option<usize>,
@@ -122,6 +145,9 @@ impl CompareController {
         right: DocumentSnapshot,
         notify: Arc<dyn Fn() + Send + Sync>,
     ) -> Result<(), CompareError> {
+        self.start_inputs(CompareInput::Resident(left),CompareInput::Resident(right),notify)
+    }
+    pub fn start_inputs(&mut self,left:CompareInput,right:CompareInput,notify:Arc<dyn Fn()+Send+Sync>)->Result<(),CompareError> {
         self.remembered = self.current_hunk().map(|h| h.stable_id).or(self.remembered);
         self.cancel();
         self.result = None;
@@ -192,8 +218,11 @@ impl CompareController {
         self.invalidate();
     }
     pub fn poll(&mut self, left: &DocumentSnapshot, right: &DocumentSnapshot) -> bool {
+        self.poll_inputs(&CompareInput::Resident(left.clone()),&CompareInput::Resident(right.clone()))
+    }
+    pub fn poll_inputs(&mut self,left:&CompareInput,right:&CompareInput)->bool {
         if let Some(pending) = &self.pending {
-            if !same(&pending.left, left) || !same(&pending.right, right) {
+            if !pending.left.current(left) || !pending.right.current(right) {
                 self.invalidate();
                 return true;
             }
@@ -205,22 +234,26 @@ impl CompareController {
         let pending = self.pending.take().expect("pending");
         match received {
             Ok(result) if !pending.cancel.is_cancelled() => {
-                self.accept(result, [pending.left, pending.right], left, right);
+                self.accept_inputs(result, [pending.left, pending.right], left, right);
             }
             _ => self.state = CompareState::Failed,
         }
         true
     }
-    fn accept(
+    #[cfg(test)]
+    fn accept(&mut self,result:CompareResult,captured:[DocumentSnapshot;2],left:&DocumentSnapshot,right:&DocumentSnapshot) {
+        self.accept_inputs(result,captured.map(CompareInput::Resident),&CompareInput::Resident(left.clone()),&CompareInput::Resident(right.clone()));
+    }
+    fn accept_inputs(
         &mut self,
         result: CompareResult,
-        captured: [DocumentSnapshot; 2],
-        left: &DocumentSnapshot,
-        right: &DocumentSnapshot,
+        captured: [CompareInput; 2],
+        left: &CompareInput,
+        right: &CompareInput,
     ) {
-        if !same(&captured[0], left)
-            || !same(&captured[1], right)
-            || bareline_diff::is_stale(&result, left.revision, right.revision)
+        if !captured[0].current(left)
+            || !captured[1].current(right)
+            || bareline_diff::is_stale(&result, left.revision(), right.revision())
         {
             self.state = CompareState::Stale;
             return;
@@ -244,7 +277,7 @@ impl CompareController {
             } else {
                 Some(0)
             });
-        self.alignment = alignment(&result, left, right);
+        self.alignment = match (left,right) {(CompareInput::Resident(left),CompareInput::Resident(right))=>alignment(&result,left,right),_=>None};
         self.snapshots = Some(captured);
         self.result = Some(result);
     }
@@ -254,10 +287,13 @@ impl CompareController {
         left: &DocumentSnapshot,
         right: &DocumentSnapshot,
     ) -> &[DiffHunk] {
+        self.visible_input_hunks(&CompareInput::Resident(left.clone()),&CompareInput::Resident(right.clone()))
+    }
+    pub fn visible_input_hunks(&mut self,left:&CompareInput,right:&CompareInput)->&[DiffHunk] {
         if self
             .snapshots
             .as_ref()
-            .is_some_and(|s| !same(&s[0], left) || !same(&s[1], right))
+            .is_some_and(|s| !s[0].current(left) || !s[1].current(right))
         {
             self.invalidate();
         }
@@ -278,6 +314,11 @@ impl CompareController {
             (Some(i), false) => (i + 1) % count,
             (None, false) => 0,
         });
+        self.current_hunk()
+    }
+    pub fn navigate_offset(&mut self,right:bool,offset:TextOffset)->Option<&DiffHunk> {
+        let hunks=&self.result.as_ref()?.hunks;
+        self.current=hunks.iter().enumerate().min_by_key(|(_,h)|{let range=if right{&h.right}else{&h.left};if offset<range.start{range.start.0-offset.0}else{offset.0.saturating_sub(range.end.0)}}).map(|(i,_)|i);
         self.current_hunk()
     }
     pub fn counter(&self) -> (usize, usize) {
@@ -360,6 +401,68 @@ fn same(a: &DocumentSnapshot, b: &DocumentSnapshot) -> bool {
         && a.revision == b.revision
         && a.content_state == b.content_state
         && b.is_complete()
+}
+
+enum PagedResolver {
+    Paged(bareline_editor_surface::paged_view::PagedReadHandle),
+    Resident(DocumentSnapshot,bareline_document::source::SourcePublisher),
+}
+impl PagedResolver {
+    fn prepare(input:&CompareInput)->Result<(bareline_document::paged::PagedSnapshot,Self),()> {
+        use bareline_document::{Budget,source::{MemorySource,Generation,SourceKind}};
+        match input {
+            CompareInput::Paged(handle)=>Ok((handle.snapshot().clone(),Self::Paged(handle.clone()))),
+            CompareInput::Resident(snapshot)=>{
+                if !snapshot.is_complete(){return Err(());}
+                let (source,publisher)=MemorySource::new(snapshot.len() as u64,Generation(1),SourceKind::Paged,64*1024,256*1024,Budget::new(512*1024)).map_err(|_|())?;
+                let mut paged=bareline_document::paged::PagedSnapshot::utf8(source,0).map_err(|_|())?;
+                paged.revision=snapshot.revision;
+                Ok((paged,Self::Resident(snapshot.clone(),publisher)))
+            }
+        }
+    }
+    fn resolve(&self,ticket:bareline_document::source::PageTicket)->Result<bool,()> {
+        match self {
+            Self::Paged(handle)=>handle.resolve_page(ticket).map_err(|_|()),
+            Self::Resident(snapshot,publisher)=>{
+                let start=(ticket.page as usize).checked_mul(64*1024).ok_or(())?;
+                let end=start.saturating_add(64*1024).min(snapshot.len());
+                let mut a=start;let mut b=end;
+                // Pages split bytes, whereas snapshot reads require scalar boundaries.
+                // Extend by at most three bytes at each edge, then publish exact page bytes.
+                while snapshot.chunks(TextOffset(a)..TextOffset(snapshot.len())).is_err()&&a>0 {a-=1;if start-a>3{return Err(());}}
+                while snapshot.chunks(TextOffset(a)..TextOffset(b)).is_err()&&b<snapshot.len(){b+=1;if b-end>3{return Err(());}}
+                let text=snapshot.read(TextOffset(a)..TextOffset(b),64*1024+6).map_err(|_|())?;
+                publisher.publish(ticket,&text.as_bytes()[start-a..end-a],ticket.generation).map_err(|_|())?;Ok(true)
+            }
+        }
+    }
+}
+fn compare_paged_inputs(left:&CompareInput,right:&CompareInput,options:&CompareOptions,cancel:&CancelToken)->CompareResult {
+    use bareline_diff::paged::{PagedCompareJob,PagedComparePoll,Side};
+    let mut output=CompareResult {left_revision:left.revision(),right_revision:right.revision(),options:options.clone(),hunks:Vec::new(),completeness:CompareCompleteness::Failed,stats:Default::default()};
+    let (Ok((l,lr)),Ok((r,rr)))=(PagedResolver::prepare(left),PagedResolver::prepare(right))else{return output;};
+    let mut job=PagedCompareJob::new(l,r,options.clone(),cancel.clone());
+    let mut retained=0usize;
+    loop {
+        match job.poll() {
+            PagedComparePoll::Progress=>{},
+            PagedComparePoll::Pending{side,ticket}=>match match side{Side::Left=>lr.resolve(ticket),Side::Right=>rr.resolve(ticket)} {
+                Ok(true)=>{},Ok(false)=>std::thread::sleep(std::time::Duration::from_millis(1)),Err(())=>{output.completeness=CompareCompleteness::Unavailable;break;}
+            },
+            PagedComparePoll::Batch(batch)=>{
+                let cost=batch.hunks.iter().fold(0usize,|sum,h|sum.saturating_add(std::mem::size_of::<DiffHunk>()).saturating_add(h.intraline.len()*std::mem::size_of::<bareline_diff::IntralineSpan>()));
+                retained=retained.saturating_add(cost);
+                if retained>options.limits.max_memory_bytes/2 {output.hunks.clear();output.completeness=CompareCompleteness::Unavailable;break;}
+                output.hunks.extend(batch.hunks.iter().cloned());
+            }
+            PagedComparePoll::CoarseBlock(hunk)=>output.hunks.push(*hunk),
+            PagedComparePoll::Finished(completeness)=>{output.completeness=completeness;break;},
+            PagedComparePoll::Backpressure=>{output.completeness=CompareCompleteness::Failed;break;}
+        }
+    }
+    if !matches!(output.completeness,CompareCompleteness::Exact|CompareCompleteness::Coarse(_)){output.hunks.clear();}
+    output.stats.input_bytes=left.len().saturating_add(right.len());output.stats.peak_accounted_bytes=retained;output
 }
 fn alignment(
     result: &CompareResult,
@@ -496,6 +599,21 @@ mod tests {
                 origin: CompareOrigin::Disk("right.txt".into()),
             },
         )
+    }
+    #[test]
+    fn paged_worker_reads_beyond_first_window_and_utf8_page_boundaries() {
+        let text=format!("{}late original\n","αβγ\n".repeat(20000));
+        let changed=text.replace("late original","late changed");
+        let left=Document::from_utf8(&text,Budget::new(2*1024*1024),Budget::new(0)).unwrap();
+        let right=Document::from_utf8(&changed,Budget::new(2*1024*1024),Budget::new(0)).unwrap();
+        let mut options=CompareOptions::default();options.limits.max_bytes_exact=1;
+        let result=compare_paged_inputs(&CompareInput::Resident(left.snapshot()),&CompareInput::Resident(right.snapshot()),&options,&CancelToken::default());
+        assert!(matches!(result.completeness,CompareCompleteness::Exact|CompareCompleteness::Coarse(_)));
+        assert!(!result.hunks.is_empty());
+        assert!(result.hunks.iter().any(|h|h.left.end.0>64*1024));
+        let equal=compare_paged_inputs(&CompareInput::Resident(left.snapshot()),&CompareInput::Resident(left.snapshot()),&options,&CancelToken::default());
+        assert!(equal.hunks.is_empty());
+        assert_eq!(equal.completeness,CompareCompleteness::Exact);
     }
     #[test]
     fn stale_results_never_paint_and_merge_undo() {

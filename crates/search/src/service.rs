@@ -23,6 +23,21 @@ struct Request {
 type PageResolver =
     Box<dyn FnMut(bareline_document::source::PageTicket) -> Result<bool, String> + Send>;
 enum Work {
+    Folder {
+        scope: super::folders::FolderScope,
+        query: SearchQuery,
+        trust: Arc<dyn bareline_platform::PathTrustProvider + Send + Sync>,
+        platform: Arc<dyn bareline_platform::LocalFileSystem>,
+        reply: SyncSender<Result<super::folders::FolderResults, SearchError>>,
+    },
+    ReplacePaged {
+        results: Arc<super::paged::PagedResults>,
+        snapshot: bareline_document::paged::PagedSnapshot,
+        replacement: String,
+        scope: ReplaceScope,
+        resolve: PageResolver,
+        reply: SyncSender<Result<PreparedPagedReplacement, ReplaceError>>,
+    },
     Paged {
         snapshot: bareline_document::paged::PagedSnapshot,
         query: SearchQuery,
@@ -48,6 +63,10 @@ enum Work {
         reply: SyncSender<Result<PreparedReplacement, ReplaceError>>,
     },
 }
+pub struct PreparedPagedReplacement {
+    pub source: bareline_document::paged::PagedSnapshot,
+    pub transaction: EditTransaction,
+}
 pub struct PreparedReplacement {
     pub source: DocumentSnapshot,
     pub transaction: EditTransaction,
@@ -56,6 +75,12 @@ impl Request {
     fn reject(self, error: SearchError) {
         self.job.cancel();
         match self.work {
+            Work::Folder { reply, .. } => {
+                let _ = reply.try_send(Err(error));
+            }
+            Work::ReplacePaged { reply, .. } => {
+                let _ = reply.try_send(Err(ReplaceError::Cancelled));
+            }
             Work::Paged { reply, .. } => {
                 let _ = reply.try_send(Err(error));
             }
@@ -73,6 +98,37 @@ impl Request {
     }
     fn execute(self) {
         match self.work {
+            Work::Folder {
+                scope,
+                query,
+                trust,
+                platform,
+                reply,
+            } => {
+                let _ = reply.try_send(Ok(super::folders::collect_folder(
+                    &scope,
+                    &query,
+                    &self.job,
+                    trust.as_ref(),
+                    platform.as_ref(),
+                )));
+            }
+            Work::ReplacePaged {
+                results,
+                snapshot,
+                replacement,
+                scope,
+                resolve,
+                reply,
+            } => {
+                let result = results
+                    .prepare_replace(&snapshot, &replacement, scope, &self.job, resolve)
+                    .map(|transaction| PreparedPagedReplacement {
+                        source: snapshot,
+                        transaction,
+                    });
+                let _ = reply.try_send(result);
+            }
             Work::Paged {
                 snapshot,
                 query,
@@ -138,6 +194,36 @@ struct Shared {
 pub struct SearchWorker {
     shared: Arc<Shared>,
 }
+pub struct PagedReplaceTicket {
+    pub job: SearchJob,
+    receiver: Receiver<Result<PreparedPagedReplacement, ReplaceError>>,
+}
+impl PagedReplaceTicket {
+    pub fn try_recv(&self) -> Result<Result<PreparedPagedReplacement, ReplaceError>, TryRecvError> {
+        self.receiver.try_recv()
+    }
+}
+impl Drop for PagedReplaceTicket {
+    fn drop(&mut self) {
+        self.job.cancel();
+    }
+}
+pub struct FolderSearchTicket {
+    pub job: SearchJob,
+    receiver: Receiver<Result<super::folders::FolderResults, SearchError>>,
+}
+impl FolderSearchTicket {
+    pub fn try_recv(
+        &self,
+    ) -> Result<Result<super::folders::FolderResults, SearchError>, TryRecvError> {
+        self.receiver.try_recv()
+    }
+}
+impl Drop for FolderSearchTicket {
+    fn drop(&mut self) {
+        self.job.cancel();
+    }
+}
 pub struct PagedSearchTicket {
     pub job: SearchJob,
     receiver: Receiver<Result<super::paged::PagedResults, SearchError>>,
@@ -197,6 +283,58 @@ impl Drop for SearchTicket {
     }
 }
 impl SearchWorker {
+    pub fn submit_folder(
+        &self,
+        scope: super::folders::FolderScope,
+        query: SearchQuery,
+        trust: Arc<dyn bareline_platform::PathTrustProvider + Send + Sync>,
+        platform: Arc<dyn bareline_platform::LocalFileSystem>,
+        notify: Notify,
+    ) -> FolderSearchTicket {
+        let job = SearchJob::default();
+        let (reply, receiver) = mpsc::sync_channel(1);
+        self.enqueue(Request {
+            work: Work::Folder {
+                scope,
+                query,
+                trust,
+                platform,
+                reply,
+            },
+            job: job.clone(),
+            notify,
+        });
+        FolderSearchTicket { job, receiver }
+    }
+
+    pub fn replace_paged(
+        &self,
+        results: Arc<super::paged::PagedResults>,
+        snapshot: bareline_document::paged::PagedSnapshot,
+        replacement: String,
+        scope: ReplaceScope,
+        resolve: impl FnMut(bareline_document::source::PageTicket) -> Result<bool, String>
+        + Send
+        + 'static,
+        notify: Notify,
+    ) -> PagedReplaceTicket {
+        let job = SearchJob::default();
+        let (reply, receiver) = mpsc::sync_channel(1);
+        self.enqueue(Request {
+            work: Work::ReplacePaged {
+                results,
+                snapshot,
+                replacement,
+                scope,
+                resolve: Box::new(resolve),
+                reply,
+            },
+            job: job.clone(),
+            notify,
+        });
+        PagedReplaceTicket { job, receiver }
+    }
+
     pub fn submit_paged(
         &self,
         snapshot: bareline_document::paged::PagedSnapshot,

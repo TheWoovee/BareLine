@@ -174,3 +174,272 @@ fn first_party_components_cross_authenticated_process_boundary() {
         );
     }
 }
+
+/// Fixture launch remains below the production signature gate and uses only
+/// locally built components. Every request crosses the real authenticated pipe.
+fn component_case(
+    crate_name: &str,
+    command: &str,
+    arguments: &str,
+    text_length: u64,
+    raw_length: u64,
+    budget: ExecutionBudget,
+    mut broker: impl FnMut(Envelope) -> Result<BrokerValue, String>,
+) -> (String, Duration) {
+    let file = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/wasm32-wasip2/release")
+        .join(format!("bareline_{crate_name}.wasm"));
+    let component = std::fs::read(&file).expect("build actual components first");
+    assert!(component.starts_with(b"\0asm\x0d\0\x01\0"));
+    let server = PipeServer::create().unwrap();
+    let mut process = Command::new(env!("CARGO_BIN_EXE_bareline-extension-host"));
+    process
+        .args([
+            server.name(),
+            &server.nonce_hex(),
+            &std::process::id().to_string(),
+        ])
+        .arg(&file)
+        .arg(format!("{:x}", Sha256::digest(&component)))
+        .arg(match budget {
+            ExecutionBudget::Interactive => "interactive",
+            ExecutionBudget::Background => "background",
+        })
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit());
+    let started = Instant::now();
+    let (mut child, mut job) = WindowsProcessLauncher.spawn(&mut process).unwrap();
+    let mut pipe = server.accept(child.id(), Duration::from_secs(5)).unwrap();
+    pipe.set_timeout(Duration::from_millis(budget.timeout_ms()) + Duration::from_secs(2));
+    let invocation = Invocation {
+        extension_id: format!("org.bareline.{}", crate_name.replace('_', "-")),
+        command: command.into(),
+        arguments: arguments.into(),
+        document: 11,
+        revision: 23,
+        source_generation: 37,
+        text_length,
+        raw_length,
+        grant_generation: 41,
+    };
+    let bytes = encode(&invocation).unwrap();
+    pipe.write_all(&(bytes.len() as u32).to_le_bytes()).unwrap();
+    pipe.write_all(&bytes).unwrap();
+    let mut panel = None;
+    loop {
+        let message = match read_frame(&mut pipe) {
+            Ok(message) => message,
+            Err(ProtocolError::Io) => break,
+            Err(error) => panic!("malformed child frame: {error:?}"),
+        };
+        assert_eq!(message.extension_id, invocation.extension_id);
+        assert_eq!(
+            message.context.grant_generation,
+            invocation.grant_generation
+        );
+        let result = if let Request::Panel { ref text, .. } = message.request {
+            assert_eq!(message.context.capability, Capability::UiPanel);
+            assert!(
+                panel.replace(text.clone()).is_none(),
+                "expected exactly one result panel"
+            );
+            Ok(BrokerValue::Acknowledged)
+        } else {
+            broker(message.clone())
+        };
+        let bytes = encode(&BrokerResponse {
+            request_id: message.request_id,
+            result,
+        })
+        .unwrap();
+        pipe.write_all(&(bytes.len() as u32).to_le_bytes()).unwrap();
+        pipe.write_all(&bytes).unwrap();
+    }
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            assert!(status.success(), "component process: {status}");
+            break;
+        }
+        if Instant::now() >= deadline {
+            job.terminate().unwrap();
+            panic!("component did not exit");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    (panel.expect("component result panel"), started.elapsed())
+}
+
+const GIB_JSON_LENGTH: u64 = 1 << 30;
+fn generated_json_range(start: u64, end: u64) -> Vec<u8> {
+    assert!(start <= end && end <= GIB_JSON_LENGTH && end - start <= 65536);
+    let mut bytes = vec![b'a'; (end - start) as usize];
+    for (index, byte) in b"{\"data\":\"".iter().enumerate() {
+        let position = index as u64;
+        if (start..end).contains(&position) {
+            bytes[(position - start) as usize] = *byte;
+        }
+    }
+    for (position, byte) in [(GIB_JSON_LENGTH - 2, b'"'), (GIB_JSON_LENGTH - 1, b'}')] {
+        if (start..end).contains(&position) {
+            bytes[(position - start) as usize] = byte;
+        }
+    }
+    bytes
+}
+
+#[test]
+#[ignore = "coordinated release component gate; actual generated 1 GiB background workload"]
+fn generated_one_gib_json_validates_and_tree_reads_only_one_page() {
+    let mut next = 0u64;
+    let mut requests = 0u64;
+    let (panel, elapsed) = component_case(
+        "json_tools",
+        "ext.json.validate",
+        "",
+        GIB_JSON_LENGTH,
+        0,
+        ExecutionBudget::Background,
+        |message| {
+            assert_eq!(message.context.capability, Capability::DocumentRead);
+            let Request::ReadTextRange {
+                document,
+                revision,
+                range,
+            } = message.request
+            else {
+                panic!("validation requested non-read capability");
+            };
+            assert_eq!((document, revision), (11, 23));
+            assert_eq!(range.start, next);
+            let bytes = generated_json_range(range.start, range.end);
+            next = range.end;
+            requests += 1;
+            Ok(BrokerValue::Bytes(bytes))
+        },
+    );
+    assert_eq!(panel, "Valid JSON");
+    assert_eq!(next, GIB_JSON_LENGTH);
+    assert_eq!(requests, GIB_JSON_LENGTH / 65536);
+    assert!(
+        elapsed
+            < Duration::from_millis(ExecutionBudget::Background.timeout_ms())
+                + Duration::from_secs(4)
+    );
+    eprintln!(
+        "PR027 generated JSON: bytes={next}, requests={requests}, max_chunk=65536, elapsed_ms={}",
+        elapsed.as_millis()
+    );
+    let mut read = 0;
+    let (panel, _) = component_case(
+        "json_tools",
+        "ext.json.tree",
+        "",
+        GIB_JSON_LENGTH,
+        0,
+        ExecutionBudget::Interactive,
+        |message| {
+            let Request::ReadTextRange { range, .. } = message.request else {
+                panic!("tree requested non-read operation");
+            };
+            read += range.end - range.start;
+            Ok(BrokerValue::Bytes(generated_json_range(
+                range.start,
+                range.end,
+            )))
+        },
+    );
+    assert_eq!(read, 65536);
+    assert!(panel.contains("object at TextOffset 0"));
+    assert!(panel.contains("Next page"));
+    assert!(panel.contains("mode=2"));
+}
+
+#[test]
+#[ignore = "coordinated release component gate; requires actual WASI artifacts"]
+fn xml_xpath_security_and_hex_original_generation_cross_the_host() {
+    let xml =
+        b"<r xmlns:a='urn:x' id='root'><a:n id='one'>first</a:n><a:n id='two'>second</a:n></r>";
+    for (arguments, expected) in [
+        ("/r/a:n[2]/text()\na=urn:x", "second"),
+        ("/r//@id", "root\none\ntwo"),
+        ("/r/@missing", ""),
+    ] {
+        let (panel, _) = component_case(
+            "xml_tools",
+            "ext.xml.xpath",
+            arguments,
+            xml.len() as u64,
+            0,
+            ExecutionBudget::Interactive,
+            |message| {
+                let Request::ReadTextRange {
+                    document,
+                    revision,
+                    range,
+                } = message.request
+                else {
+                    panic!("XPath requested non-read operation");
+                };
+                assert_eq!((document, revision), (11, 23));
+                Ok(BrokerValue::Bytes(
+                    xml[range.start as usize..range.end as usize].to_vec(),
+                ))
+            },
+        );
+        assert_eq!(panel, expected);
+    }
+    let xml = b"<!DOCTYPE r SYSTEM 'https://example.invalid/forbidden'><r/>";
+    let (panel, _) = component_case(
+        "xml_tools",
+        "ext.xml.validate",
+        "",
+        xml.len() as u64,
+        0,
+        ExecutionBudget::Interactive,
+        |message| {
+            let Request::ReadTextRange { range, .. } = message.request else {
+                panic!("external XML attempted non-read operation");
+            };
+            Ok(BrokerValue::Bytes(
+                xml[range.start as usize..range.end as usize].to_vec(),
+            ))
+        },
+    );
+    assert!(panel.contains("DTD and external entities are disabled"));
+    for unavailable in [false, true] {
+        let (panel, _) = component_case(
+            "hex_view",
+            "ext.hex.goto",
+            "offset=0\nrows=1",
+            999,
+            4,
+            ExecutionBudget::Interactive,
+            |message| {
+                let Request::ReadOriginalBytes {
+                    document,
+                    generation,
+                    range,
+                } = message.request
+                else {
+                    panic!("Hex must never read dirty decoded text");
+                };
+                assert_eq!((document, generation), (11, 37));
+                assert_eq!((range.start, range.end), (0, 4));
+                if unavailable {
+                    Err("original source generation unavailable".into())
+                } else {
+                    Ok(BrokerValue::Bytes(vec![0xff, 0xfe, 0x41, 0]))
+                }
+            },
+        );
+        assert!(panel.contains("disk generation 37"));
+        assert!(panel.contains("Unsaved text edits are excluded"));
+        assert!(panel.contains(if unavailable {
+            "?? ?? ?? ??"
+        } else {
+            "FF FE 41 00"
+        }));
+    }
+}

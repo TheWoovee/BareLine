@@ -6,6 +6,16 @@ use std::collections::BTreeMap;
 use bareline_document::service::Scheduler;
 
 pub type Arguments = BTreeMap<String, String>;
+static RECEIPT_SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+/// One process-wide clock shared by editor and verified search completions.
+pub fn next_receipt_sequence() -> u64 {
+    RECEIPT_SEQUENCE.fetch_add(1,std::sync::atomic::Ordering::Relaxed)
+}
+#[derive(Clone)]
+pub enum ReceiptEvent { Input(crate::Input), Command(String,Arguments) }
+#[derive(Clone)]
+pub struct OrderedReceipt { pub sequence:u64, pub event:ReceiptEvent }
+
 fn parameter<T: std::str::FromStr>(args: &Arguments, key: &str) -> Result<T, String> {
     args.get(key).ok_or_else(|| format!("Missing {key}."))?.parse().map_err(|_| format!("Invalid {key}."))
 }
@@ -13,7 +23,16 @@ fn rectangle(args: &Arguments) -> Result<Rectangle, String> {
     Ok(Rectangle { first_line: parameter(args,"first_line")?, last_line: parameter(args,"last_line")?, start_column: parameter(args,"start_column")?, end_column: parameter(args,"end_column")? })
 }
 impl EditorSurface {
+    pub fn take_ordered_receipts(&mut self) -> Vec<OrderedReceipt> {
+        self.acknowledged.clear();self.acknowledged_commands.clear();
+        self.ordered_receipts.drain(..).collect()
+    }
+    pub(crate) fn acknowledge_event(&mut self,event:ReceiptEvent) {
+        if self.ordered_receipts.len()==256 {self.ordered_receipts.pop_front();}
+        self.ordered_receipts.push_back(OrderedReceipt {sequence:next_receipt_sequence(),event});
+    }
     pub(crate) fn acknowledge_command(&mut self, receipt: (String, Arguments)) {
+        self.acknowledge_event(ReceiptEvent::Command(receipt.0.clone(),receipt.1.clone()));
         if self.acknowledged_commands.len() == 256 { self.acknowledged_commands.pop_front(); }
         self.acknowledged_commands.push_back(receipt);
     }
@@ -27,6 +46,10 @@ impl EditorSurface {
         let limits = self.power_limits();
         let err = |e| format!("Command was not applied: {e:?}");
         match id {
+            "editor.indent" | "editor.unindent" if self.power_rectangle.is_some() => {
+                let rectangle=self.power_rectangle.unwrap();
+                self.apply_power(rectangle_indent(&self.snapshot,rectangle,id=="editor.unindent",limits).map_err(err)?)?;
+            }
             "editor.column.insert" => {
                 let insert = match args.get("mode").map(String::as_str) {
                     Some("text") => ColumnInsert::Text(args.get("text").cloned().ok_or("Missing text.")?),
@@ -48,7 +71,9 @@ impl EditorSurface {
                 for selected in set.selections {
                     let range = selected.range();
                     let first = self.snapshot.line_at(TextOffset(range.start)).map_err(err)?;
-                    let last = self.snapshot.line_at(TextOffset(if range.end > range.start { range.end - 1 } else { range.end })).map_err(err)?;
+                    let mut end = if range.end > range.start {range.end-1}else{range.end};
+                    while !self.snapshot.is_boundary(TextOffset(end)) {end=end.saturating_sub(1);}
+                    let last = self.snapshot.line_at(TextOffset(end)).map_err(err)?;
                     // Keep one visible line so view navigation always has an anchor.
                     if first > 0 { self.manual_hidden.push(first..=last); }
                     else if last > 0 { self.manual_hidden.push(1..=last); }
@@ -182,5 +207,89 @@ mod tests {
         assert_eq!(editor.logical_scroll(),(3,0.25,48.0));
         editor.horizontal_scroll(-100.0);
         assert_eq!(editor.logical_scroll().2,0.0);
+    }
+}
+
+impl EditorSurface {
+    pub fn set_font_family(&mut self, family: &str) -> Result<(),String> {
+        if !bareline_renderer::valid_font_family(family) { return Err("Invalid editor font family.".into()); }
+        if self.font_family != family { self.font_family = family.into(); self.layout_revision = None; }
+        Ok(())
+    }
+    /// Sorted view-only rows inserted before logical lines; no bytes or history are changed.
+    pub fn set_view_spacers(&mut self, rows: &[(u64,u64)]) -> Result<(),String> {
+        if rows.len()>100_000 { return Err("Too many view spacers.".into()); }
+        let mut spacers: Vec<(usize,usize)> = Vec::with_capacity(rows.len());
+        let mut total=0usize;
+        for &(line,count) in rows {
+            let line=usize::try_from(line).map_err(|_|"Spacer line is out of range.")?;
+            let count=usize::try_from(count).map_err(|_|"Spacer count is out of range.")?;
+            total=total.checked_add(count).filter(|n|*n<=100_000).ok_or("Too many spacer rows.")?;
+            if line>self.snapshot.line_count() || spacers.last().is_some_and(|(previous,_)|*previous>=line) { return Err("Spacer lines must be sorted and unique.".into()); }
+            if count>0 {spacers.push((line,count));}
+        }
+        self.view_spacers=spacers;
+        self.reveal_caret=false;
+        Ok(())
+    }
+    pub fn migrate_clean_spill(&self, captured:&DocumentSnapshot, source:bareline_document::source::MemorySource)->Result<bareline_document::paged::PagedDocument,Error> {
+        if self.busy()||self.dirty() {return Err(Error::ActorBusy);}
+        self.service.as_ref().ok_or(Error::ActorBusy)?.migrate_clean_spill(captured,source)
+    }
+    pub fn cancel_clean_spill(&self, captured:&DocumentSnapshot)->Result<(),Error> {
+        self.service.as_ref().ok_or(Error::ActorBusy)?.cancel_clean_spill(captured)
+    }
+}
+
+impl EditorSurface {
+    /// Copy view preferences during storage migration without replacing document ownership.
+    pub fn copy_presentation_to(&self, view: &mut EditorSurface) {
+        view.theme=self.theme;
+        view.language=self.language;view.language_override=self.language_override;
+        view.detected_language=self.detected_language;view.syntax_preference=self.syntax_preference;
+        view.udl=self.udl.clone();view.smart_typing=self.smart_typing;view.smart_pairs=self.smart_pairs;view.smart_indent=self.smart_indent;
+        view.manual_hidden=self.manual_hidden.clone();view.known_folds=self.known_folds.clone();view.fold_state=self.fold_state.clone();view.hidden_lines=self.hidden_lines.clone();view.fold_revision=self.fold_revision;view.folds_incomplete=self.folds_incomplete;view.pending_folds=self.pending_folds.clone();
+        view.encoding_label=self.encoding_label.clone();view.font_pixels=self.font_pixels;view.font_family=self.font_family.clone();view.tab_width=self.tab_width;view.line_numbers=self.line_numbers;view.highlight_current_line=self.highlight_current_line;view.whitespace=self.whitespace.clone();
+        view.scroll_y=self.scroll_y;view.scroll_x=self.scroll_x;view.top_inset=self.top_inset;view.bottom_inset=self.bottom_inset;view.view_spacers=self.view_spacers.clone();view.layout_revision=None;
+    }
+}
+
+/// Rectangle indentation touches only the insertion column or whitespace immediately before it.
+pub fn rectangle_indent(snapshot:&DocumentSnapshot, rectangle:Rectangle, backward:bool, limits:Limits)->Result<PowerEdit,Error> {
+    let left=rectangle.start_column.min(rectangle.end_column);
+    if !backward {
+        if limits.tab_width>limits.max_bytes{return Err(Error::BudgetExceeded);}
+        return column_insert(snapshot,Rectangle {start_column:left,end_column:left,..rectangle},ColumnInsert::Text(" ".repeat(limits.tab_width)),limits);
+    }
+    if rectangle.first_line>rectangle.last_line||rectangle.last_line-rectangle.first_line>=limits.max_selections{return Err(Error::BudgetExceeded);}
+    let mut edits=Vec::new();
+    for number in rectangle.first_line..=rectangle.last_line {
+        let (start,text)=line(snapshot,number,limits)?;
+        let body=content(&text);let map=DisplayColumnMap::new(body,limits.tab_width);let end=map.at(left).0;
+        let mut begin=end;
+        for (index,character) in body[..end].char_indices().rev().take(limits.tab_width) {
+            if character==' ' {begin=index;} else if character=='\t' {begin=index;break;} else {break;}
+        }
+        if begin<end {edits.push(Edit {range:TextOffset(start+begin)..TextOffset(start+end),insert:String::new()});}
+    }
+    finish(snapshot,edits,limits)
+}
+#[cfg(test)]
+mod presentation_tests {
+    use super::*;
+    #[test]
+    fn spacer_mapping_hits_next_real_line_without_changing_document() {
+        let document=bareline_document::Document::from_utf8("a\nb\nc",bareline_document::Budget::new(1024),bareline_document::Budget::new(1024)).unwrap();
+        let mut editor=EditorSurface::loading(document.snapshot(),std::sync::Arc::new(||{}));
+        editor.set_view_spacers(&[(1,2)]).unwrap();
+        assert_eq!(editor.visual_line(1),3);
+        assert_eq!(editor.logical_line(1),1);
+        assert_eq!(editor.logical_line(2),1);
+        assert_eq!(editor.logical_line(3),1);
+        assert!(editor.set_view_spacers(&[(2,1),(1,1)]).is_err());
+        assert_eq!(editor.visual_line(1),3);
+        editor.set_view_spacers(&[]).unwrap();
+        assert_eq!(editor.visual_line(1),1);
+        assert_eq!(editor.snapshot.len(),5);
     }
 }

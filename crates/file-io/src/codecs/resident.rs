@@ -339,6 +339,7 @@ impl ResidentBuilder {
 }
 impl ResidentEncoding {
     pub fn original_bytes(&self) -> Arc<Vec<u8>> { self.raw.clone() }
+    pub fn has_opaque_original(&self) -> bool { self.mapping.iter().any(|span| span.opaque) }
     pub fn original_encoding(&self) -> Encoding { self.original_encoding }
     pub fn recovery_pieces(&self, snapshot: &DocumentSnapshot) -> Result<Vec<bareline_document::paged::RestoredPiece>, ResidentError> {
         if !snapshot.same_document(&self.baseline) { return Err(ResidentError::WrongDocument); }

@@ -3,7 +3,8 @@
 use bareline_app::extensions::manager::{InstalledState, ManagerIndex};
 use bareline_app::extensions::{InvocationBroker, InvocationOutput};
 use bareline_document::DocumentSnapshot;
-use bareline_extensions_protocol::{Invocation, RawRange, broker::ExtensionSession};
+use bareline_extensions_protocol::{Invocation, broker::ExtensionSession};
+mod readers;
 use bareline_platform::PlatformServices;
 use bareline_platform_windows::extension_transport::{HostLaunch, run_verified_host};
 use std::{
@@ -28,13 +29,14 @@ pub struct InvocationJob {
     pub invocation: Invocation,
     pub budget: bareline_extensions_protocol::ExecutionBudget,
     pub source: DocumentSnapshot,
+    pub original: Option<bareline_app::workspace::extensions::OriginalSource>,
+    pub paged: Option<bareline_editor_surface::paged_view::PagedReadHandle>,
     pub session: ExtensionSession,
     pub panels: Vec<String>,
     /// Set by the document owner only after retained original-byte provenance is
     /// known safe for replacement. Read-only invocations do not need this flag.
     pub edits_preserve_original: bool,
 }
-type OriginalReader = Box<dyn FnMut(u64, RawRange) -> Result<Vec<u8>, String> + Send>;
 struct Pending {
     cancel: Arc<AtomicBool>,
     result: mpsc::Receiver<Result<InvocationOutput, String>>,
@@ -110,7 +112,6 @@ impl ExtensionsRuntime {
     pub fn start(
         &mut self,
         job: InvocationJob,
-        mut original: OriginalReader,
         notify: Arc<dyn Fn() + Send + Sync>,
     ) -> Result<(), String> {
         if !self.enabled {
@@ -119,17 +120,19 @@ impl ExtensionsRuntime {
         if self.running() {
             return Err("An extension is running; cancel it before starting another".into());
         }
-        let mut broker =
-            InvocationBroker::new(job.invocation.clone(), job.source, job.session, job.panels)?;
+        let mut broker = if job.paged.is_some() {
+            InvocationBroker::new_paged(job.invocation.clone(), job.source, job.session, job.panels)?
+        } else { InvocationBroker::new(job.invocation.clone(), job.source, job.session, job.panels)? };
         let (send, receive) = mpsc::sync_channel(1);
         let cancel = Arc::new(AtomicBool::new(false));
         let worker_cancel = cancel.clone();
         std::thread::spawn(move || {
+            let readers = std::cell::RefCell::new(readers::Readers::new(job.original, job.paged, worker_cancel.clone(), std::time::Instant::now() + std::time::Duration::from_millis(job.budget.timeout_ms())));
             let outcome = run_verified_host(HostLaunch { executable: &job.runtime.executable, executable_sha256: job.runtime.executable_sha256, publisher_certificate_sha256: job.runtime.publisher_certificate_sha256, component: &job.component, component_sha256: job.component_sha256, invocation: &job.invocation, budget:job.budget }, worker_cancel.clone(), |message| {
                 if !job.edits_preserve_original && matches!(message.request, bareline_extensions_protocol::Request::ApplyEdits { .. } | bareline_extensions_protocol::Request::BeginEdits { .. }) {
                     return bareline_extensions_protocol::BrokerResponse { request_id: message.request_id, result: Err("Formatting is unavailable while original undecodable bytes require preservation".into()) };
                 }
-                broker.request(message, &mut original)
+                broker.request_with_text(message, |_, range| readers.borrow_mut().raw(range), |range| readers.borrow_mut().text(range))
             }).map_err(|e| e.to_string());
             let outcome = if worker_cancel.load(Ordering::Acquire) {
                 Err("Extension cancelled; document unchanged".into())
@@ -702,7 +705,7 @@ impl ExtensionsRuntime {
         if !self.enabled {
             return Err("Extensions disabled for this session".into());
         }
-        if self.manager_pending.is_some() || self.running() {
+        if self.manager_pending.is_some() {
             return Err("Wait for the current extension operation".into());
         }
         let (send, receive) = mpsc::sync_channel(1);
@@ -986,15 +989,12 @@ impl super::Shell {
             .editors
             .get(self.app.active)
             .ok_or("Open a document first")?;
-        if editor.busy() || editor.paged() {
+        if editor.busy() {
             return Err("Extension requires a complete available snapshot".into());
         }
-        if command.starts_with("ext.hex.") {
-            return Err(
-                "Original byte snapshot provider is unavailable; Hex cannot substitute edited text"
-                    .into(),
-            );
-        }
+        let original = workspace.raw_source_descriptor(self.app.active)?;
+        let raw_length = original.as_ref().map_or(0, |source| source.len());
+        let paged = match editor { bareline_app::workspace::WorkspaceEditor::Paged(editor) => Some(editor.read_handle()), _ => None };
         let source = editor.snapshot().clone();
         let mut session =
             ExtensionSession::new(row.package.id.clone()).map_err(|e| format!("{e:?}"))?;
@@ -1022,9 +1022,11 @@ impl super::Shell {
             arguments: self.extensions.arguments.clone(),
             document: 1,
             revision: source.revision.0,
-            source_generation: 0,
-            text_length: source.len() as u64,
-            raw_length: 0,
+            // Tokens are scoped to this single authenticated invocation; the
+            // original authority is immutable even while editor text is dirty.
+            source_generation: 1,
+            text_length: paged.as_ref().map_or(source.len(), |handle| handle.snapshot().len()) as u64,
+            raw_length,
             grant_generation: session.generation(),
         };
         let job = InvocationJob {
@@ -1041,14 +1043,14 @@ impl super::Shell {
             invocation,
             budget,
             source,
+            original,
+            paged,
             session,
             panels: row.package.manifest.panels.clone(),
-            edits_preserve_original: workspace.path(self.app.active).is_none()
-                && !editor.read_only(),
+            edits_preserve_original: workspace.extension_edits_preserve_original(self.app.active),
         };
         self.extensions.start(
             job,
-            Box::new(|_, _| Err("Original source unavailable".into())),
             self.notify.clone(),
         )
     }

@@ -920,3 +920,5 @@ mod tests {
         }
     }
 }
+
+pub mod stream;

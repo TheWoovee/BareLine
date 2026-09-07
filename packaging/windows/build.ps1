@@ -11,7 +11,7 @@ $ErrorActionPreference = 'Stop'
 $payload = (Resolve-Path -LiteralPath $PayloadDir).Path
 [System.IO.Directory]::CreateDirectory([System.IO.Path]::GetFullPath($OutputDir)) | Out-Null
 $output = (Resolve-Path -LiteralPath $OutputDir).Path
-$names = @('bareline.exe', 'bareline-update-helper.exe', 'LICENSE', 'THIRD-PARTY-NOTICES.md')
+$names = @('bareline.exe', 'bareline-update-helper.exe', 'LICENSE', 'THIRD-PARTY-NOTICES.md', 'SBOM.json')
 foreach ($name in $names) {
     $item = Get-Item -LiteralPath (Join-Path $payload $name)
     if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw "Payload must contain regular files: $name" }

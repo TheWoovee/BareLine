@@ -2,6 +2,15 @@
 
 Prepared from the PR-021 brief; execution/acceptance is NOT_STARTED. This is an evidence collection order, not a new duplicate test suite. Record exact commit, commands, tool versions and artifact hashes at a stable integration checkpoint. No release, signing, upload or publication is authorized by this checklist.
 
+2026-09-08 scheduling override: user requires development completion before manual
+QA. Only the integration coordinator may run the combined source verification
+gate; no owner should execute benchmark/native-driver commands or manual QA now.
+PR019 source validation adds `python -m unittest discover -s tests/perf -p
+test_perf_suite.py` to that coordinated gate (it launches only bounded test Python
+children, not editors). Adapter syntax/import validation and later real owned-Job
+cleanup checks must be recorded separately. Native benchmark drivers remain
+deferred; source harness tests do not establish comparative performance acceptance.
+
 1. Freeze one integration commit. Run workspace formatting check, workspace compile and warnings-denied clippy once after owners finish wiring. Run owning-crate existing tests once for document edits/history, encoding round trips, lifecycle atomic saves, recovery fault boundaries, search replacement guards, sessions/spill, diff merge stale guards and extension protocol/isolation. Record actual failures as defects; do not replace behavioral tests with benchmark assertions.
 2. Run existing headless application command/RecordingBackend tests and hidden render smoke for hardware/software. Preserve actual images and headless logs. These cannot close keyboard-only, physical IME, screen-reader, DPI/theme or first-run visual parity checks; route those to docs/UNLOCK_CHECKLIST.md when unlocked.
 3. Run `cargo run -p xtask -- perf document --bytes 1048576 --samples 1 --product` once using a pinned build, then archive the raw metadata and recovery journal with evidence. Check correctness/completeness separately from timing. PR019 full workload and same-machine Notepad++ comparison remain release evidence outstanding; timing differences never fail CI.

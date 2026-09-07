@@ -30,6 +30,7 @@ pub struct MacroManager {
     list: Rect,
     fields: [Rect; 4],
     buttons: Vec<(CommandId, Button)>,
+    reasons: BTreeMap<CommandId, String>,
 }
 impl Default for MacroManager {
     fn default() -> Self {
@@ -50,6 +51,7 @@ impl Default for MacroManager {
             list: Rect::default(),
             fields: [Rect::default(); 4],
             buttons: Vec::new(),
+            reasons: BTreeMap::new(),
         }
     }
 }
@@ -181,11 +183,17 @@ impl MacroManager {
         height: f32,
         status: &str,
         theme: UiTheme,
+        context: &bareline_commands::CommandContext,
         ops: &mut Vec<DrawOp>,
     ) -> Result<(), LayoutError> {
         if !self.open {
             return Ok(());
         }
+        self.reasons = context
+            .states
+            .iter()
+            .filter_map(|(id, state)| state.disabled_reason.clone().map(|reason| (*id, reason)))
+            .collect();
         let w = (width - 24.).clamp(1., 700.);
         let bounds = rect((width - w) / 2., 40., w, (height - 60.).clamp(1., 470.));
         ops.push(DrawOp::FillRounded(bounds, theme.elevated, 6.));
@@ -277,6 +285,10 @@ impl MacroManager {
                 bounds: r,
                 toggle: false,
                 state: ControlState {
+                    disabled: context
+                        .states
+                        .get(&CommandId(id))
+                        .is_some_and(|state| !state.enabled),
                     focused: self.focus == index + 5,
                     pressed: previous.get(index).is_some_and(|b| b.1.state.pressed),
                     ..Default::default()
@@ -289,7 +301,12 @@ impl MacroManager {
             ops,
             bounds.x + 12.,
             bounds.y + 402.,
-            status,
+            self.focus
+                .checked_sub(5)
+                .and_then(|index| self.buttons.get(index))
+                .and_then(|(id, _)| self.reasons.get(id))
+                .map(String::as_str)
+                .unwrap_or(status),
             12.,
             theme.muted,
         );
@@ -363,7 +380,7 @@ impl MacroManager {
             nodes.push(n);
         }
         nodes.extend(self.buttons.iter().enumerate().map(|(index, (id, b))| {
-            Semantics::new(
+            let mut node = Semantics::new(
                 b.id,
                 SemanticRole::Button,
                 &b.label,
@@ -374,8 +391,12 @@ impl MacroManager {
                     ..b.state
                 },
             )
-            .action(SemanticAction::Focus)
-            .action(SemanticAction::Invoke)
+            .action(SemanticAction::Focus);
+            if !b.state.disabled {
+                node.actions.push(SemanticAction::Invoke);
+            }
+            node.invalid = self.reasons.get(id).cloned();
+            node
         }));
         nodes
     }

@@ -131,3 +131,9 @@ arguments select a budget. PR-016 supplies the host-owned bounded background
 budget (120 seconds, separate instruction quota) and cancellable Job Object;
 ordinary Run keeps the interactive default. This source change is unverified
 until the combined component/manager gate, including the generated 1 GiB case.
+
+XML commands consume the editor's decoded UTF-8 text view even when the original
+file is UTF-16 or another supported encoding. The original XML declaration is
+preserved during formatting; its encoding label does not trigger a second decode.
+Encoding-name syntax is validated. The editor remains responsible for encoding
+and byte-preservation policy when committing/saving the returned text.

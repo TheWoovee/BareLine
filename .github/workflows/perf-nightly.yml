@@ -22,7 +22,7 @@ jobs:
         run: .\target\release\xtask.exe perf launch --release --samples 3
       - name: Bounded source and product workload series
         if: always()
-        run: .\target\release\xtask.exe perf document --bytes 1048576 --samples 2 --product
+        run: .\target\release\xtask.exe perf document --bytes 1048576 --samples 3 --product
       - name: Summarize hosted history without comparative claims
         if: always()
         run: python tests/perf/perf_suite.py summarize-legacy tests/perf/results tests/perf/results/hosted-report.json
@@ -54,17 +54,19 @@ jobs:
         shell: pwsh
         run: |
           gh run download $env:CURRENT_RUN --pattern 'hosted-windows-perf-*' --dir current
-          $runs = gh run list --workflow perf-nightly.yml --status completed --limit 12 --json databaseId | ConvertFrom-Json
-          foreach ($run in $runs) {
-            if ([string]$run.databaseId -eq $env:CURRENT_RUN) { continue }
+          $runs = @(gh run list --workflow perf-nightly.yml --status completed --limit 8 --json databaseId,headSha | ConvertFrom-Json)
+          $previous = @($runs | Where-Object { [string]$_.databaseId -ne $env:CURRENT_RUN } | Select-Object -First 7)
+          $previous | ConvertTo-Json -Depth 5 | Set-Content previous-runs.json
+          foreach ($run in $previous) {
             gh run download $run.databaseId --pattern 'hosted-windows-perf-*' --dir ('history/' + $run.databaseId)
           }
       - name: Compute informational rolling regressions
         shell: pwsh
         run: |
           $candidate = Get-ChildItem current -Filter hosted-report.json -Recurse | Select-Object -First 1
-          $history = @(Get-ChildItem history -Filter hosted-report.json -Recurse | Select-Object -First 10)
-          if ($candidate -and $history.Count -ge 3) {
+          $previous = @(Get-Content previous-runs.json -Raw | ConvertFrom-Json)
+          $history = @($previous | ForEach-Object { Get-ChildItem ('history/' + $_.databaseId) -Filter hosted-report.json -Recurse | Select-Object -First 1 })
+          if ($candidate -and $previous.Count -eq 7 -and $history.Count -eq 7) {
             python tests/perf/perf_suite.py regress $candidate.FullName regressions.json @($history.FullName)
           }
       - name: Open or update opt-in tracking issue
@@ -77,7 +79,7 @@ jobs:
             if (!report.findings?.length) return;
             const title = 'Informational hosted performance regression';
             const marker = '<!-- bareline-perf-regression -->';
-            const body = `${marker}\nHosted noise series; numbers do not fail CI or establish comparative claims.\n\nCommit: ${context.sha}\nRun: https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}\n\n` +
+            const body = `${marker}\nHosted noise series; numbers do not fail CI or establish comparative claims.\n\nCommit: ${context.sha}\nPrevious seven commits: ${report.baseline_commits.join(', ')}\nRun: https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}\n\n` +
               '```json\n' + JSON.stringify(report.findings, null, 2) + '\n```';
             const issues = await github.paginate(github.rest.issues.listForRepo, {...context.repo, state:'open', per_page:100});
             const existing = issues.find(i => i.title === title && i.body?.includes(marker));

@@ -30,18 +30,50 @@ impl FoldAccumulator {
         syntax: &SyntaxResult,
         limit: usize,
     ) -> Result<(), Error> {
-        if !syntax.is_current(snapshot)
-            || syntax.status != Status::Complete
-            || syntax.range.start.0 != self.next
-        {
+        if !syntax.is_current(snapshot) {
             return Err(Error::StaleCheckpoint);
         }
-        let eof = syntax.range.end.0 == snapshot.len();
+        self.advance_window(
+            snapshot,
+            syntax,
+            syntax.range.start.0,
+            0,
+            syntax.range.end.0 == snapshot.len(),
+            limit,
+        )
+    }
+    pub fn advance_stream(
+        &mut self,
+        window: &crate::stream::StreamResult,
+        limit: usize,
+    ) -> Result<(), Error> {
+        self.advance_window(
+            &window.syntax.source,
+            &window.syntax,
+            window.origin.0,
+            window.first_line,
+            window.eof,
+            limit,
+        )
+    }
+    fn advance_window(
+        &mut self,
+        snapshot: &DocumentSnapshot,
+        syntax: &SyntaxResult,
+        origin: usize,
+        line_base: usize,
+        eof: bool,
+        limit: usize,
+    ) -> Result<(), Error> {
+        if syntax.status != Status::Complete || origin != self.next {
+            return Err(Error::StaleCheckpoint);
+        }
         if let Some(levels) = &syntax.fold_levels {
             self.native_open.clear();
-            let first = snapshot
-                .line_at(syntax.range.start)
-                .map_err(|_| Error::InvalidRange)?;
+            let first = line_base
+                + snapshot
+                    .line_at(syntax.range.start)
+                    .map_err(|_| Error::InvalidRange)?;
             let last = snapshot
                 .line_at(syntax.range.end)
                 .map_err(|_| Error::InvalidRange)?;
@@ -52,7 +84,7 @@ impl FoldAccumulator {
             let count = if eof {
                 levels.len().saturating_sub(usize::from(empty_final))
             } else {
-                last.saturating_sub(first)
+                last.saturating_sub(first - line_base)
             };
             for (index, value) in levels.iter().copied().take(count).enumerate() {
                 let number = value & 0xfff;
@@ -80,7 +112,7 @@ impl FoldAccumulator {
                     push_level_fold(
                         &mut self.known,
                         header,
-                        last.saturating_sub(usize::from(empty_final)),
+                        (line_base + last).saturating_sub(usize::from(empty_final)),
                         level,
                         limit,
                     )?;
@@ -88,7 +120,16 @@ impl FoldAccumulator {
             }
         } else if syntax.indent_folding {
             self.open.clear();
-            append_indent(snapshot, syntax, &mut self.indent_open, &mut self.indent_candidate, &mut self.known, limit)?;
+            append_indent(
+                snapshot,
+                syntax,
+                &mut self.indent_open,
+                &mut self.indent_candidate,
+                &mut self.known,
+                limit,
+                line_base,
+                eof,
+            )?;
         } else {
             // A fallback grammar cannot finish opaque primary-lexer headers.
             self.open.clear();
@@ -98,10 +139,11 @@ impl FoldAccumulator {
                 &mut self.native_open,
                 &mut self.known,
                 limit,
+                line_base,
             )?;
         }
         self.known.sort_by_key(|fold| (fold.header, fold.level));
-        self.next = syntax.range.end.0;
+        self.next = origin + syntax.range.end.0 - syntax.range.start.0;
         Ok(())
     }
 }
@@ -115,7 +157,16 @@ pub fn folds(
     }
     if syntax.fold_levels.is_none() && syntax.indent_folding {
         let mut result = Vec::new();
-        append_indent(snapshot, syntax, &mut Vec::new(), &mut None, &mut result, max_folds)?;
+        append_indent(
+            snapshot,
+            syntax,
+            &mut Vec::new(),
+            &mut None,
+            &mut result,
+            max_folds,
+            0,
+            syntax.range.end.0 == snapshot.len(),
+        )?;
         return Ok(result);
     }
     if let Some(levels) = &syntax.fold_levels {
@@ -139,7 +190,7 @@ pub fn folds(
     }
     let mut stack = Vec::new();
     let mut folds = Vec::new();
-    append_native(snapshot, syntax, &mut stack, &mut folds, max_folds)?;
+    append_native(snapshot, syntax, &mut stack, &mut folds, max_folds, 0)?;
     Ok(folds)
 }
 fn append_native(
@@ -148,6 +199,7 @@ fn append_native(
     stack: &mut Vec<(char, usize)>,
     folds: &mut Vec<Fold>,
     max_folds: usize,
+    line_base: usize,
 ) -> Result<(), Error> {
     let text = snapshot
         .read(syntax.range.clone(), crate::MAX_REQUEST_BYTES)
@@ -169,9 +221,10 @@ fn append_native(
             }
             stack.push((
                 *close,
-                snapshot
-                    .line_at(TextOffset(offset))
-                    .map_err(|_| Error::InvalidRange)?,
+                line_base
+                    + snapshot
+                        .line_at(TextOffset(offset))
+                        .map_err(|_| Error::InvalidRange)?,
             ));
         } else if syntax.fold_pairs.iter().any(|(_, close)| *close == c)
             && let Some((close, header)) = stack.pop()
@@ -180,9 +233,10 @@ fn append_native(
                 stack.clear();
                 continue;
             }
-            let end = snapshot
-                .line_at(TextOffset(offset))
-                .map_err(|_| Error::InvalidRange)?;
+            let end = line_base
+                + snapshot
+                    .line_at(TextOffset(offset))
+                    .map_err(|_| Error::InvalidRange)?;
             if end > header {
                 if folds.len() >= max_folds {
                     return Err(Error::BudgetExceeded);
@@ -198,37 +252,101 @@ fn append_native(
     folds.sort_by_key(|f| (f.header, f.level));
     Ok(())
 }
-fn append_indent(snapshot: &DocumentSnapshot, syntax: &SyntaxResult, stack: &mut Vec<(usize, usize)>, candidate: &mut Option<(usize, usize)>, result: &mut Vec<Fold>, limit: usize) -> Result<(), Error> {
-    let text = snapshot.read(syntax.range.clone(), crate::MAX_REQUEST_BYTES).map_err(|_| Error::InvalidRange)?;
+fn append_indent(
+    snapshot: &DocumentSnapshot,
+    syntax: &SyntaxResult,
+    stack: &mut Vec<(usize, usize)>,
+    candidate: &mut Option<(usize, usize)>,
+    result: &mut Vec<Fold>,
+    limit: usize,
+    line_base: usize,
+    eof: bool,
+) -> Result<(), Error> {
+    let text = snapshot
+        .read(syntax.range.clone(), crate::MAX_REQUEST_BYTES)
+        .map_err(|_| Error::InvalidRange)?;
     let mut start = 0;
-    let mut line = snapshot.line_at(syntax.range.start).map_err(|_| Error::InvalidRange)?;
-    let literal = |offset: usize| syntax.spans.get(syntax.spans.partition_point(|span| span.range.end.0 <= offset)).is_some_and(|span| span.range.start.0 <= offset && matches!(span.kind, StyleKind::String | StyleKind::Comment));
+    let mut line = line_base
+        + snapshot
+            .line_at(syntax.range.start)
+            .map_err(|_| Error::InvalidRange)?;
+    let literal = |offset: usize| {
+        syntax
+            .spans
+            .get(
+                syntax
+                    .spans
+                    .partition_point(|span| span.range.end.0 <= offset),
+            )
+            .is_some_and(|span| {
+                span.range.start.0 <= offset
+                    && matches!(span.kind, StyleKind::String | StyleKind::Comment)
+            })
+    };
     while start < text.len() {
-        let end = text[start..].find(['\r','\n']).map_or(text.len(), |offset| start+offset);
+        let end = text[start..]
+            .find(['\r', '\n'])
+            .map_or(text.len(), |offset| start + offset);
         let content = &text[start..end];
-        let trim = content.trim_start_matches([' ','\t']);
+        let trim = content.trim_start_matches([' ', '\t']);
         if !trim.is_empty() && !literal(syntax.range.start.0 + end - trim.len()) {
-            let indentation = content[..content.len()-trim.len()].bytes().fold(0, |column,b| if b == b'\t' { (column/8+1)*8 } else { column+1 });
-            while stack.last().is_some_and(|(_,indent)| indentation <= *indent) {
-                let (header,_) = stack.pop().unwrap();
-                push_level_fold(result, header, line.saturating_sub(1), 0x400+stack.len() as i32,limit)?;
+            let indentation = content[..content.len() - trim.len()]
+                .bytes()
+                .fold(0, |column, b| {
+                    if b == b'\t' {
+                        (column / 8 + 1) * 8
+                    } else {
+                        column + 1
+                    }
+                });
+            while stack
+                .last()
+                .is_some_and(|(_, indent)| indentation <= *indent)
+            {
+                let (header, _) = stack.pop().unwrap();
+                push_level_fold(
+                    result,
+                    header,
+                    line.saturating_sub(1),
+                    0x400 + stack.len() as i32,
+                    limit,
+                )?;
             }
-            if let Some((header,indent)) = candidate.take() && indentation > indent {
-                if stack.len() >= 1024 { return Err(Error::BudgetExceeded); }
-                stack.push((header,indent));
+            if let Some((header, indent)) = candidate.take()
+                && indentation > indent
+            {
+                if stack.len() >= 1024 {
+                    return Err(Error::BudgetExceeded);
+                }
+                stack.push((header, indent));
             }
             let trimmed = content.trim_end();
-            if trimmed.ends_with(':') && !literal(syntax.range.start.0+start+trimmed.len()-1) { *candidate=Some((line,indentation)); }
+            if trimmed.ends_with(':') && !literal(syntax.range.start.0 + start + trimmed.len() - 1)
+            {
+                *candidate = Some((line, indentation));
+            }
         }
-        start=end;
-        if text.as_bytes().get(start)==Some(&b'\r') { start+=1; }
-        if text.as_bytes().get(start)==Some(&b'\n') { start+=1; }
-        line+=1;
+        start = end;
+        if text.as_bytes().get(start) == Some(&b'\r') {
+            start += 1;
+        }
+        if text.as_bytes().get(start) == Some(&b'\n') {
+            start += 1;
+        }
+        line += 1;
     }
-    if syntax.range.end.0==snapshot.len() {
-        while let Some((header,_))=stack.pop() { push_level_fold(result,header,line.saturating_sub(1),0x400+stack.len() as i32,limit)?; }
+    if eof {
+        while let Some((header, _)) = stack.pop() {
+            push_level_fold(
+                result,
+                header,
+                line.saturating_sub(1),
+                0x400 + stack.len() as i32,
+                limit,
+            )?;
+        }
     }
-    result.sort_by_key(|fold|(fold.header,fold.level));
+    result.sort_by_key(|fold| (fold.header, fold.level));
     Ok(())
 }
 // Scintilla levels carry the current numeric nesting in the low 12 bits and

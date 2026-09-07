@@ -71,6 +71,60 @@ pub struct FolderSummary {
     pub count: usize,
     pub completeness: Completeness,
 }
+pub struct FolderGroup {
+    pub path: PathBuf,
+    pub fingerprint: Fingerprint,
+    pub matches: Vec<FolderMatch>,
+}
+pub struct FolderResults {
+    pub groups: Vec<FolderGroup>,
+    pub skips: Vec<(PathBuf, FolderSkip)>,
+    pub summary: FolderSummary,
+}
+pub fn collect_folder(
+    scope: &FolderScope,
+    query: &SearchQuery,
+    job: &SearchJob,
+    trust: &dyn PathTrustProvider,
+    platform: &dyn LocalFileSystem,
+) -> FolderResults {
+    let mut groups: Vec<FolderGroup> = Vec::new();
+    let mut skips = Vec::new();
+    let summary = scan_folder(scope, query, job, trust, platform, |event| match event {
+        FolderEvent::Batch {
+            path,
+            fingerprint,
+            matches,
+        } => {
+            if groups.last().is_none_or(|group| group.path != path) {
+                groups.push(FolderGroup {
+                    path: path.into(),
+                    fingerprint: fingerprint.clone(),
+                    matches: Vec::new(),
+                });
+            }
+            let group = groups.last_mut().unwrap();
+            group
+                .matches
+                .extend(matches.iter().map(|matched| FolderMatch {
+                    range: matched.range.clone(),
+                    excerpt_start: matched.excerpt_start,
+                    excerpt: matched.excerpt.clone(),
+                }));
+        }
+        FolderEvent::Skipped { path, reason } => {
+            // Diagnostics have an independent finite cap; terminal summary retains total skips.
+            if skips.len() < 256 {
+                skips.push((path.into(), reason));
+            }
+        }
+    });
+    FolderResults {
+        groups,
+        skips,
+        summary,
+    }
+}
 fn skip(
     summary: &mut FolderSummary,
     path: &Path,

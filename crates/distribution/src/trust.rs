@@ -26,6 +26,7 @@ pub fn verify_authority(bytes: &[u8], signature: &str, offline_root_key: &str, h
         || root.publisher_certificate_sha256.len() != 64
         || !root.publisher_certificate_sha256.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
         || root.revoked_release_keys.contains(&root.release_public_key)
+        || root.revoked_release_keys.contains(&root.catalog_public_key)
         || root.catalog_public_key == root.release_public_key || root.catalog_public_key == offline_root_key || root.release_public_key == offline_root_key
         || root.revoked_publishers.iter().any(|p| p.eq_ignore_ascii_case(&root.publisher_certificate_sha256)) {
         return Err(VerifyError::Policy);

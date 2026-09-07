@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Compare commands and paint on the normal split editor surfaces.
 use super::*;
-use bareline_app::compare::{CompareController, CompareOrigin, CompareSource, CompareState};
+use bareline_app::compare::{CompareController, CompareInput, CompareOrigin, CompareSource, CompareState};
 use bareline_commands::{CommandId, CommandPresentation, CommandRegistry, CommandSpec};
 use bareline_diff::{DiffKind, Direction, MergePolicy, Whitespace};
 use bareline_document::DocumentSnapshot;
@@ -24,6 +24,9 @@ const COLOR_CONTROLS: [(&str, &str); 15] = [
     ("compare.accentCurrent", "diff.current.overview"),
     ("compare.gutterCurrent", "diff.current.gutter"),
 ];
+fn compare_input(editor:&bareline_app::workspace::WorkspaceEditor)->CompareInput {
+    match editor {bareline_app::workspace::WorkspaceEditor::Resident(e)=>CompareInput::Resident(e.snapshot().clone()),bareline_app::workspace::WorkspaceEditor::Paged(e)=>CompareInput::Paged(e.read_handle())}
+}
 
 pub(super) fn register(registry: &mut CommandRegistry) {
     bareline_app::compare::register_commands(registry);
@@ -84,7 +87,7 @@ pub(super) fn register(registry: &mut CommandRegistry) {
 #[derive(Default)]
 pub(super) struct CompareRuntime {
     controller: Option<CompareController>,
-    documents: Option<[DocumentSnapshot; 2]>,
+    documents: Option<[CompareInput; 2]>,
     options_open: bool,
     hits: Vec<(Rect, &'static str)>,
     focus: usize,
@@ -94,11 +97,12 @@ pub(super) struct CompareRuntime {
     color_blind: bool,
     saved: Vec<(DocumentSnapshot, String)>,
     pending_source: Option<PendingSource>,
+    overview: [Option<Rect>;2],
 }
 struct PendingSource {
-    left: DocumentSnapshot,
+    left: CompareInput,
     path: PathBuf,
-    previous: Vec<DocumentSnapshot>,
+    previous: Vec<CompareInput>,
     origin: CompareOrigin,
 }
 impl CompareRuntime {
@@ -144,9 +148,9 @@ impl CompareRuntime {
         if !views.compare_pair(workspace, pair[0], pair[1]) {
             return Err("Compare sources are not ready".into());
         }
-        let snapshots = pair.map(|i| workspace.editors[i].snapshot().clone());
+        let snapshots = pair.map(|i| compare_input(&workspace.editors[i]));
         controller
-            .start(snapshots[0].clone(), snapshots[1].clone(), notify)
+            .start_inputs(snapshots[0].clone(), snapshots[1].clone(), notify)
             .map_err(|e| format!("Compare restore: {e:?}"))?;
         self.documents = Some(snapshots);
         self.controller = Some(controller);
@@ -161,7 +165,7 @@ impl CompareRuntime {
         if workspace.is_none_or(|w| {
             w.editors
                 .iter()
-                .filter(|e| !e.paged() && e.snapshot().is_complete())
+                .filter(|e| e.paged() || e.snapshot().is_complete())
                 .count()
                 < 2
         }) {
@@ -206,8 +210,8 @@ impl CompareRuntime {
         {
             let hunk = controller.current_hunk();
             let fresh = hunk.is_some_and(|h| {
-                h.left_revision == workspace.editors[indices[0]].snapshot().revision
-                    && h.right_revision == workspace.editors[indices[1]].snapshot().revision
+                h.left_revision == compare_input(&workspace.editors[indices[0]]).revision()
+                    && h.right_revision == compare_input(&workspace.editors[indices[1]]).revision()
             });
             if !fresh {
                 for id in [
@@ -243,16 +247,52 @@ impl CompareRuntime {
             workspace
                 .editors
                 .iter()
-                .position(|e| !e.paged() && e.snapshot().same_document(&documents[0]))?,
+                .position(|e| compare_input(e).same_document(&documents[0]))?,
             workspace
                 .editors
                 .iter()
-                .position(|e| !e.paged() && e.snapshot().same_document(&documents[1]))?,
+                .position(|e| compare_input(e).same_document(&documents[1]))?,
         ])
     }
 }
 
 impl Shell {
+    pub(super) fn compare_accessibility_nodes(&self)->Vec<bareline_platform::accessibility::AccessibilityNode> {
+        use bareline_platform::accessibility::{AccessibilityNode,AccessibilityRole};
+        let offset=self.editor_bounds();
+        let mut context=bareline_commands::CommandContext::default();
+        self.compare.annotate_context(&mut context,self.workspace.as_ref());
+        self.compare.hits.iter().filter_map(|(bounds,id)| {
+            let (index,command)=self.app.commands.entries().enumerate().find(|(_,command)|command.id.0==*id)?;
+            Some(AccessibilityNode{id:50_000+index as u64,parent:1,role:AccessibilityRole::Button,name:command.title.into(),value:None,
+                bounds:[(bounds.x+offset.x) as f64,(bounds.y+offset.y) as f64,bounds.width as f64,bounds.height as f64],
+                disabled:context.states.get(&command.id).is_some_and(|state|!state.enabled),selected:false,expanded:None,focusable:true,invokable:true})
+        }).collect()
+    }
+    pub(super) fn compare_accessibility_focus(&self)->Option<u64> {
+        if !self.compare.options_open{return None;}
+        let (_,id)=self.compare.hits.get(self.compare.focus)?;
+        self.app.commands.entries().position(|command|command.id.0==*id).map(|i|50_000+i as u64)
+    }
+    pub(super) fn compare_accessibility(&mut self,el:&ActiveEventLoop,action:&bareline_platform::accessibility::AccessibilityAction)->bool {
+        use bareline_platform::accessibility::AccessibilityAction;
+        let (id,invoke)=match action{AccessibilityAction::Focus(id)=>(*id,false),AccessibilityAction::Invoke(id)=>(*id,true),_=>return false};
+        let Some(node)=self.compare_accessibility_nodes().into_iter().find(|node|node.id==id)else{return false;};
+        if node.disabled{return true;}
+        let Some(command)=self.app.commands.entries().nth((id-50_000) as usize).map(|command|command.id.0)else{return false;};
+        if let Some(index)=self.compare.hits.iter().position(|(_,candidate)|*candidate==command){self.compare.focus=index;}
+        if invoke{self.compare_dispatch(el,command);}self.compare_redraw();true
+    }
+    /// Both indices must refer to actual loaded sources. Recovery Center owns their
+    /// asynchronous opening; this bridge never compares a viewport prefix.
+    pub(super) fn compare_recovery_pair(&mut self,recovered_index:usize,disk_index:usize) {
+        if self.workspace.as_ref().is_none_or(|w|recovered_index>=w.editors.len()||disk_index>=w.editors.len()||recovered_index==disk_index){return;}
+        if !self.compare_start_pair(recovered_index,disk_index){return;}
+        if let Some(controller)=&mut self.compare.controller {
+            controller.sources=[CompareSource{label:"Recovered copy".into(),origin:CompareOrigin::Recovery("Recovered copy".into())},CompareSource{label:"Current disk".into(),origin:CompareOrigin::Disk("Current disk".into())}];
+        }
+        self.compare_redraw();
+    }
     /// Recovery/conflict controllers can supply an immutable source; adoption never
     /// copies the complete text and never gives a preview a writable file identity.
     pub(super) fn compare_snapshot_source(
@@ -277,12 +317,13 @@ impl Shell {
             }
         }
     }
-    fn compare_start_pair(&mut self, left: usize, right: usize) {
+    fn compare_start_pair(&mut self, left: usize, right: usize)->bool {
         let Some(workspace) = &mut self.workspace else {
-            return;
+            return false;
         };
         if !self.views.compare_pair(workspace, left, right) {
-            return;
+            workspace.message=Some("Compare panes are not ready; retry after both sources finish opening".into());
+            return false;
         }
         let titles = workspace.titles();
         let sources = [left, right].map(|index| CompareSource {
@@ -294,12 +335,12 @@ impl Shell {
             controller.set_options(previous.options().clone());
         }
         self.compare.documents = Some([
-            workspace.editors[left].snapshot().clone(),
-            workspace.editors[right].snapshot().clone(),
+            compare_input(&workspace.editors[left]),
+            compare_input(&workspace.editors[right]),
         ]);
-        let result = controller.start(
-            workspace.editors[left].snapshot().clone(),
-            workspace.editors[right].snapshot().clone(),
+        let result = controller.start_inputs(
+            compare_input(&workspace.editors[left]),
+            compare_input(&workspace.editors[right]),
             self.notify.clone(),
         );
         workspace.message = Some(
@@ -309,6 +350,7 @@ impl Shell {
         );
         self.compare.controller = Some(controller);
         self.app.active = left;
+        true
     }
     pub(super) fn compare_dispatch(&mut self, _el: &ActiveEventLoop, id: &str) -> bool {
         if !id.starts_with("compare.") {
@@ -352,14 +394,13 @@ impl Shell {
                 && let Some(left) = workspace
                     .editors
                     .get(self.app.active)
-                    .filter(|e| !e.paged())
             {
                 self.compare.pending_source = Some(PendingSource {
-                    left: left.snapshot().clone(),
+                    left: compare_input(left),
                     previous: workspace
                         .editors
                         .iter()
-                        .map(|e| e.snapshot().clone())
+                        .map(compare_input)
                         .collect(),
                     origin: if id == "compare.external" {
                         CompareOrigin::ExternalConflict(path.display().to_string())
@@ -459,7 +500,7 @@ impl Shell {
             if let Some(workspace) = &self.workspace {
                 let left = self.app.active;
                 if let Some(right) = (0..workspace.editors.len())
-                    .find(|i| *i != left && !workspace.editors[*i].paged())
+                    .find(|i| *i != left)
                 {
                     self.compare_start_pair(left, right);
                 } else if let Some(workspace) = &mut self.workspace {
@@ -503,7 +544,7 @@ impl Shell {
                 let side = usize::from(id == "compare.rightSource");
                 if let Some(next) = (1..=workspace.editors.len())
                     .map(|step| (pair[side] + step) % workspace.editors.len())
-                    .find(|i| *i != pair[1 - side] && !workspace.editors[*i].paged())
+                    .find(|i| *i != pair[1 - side])
                 {
                     pair[side] = next;
                 }
@@ -516,6 +557,7 @@ impl Shell {
             return true;
         };
         let snapshots = indices.map(|i| workspace.editors[i].snapshot().clone());
+        let inputs = indices.map(|i| compare_input(&workspace.editors[i]));
         let Some(controller) = &mut self.compare.controller else {
             return true;
         };
@@ -527,9 +569,9 @@ impl Shell {
                 }
             }
             "compare.recompare" => {
-                let _ = controller.start(
-                    snapshots[0].clone(),
-                    snapshots[1].clone(),
+                let _ = controller.start_inputs(
+                    inputs[0].clone(),
+                    inputs[1].clone(),
                     self.notify.clone(),
                 );
             }
@@ -614,9 +656,9 @@ impl Shell {
                     _ => return true,
                 }
                 controller.set_options(options);
-                let _ = controller.start(
-                    snapshots[0].clone(),
-                    snapshots[1].clone(),
+                let _ = controller.start_inputs(
+                    inputs[0].clone(),
+                    inputs[1].clone(),
                     self.notify.clone(),
                 );
             }
@@ -667,24 +709,21 @@ impl Shell {
                 .enumerate()
                 .find(|(index, e)| {
                     workspace.path(*index) == Some(pending.path.as_path())
-                        && e.snapshot().is_complete()
+                        && (e.paged() || e.snapshot().is_complete())
                         && !pending
                             .previous
                             .iter()
-                            .any(|old| old.same_document(e.snapshot()))
+                            .any(|old| old.same_document(&compare_input(e)))
                 })
                 .map(|(i, _)| i);
             let left = workspace
                 .editors
                 .iter()
-                .position(|e| e.snapshot().same_document(&pending.left));
+                .position(|e| compare_input(e).same_document(&pending.left));
             if let (Some(left), Some(right)) = (left, right) {
                 let pending = self.compare.pending_source.take().unwrap();
-                if workspace.editors[right].paged() {
-                    workspace.message = Some("This source requires paged comparison.".into());
-                } else {
-                    workspace.editors[right].set_read_only(true);
-                    self.compare_start_pair(left, right);
+                workspace.editors[right].set_read_only(true);
+                if self.compare_start_pair(left, right) {
                     if let Some(c) = &mut self.compare.controller {
                         c.sources[1].origin = pending.origin;
                     }
@@ -703,15 +742,15 @@ impl Shell {
             }
             return;
         };
-        let snapshots = indices.map(|i| workspace.editors[i].snapshot().clone());
+        let snapshots = indices.map(|i| compare_input(&workspace.editors[i]));
         let controller = self.compare.controller.as_mut().unwrap();
-        let mut changed = controller.poll(&snapshots[0], &snapshots[1]);
-        controller.visible_hunks(&snapshots[0], &snapshots[1]);
+        let mut changed = controller.poll_inputs(&snapshots[0], &snapshots[1]);
+        controller.visible_input_hunks(&snapshots[0], &snapshots[1]);
         if controller.state == CompareState::Stale
             && !controller.pause_automatic
             && indices.iter().all(|i| !workspace.editors[*i].busy())
         {
-            let _ = controller.start(
+            let _ = controller.start_inputs(
                 snapshots[0].clone(),
                 snapshots[1].clone(),
                 self.notify.clone(),
@@ -736,6 +775,18 @@ impl Shell {
                 ..
             } => {
                 let pointer = self.editor_pointer();
+                if !self.compare.options_open {
+                    if let Some((side,bounds))=self.compare.overview.iter().enumerate().find_map(|(i,r)|r.filter(|r|r.contains(pointer)).map(|r|(i,r))) {
+                        if let Some(workspace)=&mut self.workspace {
+                            if let Some(indices)=self.compare.indices(workspace) {
+                                let length=compare_input(&workspace.editors[indices[side]]).len();
+                                let offset=bareline_document::TextOffset((((pointer.y-bounds.y)/bounds.height).clamp(0.0,1.0) as f64*length as f64) as usize);
+                                if let Some(h)=self.compare.controller.as_mut().and_then(|c|c.navigate_offset(side==1,offset)) {self.views.compare_navigate(workspace,h.left.start,h.right.start);}
+                            }
+                        }
+                        self.compare_redraw();return true;
+                    }
+                }
                 if let Some((index, (_, id))) = self
                     .compare
                     .hits
@@ -852,7 +903,9 @@ impl CompareRuntime {
         let Some(indices) = self.indices(workspace) else {
             return Ok(());
         };
-        let snapshots = indices.map(|i| workspace.editors[i].snapshot().clone());
+        let Some(snapshots)=views.compare_snapshots(workspace)else{return Ok(());};
+        let inputs = indices.map(|i| compare_input(&workspace.editors[i]));
+        let bases=views.compare_viewport_starts(workspace);
         let geometry = views.compare_geometry();
         let scroll = views.compare_scroll(workspace);
         let line_height =
@@ -870,7 +923,7 @@ impl CompareRuntime {
             return Ok(());
         };
         let current = controller.current_hunk().map(|h| h.stable_id);
-        let hunks = controller.visible_hunks(&snapshots[0], &snapshots[1]);
+        let hunks = controller.visible_input_hunks(&inputs[0], &inputs[1]);
         let mut painted = Vec::with_capacity(ops.len() + hunks.len().min(256) * 4);
         for op in ops.drain(..) {
             if let DrawOp::Layout { origin, layout, .. } = &op
@@ -883,7 +936,8 @@ impl CompareRuntime {
                     / line_height as f64)
                     .round()
                     .max(0.0) as usize;
-                if let Ok(line) = snapshots[side].line_range(row) {
+                if let Ok(local_line) = snapshots[side].line_range(row) {
+                    let line=bareline_document::TextOffset(local_line.start.0+bases[side])..bareline_document::TextOffset(local_line.end.0+bases[side]);
                     for hunk in hunks {
                         let range = if side == 0 { &hunk.left } else { &hunk.right };
                         if range.start < line.end && range.end > line.start {
@@ -943,6 +997,25 @@ impl CompareRuntime {
             painted.push(op);
         }
         *ops = painted;
+        self.overview=[None,None];
+        for side in 0..2 {
+            if let Some(pane)=geometry[side] {
+                let track=rect(pane.x+pane.width-10.0,pane.y+TAB_HEIGHT,8.0,(pane.height-TAB_HEIGHT).max(1.0));
+                self.overview[side]=Some(track);
+                ops.push(DrawOp::Fill(track,theme.chrome));
+                let length=inputs[side].len().max(1) as f64;
+                for h in hunks.iter().take(4096) {
+                    let range=if side==0{&h.left}else{&h.right};
+                    let kind=match h.kind{DiffKind::Added=>0,DiffKind::Removed=>1,DiffKind::MovedAligned=>3,_=>2};
+                    let key=["diff.added.overview","diff.removed.overview","diff.changed.overview","diff.moved.overview"][kind];
+                    let y=track.y+(range.start.0 as f64/length*track.height as f64) as f32;
+                    let size=((range.end.0.saturating_sub(range.start.0) as f64/length*track.height as f64) as f32).max(3.0).min(track.height);
+                    let marker=rect(track.x,y.min(track.y+track.height-size),track.width,size);
+                    ops.push(DrawOp::Fill(marker,settings.theme_color(key).unwrap_or(colors[kind])));
+                    if Some(h.stable_id)==current{ops.push(DrawOp::Stroke(marker,colors[4],1.0));}
+                }
+            }
+        }
         self.hits.clear();
         ops.push(DrawOp::Fill(
             rect(0.0, TAB_HEIGHT, width, 44.0),
@@ -1317,7 +1390,7 @@ mod tests {
         };
         let mut runtime = CompareRuntime {
             controller: Some(CompareController::new(source("left"), source("right"))),
-            documents: Some(snapshots.clone()),
+            documents: Some(snapshots.clone().map(CompareInput::Resident)),
             ..Default::default()
         };
         let mut views = views::ViewsRuntime::default();

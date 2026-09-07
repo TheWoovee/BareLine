@@ -54,7 +54,51 @@ macro_rules! setting {
     };
 }
 pub static DEFINITIONS: &[SettingDefinition] = &[
-    setting!("language.policies", "Language behavior", "Per-language overrides: language ID and field, for example rust.lexer = native or rust.min_chars = 2. Values are strings.", "Language", SettingKind::Map, false, false),
+    setting!(
+        "editor.clipboard.history_enabled",
+        "Clipboard history",
+        "Keep a bounded in-memory clipboard history for this session.",
+        "Advanced",
+        SettingKind::Boolean,
+        false,
+        false
+    ),
+    setting!(
+        "clipboard.history.max_entries",
+        "Clipboard history entries",
+        "Maximum number of retained clipboard entries.",
+        "Advanced",
+        SettingKind::Integer(1, 1000),
+        false,
+        false
+    ),
+    setting!(
+        "clipboard.history.max_total_bytes",
+        "Clipboard history byte limit",
+        "Maximum total clipboard history bytes.",
+        "Advanced",
+        SettingKind::Integer(4096, 268435456),
+        false,
+        false
+    ),
+    setting!(
+        "clipboard.history.max_entry_bytes",
+        "Clipboard entry byte limit",
+        "Maximum bytes retained for one clipboard entry.",
+        "Advanced",
+        SettingKind::Integer(1024, 67108864),
+        false,
+        false
+    ),
+    setting!(
+        "language.policies",
+        "Language behavior",
+        "Per-language overrides: language ID and field, for example rust.lexer = native or rust.min_chars = 2. Values are strings.",
+        "Language",
+        SettingKind::Map,
+        false,
+        false
+    ),
     setting!(
         "document.resident_max_bytes",
         "Resident document limit",
@@ -477,13 +521,22 @@ fn number(item: &Item) -> Option<f64> {
 /// Parse the single-line value editor using the same schema as persisted TOML.
 /// Text and choices are plain text; arrays/maps use TOML value syntax.
 pub fn parse_setting_input(key: &str, input: &str) -> Result<SettingValue, String> {
-    if input.len() > 16 * 1024 { return Err("Value exceeds the inline editor limit; edit the TOML file".into()); }
-    let definition = DEFINITIONS.iter().find(|d| d.key == key).ok_or("Unknown setting")?;
+    if input.len() > 16 * 1024 {
+        return Err("Value exceeds the inline editor limit; edit the TOML file".into());
+    }
+    let definition = DEFINITIONS
+        .iter()
+        .find(|d| d.key == key)
+        .ok_or("Unknown setting")?;
     let value = match definition.kind {
         SettingKind::Text | SettingKind::Choice(_) => SettingValue::Text(input.to_owned()),
         _ => {
-            let document = format!("value = {input}").parse::<DocumentMut>().map_err(|_| "Enter a valid TOML value")?;
-            if document.len() != 1 { return Err("Enter one value only".into()); }
+            let document = format!("value = {input}")
+                .parse::<DocumentMut>()
+                .map_err(|_| "Enter a valid TOML value")?;
+            if document.len() != 1 {
+                return Err("Enter one value only".into());
+            }
             parse_value(definition, document.get("value").ok_or("Missing value")?)?
         }
     };
@@ -498,18 +551,25 @@ pub fn format_setting_input(value: &SettingValue) -> String {
         SettingValue::Number(value) => value.to_string(),
         SettingValue::Strings(values) => {
             let mut array = toml_edit::Array::new();
-            for value in values { array.push(value.as_str()); }
+            for value in values {
+                array.push(value.as_str());
+            }
             array.to_string()
         }
         SettingValue::Map(values) => {
             let mut table = toml_edit::InlineTable::new();
-            for (key, value) in values { table.insert(key, Value::from(value.as_str())); }
+            for (key, value) in values {
+                table.insert(key, Value::from(value.as_str()));
+            }
             table.to_string()
         }
     }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum LexerPreference { Primary, Native }
+pub enum LexerPreference {
+    Primary,
+    Native,
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LanguagePolicy {
     pub lexer: LexerPreference,
@@ -521,38 +581,87 @@ pub struct LanguagePolicy {
     pub parameter_hints: bool,
 }
 impl Default for LanguagePolicy {
-    fn default() -> Self { Self { lexer: LexerPreference::Primary, completion: true, min_chars: 0,
-        include_open_documents: true, smart_pairs: true, smart_indent: true, parameter_hints: true } }
+    fn default() -> Self {
+        Self {
+            lexer: LexerPreference::Primary,
+            completion: true,
+            min_chars: 0,
+            include_open_documents: true,
+            smart_pairs: true,
+            smart_indent: true,
+            parameter_hints: true,
+        }
+    }
 }
 fn validate_language_policy(key: &str, value: &str) -> Result<(), String> {
-    let (language, field) = key.rsplit_once('.').ok_or("Use language-id.field for a policy key")?;
-    if language.is_empty() || language.len() > 64 || !language.bytes().all(|b| b.is_ascii_alphanumeric() || b"_-".contains(&b)) {
+    let (language, field) = key
+        .rsplit_once('.')
+        .ok_or("Use language-id.field for a policy key")?;
+    if language.is_empty()
+        || language.len() > 64
+        || !language
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"_-".contains(&b))
+    {
         return Err("Invalid stable language ID".into());
     }
     let valid = match field {
         "lexer" => matches!(value, "primary" | "native"),
         "min_chars" => value.parse::<u8>().is_ok_and(|n| n <= 16),
-        "completion" | "include_open_documents" | "smart_pairs" | "smart_indent" | "parameter_hints" => matches!(value, "true" | "false"),
+        "completion"
+        | "include_open_documents"
+        | "smart_pairs"
+        | "smart_indent"
+        | "parameter_hints" => matches!(value, "true" | "false"),
         _ => false,
     };
-    if valid { Ok(()) } else { Err(format!("Invalid language policy {key}")) }
+    if valid {
+        Ok(())
+    } else {
+        Err(format!("Invalid language policy {key}"))
+    }
 }
 impl EffectiveSettings {
     pub fn setting_value(&self, key: &str) -> Option<SettingValue> {
         Some(match key {
+            "editor.clipboard.history_enabled" => {
+                SettingValue::Bool(self.clipboard_history_enabled)
+            }
+            "clipboard.history.max_entries" => {
+                SettingValue::Integer(self.clipboard_history_max_entries as i64)
+            }
+            "clipboard.history.max_total_bytes" => {
+                SettingValue::Integer(self.clipboard_history_max_total_bytes as i64)
+            }
+            "clipboard.history.max_entry_bytes" => {
+                SettingValue::Integer(self.clipboard_history_max_entry_bytes as i64)
+            }
             "session.restore" => SettingValue::Bool(self.restore_session),
-            "workspace.preferences_enabled" => SettingValue::Bool(self.workspace_preferences_enabled),
+            "workspace.preferences_enabled" => {
+                SettingValue::Bool(self.workspace_preferences_enabled)
+            }
             "document.resident_max_bytes" => SettingValue::Integer(self.resident_max_bytes as i64),
-            "transcode.temp_quota_bytes" => SettingValue::Integer(self.transcode_quota_bytes as i64),
+            "transcode.temp_quota_bytes" => {
+                SettingValue::Integer(self.transcode_quota_bytes as i64)
+            }
             "editor.font.family" => SettingValue::Text(self.editor_font_family.clone()),
             "editor.font.size" => SettingValue::Number(self.editor_font_size_pt),
             "editor.tab.width" => SettingValue::Integer(self.tab_width as i64),
             "editor.insert_spaces" => SettingValue::Bool(self.insert_spaces),
-            "editor.wrap.mode" => SettingValue::Text(if self.word_wrap { "viewport" } else { "off" }.into()),
+            "editor.wrap.mode" => {
+                SettingValue::Text(if self.word_wrap { "viewport" } else { "off" }.into())
+            }
             "editor.line_numbers" => SettingValue::Bool(self.line_numbers),
             "editor.render.whitespace" => SettingValue::Text(self.whitespace.clone()),
             "editor.currentLine.highlight" => SettingValue::Bool(self.highlight_current_line),
-            "theme.mode" => SettingValue::Text(match self.theme { ThemeMode::System => "system", ThemeMode::Light => "light", ThemeMode::Dark => "dark" }.into()),
+            "theme.mode" => SettingValue::Text(
+                match self.theme {
+                    ThemeMode::System => "system",
+                    ThemeMode::Light => "light",
+                    ThemeMode::Dark => "dark",
+                }
+                .into(),
+            ),
             "theme.overrides" => SettingValue::Map(self.theme_overrides.clone()),
             "toolbar.visible" => SettingValue::Bool(self.toolbar_visible),
             "toolbar.commands" => SettingValue::Strings(self.toolbar_commands.clone()),
@@ -561,18 +670,40 @@ impl EffectiveSettings {
             "language.associations" => SettingValue::Map(self.language_associations.clone()),
             "language.policies" => SettingValue::Map(self.language_policies.clone()),
             "search.excludes" => SettingValue::Strings(self.search_excludes.clone()),
-            "renderer.mode" => SettingValue::Text(match self.renderer { RendererMode::Hardware => "hardware", RendererMode::Software => "software" }.into()),
+            "renderer.mode" => SettingValue::Text(
+                match self.renderer {
+                    RendererMode::Hardware => "hardware",
+                    RendererMode::Software => "software",
+                }
+                .into(),
+            ),
             _ => return None,
         })
     }
     pub fn language_policy(&self, stable_id: &str) -> LanguagePolicy {
         let mut policy = LanguagePolicy::default();
-        let get = |field: &str| self.language_policies.get(&format!("{stable_id}.{field}")).map(String::as_str);
-        if get("lexer") == Some("native") { policy.lexer = LexerPreference::Native; }
-        policy.min_chars = get("min_chars").and_then(|n| n.parse().ok()).filter(|n| *n <= 16).unwrap_or(0);
-        for (field, target) in [("completion", &mut policy.completion), ("include_open_documents", &mut policy.include_open_documents),
-            ("smart_pairs", &mut policy.smart_pairs), ("smart_indent", &mut policy.smart_indent), ("parameter_hints", &mut policy.parameter_hints)] {
-            if let Some(value) = get(field) { *target = value == "true"; }
+        let get = |field: &str| {
+            self.language_policies
+                .get(&format!("{stable_id}.{field}"))
+                .map(String::as_str)
+        };
+        if get("lexer") == Some("native") {
+            policy.lexer = LexerPreference::Native;
+        }
+        policy.min_chars = get("min_chars")
+            .and_then(|n| n.parse().ok())
+            .filter(|n| *n <= 16)
+            .unwrap_or(0);
+        for (field, target) in [
+            ("completion", &mut policy.completion),
+            ("include_open_documents", &mut policy.include_open_documents),
+            ("smart_pairs", &mut policy.smart_pairs),
+            ("smart_indent", &mut policy.smart_indent),
+            ("parameter_hints", &mut policy.parameter_hints),
+        ] {
+            if let Some(value) = get(field) {
+                *target = value == "true";
+            }
         }
         policy
     }
@@ -617,15 +748,26 @@ fn parse_value(definition: &SettingDefinition, item: &Item) -> Result<SettingVal
 fn validate_value(definition: &SettingDefinition, value: &SettingValue) -> Result<(), String> {
     if definition.key == "language.locale" {
         if let SettingValue::Text(locale) = value {
-            if locale.is_empty() || locale.len() > 64 || !locale.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
-                return Err("Locale must be a language ID containing letters, digits or hyphens".into());
+            if locale.is_empty()
+                || locale.len() > 64
+                || !locale
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+            {
+                return Err(
+                    "Locale must be a language ID containing letters, digits or hyphens".into(),
+                );
             }
         }
     }
     if definition.key == "language.policies" {
         if let SettingValue::Map(values) = value {
-            if values.len() > 512 { return Err("At most 512 language policy entries are allowed".into()); }
-            for (key, value) in values { validate_language_policy(key, value)?; }
+            if values.len() > 512 {
+                return Err("At most 512 language policy entries are allowed".into());
+            }
+            for (key, value) in values {
+                validate_language_policy(key, value)?;
+            }
         }
     }
     let valid = match (definition.kind, value) {
@@ -722,6 +864,10 @@ fn put(document: &mut DocumentMut, key: &str, value: SettingValue) -> Result<(),
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct EffectiveSettings {
+    pub clipboard_history_enabled: bool,
+    pub clipboard_history_max_entries: usize,
+    pub clipboard_history_max_total_bytes: usize,
+    pub clipboard_history_max_entry_bytes: usize,
     pub language_policies: BTreeMap<String, String>,
     pub resident_max_bytes: u64,
     pub transcode_quota_bytes: u64,
@@ -748,6 +894,10 @@ pub struct EffectiveSettings {
 impl Default for EffectiveSettings {
     fn default() -> Self {
         Self {
+            clipboard_history_enabled: false,
+            clipboard_history_max_entries: 20,
+            clipboard_history_max_total_bytes: 16 * 1024 * 1024,
+            clipboard_history_max_entry_bytes: 4 * 1024 * 1024,
             language_policies: BTreeMap::new(),
             resident_max_bytes: 268_435_456,
             transcode_quota_bytes: 21_474_836_480,
@@ -817,6 +967,18 @@ pub fn resolve(
 }
 fn apply(settings: &mut EffectiveSettings, key: &str, value: SettingValue) {
     match (key, value) {
+        ("editor.clipboard.history_enabled", SettingValue::Bool(v)) => {
+            settings.clipboard_history_enabled = v
+        }
+        ("clipboard.history.max_entries", SettingValue::Integer(v)) => {
+            settings.clipboard_history_max_entries = v as usize
+        }
+        ("clipboard.history.max_total_bytes", SettingValue::Integer(v)) => {
+            settings.clipboard_history_max_total_bytes = v as usize
+        }
+        ("clipboard.history.max_entry_bytes", SettingValue::Integer(v)) => {
+            settings.clipboard_history_max_entry_bytes = v as usize
+        }
         ("language.policies", SettingValue::Map(v)) => settings.language_policies.extend(v),
         ("document.resident_max_bytes", SettingValue::Integer(v)) => {
             settings.resident_max_bytes = v as u64
@@ -865,6 +1027,46 @@ fn apply(settings: &mut EffectiveSettings, key: &str, value: SettingValue) {
 /// Points remain persisted; renderer receives logical pixels and applies monitor scale once.
 pub fn pt_to_logical_px(points: f64) -> f64 {
     points * 96.0 / 72.0
+}
+
+#[cfg(test)]
+mod input_contract_tests {
+    use super::*;
+    #[test]
+    fn policy_and_clipboard_inputs_roundtrip_and_invalid_input_preserves_document() {
+        let mut document = SettingsDocument::empty(Scope::User);
+        let policies = parse_setting_input(
+            "language.policies",
+            r#"{ "rust.lexer" = "native", "rust.min_chars" = "2" }"#,
+        )
+        .unwrap();
+        document.set("language.policies", policies.clone()).unwrap();
+        assert_eq!(
+            parse_setting_input("language.policies", &format_setting_input(&policies)).unwrap(),
+            policies
+        );
+        document
+            .set("editor.clipboard.history_enabled", SettingValue::Bool(true))
+            .unwrap();
+        let before = document.to_toml();
+        assert!(
+            document
+                .set("clipboard.history.max_entries", SettingValue::Integer(0))
+                .is_err()
+        );
+        assert_eq!(document.to_toml(), before);
+        assert!(
+            parse_setting_input("language.policies", r#"{ "rust.min_chars" = "17" }"#).is_err()
+        );
+        let effective = resolve(&document, None, false, None).values;
+        assert_eq!(
+            effective.language_policy("rust").lexer,
+            LexerPreference::Native
+        );
+        assert_eq!(effective.language_policy("rust").min_chars, 2);
+        assert!(effective.clipboard_history_enabled);
+        assert_eq!(effective.clipboard_history_max_entries, 20);
+    }
 }
 pub fn pt_to_physical_px(points: f64, scale: f64) -> Result<f64, String> {
     if !points.is_finite()

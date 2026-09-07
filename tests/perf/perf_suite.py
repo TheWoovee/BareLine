@@ -167,6 +167,9 @@ def run(manifest_path, destination):
     if len(names) != len(set(names)) or any(n not in SCENARIOS for n in names):
         raise ValueError("unknown or duplicate scenario")
     for scenario in scenarios:
+        if not isinstance(scenario.get("comparable_metrics", []), list) or any(
+                not isinstance(metric, str) for metric in scenario.get("comparable_metrics", [])):
+            raise ValueError("comparable_metrics must explicitly list reviewed matching endpoints")
         if not scenario.get("cache_state") or not scenario.get("renderer"):
             raise ValueError("explicit cache_state and renderer required")
         if not 1 <= scenario["timeout_seconds"] <= 3600:
@@ -241,10 +244,19 @@ def report(directory, destination):
                     raise ValueError("invalid persisted metric")
                 records.append({k: raw.get(k) for k in ("scenario", "pair", "position", "application", "metrics", "status")})
     rows = []
+    observations = []
     for scenario in manifest["scenarios"]:
         selected = [r for r in records if r["scenario"] == scenario["name"]]
         metrics = sorted({m for r in selected for m in (r.get("metrics") or {})})
         for metric in metrics:
+            for application in ("bareline", "notepadpp"):
+                values = [r["metrics"][metric] for r in selected if r["application"] == application
+                          and r["status"] == "ok" and metric in (r.get("metrics") or {})]
+                observations.append({"scenario": scenario["name"], "application": application,
+                    "metric": metric, "sample_count": len(values), "p50": percentile(values, .5),
+                    "p95": percentile(values, .95), "comparison_eligible": False})
+            if metric not in scenario.get("comparable_metrics", []):
+                continue
             pairs = []
             excluded = []
             for pair in range(manifest["repetitions"]):
@@ -262,7 +274,7 @@ def report(directory, destination):
             rows.append({"scenario": scenario["name"], "metric": metric, "paired_samples": len(pairs),
                          "excluded_pairs": excluded, **stats,
                          "p50_ratio": stats["bareline"]["p50"] / denominator if denominator else None})
-    write_new(destination, {"schema_version": 1, "provenance": provenance, "rows": rows,
+    write_new(destination, {"schema_version": 1, "provenance": provenance, "rows": rows, "observations": observations,
                             "failures": [r for r in records if r["status"] != "ok"],
                             "missing_trials": len(manifest["scenarios"]) * manifest["repetitions"] * 2 - len(records),
                             "claims_eligible": False,
@@ -274,8 +286,8 @@ def regress(candidate_path, baselines, destination):
     candidate = read_json(candidate_path)
     manifest = candidate["provenance"]["manifest"]
     history = [read_json(path) for path in baselines]
-    if not 3 <= len(history) <= 30:
-        raise ValueError("rolling baseline requires 3..30 reports")
+    if len(history) != 7:
+        raise ValueError("rolling baseline requires exactly the previous seven reports")
     identity = ("series", "configuration", "machine_id")
     if any(any(report["provenance"]["manifest"][k] != manifest[k] for k in identity) for report in history):
         raise ValueError("cannot mix machines, configurations or hosted/profiled/local series")
@@ -284,6 +296,12 @@ def regress(candidate_path, baselines, destination):
                 for scenario in config.get("scenarios", [])]
     if any(scenarios(old["provenance"]["manifest"]) != scenarios(manifest) for old in history):
         raise ValueError("cannot mix fixtures, cache states or scenario settings")
+    def application_settings(config):
+        apps = config.get("applications", {})
+        return ({name: app.get("settings") for name, app in apps.items()},
+                apps.get("notepadpp", {}).get("sha256"), apps.get("notepadpp", {}).get("version"))
+    if any(application_settings(old["provenance"]["manifest"]) != application_settings(manifest) for old in history):
+        raise ValueError("cannot mix application settings or comparator versions")
     findings = []
     for row in candidate["rows"]:
         if row.get("paired_samples", row.get("sample_count", 0)) < 3 or row.get("excluded_pairs"):
@@ -293,10 +311,15 @@ def regress(candidate_path, baselines, destination):
                     and old.get("paired_samples", old.get("sample_count", 0)) >= 3 and not old.get("excluded_pairs")]
         if len(previous) != len(history):
             continue
+        if any(isinstance(value, bool) or not isinstance(value, (int, float))
+               or not math.isfinite(value) or value < 0 for value in previous):
+            raise ValueError("invalid baseline P50")
         baseline = percentile(previous, .5)
         noise = max(abs(value - baseline) for value in previous) / baseline if baseline else 0
         threshold = max(.10, noise)
         current = row["bareline"]["p50"]
+        if isinstance(current, bool) or not isinstance(current, (int, float)) or not math.isfinite(current) or current < 0:
+            raise ValueError("invalid candidate P50")
         # Only time/byte costs have an established lower-is-better meaning here.
         if not row["metric"].endswith(("_us", "_bytes", "_bytes_point")):
             continue

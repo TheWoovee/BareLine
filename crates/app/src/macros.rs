@@ -112,7 +112,7 @@ use bareline_renderer::{DrawOp, Rect};
 use bareline_ui::{
     controls::{ControlState, UiEvent},
     variable_list::{VariableItemSource, VariableList},
-    widgets::{SemanticAction, SemanticRole, Semantics, Theme},
+    widgets::{SemanticAction, SemanticRole, Semantics},
     *,
 };
 use std::{collections::BTreeMap, sync::Arc, time::Instant};
@@ -318,6 +318,60 @@ impl Default for MacrosController {
     }
 }
 impl MacrosController {
+    /// Merge independently drained producers using their process-wide completion clock.
+    pub fn record_receipts(
+        &mut self,
+        mut receipts: Vec<bareline_editor_surface::power::consumer::OrderedReceipt>,
+        registry: &CommandRegistry,
+    ) -> Result<(), String> {
+        use bareline_editor_surface::power::consumer::ReceiptEvent;
+        if !self.recorder.recording() {
+            return Ok(());
+        }
+        receipts.sort_by_key(|receipt| receipt.sequence);
+        for receipt in receipts {
+            let event = match receipt.event {
+                ReceiptEvent::Command(id, arguments) => MacroEvent::Command { id, arguments },
+                ReceiptEvent::Input(input) => {
+                    let mut arguments = BTreeMap::new();
+                    let id = match input {
+                        Input::Insert(text) => {
+                            arguments.insert("text".into(), text);
+                            "edit.insert_text"
+                        }
+                        Input::Backspace => "edit.backspace",
+                        Input::Delete => "edit.delete",
+                        Input::Undo => "edit.undo",
+                        Input::Redo => "edit.redo",
+                        Input::SelectAll => "edit.select_all",
+                        Input::Left(extend)
+                        | Input::Right(extend)
+                        | Input::Up(extend)
+                        | Input::Down(extend)
+                        | Input::Home(extend)
+                        | Input::End(extend) => {
+                            arguments.insert("extend".into(), extend.to_string());
+                            match input {
+                                Input::Left(_) => "edit.move_left",
+                                Input::Right(_) => "edit.move_right",
+                                Input::Up(_) => "edit.move_up",
+                                Input::Down(_) => "edit.move_down",
+                                Input::Home(_) => "edit.move_home",
+                                _ => "edit.move_end",
+                            }
+                        }
+                        Input::SetCaret(..) => continue,
+                    };
+                    MacroEvent::Command {
+                        id: id.into(),
+                        arguments,
+                    }
+                }
+            };
+            self.recorder.executed(event, true, registry)?;
+        }
+        Ok(())
+    }
     pub fn capture_replay_target(&mut self, workspace: &Workspace, active: usize) {
         self.replay_document = workspace.editors.get(active).map(ReplayDocument::capture);
     }
@@ -590,7 +644,23 @@ impl MacrosController {
             notify,
         };
         let state = playback.tick(now, registry, &mut executor);
-        self.status = format!("Macro: {state:?}");
+        self.status = match &state {
+            PlaybackState::Running | PlaybackState::Waiting(_) => {
+                let location = playback.location();
+                format!(
+                    "Playing macro — iteration {}, event {}",
+                    location.iteration + 1,
+                    location.event + 1
+                )
+            }
+            PlaybackState::Complete => "Macro complete".into(),
+            PlaybackState::Cancelled => "Macro cancelled".into(),
+            PlaybackState::Failed { location, reason } => format!(
+                "Stopped at iteration {}, event {}: {reason}. Resume Failed Macro retries this event.",
+                location.iteration + 1,
+                location.event + 1
+            ),
+        };
         Some(state)
     }
     pub fn run(
@@ -697,6 +767,18 @@ impl MacrosController {
     }
     pub fn semantics(&self) -> Vec<Semantics> {
         let mut nodes = self.manager.semantics();
+        if self.manager.open || self.output_open {
+            let mut status = Semantics::new(
+                ViewId(23300),
+                SemanticRole::Alert,
+                "Macro and process status",
+                "macro.manager",
+                rect(0., 0., 0., 0.),
+                ControlState::default(),
+            );
+            status.value = Some(format!("{} {}", self.status, self.process_status));
+            nodes.push(status);
+        }
         if !self.output_open {
             return nodes;
         }
@@ -737,12 +819,24 @@ impl MacrosController {
             None
         }
     }
-    pub fn draw_output(&mut self, bounds: Rect, ops: &mut Vec<DrawOp>) {
+    pub fn draw_output(
+        &mut self,
+        bounds: Rect,
+        theme: bareline_ui::theme::UiTheme,
+        ops: &mut Vec<DrawOp>,
+    ) {
         if !self.output_open {
             return;
         }
-        ops.push(DrawOp::Fill(bounds, ELEVATED));
-        text(ops, bounds.x + 10.0, bounds.y + 8.0, "Output", 13.0, TEXT);
+        ops.push(DrawOp::Fill(bounds, theme.elevated));
+        text(
+            ops,
+            bounds.x + 10.0,
+            bounds.y + 8.0,
+            "Output",
+            13.0,
+            theme.text,
+        );
         ops.push(DrawOp::PushClip(rect(
             bounds.x + 70.0,
             bounds.y,
@@ -755,7 +849,7 @@ impl MacrosController {
             bounds.y + 8.0,
             &format!("{}  {}", self.status, self.process_status),
             12.0,
-            MUTED,
+            theme.muted,
         );
         ops.push(DrawOp::PopClip);
         self.list.bounds = rect(
@@ -764,7 +858,7 @@ impl MacrosController {
             bounds.width,
             bounds.height - 28.0,
         );
-        self.list.paint(&self.rows, Theme::default(), ops);
+        self.list.paint(&self.rows, theme.widgets(), ops);
     }
 }
 /// The adapter acknowledges actor completion before Playback advances its event location.
@@ -1019,6 +1113,112 @@ mod tests {
         let mut registry = bareline_commands::shell_commands();
         register_commands(&mut registry);
         registry
+    }
+    #[test]
+    fn mixed_receipts_keep_completion_order_through_save_and_replay() {
+        use bareline_editor_surface::power::consumer::{
+            OrderedReceipt, ReceiptEvent, next_receipt_sequence,
+        };
+        let mut registry = registry();
+        bareline_editor_surface::power::register_commands(&mut registry);
+        let mut query = bareline_search::SearchQuery::literal("B");
+        query.case = bareline_search::Case::Sensitive;
+        let events = [
+            ReceiptEvent::Input(Input::Insert("ab".into())),
+            ReceiptEvent::Input(Input::SelectAll),
+            ReceiptEvent::Command("editor.case.upper".into(), BTreeMap::new()),
+            ReceiptEvent::Command("search.find_next".into(), search_arguments(&query)),
+            ReceiptEvent::Input(Input::Insert("z".into())),
+        ];
+        let receipts: Vec<_> = events
+            .into_iter()
+            .map(|event| OrderedReceipt {
+                sequence: next_receipt_sequence(),
+                event,
+            })
+            .collect();
+        // Producers drain independently: all input, then power, then search.
+        let mut controller = MacrosController::default();
+        controller.record().unwrap();
+        controller
+            .record_receipts(
+                vec![
+                    receipts[0].clone(),
+                    receipts[1].clone(),
+                    receipts[4].clone(),
+                    receipts[2].clone(),
+                    receipts[3].clone(),
+                ],
+                &registry,
+            )
+            .unwrap();
+        controller.stop_recording("Mixed", &registry).unwrap();
+        let text = controller.export_selected().unwrap();
+        let mut reopened = MacrosController::default();
+        reopened.import(&text, &registry).unwrap();
+        reopened.play(Repeat::Once, &registry).unwrap();
+        #[derive(Default)]
+        struct Fixture {
+            value: String,
+            selection: std::ops::Range<usize>,
+            revision: u64,
+        }
+        impl MacroExecutor for Fixture {
+            fn context(&self) -> CommandContext {
+                CommandContext::default()
+            }
+            fn progress(&self) -> Progress {
+                Progress {
+                    document: 1,
+                    position: self.selection.end as u64,
+                    revision: self.revision,
+                    eof: self.selection.end == self.value.len(),
+                }
+            }
+            fn execute(
+                &mut self,
+                id: CommandId,
+                args: &BTreeMap<String, String>,
+            ) -> Result<(), String> {
+                match id.0 {
+                    "edit.insert_text" => {
+                        let value = args.get("text").ok_or("Missing explicit text")?;
+                        let end = self.selection.start + value.len();
+                        self.value.replace_range(self.selection.clone(), value);
+                        self.selection = end..end;
+                        self.revision += 1;
+                    }
+                    "edit.select_all" => self.selection = 0..self.value.len(),
+                    "editor.case.upper" => {
+                        let upper = self.value[self.selection.clone()].to_uppercase();
+                        self.value.replace_range(self.selection.clone(), &upper);
+                        self.revision += 1;
+                    }
+                    "search.find_next" => {
+                        if args.get("case").map(String::as_str) != Some("true") {
+                            return Err("Captured query case changed".into());
+                        }
+                        let pattern = args.get("pattern").ok_or("Missing captured query")?;
+                        let start = self
+                            .value
+                            .find(pattern)
+                            .ok_or("Captured query did not match")?;
+                        self.selection = start..start + pattern.len();
+                    }
+                    _ => return Err("Unexpected replay command".into()),
+                }
+                Ok(())
+            }
+        }
+        let mut fixture = Fixture::default();
+        let playback = reopened.playback.as_mut().unwrap();
+        for _ in 0..10 {
+            if playback.tick(Instant::now(), &registry, &mut fixture) == PlaybackState::Complete {
+                break;
+            }
+        }
+        assert_eq!(playback.state(), &PlaybackState::Complete);
+        assert_eq!(fixture.value, "Az");
     }
     #[test]
     fn saved_slot_survives_rename_and_restart_and_rejects_duplicate_import() {

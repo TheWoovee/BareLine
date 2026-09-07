@@ -249,6 +249,7 @@ impl RenderBackend for WindowsRenderer {
         Ok(())
     }
     fn render(&mut self, operations: &[DrawOp]) -> Result<FrameStatus, Self::Error> {
+        let _frame_span = bareline_renderer::frame_span();
         if !balanced_clips(operations) {
             return Err(windows::core::Error::from_hresult(E_INVALIDARG));
         }

@@ -177,6 +177,9 @@ impl Shell {
             }
             match result {
                 Ok(SessionCompletion::Loaded(Ok(loaded))) => {
+                    if !loaded.manifest.recent.is_empty() && self.ensure_workspace(el) {
+                        self.workspace.as_mut().unwrap().restore_recent_paths(&loaded.manifest.recent);
+                    }
                     if !loaded.manifest.tabs.is_empty() && self.ensure_workspace(el) {
                         let warning = loaded.recovered_previous;
                         match RestoreQueue::new(loaded.manifest) {
@@ -753,11 +756,7 @@ impl Shell {
             .collect();
         manifest.compare = self.compare.capture(workspace, &documents);
         manifest.tabs.sort_by_key(|tab| !tab.pinned);
-        manifest.recent = manifest
-            .documents
-            .iter()
-            .filter_map(|doc| doc.path.clone())
-            .collect();
+        manifest.recent = workspace.recent_paths().to_vec();
         manifest.validate()?;
         Ok(manifest)
     }

@@ -34,6 +34,16 @@ impl StartupAction {
         )
     }
 }
+/// A closed action tag prevents paths/content entering tracing fields.
+#[cfg(feature = "perf-spans")]
+pub fn startup_span(action: StartupAction) -> tracing::span::EnteredSpan {
+    tracing::info_span!("startup.phase", action = ?action).entered()
+}
+#[cfg(not(feature = "perf-spans"))]
+pub struct DisabledStartupSpan;
+#[cfg(not(feature = "perf-spans"))]
+#[inline(always)]
+pub fn startup_span(_action: StartupAction) -> DisabledStartupSpan { DisabledStartupSpan }
 pub struct StartupLedger {
     started: Instant,
     pub entries: Vec<(StartupAction, u128)>,
@@ -56,6 +66,7 @@ impl StartupLedger {
         action: StartupAction,
         limit: usize,
     ) -> io::Result<Option<Vec<u8>>> {
+        let _phase = startup_span(action);
         if !matches!(
             action,
             StartupAction::ReadSettings

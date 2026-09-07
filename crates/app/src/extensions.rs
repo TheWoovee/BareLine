@@ -22,6 +22,7 @@ pub struct InvocationBroker {
     edits: Option<Vec<TextEdit>>,
     panels: Vec<(String, String)>,
     panel_bytes: usize,
+    external_text: bool,
 }
 impl InvocationBroker {
     pub fn new(
@@ -46,12 +47,26 @@ impl InvocationBroker {
             edits: None,
             panels: vec![],
             panel_bytes: 0,
+            external_text: false,
         })
+    }
+    /// Read-only paged authority is captured separately from the viewport adapter.
+    pub fn new_paged(invocation: Invocation, source: DocumentSnapshot, session: ExtensionSession, panels: Vec<String>) -> Result<Self, String> {
+        if invocation.grant_generation != session.generation() { return Err("Invocation grant changed".into()); }
+        Ok(Self { invocation, source, session, allowed_panels: panels.into_iter().collect(), seen: BTreeSet::new(), edits: None, panels: vec![], panel_bytes: 0, external_text: true })
     }
     pub fn request(
         &mut self,
         message: Envelope,
+        original: impl FnMut(u64, RawRange) -> Result<Vec<u8>, String>,
+    ) -> BrokerResponse {
+        self.request_with_text(message, original, |_| Err("External text reader unavailable".into()))
+    }
+    pub fn request_with_text(
+        &mut self,
+        message: Envelope,
         mut original: impl FnMut(u64, RawRange) -> Result<Vec<u8>, String>,
+        mut text: impl FnMut(TextRange) -> Result<Vec<u8>, String>,
     ) -> BrokerResponse {
         let request_id = message.request_id;
         let result = (|| {
@@ -73,7 +88,10 @@ impl InvocationBroker {
                     {
                         return Err("Stale text snapshot".into());
                     }
-                    Ok(BrokerValue::Bytes(read_bytes(&self.source, range)?))
+                    if range.start > range.end || range.end > self.invocation.text_length || range.end - range.start > (MAX_CHUNK_BYTES - 128) as u64 { return Err("Text range limit".into()); }
+                    let bytes = if self.external_text { text(range.clone())? } else { read_bytes(&self.source, range)? };
+                    if bytes.len() as u64 != range.end - range.start { return Err("Text range unavailable".into()); }
+                    Ok(BrokerValue::Bytes(bytes))
                 }
                 Request::ReadOriginalBytes {
                     document,
@@ -95,6 +113,7 @@ impl InvocationBroker {
                     Ok(BrokerValue::Bytes(bytes))
                 }
                 Request::BeginEdits { document, .. } => {
+                    if self.external_text { return Err("Paged invocation is read-only".into()); }
                     if *document != self.invocation.document || self.edits.is_some() {
                         return Err("One document transaction per invocation".into());
                     }
@@ -128,6 +147,7 @@ impl InvocationBroker {
                     revision,
                     edits,
                 } => {
+                    if self.external_text { return Err("Paged invocation is read-only".into()); }
                     if *document != self.invocation.document
                         || *revision != self.invocation.revision
                         || self.edits.is_some()

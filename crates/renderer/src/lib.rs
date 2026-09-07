@@ -1,4 +1,15 @@
 // SPDX-License-Identifier: MPL-2.0
+/// Instrumentation is removed at compile time unless explicitly enabled.
+#[cfg(feature = "perf-spans")]
+pub fn frame_span() -> tracing::span::EnteredSpan {
+    tracing::info_span!("renderer.frame").entered()
+}
+#[cfg(not(feature = "perf-spans"))]
+pub struct DisabledFrameSpan;
+#[cfg(not(feature = "perf-spans"))]
+#[inline(always)]
+pub fn frame_span() -> DisabledFrameSpan { DisabledFrameSpan }
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Point {
     pub x: f32,

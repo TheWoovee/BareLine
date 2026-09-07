@@ -11,6 +11,7 @@ use std::{
     path::PathBuf,
     sync::{
         Arc,
+        atomic::{AtomicBool, Ordering},
         mpsc::{self, Receiver},
     },
 };
@@ -83,6 +84,11 @@ struct Listing {
     status: Option<String>,
     cursor: Option<DirectoryCursor>,
 }
+struct PendingListing {
+    receiver: Receiver<Listing>,
+    cancel: Arc<AtomicBool>,
+    replace: bool,
+}
 #[derive(Debug)]
 pub enum PanelAction {
     Open(PathBuf),
@@ -92,13 +98,19 @@ pub struct WorkspacePanel {
     pub open: bool,
     model: Model,
     tree: Tree,
-    pending: Option<Receiver<Listing>>,
+    pending: Option<PendingListing>,
     notify: Arc<dyn Fn() + Send + Sync>,
     pub message: Option<String>,
     selected: Option<NodeId>,
     directory_guard: Option<DirectoryGuard>,
     excludes: Arc<Vec<String>>,
     dirty: BTreeSet<u64>,
+    expanded: BTreeSet<u64>,
+}
+impl Drop for WorkspacePanel {
+    fn drop(&mut self) {
+        if let Some(pending) = &self.pending { pending.cancel.store(true, Ordering::Relaxed); }
+    }
 }
 impl WorkspacePanel {
     pub fn new(notify: Arc<dyn Fn() + Send + Sync>) -> Self {
@@ -113,6 +125,7 @@ impl WorkspacePanel {
             directory_guard: None,
             excludes: Arc::new(Vec::new()),
             dirty: BTreeSet::new(),
+            expanded: BTreeSet::new(),
         }
     }
     pub fn set_directory_guard(
@@ -134,11 +147,14 @@ impl WorkspacePanel {
     }
     pub fn load_more(&mut self) {
         if let Some(id) = self.selected {
-            self.request(id);
+            self.request(id, false);
         }
     }
     pub fn watch_roots(&self) -> Vec<PathBuf> {
-        self.model.nodes.values().filter(|n| n.directory && n.children.is_some())
+        let mut ids: Vec<_> = self.expanded.iter().copied().collect();
+        ids.sort_by_key(|id| (Some(NodeId(*id)) != self.selected, *id));
+        ids.into_iter().filter_map(|id| self.model.nodes.get(&id))
+            .filter(|n| n.directory && n.children.is_some())
             .take(256).map(|n| n.path.clone()).collect()
     }
     /// Invalidate only the changed directory; unaffected path/node IDs survive.
@@ -157,6 +173,8 @@ impl WorkspacePanel {
                 pending.extend(node.children.unwrap_or_default());
             }
             self.dirty.remove(&child.0);
+            self.expanded.remove(&child.0);
+            if self.selected == Some(child) { self.selected = Some(id); }
         }
         self.tree.update_child_count(id, 0);
     }
@@ -164,20 +182,9 @@ impl WorkspacePanel {
         Some(&self.model.nodes.get(&self.selected?.0)?.path)
     }
     pub fn refresh_tree(&mut self) {
-        self.pending = None;
-        self.dirty.clear();
-        let roots: Vec<_> = self
-            .model
-            .roots
-            .iter()
-            .map(|id| self.model.nodes[&id.0].path.clone())
-            .collect();
-        self.model = Model::default();
-        self.tree.reset();
-        self.selected = None;
-        for root in roots {
-            self.add_root(root);
-        }
+        if let Some(pending) = &self.pending { pending.cancel.store(true, Ordering::Relaxed); }
+        self.dirty.extend(self.model.nodes.iter().filter(|(_, n)| n.directory && n.children.is_some()).map(|(&id, _)| id));
+        self.message = Some("Refreshing loaded folders…".into());
     }
     pub fn width(&self) -> f32 {
         if self.open { 238.0 } else { 0.0 }
@@ -187,6 +194,7 @@ impl WorkspacePanel {
     }
     pub fn hide(&mut self) {
         self.open = false;
+        if let Some(pending) = &self.pending { pending.cancel.store(true, Ordering::Relaxed); }
     }
     /// Caller must authorize the actual path before adding; this does no I/O.
     pub fn add_root(&mut self, path: PathBuf) {
@@ -206,17 +214,28 @@ impl WorkspacePanel {
         let id = self.model.insert(path, true);
         self.model.roots.push(id);
     }
-    fn request(&mut self, id: NodeId) {
+    fn request(&mut self, id: NodeId, replace: bool) {
         if self.pending.is_some() {
             self.message = Some("Folder discovery busy; try again when ready".into());
             return;
         }
         // Continuation replaces the previous page at the resident-node ceiling.
         // The live ReadDir cursor advances, so every entry remains reachable.
-        if NODE_LIMIT.saturating_sub(self.model.nodes.len()) < ENTRY_LIMIT {
+        let Some(target) = self.model.nodes.get(&id.0).map(|n| n.path.clone()) else { return; };
+        while NODE_LIMIT.saturating_sub(self.model.nodes.len()) < ENTRY_LIMIT {
+            let candidate = self.model.nodes.iter()
+                .filter(|(candidate, n)| **candidate != id.0 && !target.starts_with(&n.path) && n.children.as_ref().is_some_and(|c| !c.is_empty()))
+                .min_by_key(|(candidate, _)| (self.expanded.contains(candidate), **candidate)).map(|(&candidate, _)| NodeId(candidate));
+            let Some(candidate) = candidate else { break; };
+            self.release_children(candidate);
+            if let Some(node) = self.model.nodes.get_mut(&candidate.0) { node.cursor = None; }
+            self.expanded.remove(&candidate.0);
+        }
+        if !replace && NODE_LIMIT.saturating_sub(self.model.nodes.len()) < ENTRY_LIMIT {
             self.release_children(id);
         }
-        let capacity = ENTRY_LIMIT.min(NODE_LIMIT.saturating_sub(self.model.nodes.len()));
+        let replaced = if replace { self.model.nodes.get(&id.0).and_then(|n| n.children.as_ref()).map_or(0, Vec::len) } else { 0 };
+        let capacity = ENTRY_LIMIT.min(NODE_LIMIT.saturating_sub(self.model.nodes.len()) + replaced);
         if capacity == 0 {
             self.message =
                 Some("Tree budget reached; Refresh Workspace to release loaded branches".into());
@@ -225,15 +244,17 @@ impl WorkspacePanel {
         let Some(node) = self.model.nodes.get_mut(&id.0) else {
             return;
         };
-        if !node.directory || (node.children.is_some() && node.cursor.is_none()) {
+        if !node.directory || (!replace && node.children.is_some() && node.cursor.is_none()) {
             return;
         }
-        let cursor = node.cursor.take();
+        let cursor = if replace { node.cursor = None; None } else { node.cursor.take() };
         let path = node.path.clone();
         let guard = self.directory_guard.clone();
         let excludes = self.excludes.clone();
         let notify = self.notify.clone();
         let (tx, rx) = mpsc::sync_channel(1);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let worker_cancel = cancel.clone();
         match std::thread::Builder::new()
             .name("workspace-discovery".into())
             .spawn(move || {
@@ -251,7 +272,7 @@ impl WorkspacePanel {
                     })(),
                 };
                 let result = match cursor {
-                    Ok(cursor) => enumerate_page(id, cursor, capacity, &excludes),
+                    Ok(cursor) => enumerate_page(id, cursor, capacity, &excludes, &worker_cancel),
                     Err(error) => Listing {
                         parent: id,
                         entries: vec![],
@@ -263,26 +284,24 @@ impl WorkspacePanel {
                 notify();
             }) {
             Ok(_) => {
-                self.pending = Some(rx);
+                self.pending = Some(PendingListing { receiver: rx, cancel, replace });
                 self.message = Some("Loading folder…".into());
             }
             Err(error) => self.message = Some(error.to_string()),
         }
     }
     pub fn pump(&mut self) -> bool {
-        if self.pending.is_none() {
+        if self.open && self.pending.is_none() {
             if let Some(id) = self.dirty.pop_first() {
                 let id = NodeId(id);
-                self.release_children(id);
-                if let Some(node) = self.model.nodes.get_mut(&id.0) { node.cursor = None; }
-                self.request(id);
+                self.request(id, true);
                 return true;
             }
         }
-        let Some(rx) = &self.pending else {
+        let Some(pending) = &self.pending else {
             return false;
         };
-        let listing = match rx.try_recv() {
+        let listing = match pending.receiver.try_recv() {
             Ok(v) => v,
             Err(mpsc::TryRecvError::Empty) => return false,
             Err(_) => {
@@ -291,31 +310,60 @@ impl WorkspacePanel {
                 return true;
             }
         };
-        self.pending = None;
+        let pending = self.pending.take().unwrap();
+        if pending.cancel.load(Ordering::Relaxed) {
+            self.dirty.insert(listing.parent.0);
+            return true;
+        }
+        self.apply_listing(listing, pending.replace);
+        true
+    }
+    fn apply_listing(&mut self, listing: Listing, replace: bool) {
+        if !self.model.nodes.contains_key(&listing.parent.0) { return; }
         self.message = listing.status;
-        let children: Vec<_> = listing
-            .entries
-            .into_iter()
-            .map(|(path, directory)| self.model.insert(path, directory))
-            .collect();
+        let old = self.model.nodes[&listing.parent.0].children.clone().unwrap_or_default();
+        let mut resident: BTreeMap<_, _> = old.iter().filter_map(|id| self.model.nodes.get(&id.0).map(|n| (n.path.clone(), (*id, n.directory)))).collect();
+        let mut children = if replace { Vec::new() } else { old.clone() };
+        let mut retained: BTreeSet<_> = children.iter().map(|id| id.0).collect();
+        for (path, directory) in listing.entries {
+            let id = if let Some((id, old_directory)) = resident.remove(&path) {
+                if old_directory != directory {
+                    self.release_children(id);
+                    let node = self.model.nodes.get_mut(&id.0).unwrap();
+                    node.directory = directory; node.cursor = None;
+                }
+                id
+            } else { self.model.insert(path, directory) };
+            if retained.insert(id.0) { children.push(id); }
+        }
+        if replace {
+            for (_, (id, _)) in resident {
+                self.release_children(id);
+                self.model.nodes.remove(&id.0);
+                self.dirty.remove(&id.0); self.expanded.remove(&id.0);
+                if self.selected == Some(id) { self.selected = Some(listing.parent); }
+            }
+        }
+        self.tree.replace_child_ids(listing.parent, &old, &children);
         if let Some(node) = self.model.nodes.get_mut(&listing.parent.0) {
-            node.children.get_or_insert_with(Vec::new).extend(children);
+            node.children = Some(children);
             node.cursor = listing.cursor;
             self.tree
                 .update_child_count(listing.parent, node.children.as_ref().unwrap().len());
         }
         // The control requested this selected branch before its children existed.
         self.tree.expand_selected(&self.model);
-        true
     }
     fn action(&mut self, action: Option<TreeAction>) -> Option<PanelAction> {
         match action {
             Some(TreeAction::Selected(id)) => self.selected = Some(id),
             Some(TreeAction::RequestChildren(Some(id))) => {
                 self.selected = Some(id);
-                self.request(id);
+                self.expanded.insert(id.0);
+                self.request(id, false);
             }
-            Some(TreeAction::Expanded(id) | TreeAction::Collapsed(id)) => self.selected = Some(id),
+            Some(TreeAction::Expanded(id)) => { self.selected = Some(id); self.expanded.insert(id.0); }
+            Some(TreeAction::Collapsed(id)) => { self.selected = Some(id); self.expanded.remove(&id.0); }
             Some(TreeAction::Activated(id)) => {
                 let node = self.model.nodes.get(&id.0)?;
                 if !node.directory {
@@ -334,6 +382,17 @@ impl WorkspacePanel {
         }
         self.tree.state.focused = true;
         let action = self.tree.event(UiEvent::Key(key), &self.model);
+        self.action(action)
+    }
+    pub fn semantics(&self, parent: bareline_ui::ViewId, prefix: u64) -> Vec<bareline_ui::semantics::SemanticEntry> {
+        if !self.open { return Vec::new(); }
+        let mut entries = self.tree.visible_semantics(&self.model, parent, |id| bareline_ui::ViewId(prefix + id.0), "workspace.activateEntry");
+        for entry in &mut entries { entry.node.actions.push(bareline_ui::widgets::SemanticAction::Focus); }
+        entries
+    }
+    pub fn accessibility_action(&mut self, id: NodeId, action: bareline_ui::widgets::SemanticAction) -> Option<PanelAction> {
+        self.tree.state.focused = true;
+        let action = self.tree.accessibility_action(&self.model, id, action);
         self.action(action)
     }
     /// Select the contextual target without opening it or toggling a branch.
@@ -427,6 +486,7 @@ fn enumerate_page(
     mut cursor: DirectoryCursor,
     capacity: usize,
     excludes: &[String],
+    cancel: &AtomicBool,
 ) -> Listing {
     let mut result = Listing {
         parent,
@@ -438,6 +498,7 @@ fn enumerate_page(
     // Count visited entries, not only matches: an excluded million-entry folder
     // still yields after one page and exposes continuation to the user.
     for _ in 0..capacity {
+        if cancel.load(Ordering::Relaxed) { break; }
         let Some(entry) = cursor.entries.next() else {
             exhausted = true;
             break;
@@ -492,6 +553,7 @@ fn enumerate(parent: NodeId, path: PathBuf, capacity: usize) -> Listing {
             },
             capacity,
             &[],
+            &AtomicBool::new(false),
         ),
         Err(error) => Listing {
             parent,

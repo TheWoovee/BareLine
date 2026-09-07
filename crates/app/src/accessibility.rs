@@ -366,6 +366,7 @@ pub fn snapshot(
         focus,
         nodes,
         text,
+        text_geometry: Vec::new(),
         text_context: editor.map(|e| AccessibilityTextContext {
             source_identity: e.snapshot().identity_token(),
             selection: (e.selection.anchor, e.selection.caret),

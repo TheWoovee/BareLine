@@ -8,6 +8,7 @@ use std::sync::{
 #[derive(Clone, Default)]
 pub struct Cancellation(Arc<AtomicBool>);
 impl Cancellation {
+    pub fn from_flag(flag: Arc<AtomicBool>) -> Self { Self(flag) }
     pub fn cancel(&self) {
         self.0.store(true, Ordering::Release);
     }

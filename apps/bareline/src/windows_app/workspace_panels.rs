@@ -20,6 +20,10 @@ enum Focus {
     Documents,
     Outline,
 }
+const ACCESS_GROUP: u64 = 90_000_009;
+const ACCESS_EXPLORER: u64 = 0x9009_0000_0000_0000;
+const ACCESS_DOCUMENTS: u64 = 0x9009_1000_0000_0000;
+const ACCESS_OUTLINE: u64 = 0x9009_2000_0000_0000;
 pub struct WorkspacePanelsRuntime {
     explorer: Option<WorkspacePanel>,
     documents: DocumentList,
@@ -63,6 +67,35 @@ impl Default for WorkspacePanelsRuntime {
     }
 }
 impl WorkspacePanelsRuntime {
+    fn semantics(&self) -> Vec<bareline_ui::semantics::SemanticEntry> {
+        use bareline_ui::{ViewId, controls::ControlState, semantics::SemanticEntry, widgets::{Semantics, SemanticRole, SemanticAction}};
+        let mut entries = Vec::new();
+        for (open, id, label, role, bounds, filter) in [
+            (self.explorer.as_ref().is_some_and(|p| p.open), ACCESS_EXPLORER, "Workspace", SemanticRole::Tree, self.left, None),
+            (self.documents.open, ACCESS_DOCUMENTS, "Documents", SemanticRole::List, self.left, Some(self.document_filter.as_str())),
+            (self.outline.open, ACCESS_OUTLINE, "Outline", SemanticRole::Tree, self.right, Some(self.outline_filter.as_str())),
+        ] {
+            if !open { continue; }
+            entries.push(SemanticEntry { parent: ViewId(ACCESS_GROUP), node: Semantics::new(ViewId(id), role, label, "", bounds, ControlState::default()) });
+            if let Some(value) = filter {
+                let mut node = Semantics::new(ViewId(id + 1), SemanticRole::TextField, &format!("Filter {label}"), if id == ACCESS_DOCUMENTS { "documents.filter" } else { "outline.filter" },
+                    Rect { height: 28.0, ..bounds }, ControlState::default()).action(SemanticAction::Focus).action(SemanticAction::SetValue);
+                node.value = Some(value.into());
+                entries.push(SemanticEntry { parent: ViewId(id), node });
+            }
+        }
+        if let Some(panel) = &self.explorer {
+            let mut nodes = panel.semantics(ViewId(ACCESS_EXPLORER), ACCESS_EXPLORER + 65536);
+            for entry in &mut nodes {
+                entry.node.bounds.y += TAB_HEIGHT;
+                entry.node.focused &= self.focus == Focus::Explorer;
+            }
+            entries.extend(nodes);
+        }
+        entries.extend(self.documents.semantics(ViewId(ACCESS_DOCUMENTS), ACCESS_DOCUMENTS, self.focus == Focus::Documents));
+        entries.extend(self.outline.semantics(ViewId(ACCESS_OUTLINE), ACCESS_OUTLINE, self.focus == Focus::Outline));
+        entries
+    }
     fn explorer(&mut self) -> &mut WorkspacePanel {
         self.explorer.get_or_insert_with(|| {
             let mut panel = WorkspacePanel::new(self.notify.clone());
@@ -235,6 +268,66 @@ impl WorkspacePanelsRuntime {
     }
 }
 impl Shell {
+    pub(super) fn panels_accessibility_nodes(&self) -> Vec<bareline_platform::accessibility::AccessibilityNode> {
+        use bareline_platform::accessibility::{AccessibilityNode, AccessibilityRole};
+        let entries = self.panels.semantics();
+        if entries.is_empty() { return Vec::new(); }
+        let mut nodes = vec![AccessibilityNode { id: ACCESS_GROUP, parent: 1, role: AccessibilityRole::Group, name: "Navigation panels".into(), value: None,
+            bounds: [0.0, TAB_HEIGHT as f64, 0.0, 0.0], disabled: false, selected: false, expanded: None, focusable: false, invokable: false }];
+        nodes.extend(entries.iter().map(|entry| bareline_app::accessibility::semantic_node(&entry.node, entry.parent.0)));
+        nodes
+    }
+    pub(super) fn panels_accessibility_focus(&self) -> Option<u64> {
+        self.panels.semantics().into_iter().find(|entry| entry.node.focused).map(|entry| entry.node.id.0)
+    }
+    pub(super) fn panels_accessibility(&mut self, el: &ActiveEventLoop, action: &bareline_platform::accessibility::AccessibilityAction) -> bool {
+        use bareline_platform::accessibility::AccessibilityAction;
+        use bareline_ui::widgets::SemanticAction;
+        let (id, invoke) = match action {
+            AccessibilityAction::Focus(id) => (*id, false),
+            AccessibilityAction::Invoke(id) => (*id, true),
+            AccessibilityAction::SetValue { id, value } => {
+                if value.len() > 256 { return false; }
+                if *id == ACCESS_DOCUMENTS + 1 && self.panels.documents.open {
+                    self.panels.document_filter = value.clone();
+                    self.panels.documents.set_filter(value);
+                    self.panels.focus = Focus::Documents;
+                } else if *id == ACCESS_OUTLINE + 1 && self.panels.outline.open {
+                    self.panels.outline_filter = value.clone();
+                    self.panels.outline.set_filter(value);
+                    self.panels.focus = Focus::Outline;
+                } else { return false; }
+                if let Some(window) = &self.window { window.request_redraw(); }
+                return true;
+            }
+            _ => return false,
+        };
+        if !self.panels.semantics().iter().any(|entry| entry.node.id.0 == id) { return false; }
+        if (ACCESS_EXPLORER..ACCESS_DOCUMENTS).contains(&id) {
+            self.panels.focus = Focus::Explorer;
+            if let Some(local) = id.checked_sub(ACCESS_EXPLORER + 65536) {
+                let action = self.panels.explorer().accessibility_action(bareline_ui::virtual_tree::NodeId(local), if invoke { SemanticAction::Invoke } else { SemanticAction::Focus });
+                if let Some(PanelAction::Open(path)) = action && self.ensure_workspace(el) {
+                    self.workspace.as_mut().unwrap().open(path);
+                }
+            }
+        } else if (ACCESS_DOCUMENTS..ACCESS_OUTLINE).contains(&id) {
+            self.panels.focus = Focus::Documents;
+            if let Some(action) = self.panels.documents.accessibility_action(id, ACCESS_DOCUMENTS, invoke) {
+                self.panel_document_action(el, action);
+            }
+        } else {
+            self.panels.focus = Focus::Outline;
+            if let Some(editor) = self.workspace.as_mut().and_then(|w| w.editors.get_mut(self.app.active))
+                && let Some(offset) = self.panels.outline.accessibility_action(id, ACCESS_OUTLINE, invoke, editor.snapshot()) {
+                let mut selection = editor.selection;
+                selection.anchor = offset.0; selection.caret = offset.0;
+                let _ = editor.set_selections(selection.into());
+            }
+        }
+        if let Some(window) = &self.window { window.request_redraw(); }
+        true
+    }
     pub(super) fn panels_context_commands(&mut self) -> Option<Vec<bareline_commands::CommandId>> {
         if !self.panels.left.contains(self.pointer) {
             return None;

@@ -20,6 +20,7 @@ pub struct WindowsPlatform {
     commands: Vec<Action>,
     command_ids: Vec<CommandId>,
     item_menus: Vec<HMENU>,
+    submenu_labels: Vec<(HMENU, u32, String)>,
 }
 impl WindowsPlatform {
     fn append_model(
@@ -56,6 +57,7 @@ impl WindowsPlatform {
                     }
                 }
                 MenuItem::Submenu { title, items } => unsafe {
+                    let position = GetMenuItemCount(Some(menu)) as u32;
                     let child = CreatePopupMenu()?;
                     let label = wide(title);
                     if let Err(error) =
@@ -64,6 +66,8 @@ impl WindowsPlatform {
                         let _ = DestroyMenu(child);
                         return Err(error);
                     }
+                    self.submenu_labels
+                        .push((menu, position, title.to_string()));
                     self.append_model(child, items, registry)?;
                 },
             }
@@ -83,6 +87,16 @@ impl WindowsPlatform {
         context: &CommandContext,
         keymap: &Keymap,
     ) -> windows::core::Result<()> {
+        self.sync_commands_localized(registry, context, keymap, |_, fallback| fallback.to_owned())
+    }
+    /// Stable command IDs and `menu.<English title>` IDs share one data-only label resolver.
+    pub fn sync_commands_localized(
+        &self,
+        registry: &CommandRegistry,
+        context: &CommandContext,
+        keymap: &Keymap,
+        label_for: impl Fn(&str, &str) -> String,
+    ) -> windows::core::Result<()> {
         for (index, id) in self.command_ids.iter().enumerate() {
             let Some(spec) = registry.entries().find(|spec| spec.id == *id) else {
                 continue;
@@ -92,7 +106,7 @@ impl WindowsPlatform {
             };
             let mut label = wide(&format!(
                 "{}\t{}",
-                state.label.as_deref().unwrap_or(spec.title),
+                label_for(id.0, state.label.as_deref().unwrap_or(spec.title)),
                 keymap.shortcut_label(*id)
             ));
             let info = MENUITEMINFOW {
@@ -112,6 +126,18 @@ impl WindowsPlatform {
             };
             unsafe {
                 SetMenuItemInfoW(self.item_menus[index], (index + 1) as u32, false, &info)?;
+            }
+        }
+        for (menu, position, title) in &self.submenu_labels {
+            let mut label = wide(&label_for(&format!("menu.{title}"), title));
+            let info = MENUITEMINFOW {
+                cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32,
+                fMask: MIIM_STRING,
+                dwTypeData: windows::core::PWSTR(label.as_mut_ptr()),
+                ..Default::default()
+            };
+            unsafe {
+                SetMenuItemInfoW(*menu, *position, true, &info)?;
             }
         }
         unsafe { DrawMenuBar(self.hwnd) }
@@ -170,6 +196,7 @@ impl WindowsPlatform {
             commands: Vec::new(),
             command_ids: Vec::new(),
             item_menus: Vec::new(),
+            submenu_labels: Vec::new(),
         };
         // SAFETY: menu handles are transferred to the live window after successful SetMenu.
         unsafe {

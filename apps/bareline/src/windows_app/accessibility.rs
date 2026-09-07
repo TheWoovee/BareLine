@@ -3,6 +3,17 @@ use super::Shell;
 use bareline_platform::accessibility::{
     AccessibilityNode, AccessibilityRole, AccessibilitySnapshot,
 };
+fn semantic_group(nodes: &mut Vec<AccessibilityNode>, id: u64, name: &str, mut children: Vec<AccessibilityNode>) {
+    if children.is_empty() { return; }
+    let x = children.iter().map(|n| n.bounds[0]).fold(f64::INFINITY, f64::min);
+    let y = children.iter().map(|n| n.bounds[1]).fold(f64::INFINITY, f64::min);
+    let right = children.iter().map(|n| n.bounds[0]+n.bounds[2]).fold(x, f64::max);
+    let bottom = children.iter().map(|n| n.bounds[1]+n.bounds[3]).fold(y, f64::max);
+    for node in &mut children { if node.parent == 1 { node.parent = id; } }
+    nodes.push(AccessibilityNode { id, parent: 1, role: AccessibilityRole::Group, name: name.into(), value: None,
+        bounds: [x,y,right-x,bottom-y], disabled: false, selected: false, expanded: None, focusable: false, invokable: false });
+    nodes.extend(children);
+}
 impl Shell {
     pub(super) fn accessibility_text_source(&self) -> Option<std::sync::Arc<dyn bareline_platform::accessibility::AccessibilityTextSource>> {
         self.workspace.as_ref().and_then(|w| w.editors.get(self.app.active)).map(|editor| bareline_app::accessibility::text_source(editor, self.notify.clone()))
@@ -15,23 +26,26 @@ impl Shell {
     ) -> AccessibilitySnapshot {
         let mut focus = 2;
         let editor_bounds = self.editor_bounds();
-        let mut chrome = bareline_app::accessibility::tabs(&self.app, width as f32);
-        chrome.extend(
+        let mut chrome = Vec::new();
+        semantic_group(&mut chrome, 90_000_001, "Document tabs", bareline_app::accessibility::tabs(&self.app, width as f32));
+        semantic_group(&mut chrome, 90_000_002, "Command palette",
             self.palette
                 .semantics()
                 .iter()
-                .map(|n| bareline_app::accessibility::semantic_node(n, 1)),
+                .map(|n| bareline_app::accessibility::semantic_node(n, 1)).collect(),
         );
         let editor = self
             .workspace
             .as_ref()
             .and_then(|w| w.editors.get(self.app.active));
+        let mut settings_nodes = Vec::new();
         for semantic in self.settings.controller.semantics() {
             if semantic.focused {
                 focus = semantic.id.0;
             }
-            chrome.push(bareline_app::accessibility::semantic_node(&semantic, 1));
+            settings_nodes.push(bareline_app::accessibility::semantic_node(&semantic, 1));
         }
+        semantic_group(&mut chrome, 90_000_012, "Settings", settings_nodes);
         if let Some(workspace) = &self.workspace {
             for semantic in workspace
                 .find
@@ -102,14 +116,34 @@ impl Shell {
                 });
             }
         }
+        let mut toolbar_nodes = Vec::new();
         for semantic in self.toolbar.controller.semantics() {
             if semantic.focused && !self.settings.controller.open {
                 focus = semantic.id.0;
             }
-            chrome.push(bareline_app::accessibility::semantic_node(&semantic, 1));
+            toolbar_nodes.push(bareline_app::accessibility::semantic_node(&semantic, 1));
         }
+        semantic_group(&mut chrome, 90_000_003, "Toolbar", toolbar_nodes);
+        chrome.extend(self.recovery_accessibility_nodes());
+        chrome.extend(self.compare_accessibility_nodes());
+        if !self.settings.controller.open {
+            if let Some(id) = self.recovery_accessibility_focus() { focus = id; }
+            if let Some(id) = self.compare_accessibility_focus() { focus = id; }
+        }
+        let mut manager = Vec::new();
+        let mut output = Vec::new();
+        for semantic in self.macros.controller.semantics() {
+            if semantic.focused && !self.settings.controller.open { focus = semantic.id.0; }
+            let node = bareline_app::accessibility::semantic_node(&semantic, 1);
+            if semantic.id.0 >= 2_000_000 { output.push(node); } else { manager.push(node); }
+        }
+        semantic_group(&mut chrome, 90_000_014, "Macro and Run manager", manager);
+        semantic_group(&mut chrome, 90_000_015, "Command output", output);
+        let power_nodes = self.power.accessibility_nodes();
+        if let Some(node) = power_nodes.iter().find(|n| n.selected && n.focusable) { focus = node.id; }
+        semantic_group(&mut chrome, 90_000_006, "Column editor and clipboard history", power_nodes);
         if self.shortcuts.open {
-            chrome.extend(self.shortcuts.accessibility_nodes(&self.app.commands));
+            semantic_group(&mut chrome, 90_000_004, "Keyboard shortcuts", self.shortcuts.accessibility_nodes(&self.app.commands));
             focus = if self.shortcuts.binding_focus {
                 19001
             } else {
@@ -124,9 +158,16 @@ impl Shell {
             chrome,
             if self.palette.open { 11000 } else { focus },
         );
+        if let (Some(editor), Some(renderer)) = (editor, self.renderer.as_ref()) {
+            snapshot.text_geometry = editor.accessibility_geometry(renderer, editor_bounds.width, editor_bounds.height).into_iter().map(|(range, rect)| bareline_platform::accessibility::AccessibilityTextBox {
+                start: range.start, end: range.end,
+                bounds: [(rect.x as f64+editor_bounds.x as f64)*scale, (rect.y as f64+editor_bounds.y as f64)*scale, rect.width as f64*scale, rect.height as f64*scale],
+            }).collect();
+        }
         if let Some(bareline_app::workspace::WorkspaceEditor::Paged(editor)) = editor {
             let base = editor.viewport_start().0;
             if let Some(text) = &mut snapshot.text { text.start_byte += base; }
+            for rect in &mut snapshot.text_geometry { rect.start += base; rect.end += base; }
             if let Some(context) = &mut snapshot.text_context {
                 context.source_identity = editor.snapshot().identity_token();
                 context.selection.0 += base;
@@ -160,6 +201,21 @@ impl Shell {
             .as_mut()
             .map_or_else(Vec::new, |p| p.drain_actions());
         for action in actions {
+            if self.power_accessibility(&action) { continue; }
+            if !self.palette.open && !self.power.open && !self.settings.controller.open {
+                if self.recovery_accessibility(el, &action) || self.compare_accessibility(el, &action) { continue; }
+            }
+            if !self.palette.open && !self.power.open && !self.settings.controller.open {
+                let target = match &action {
+                    AccessibilityAction::Focus(id) => Some((*id, false, None)),
+                    AccessibilityAction::Invoke(id) => Some((*id, true, None)),
+                    AccessibilityAction::SetValue { id, value } => Some((*id, false, Some(value.clone()))),
+                    _ => None,
+                };
+                if let Some((id, invoke, value)) = target {
+                    if self.macros_accessibility(el, id, invoke, value) { continue; }
+                }
+            }
             if self.shortcuts_accessibility(&action) {
                 continue;
             }
@@ -197,10 +253,8 @@ impl Shell {
             }
             if self.settings.controller.open && !self.palette.open {
                 let effect = match &action {
-                    AccessibilityAction::SetValue { id: 8000, value } => {
-                        self.settings.controller.query.select_all();
-                        self.settings.controller.query.insert(value);
-                        self.settings.controller.query_changed();
+                    AccessibilityAction::SetValue { id, value } => {
+                        self.settings.controller.accessibility_set_value(*id, value);
                         None
                     }
                     AccessibilityAction::Focus(id) => {
@@ -224,6 +278,7 @@ impl Shell {
             }
             match action {
                 AccessibilityAction::ScrollToText { source_identity, offset } => {
+                    let height = self.editor_bounds().height;
                     if let Some(editor) = self.workspace.as_mut().and_then(|w| w.editors.get_mut(self.app.active)) {
                         if bareline_app::accessibility::source_identity(editor) != source_identity || editor.busy() { continue; }
                         match editor {
@@ -231,7 +286,7 @@ impl Shell {
                                 if let Err(error) = editor.request_viewport(bareline_document::TextOffset(offset)) { editor.error = Some(error); }
                             }
                             bareline_app::workspace::WorkspaceEditor::Resident(editor) => {
-                                if bareline_app::accessibility::selection_valid(editor, offset, offset) { editor.enqueue(Input::SetCaret(offset, false)); }
+                                editor.accessibility_scroll_to(offset, height);
                             }
                         }
                     }

@@ -344,6 +344,7 @@ mod tests {
         AccessibilitySnapshot {
             root: 1,
             focus: 2,
+            text_geometry: Vec::new(),
             text_context: Some(AccessibilityTextContext { source_identity: (7, 3), selection: (5_000_000_001, 5_000_000_003), composition: None }),
             nodes: vec![
                 AccessibilityNode {

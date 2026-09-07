@@ -53,6 +53,14 @@ pub struct AccessibilitySnapshot {
     pub nodes: Vec<AccessibilityNode>,
     pub text: Option<AccessibilityText>,
     pub text_context: Option<AccessibilityTextContext>,
+    /// Visible grapheme boxes from actual shaped layouts, in physical client px.
+    pub text_geometry: Vec<AccessibilityTextBox>,
+}
+#[derive(Clone, Debug, PartialEq)]
+pub struct AccessibilityTextBox {
+    pub start: usize,
+    pub end: usize,
+    pub bounds: [f64; 4],
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AccessibilityTextContext {
@@ -94,6 +102,9 @@ pub trait AccessibilityTextSource: Send + Sync {
 impl AccessibilitySnapshot {
     /// Validate before passing an external tree to the native provider.
     pub fn validate(&self) -> Result<(), &'static str> {
+        if self.text_geometry.len() > 4096 || self.text_geometry.iter().any(|rect| {
+            rect.start > rect.end || rect.bounds.iter().any(|v| !v.is_finite()) || rect.bounds[2] < 0.0 || rect.bounds[3] < 0.0
+        }) { return Err("invalid bounded text geometry"); }
         let ids: std::collections::BTreeSet<_> = self.nodes.iter().map(|n| n.id).collect();
         if ids.len() != self.nodes.len() || !ids.contains(&self.root) || !ids.contains(&self.focus)
         {

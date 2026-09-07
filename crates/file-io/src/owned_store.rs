@@ -46,8 +46,13 @@ pub fn prepare_resident(
     writer.output.sync_all()?;
     let used = writer.written;
     drop(writer);
-    let mut job = DiskTranscoder::new(FileInput { path: path.clone(), file: std::fs::File::open(&path)? }, platform.clone(), cache,
-        DiskOptions { temp_quota_bytes: quota.saturating_sub(used), interpret: Some(encoding.map_or(Encoding::Utf8, |encoding| encoding.state.save_target)) }, bytes.clone(), cancellation.clone()).map_err(FileError::Transcode)?;
+    let input = FileInput { path: path.clone(), file: std::fs::File::open(&path)? };
+    let options_disk = DiskOptions { temp_quota_bytes: quota.saturating_sub(used), interpret: Some(encoding.map_or(Encoding::Utf8, |encoding| encoding.state.save_target)) };
+    let mut job = if encoding.map_or(bom, |encoding| encoding.state.bom) {
+        DiskTranscoder::new(input, platform.clone(), cache, options_disk, bytes.clone(), cancellation.clone())
+    } else {
+        DiskTranscoder::continuation(input, platform.clone(), cache, options_disk, bytes.clone(), cancellation.clone())
+    }.map_err(FileError::Transcode)?;
     loop { if job.step().map_err(FileError::Transcode)?.complete { break; } }
     let store = job.finish().map_err(FileError::Transcode)?;
     let result = store.open_paged(platform, options, bytes, history, cancellation).map_err(FileError::Transcode)?;

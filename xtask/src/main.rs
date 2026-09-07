@@ -84,6 +84,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     fs::create_dir_all(isolated.join("data"))?;
     let measured_executable = isolated.join("bareline.exe");
     fs::copy(&executable, &measured_executable)?;
+    let mut copied = fs::File::open(&measured_executable)?;
+    let mut copied_hash = Sha256::new();
+    loop {
+        let read = copied.read(&mut chunk)?;
+        if read == 0 { break; }
+        copied_hash.update(&chunk[..read]);
+    }
+    if format!("{:x}", copied_hash.finalize()) != digest {
+        return Err("Editor binary changed while preparing isolated measurement".into());
+    }
     fs::write(isolated.join("bareline.portable"), [])?;
     let mut samples = Vec::new();
     let mut failures = 0usize;

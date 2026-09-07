@@ -4,18 +4,18 @@ use super::*;
 use bareline_app::workspace::WorkspaceEditor;
 use bareline_commands::{CommandContext, CommandId, CommandRegistry, CommandSpec, CommandState};
 use std::collections::VecDeque;
-enum Identity {
+pub(super) enum Identity {
     Resident(bareline_document::DocumentSnapshot),
     Paged(bareline_document::paged::PagedSnapshot),
 }
 impl Identity {
-    fn capture(editor: &WorkspaceEditor) -> Self {
+    pub(super) fn capture(editor: &WorkspaceEditor) -> Self {
         match editor {
             WorkspaceEditor::Resident(e) => Self::Resident(e.snapshot().clone()),
             WorkspaceEditor::Paged(e) => Self::Paged(e.snapshot().clone()),
         }
     }
-    fn matches(&self, editor: &WorkspaceEditor) -> bool {
+    pub(super) fn matches(&self, editor: &WorkspaceEditor) -> bool {
         match (self, editor) {
             (Self::Resident(a), WorkspaceEditor::Resident(b)) => a.same_document(b.snapshot()),
             (Self::Paged(a), WorkspaceEditor::Paged(b)) => a.same_document(b.snapshot()),

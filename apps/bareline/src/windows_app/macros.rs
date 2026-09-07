@@ -4,7 +4,7 @@ mod location;
 use bareline_app::macros::{
     MacrosController,
     model::{
-        MacroEvent, PlaybackState, Repeat,
+        PlaybackState, Repeat,
         process::{
             ExternalDefinition, LaunchMode, PlaceholderContext, ProcessPermission, ProcessState,
         },
@@ -13,7 +13,6 @@ use bareline_app::macros::{
 use bareline_renderer::{DrawOp, Rect};
 use bareline_ui::controls::{Key as UiKey, UiEvent};
 use std::{
-    collections::BTreeMap,
     io::{Read, Write},
     sync::mpsc,
 };
@@ -51,6 +50,8 @@ pub struct MacrosRuntime {
     location_cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
     prepare_cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
     output_directory: Option<PathBuf>,
+    theme: bareline_ui::theme::UiTheme,
+    command_context: bareline_commands::CommandContext,
 }
 impl Default for MacrosRuntime {
     fn default() -> Self {
@@ -70,6 +71,8 @@ impl Default for MacrosRuntime {
             location_cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             prepare_cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             output_directory: None,
+            theme: Default::default(),
+            command_context: Default::default(),
         }
     }
 }
@@ -176,6 +179,68 @@ impl MacrosRuntime {
     }
     pub fn annotate_context(&self, context: &mut bareline_commands::CommandContext) {
         use bareline_commands::{CommandId, CommandState};
+        let playing = self.controller.playback.as_ref().is_some_and(|playback| {
+            matches!(
+                playback.state(),
+                PlaybackState::Running | PlaybackState::Waiting(_)
+            )
+        });
+        context.states.insert(
+            CommandId("macro.record"),
+            CommandState {
+                checked: self.controller.recorder.recording(),
+                ..Default::default()
+            },
+        );
+        if self.controller.recorder.recording() || playing {
+            context.states.insert(
+                CommandId("macro.record"),
+                CommandState::disabled("Stop the current recording or playback first"),
+            );
+        }
+        for id in [
+            "macro.play",
+            "macro.play_eof",
+            "macro.play_n",
+            "macro.rename",
+            "macro.ghost",
+            "macro.shortcut",
+        ] {
+            if self.controller.selected.is_none() {
+                context.states.insert(
+                    CommandId(id),
+                    CommandState::disabled("Select a recorded or imported macro first"),
+                );
+            } else if playing || self.controller.recorder.recording() {
+                context.states.insert(
+                    CommandId(id),
+                    CommandState::disabled("Stop recording or playback first"),
+                );
+            }
+        }
+        if !playing {
+            context.states.insert(
+                CommandId("macro.cancel"),
+                CommandState::disabled("Macro playback is not active"),
+            );
+        }
+        if !self
+            .controller
+            .playback
+            .as_ref()
+            .is_some_and(|playback| matches!(playback.state(), PlaybackState::Failed { .. }))
+        {
+            context.states.insert(
+                CommandId("macro.resume"),
+                CommandState::disabled("No failed macro location is available"),
+            );
+        }
+        if self.storage_ready || self.pending.is_some() {
+            context.states.insert(
+                CommandId("macro.reload"),
+                CommandState::disabled("Macro storage is already loaded or loading"),
+            );
+        }
         if !self.storage_ready {
             for id in [
                 "macro.record",
@@ -273,13 +338,14 @@ impl MacrosRuntime {
             width,
             self.height(),
         );
-        self.controller.draw_output(self.bounds, ops);
+        self.controller.draw_output(self.bounds, self.theme, ops);
         if let Err(error) = self.controller.manager.draw(
             renderer,
             width,
             height,
             &self.controller.status,
-            bareline_ui::theme::UiTheme::default(),
+            self.theme,
+            &self.command_context,
             ops,
         ) {
             self.controller.status = format!("Macro manager layout failed: {error:?}");
@@ -471,67 +537,31 @@ impl Shell {
             None => {}
         }
     }
-    /// Owner supplies this only after an acknowledged deterministic command.
-    pub(super) fn macros_record_command(&mut self, id: &str, arguments: BTreeMap<String, String>) {
-        if self.macros.controller.recorder.recording() {
-            if let Err(error) = self.macros.controller.recorded(
-                MacroEvent::Command {
-                    id: id.into(),
-                    arguments,
-                },
-                true,
-                &self.app.commands,
-            ) {
-                self.macros.controller.status = error;
-            }
-        }
-    }
-    /// Call after the exact normalized Input has acknowledged success, including navigation.
-    pub(super) fn macros_record_input(&mut self, input: &Input) {
-        if !self.macros.controller.recorder.recording() {
-            return;
-        }
-        let mut arguments = BTreeMap::new();
-        let id = match input {
-            Input::Insert(value) => {
-                arguments.insert("text".into(), value.clone());
-                "edit.insert_text"
-            }
-            Input::Backspace => "edit.backspace",
-            Input::Delete => "edit.delete",
-            Input::Undo => "edit.undo",
-            Input::Redo => "edit.redo",
-            Input::SelectAll => "edit.select_all",
-            Input::Left(extend)
-            | Input::Right(extend)
-            | Input::Up(extend)
-            | Input::Down(extend)
-            | Input::Home(extend)
-            | Input::End(extend) => {
-                arguments.insert("extend".into(), extend.to_string());
-                match input {
-                    Input::Left(_) => "edit.move_left",
-                    Input::Right(_) => "edit.move_right",
-                    Input::Up(_) => "edit.move_up",
-                    Input::Down(_) => "edit.move_down",
-                    Input::Home(_) => "edit.move_home",
-                    _ => "edit.move_end",
-                }
-            }
-            _ => return,
-        };
-        if let Err(error) = self.macros.controller.recorded(
-            MacroEvent::Command {
-                id: id.into(),
-                arguments,
-            },
-            true,
-            &self.app.commands,
-        ) {
+    pub(super) fn macros_record_receipts(
+        &mut self,
+        receipts: Vec<bareline_editor_surface::power::consumer::OrderedReceipt>,
+    ) {
+        if let Err(error) = self
+            .macros
+            .controller
+            .record_receipts(receipts, &self.app.commands)
+        {
             self.macros.controller.status = error;
+            self.macros.controller.output_open = true;
         }
     }
     pub(super) fn macros_dispatch(&mut self, _el: &ActiveEventLoop, id: &str) -> bool {
+        if (matches!(id, "macro.play" | "macro.play_eof" | "macro.play_n")
+            || bareline_app::macros::SAVED_COMMANDS.contains(&id))
+            && !self
+                .workspace
+                .as_ref()
+                .is_some_and(|workspace| self.app.active < workspace.editors.len())
+        {
+            self.macros.controller.status = "Open a document before playing a macro".into();
+            self.macros.controller.output_open = true;
+            return true;
+        }
         if !self.macros.storage_ready
             && matches!(
                 id,
@@ -651,7 +681,10 @@ impl Shell {
                 })
                 .and_then(|()| self.macros.save_library(self.notify.clone())),
             "macro.shortcut" => self.macros_assign_shortcut(),
-            "macro.record" => self.macros.controller.record(),
+            "macro.record" => {
+                self.macros.controller.output_open = true;
+                self.macros.controller.record()
+            }
             "macro.stop" => {
                 if self.views.pending_edits()
                     || self.workspace.as_ref().is_some_and(|workspace| {
@@ -805,6 +838,17 @@ impl Shell {
             .as_ref()
             .ok_or("Load a user command definition first")?
             .clone();
+        if definition
+            .arguments
+            .iter()
+            .any(|argument| argument.contains("${line}") || argument.contains("${column}"))
+            && !self
+                .workspace
+                .as_ref()
+                .is_some_and(|workspace| self.app.active < workspace.editors.len())
+        {
+            return Err("Open a document before using ${line} or ${column}".into());
+        }
         if let Some(workspace) = &self.workspace {
             if let Some(bareline_app::workspace::WorkspaceEditor::Paged(editor)) =
                 workspace.editors.get(self.app.active)
@@ -827,6 +871,10 @@ impl Shell {
                         self.app.active,
                         &templates,
                     )?;
+                    context.workspace = self
+                        .settings
+                        .workspace_root()
+                        .map(std::path::Path::to_path_buf);
                     let source = editor.read_handle();
                     let offset = editor
                         .viewport_start()
@@ -859,7 +907,7 @@ impl Shell {
                 }
             }
         }
-        let context = match &self.workspace {
+        let mut context = match &self.workspace {
             Some(workspace) => bareline_app::macros::placeholder_context(
                 workspace,
                 self.app.active,
@@ -867,6 +915,10 @@ impl Shell {
             )?,
             None => PlaceholderContext::default(),
         };
+        context.workspace = self
+            .settings
+            .workspace_root()
+            .map(std::path::Path::to_path_buf);
         let request = definition.request(&context)?;
         self.macros_confirm_run(request)
     }
@@ -899,6 +951,8 @@ impl Shell {
         Ok(())
     }
     pub(super) fn macros_pump(&mut self, el: &ActiveEventLoop) {
+        self.macros.theme = self.settings.ui_theme();
+        self.macros.command_context = self.command_context();
         self.macros_poll_location();
         if let Err(error) = self.macros.load_library(self.notify.clone()) {
             self.macros.controller.status = error;

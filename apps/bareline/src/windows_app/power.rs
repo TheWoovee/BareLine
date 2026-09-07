@@ -9,9 +9,11 @@ pub(super) struct PowerRuntime {
     pub open: bool,
     history_open: bool,
     pub history: ClipboardHistory,
+    history_limits: (usize,usize,usize),
     fields: Vec<TextField>,
     focus: usize,
     selected: usize,
+    accessibility_focus: Option<u64>,
     bounds: Rect,
     status: String,
     rectangle: Option<Rectangle>,
@@ -23,7 +25,7 @@ pub(super) struct PowerRuntime {
 impl Default for PowerRuntime {
     fn default() -> Self {
         let fields = ["text","","0","1","0","10","1"].into_iter().map(|value| { let mut field = TextField::default(); field.insert(value); field }).collect();
-        Self { open:false,history_open:false,history:ClipboardHistory::default(),fields,focus:0,selected:0,bounds:Rect::default(),status:String::new(),rectangle:None,target:None,rectangle_drag:None,drag:None,group:None }
+        Self { open:false,history_open:false,history:ClipboardHistory::default(),history_limits:(20,16<<20,4<<20),fields,focus:0,selected:0,accessibility_focus:None,bounds:Rect::default(),status:String::new(),rectangle:None,target:None,rectangle_drag:None,drag:None,group:None }
     }
 }
 pub(super) fn register(registry: &mut bareline_commands::CommandRegistry) {
@@ -33,7 +35,12 @@ pub(super) fn register(registry: &mut bareline_commands::CommandRegistry) {
     }
 }
 impl PowerRuntime {
-    pub(super) fn copied(&mut self, text: &str) { if let Err(error) = self.history.admit(text) { self.status = format!("Clipboard history: {error:?}"); } }
+    pub(super) fn configure_history(&mut self, enabled:bool,count:usize,total:usize,entry:usize) {
+        let limits=(count.min(20),total.min(16<<20),entry.min(4<<20));
+        if self.history_limits!=limits {self.history.set_enabled(false);self.history_limits=limits;}
+        self.history.set_enabled(enabled);
+    }
+    pub(super) fn copied(&mut self, text: &str) { if let Err(error) = self.history.admit_with_limits(text,self.history_limits.0,self.history_limits.1,self.history_limits.2) { self.status = format!("Clipboard history: {error:?}"); } }
     pub(super) fn draw(&mut self, renderer: &mut WindowsRenderer, width: f32, height: f32, ops: &mut Vec<DrawOp>) -> Result<Option<Rect>,LayoutError> {
         if !self.open { return Ok(None); }
         let theme = bareline_ui::theme::UiTheme::default();
@@ -111,7 +118,7 @@ impl Shell {
         match event {
             WindowEvent::KeyboardInput{event,..} if event.state==ElementState::Pressed=>match &event.logical_key {
                 Key::Named(NamedKey::Escape)=>self.power.open=false,
-                Key::Named(NamedKey::Enter)=>self.power_apply(),
+                Key::Named(NamedKey::Enter)=>{if self.power.accessibility_focus==Some(34021){self.power.open=false;}else{self.power_apply();}},
                 Key::Named(NamedKey::Tab)=>self.power.focus=(self.power.focus+1)%self.power.fields.len(),
                 Key::Named(NamedKey::ArrowUp) if self.power.history_open=>self.power.selected=self.power.selected.saturating_sub(1),
                 Key::Named(NamedKey::ArrowDown) if self.power.history_open=>self.power.selected=(self.power.selected+1).min(self.power.history.entries().count().saturating_sub(1)),
@@ -137,7 +144,7 @@ impl Shell {
         let Some(workspace)=self.workspace.as_mut() else{self.power.group=Some((group,index));return false;};
         let Some(primary)=workspace.editors.get_mut(index) else{self.power.group=Some((group,index));return false;};
         let Some(secondary)=self.views.secondary.as_mut() else{self.power.group=Some((group,index));return false;};
-        match group.pump(&mut [&mut **primary,secondary]) {Ok(Some(_))=>true,Ok(None)=>{self.power.group=Some((group,index));false},Err(error)=>{primary.error=Some(error);self.power.group=Some((group,index));false}}
+        match group.pump(&mut [&mut **primary,&mut **secondary]) {Ok(Some(_))=>true,Ok(None)=>{self.power.group=Some((group,index));false},Err(error)=>{primary.error=Some(error);self.power.group=Some((group,index));false}}
     }
     fn power_pointer(&mut self,event:&WindowEvent)->bool {
         let relevant=matches!(event,WindowEvent::MouseInput{button:MouseButton::Left,..}|WindowEvent::CursorMoved{..});
@@ -147,7 +154,12 @@ impl Shell {
         let bounds=self.views.bounds[pane].unwrap_or(self.editor_bounds());
         let local=Point{x:point.x-bounds.x,y:point.y-bounds.y};
         let Some(workspace)=self.workspace.as_mut()else{return false;};let Some(renderer)=self.renderer.as_ref()else{return false;};
-        let editor=if pane==1{self.views.secondary.as_mut()}else{workspace.editors.get_mut(self.app.active).map(|e|&mut **e)};
+        if workspace.editors.get(self.app.active).is_some_and(|e| e.paged()) || self.views.secondary.as_ref().is_some_and(|e| e.paged()) {
+            let power_gesture = self.modifiers.alt_key() || self.modifiers.control_key() || self.power.drag.is_some() || self.power.rectangle_drag.is_some();
+            if power_gesture { workspace.message=Some("Power pointer editing is unavailable for paged views.".into()); }
+            return power_gesture && matches!(event,WindowEvent::MouseInput{..});
+        }
+        let editor=if pane==1{self.views.secondary.as_mut().map(|e|&mut **e)}else{workspace.editors.get_mut(self.app.active).map(|e|&mut **e)};
         let Some(editor)=editor else{return false;};let Some((offset,line,column))=editor.power_hit_position(renderer,local)else{return false;};
         match event {
             WindowEvent::MouseInput{state:ElementState::Pressed,..} if self.modifiers.alt_key()=>{
@@ -169,7 +181,7 @@ impl Shell {
                 } else {
                     let (scheduler,editors)=workspace.scheduler_and_editors();
                     let Some(primary)=editors.get_mut(index)else{return true;};let Some(secondary)=self.views.secondary.as_mut()else{return true;};
-                    let (source,target)=if source_pane==0{(&mut **primary,secondary)}else{(secondary,&mut **primary)};
+                    let (source,target)=if source_pane==0{(&mut **primary,&mut **secondary)}else{(&mut **secondary,&mut **primary)};
                     if !snapshot.same_document(source.snapshot())||snapshot.revision!=source.snapshot().revision{source.error=Some("Drag source changed; select the text again.".into());return true;}
                     source.selection=selection;
                     match power::consumer::drag_between(scheduler,source,target,offset,self.modifiers.control_key()){Ok(Some(group))=>self.power.group=Some((group,index)),Ok(None)=>{},Err(e)=>source.error=Some(e)}
@@ -188,12 +200,12 @@ impl PowerRuntime {
         let mut nodes=Vec::new();
         if !self.history_open {
             for (index,label) in ["Mode: text or numbers","Repeated text","Initial number","Increment","Zero-padding width","Base","Repeat count"].iter().enumerate(){
-                nodes.push(AccessibilityNode{id:34000+index as u64,parent:1,role:AccessibilityRole::TextField,name:(*label).into(),value:Some(self.fields[index].value().into()),bounds:[(self.bounds.x+190.0)as f64,(self.bounds.y+44.0+index as f32*37.0)as f64,(self.bounds.width-206.0)as f64,30.0],disabled:false,selected:self.focus==index,expanded:None,focusable:true,invokable:false});
+                nodes.push(AccessibilityNode{id:34000+index as u64,parent:1,role:AccessibilityRole::TextField,name:(*label).into(),value:Some(self.fields[index].value().into()),bounds:[(self.bounds.x+190.0)as f64,(self.bounds.y+44.0+index as f32*37.0)as f64,(self.bounds.width-206.0)as f64,30.0],disabled:false,selected:self.accessibility_focus.unwrap_or(34000+self.focus as u64)==34000+index as u64,expanded:None,focusable:true,invokable:false});
             }
         } else {
-            for (index,entry) in self.history.entries().enumerate(){nodes.push(AccessibilityNode{id:34100+index as u64,parent:1,role:AccessibilityRole::ListItem,name:entry.chars().take(80).collect(),value:None,bounds:[self.bounds.x as f64,self.bounds.y as f64,self.bounds.width as f64,27.0],disabled:false,selected:self.selected==index,expanded:None,focusable:true,invokable:true});}
+            for (index,entry) in self.history.entries().enumerate(){nodes.push(AccessibilityNode{id:34100+index as u64,parent:1,role:AccessibilityRole::ListItem,name:entry.chars().take(80).collect(),value:None,bounds:[self.bounds.x as f64,self.bounds.y as f64,self.bounds.width as f64,27.0],disabled:false,selected:self.accessibility_focus.unwrap_or(34100+self.selected as u64)==34100+index as u64,expanded:None,focusable:true,invokable:true});}
         }
-        for (id,name) in [(34020,"Apply"),(34021,"Cancel")]{nodes.push(AccessibilityNode{id,parent:1,role:AccessibilityRole::Button,name:name.into(),value:None,bounds:[self.bounds.x as f64,(self.bounds.y+self.bounds.height-40.0)as f64,100.0,30.0],disabled:false,selected:false,expanded:None,focusable:true,invokable:true});}
+        for (id,name) in [(34020,"Apply"),(34021,"Cancel")]{nodes.push(AccessibilityNode{id,parent:1,role:AccessibilityRole::Button,name:name.into(),value:None,bounds:[self.bounds.x as f64,(self.bounds.y+self.bounds.height-40.0)as f64,100.0,30.0],disabled:false,selected:self.accessibility_focus==Some(id),expanded:None,focusable:true,invokable:true});}
         nodes
     }
 }
@@ -202,7 +214,9 @@ impl Shell {
         use bareline_platform::accessibility::AccessibilityAction;
         if !self.power.open||self.palette.open{return false;}
         match action {
-            AccessibilityAction::Focus(id) if (34000..34007).contains(id)=>self.power.focus=(*id-34000)as usize,
+            AccessibilityAction::Focus(id) if (34000..34007).contains(id)=>{self.power.focus=(*id-34000)as usize;self.power.accessibility_focus=Some(*id);},
+            AccessibilityAction::Focus(id) if *id==34020||*id==34021=>self.power.accessibility_focus=Some(*id),
+            AccessibilityAction::Focus(id) if (34100..34120).contains(id)&&self.power.history_open=>{self.power.selected=(*id-34100)as usize;self.power.accessibility_focus=Some(*id);},
             AccessibilityAction::SetValue{id,value} if (34000..34007).contains(id)=>{let field=&mut self.power.fields[(*id-34000)as usize];field.select_all();field.insert(value);},
             AccessibilityAction::Invoke(34020)=>self.power_apply(),
             AccessibilityAction::Invoke(34021)=>self.power.open=false,

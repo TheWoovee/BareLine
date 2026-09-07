@@ -57,6 +57,7 @@ pub struct DocumentList {
     list: VariableList,
     filter: String,
     sort: Sort,
+    generation: u64,
 }
 impl Default for DocumentList {
     fn default() -> Self {
@@ -71,6 +72,7 @@ impl Default for DocumentList {
             },
             filter: String::new(),
             sort: Sort::TabOrder,
+            generation: 0,
         }
     }
 }
@@ -78,6 +80,7 @@ impl DocumentList {
     /// Call when tab metadata changes. Equal data avoids rebuilding indexes.
     pub fn update(&mut self, items: Vec<DocumentItem>) {
         if self.all != items {
+            self.generation = self.generation.wrapping_add(1);
             self.all = items;
             self.rebuild();
         }
@@ -126,6 +129,23 @@ impl DocumentList {
     }
     pub fn selected(&self) -> Option<usize> {
         Some(self.items.rows.get(self.list.selected?)?.index)
+    }
+    pub fn semantics(&self, parent: bareline_ui::ViewId, prefix: u64, focused: bool) -> Vec<bareline_ui::semantics::SemanticEntry> {
+        if !self.open { return Vec::new(); }
+        let mut nodes = bareline_ui::semantics::variable_list(&self.list, &self.items, parent,
+            |row| bareline_ui::ViewId(prefix + 65536 + self.generation * 1_048_576 + self.items.rows[row].index as u64), "documents.activate", focused);
+        for node in &mut nodes {
+            node.node.focused = focused && node.node.selected;
+            node.node.actions.push(bareline_ui::widgets::SemanticAction::Focus);
+            let item = self.items.rows.iter().find(|i| prefix + 65536 + self.generation * 1_048_576 + i.index as u64 == node.node.id.0);
+            if let Some(item) = item { node.node.value = Some(format!("{}{}", item.path, if item.dirty { " · unsaved" } else { "" })); }
+        }
+        nodes
+    }
+    pub fn accessibility_action(&mut self, id: u64, prefix: u64, invoke: bool) -> Option<DocumentAction> {
+        let row = self.list.visible(&self.items, 0).into_iter().find(|row| prefix + 65536 + self.generation * 1_048_576 + self.items.rows[row.index].index as u64 == id)?;
+        self.list.selected = Some(row.index);
+        invoke.then(|| DocumentAction::Activate(self.items.rows[row.index].index))
     }
     pub fn save_selected(&self) -> Option<DocumentAction> {
         self.selected().map(DocumentAction::Save)

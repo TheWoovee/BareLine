@@ -232,6 +232,9 @@ dependencies = [
 [[package]]
 name = "bareline-diagnostics"
 version = "0.1.0"
+dependencies = [
+ "tracing",
+]
 
 [[package]]
 name = "bareline-diff"
@@ -249,6 +252,7 @@ dependencies = [
  "bareline-platform",
  "lexopt",
  "minisign-verify",
+ "quick-xml",
  "serde",
  "serde_json",
  "sha2",
@@ -413,6 +417,9 @@ dependencies = [
 [[package]]
 name = "bareline-renderer"
 version = "0.1.0"
+dependencies = [
+ "tracing",
+]
 
 [[package]]
 name = "bareline-renderer-recording"

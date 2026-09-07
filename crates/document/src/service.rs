@@ -563,6 +563,21 @@ mod tests {
             },
         }
     }
+    // Completion receipt precedes scheduler slot release. Transient saturation is a
+    // documented admission outcome; retain and retry the same non-droppable mutation.
+    fn submit_group_retry(pool: &Scheduler, mut mutation: GroupMutation) -> GroupCompletion {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            match pool.submit_group(mutation, None) {
+                Ok(receiver) => return receiver.recv_timeout(std::time::Duration::from_secs(5)).unwrap(),
+                Err((SubmitError::Saturated, returned)) if std::time::Instant::now() < deadline => {
+                    mutation = returned;
+                    std::thread::yield_now();
+                }
+                Err((error, _)) => panic!("group admission failed: {error:?}"),
+            }
+        }
+    }
     #[test]
     fn grouped_worker_commit_failure_and_linked_undo_are_atomic() {
         let pool = Scheduler::new(2, 16).unwrap();
@@ -575,18 +590,12 @@ mod tests {
         let second = pool.document(second, 8);
         let mut bad = group_edit(&second, second_snapshot.clone(), "changed");
         bad.transaction.base_revision = Revision(99);
-        let failed = pool
-            .submit_group(
+        let failed = submit_group_retry(&pool,
                 GroupMutation::Apply(vec![
                     group_edit(&first, first_snapshot.clone(), "changed"),
                     bad,
                 ]),
-                None,
-            )
-            .ok()
-            .unwrap()
-            .recv()
-            .unwrap();
+            );
         assert_eq!(failed.result, Err(Error::StaleRevision));
         assert!(
             failed
@@ -594,18 +603,12 @@ mod tests {
                 .iter()
                 .all(|snapshot| snapshot.revision == Revision(0))
         );
-        let completed = pool
-            .submit_group(
+        let completed = submit_group_retry(&pool,
                 GroupMutation::Apply(vec![
                     group_edit(&first, first_snapshot, "one"),
                     group_edit(&second, second_snapshot, "two"),
                 ]),
-                None,
-            )
-            .ok()
-            .unwrap()
-            .recv()
-            .unwrap();
+            );
         let group = completed.result.unwrap();
         assert!(
             completed
@@ -613,7 +616,18 @@ mod tests {
                 .iter()
                 .all(|snapshot| snapshot.revision == Revision(1))
         );
-        let single = first.submit(Mutation::Undo).ok().unwrap().recv().unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut mutation = Mutation::Undo;
+        let single = loop {
+            match first.submit(mutation) {
+                Ok(receiver) => break receiver.recv_timeout(std::time::Duration::from_secs(5)).unwrap(),
+                Err((SubmitError::Saturated, returned)) if std::time::Instant::now() < deadline => {
+                    mutation = returned;
+                    std::thread::yield_now();
+                }
+                Err((error, _)) => panic!("single undo admission failed: {error:?}"),
+            }
+        };
         assert_eq!(single.result, Err(Error::LinkedUndoRequired));
         let participants = vec![
             GroupParticipant {
@@ -625,18 +639,12 @@ mod tests {
                 snapshot: completed.snapshots[1].clone(),
             },
         ];
-        let undone = pool
-            .submit_group(
+        let undone = submit_group_retry(&pool,
                 GroupMutation::Undo {
                     group,
                     participants,
                 },
-                None,
-            )
-            .ok()
-            .unwrap()
-            .recv()
-            .unwrap();
+            );
         assert_eq!(undone.result, Ok(group));
         assert_eq!(
             undone.snapshots[0]
@@ -660,18 +668,12 @@ mod tests {
                 snapshot: undone.snapshots[1].clone(),
             },
         ];
-        let redone = pool
-            .submit_group(
+        let redone = submit_group_retry(&pool,
                 GroupMutation::Redo {
                     group,
                     participants,
                 },
-                None,
-            )
-            .ok()
-            .unwrap()
-            .recv()
-            .unwrap();
+            );
         assert_eq!(redone.result, Ok(group));
         assert_eq!(
             redone.snapshots[0]

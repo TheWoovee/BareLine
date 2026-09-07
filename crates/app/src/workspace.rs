@@ -59,6 +59,7 @@ pub struct Workspace {
     files: Vec<Option<FileState>>,
     untitled_labels: Vec<String>,
     next_untitled: u64,
+    recent: Vec<bareline_platform::SerializedPath>,
     file_system: Arc<dyn LocalFileSystem>,
     io: Option<IoService>,
     pending_io: Vec<PendingIo>,
@@ -67,10 +68,27 @@ pub struct Workspace {
     pub search_panel: crate::search_panel::SearchPanel,
     pub search_focus: bool,
     pending_replace: Option<bareline_search::service::ReplaceTicket>,
+    pending_paged_replace: Option<bareline_search::service::PagedReplaceTicket>,
+    pending_search_navigation: Option<PendingSearchNavigation>,
+    acknowledged_search_commands: Vec<bareline_editor_surface::power::consumer::OrderedReceipt>,
     styling: crate::styling::Styling,
     retired: Vec<WorkspaceEditor>,
     closed: Vec<(WorkspaceEditor, Option<FileState>, String)>,
     paused_transcode: Option<Box<bareline_file_io::lifecycle::PausedTranscode>>,
+    spill_pending: bool,
+    spill_paused: bool,
+    spill_selection: Option<(bareline_document::paged::PagedSnapshot, usize, usize)>,
+}
+enum SearchNavigationSource {
+    Resident(bareline_document::DocumentSnapshot),
+    Paged(bareline_document::paged::PagedSnapshot),
+}
+struct PendingSearchNavigation {
+    source: SearchNavigationSource,
+    job: bareline_search::SearchJobId,
+    query: bareline_search::SearchQuery,
+    range: std::ops::Range<bareline_document::TextOffset>,
+    backwards: bool,
 }
 struct FileState {
     path: PathBuf,
@@ -112,6 +130,7 @@ impl Workspace {
             files: Vec::new(),
             untitled_labels: Vec::new(),
             next_untitled: 1,
+            recent: Vec::new(),
             file_system,
             io: None,
             pending_io: Vec::new(),
@@ -120,10 +139,16 @@ impl Workspace {
             search_panel: Default::default(),
             search_focus: false,
             pending_replace: None,
+            pending_paged_replace: None,
+            pending_search_navigation: None,
+            acknowledged_search_commands: Vec::new(),
             styling: crate::styling::Styling::default(),
             retired: Vec::new(),
             closed: Vec::new(),
             paused_transcode: None,
+            spill_pending: false,
+            spill_paused: false,
+            spill_selection: None,
         })
     }
     pub fn new_document(&mut self) -> Result<(), bareline_document::Error> {
@@ -166,7 +191,37 @@ impl Workspace {
             changed |= editor.pump();
             if let WorkspaceEditor::Paged(paged) = editor { if let Some(error) = &paged.error { self.message = Some(error.clone()); } }
         }
-        for (index, editor) in self.editors.iter().enumerate() { if let WorkspaceEditor::Paged(paged) = editor { if let Some(file) = &mut self.files[index] { file.path = paged.path.clone(); file.fingerprint = paged.fingerprint.clone(); } } }
+        changed |= self.pump_search_acknowledgment();
+        let mut saved_paths=Vec::new();
+        for (index, editor) in self.editors.iter().enumerate() { if let WorkspaceEditor::Paged(paged) = editor { if let Some(file) = &mut self.files[index] { if !paged.save_as_required && (file.path!=paged.path||file.fingerprint!=paged.fingerprint) {saved_paths.push(paged.path.clone());} file.path = paged.path.clone(); file.fingerprint = paged.fingerprint.clone(); } } }
+        for path in saved_paths {self.note_recent(path);}
+        if let Some(ticket) = &self.pending_paged_replace {
+            match ticket.try_recv() {
+                Err(TryRecvError::Empty) => {}
+                received => {
+                    let cancelled = ticket.job.is_cancelled();
+                    self.pending_paged_replace = None;
+                    changed = true;
+                    self.message = Some(match received {
+                        Ok(Ok(prepared)) if !cancelled => {
+                            let target = self.editors.iter_mut().find_map(|editor| match editor {
+                                WorkspaceEditor::Paged(paged) if paged.snapshot().same_document(&prepared.source) => Some(paged),
+                                _ => None,
+                            });
+                            match target {
+                                Some(paged) => match paged.apply_prepared(&prepared.source, prepared.transaction) {
+                                    Ok(()) => "Applying paged replacements…".into(),
+                                    Err(error) => error,
+                                },
+                                None => "Document closed; replacement not applied".into(),
+                            }
+                        }
+                        Ok(Err(error)) => format!("Replacement not applied: {error:?}"),
+                        _ => "Replacement cancelled".into(),
+                    });
+                }
+            }
+        }
         if let Some(ticket) = &self.pending_replace {
             match ticket.try_recv() {
                 Err(TryRecvError::Empty) => {}
@@ -221,6 +276,7 @@ impl Workspace {
                 }
                 Err(TryRecvError::Disconnected) => {
                     self.message = Some("File worker stopped.".into());
+                    if self.spill_pending { self.spill_pending = false; self.spill_paused = true; }
                     let failed = self.pending_io.remove(i);
                     self.discard_preview(failed.preview.as_ref());
                     changed = true;
@@ -231,6 +287,7 @@ impl Workspace {
             changed = true;
             match result {
                 IoCompletion::Open(Ok(opened)) => {
+                    self.note_recent(opened.path.clone());
                     if let Some(captured) = &pending.reload {
                         let current = self.editors.iter().position(|editor| editor.snapshot().same_document(captured));
                         if let Some(index) = current && self.editors[index].snapshot().revision == captured.revision && !self.editors[index].busy() {
@@ -288,6 +345,7 @@ impl Workspace {
                         && let Some(editor) = self.editors.get_mut(index)
                     {
                         editor.mark_saved(&saved.captured);
+                        self.note_recent(path.clone());
                         self.files[index] = Some(FileState {
                             path,
                             fingerprint: saved.fingerprint,
@@ -300,6 +358,7 @@ impl Workspace {
                     self.message = None;
                 }
                 IoCompletion::Transcode(bareline_file_io::lifecycle::TranscodeOutcome::Complete(opened)) => {
+                    if opened.recovery_origin.is_none() {self.note_recent(opened.path.clone());}
                     self.discard_preview(pending.preview.as_ref());
                     let file = FileState { path: opened.path.clone(), fingerprint: opened.fingerprint.clone(), bom: opened.transcoded.store.state.bom, encoding: None };
                     match PagedEditorSurface::new(opened, self.bytes.clone(), self.notify.clone()) {
@@ -315,11 +374,44 @@ impl Workspace {
                 IoCompletion::Transcode(bareline_file_io::lifecycle::TranscodeOutcome::Failed(error)) => {
                     self.discard_preview(pending.preview.as_ref()); self.message = Some(file_error(error));
                 }
-                IoCompletion::ResidentSpilled { captured: _, result } => {
-                    self.message = Some(match result {
-                        Ok(_) => "Resident migration is not attached; the current document was retained.".into(),
-                        Err(error) => file_error(error),
-                    });
+                IoCompletion::ResidentSpilled { captured, result } => {
+                    self.spill_pending = false;
+                    match result {
+                        Err(error) => { self.spill_paused = true; self.message = Some(format!("Memory spill paused; document retained: {}", file_error(error))); }
+                        Ok(mut transcoded) => {
+                            let index = self.editors.iter().position(|editor| matches!(editor, WorkspaceEditor::Resident(_)) && editor.snapshot().same_document(&captured));
+                            if let Some(index) = index && !self.document_busy(index) && !self.editors[index].dirty()
+                                && self.editors[index].snapshot().revision == captured.revision
+                                && self.editors.iter().filter(|editor| editor.snapshot().same_document(&captured)).count() == 1
+                                && let Some(file) = &self.files[index]
+                                && transcoded.store.fingerprint.sha256 == file.fingerprint.sha256 {
+                                let selection = self.editors[index].selection;
+                                match self.editors[index].migrate_clean_spill(&captured, transcoded.source.source()) {
+                                    Err(error) => { self.spill_paused = true; self.message = Some(format!("Memory spill could not attach: {error:?}")); }
+                                    Ok(document) => {
+                                        transcoded.document = document;
+                                        let opened = Box::new(bareline_file_io::lifecycle::PagedOpened { recovery_origin: None, transcoded, path: file.path.clone(), fingerprint: file.fingerprint.clone() });
+                                        match PagedEditorSurface::new(opened, self.bytes.clone(), self.notify.clone()) {
+                                            Err(error) => { let _ = self.editors[index].cancel_clean_spill(&captured); self.spill_paused = true; self.message = Some(error); }
+                                            Ok(mut paged) => {
+                                                self.editors[index].copy_presentation_to(&mut paged.surface);
+                                                if let Some(root) = &self.recovery_root { paged.enable_recovery(root.clone(), self.file_system.clone()); }
+                                                self.spill_selection = Some((paged.snapshot().clone(), selection.anchor, selection.caret));
+                                                let old = std::mem::replace(&mut self.editors[index], WorkspaceEditor::Paged(paged));
+                                                self.retired.push(old);
+                                                self.files[index].as_mut().unwrap().encoding = None;
+                                                self.find.clear_source(); self.last_drawn = None;
+                                                self.message = Some("Resident data moved to private paged storage.".into());
+                                            }
+                                        }
+                                    }
+                                }
+                            } else {
+                                self.spill_paused = true;
+                                self.message = Some("Memory spill was not attached because the document, original bytes, or view ownership changed; current data was retained.".into());
+                            }
+                        }
+                    }
                 }
                 IoCompletion::Open(Err(FileError::StreamingRequired)) => {
                     self.discard_preview(pending.preview.as_ref());
@@ -331,7 +423,40 @@ impl Workspace {
                 }
             }
         }
+        if let Some((snapshot, anchor, caret)) = self.spill_selection.take() {
+            if let Some(WorkspaceEditor::Paged(editor)) = self.editors.iter_mut().find(|editor| matches!(editor, WorkspaceEditor::Paged(paged) if paged.snapshot().same_document(&snapshot))) {
+                if editor.busy() { self.spill_selection = Some((snapshot, anchor, caret)); }
+                else if let Err(error) = editor.restore_selection(bareline_document::TextOffset(anchor), bareline_document::TextOffset(caret)) { self.message = Some(error); }
+            }
+        }
+        // Event-driven pressure handling; failed storage waits for explicit retry.
+        if !self.spill_pending && !self.spill_paused && self.pending_io.is_empty()
+            && self.bytes.used() > self.bytes.limit().saturating_mul(3) / 4 {
+            self.migrate_clean_resident();
+        }
         changed
+    }
+    /// Retry or initiate an owned spill. Only clean history-free single views qualify;
+    /// dirty/history-bearing tabs remain owned until their history spill path is available.
+    pub fn migrate_clean_resident(&mut self) -> bool {
+        if self.spill_pending || !self.pending_io.is_empty() { return false; }
+        let candidate = self.editors.iter().enumerate().filter(|(index, editor)| {
+            matches!(editor, WorkspaceEditor::Resident(_)) && self.files[*index].is_some()
+                && !editor.busy() && !editor.dirty() && !editor.can_undo() && !editor.can_redo()
+                && editor.snapshot().is_complete() && editor.snapshot().len() >= 1024 * 1024
+                && editor.selection.anchor.abs_diff(editor.selection.caret) <= 64 * 1024 - 8
+                && self.editors.iter().filter(|peer| peer.snapshot().same_document(editor.snapshot())).count() == 1
+        }).max_by_key(|(_, editor)| editor.snapshot().len()).map(|(index, _)| index);
+        let Some(index) = candidate else { return false; };
+        if !self.ensure_io() { return false; }
+        let file = self.files[index].as_ref().unwrap();
+        let request = IoRequest::SpillResident { captured: self.editors[index].snapshot().clone(), encoding: file.encoding.clone(), bom: file.bom,
+            cache: std::env::temp_dir().join("Bareline-owned-spill"), quota: self.transcode_quota_bytes,
+            options: bareline_file_io::source::SourceOptions::default(), bytes: self.bytes.clone(), history: self.history.clone() };
+        match self.io.as_ref().unwrap().submit(request, self.notify.clone()) {
+            Ok(receiver) => { self.spill_pending = true; self.spill_paused = false; self.pending_io.push(PendingIo { receiver, save: None, copy_only: false, open_path: None, preview: None, reload: None }); true }
+            Err(_) => false,
+        }
     }
     fn discard_preview(&mut self, source: Option<&bareline_document::DocumentSnapshot>) {
         if let Some(index) = source.and_then(|source| {
@@ -424,6 +549,19 @@ impl Workspace {
         self.transcode_quota_bytes = quota_bytes;
         if let Some(paused) = self.paused_transcode.take() { let path = paused.path.clone(); self.submit_paged(IoRequest::ResumeTranscode { paused, temp_quota_bytes: quota_bytes }, path); }
     }
+    /// Recent paths are metadata only; loading this list never opens a file.
+    pub fn recent_paths(&self) -> &[bareline_platform::SerializedPath] { &self.recent }
+    pub fn restore_recent_paths(&mut self, recent:&[bareline_platform::SerializedPath]) {
+        for path in recent.iter().take(100) {
+            if !self.recent.iter().any(|existing|existing.encoding==path.encoding&&existing.data==path.data) {self.recent.push(path.clone());}
+        }
+        self.recent.truncate(100);
+    }
+    fn note_recent(&mut self,path:PathBuf) {
+        let path=bareline_platform::SerializedPath::from_native(&path);
+        self.recent.retain(|existing|existing.encoding!=path.encoding||existing.data!=path.data);
+        self.recent.insert(0,path);self.recent.truncate(100);
+    }
     pub fn path(&self, index: usize) -> Option<&std::path::Path> {
         if matches!(self.editors.get(index),Some(WorkspaceEditor::Paged(editor)) if editor.save_as_required) { return None; }
         self.files
@@ -496,7 +634,7 @@ impl Workspace {
         let file = self.files.remove(index);
         let label = self.untitled_labels.remove(index);
         self.closed.push((closed, file, label));
-        if self.closed.len() > 10 { self.closed.remove(0); }
+        if self.closed.len() > 20 { self.closed.remove(0); }
         self.find.clear_source();
         if self.editors.is_empty() {
             self.find.hide();
@@ -521,6 +659,7 @@ impl Workspace {
     /// Reattach the retained model, history and selection without reopening its path.
     pub fn restore_last_closed(&mut self) -> Option<usize> {
         let (editor, file, label) = self.closed.pop()?;
+        if !matches!(&editor,WorkspaceEditor::Paged(paged) if paged.save_as_required) && let Some(file)=&file {self.note_recent(file.path.clone());}
         let index = self.editors.len();
         self.editors.push(editor);
         self.files.push(file);
@@ -642,32 +781,83 @@ impl Workspace {
             })
             .collect()
     }
-    pub fn find_next(&mut self, active: usize, backwards: bool) {
-        let Some(editor) = self.editors.get_mut(active) else {
-            return;
-        };
-        if editor.busy() {
-            return;
+    /// Drain only navigation commands whose target selection has actually been applied.
+    pub fn take_acknowledged_commands(&mut self) -> Vec<(String, std::collections::BTreeMap<String, String>)> {
+        self.pump_search_acknowledgment();
+        self.take_ordered_search_receipts().into_iter().filter_map(|receipt| match receipt.event {
+            bareline_editor_surface::power::consumer::ReceiptEvent::Command(id, arguments) => Some((id, arguments)),
+            _ => None,
+        }).collect()
+    }
+    pub fn take_ordered_search_receipts(&mut self) -> Vec<bareline_editor_surface::power::consumer::OrderedReceipt> {
+        self.pump_search_acknowledgment();
+        std::mem::take(&mut self.acknowledged_search_commands)
+    }
+    fn pump_search_acknowledgment(&mut self) -> bool {
+        let Some(pending) = self.pending_search_navigation.take() else { return false; };
+        let mut waiting = false;
+        let mut acknowledged = false;
+        for editor in &self.editors {
+            let current = match (&pending.source, editor) {
+                (SearchNavigationSource::Resident(source), WorkspaceEditor::Resident(editor)) if source.same_document(editor.snapshot()) => {
+                    let same = source.revision == editor.snapshot().revision;
+                    let job = self.find.completed_results().map(|results| results.job);
+                    Some((same && job == Some(pending.job), editor.busy(), editor.selection.anchor, editor.selection.caret))
+                }
+                (SearchNavigationSource::Paged(source), WorkspaceEditor::Paged(editor)) if source.same_document(editor.snapshot()) => {
+                    let same = source.revision == editor.snapshot().revision && source.content_state == editor.snapshot().content_state;
+                    let job = self.find.completed_paged_results().map(|results| results.job);
+                    Some((same && job == Some(pending.job), editor.busy(), editor.viewport_start().0 + editor.surface.selection.anchor, editor.viewport_start().0 + editor.surface.selection.caret))
+                }
+                _ => None,
+            };
+            if let Some((same, busy, anchor, caret)) = current {
+                if !same { break; }
+                if busy { waiting = true; break; }
+                acknowledged = anchor == pending.range.start.0 && caret == pending.range.end.0;
+                break;
+            }
         }
-        let at = if backwards {
-            editor.selection.anchor.min(editor.selection.caret)
-        } else {
-            editor.selection.anchor.max(editor.selection.caret)
+        if waiting { self.pending_search_navigation = Some(pending); return false; }
+        if acknowledged {
+            let id = if pending.backwards { "search.find_previous" } else { "search.find_next" };
+            self.acknowledged_search_commands.push(bareline_editor_surface::power::consumer::OrderedReceipt {
+                sequence: bareline_editor_surface::power::consumer::next_receipt_sequence(),
+                event: bareline_editor_surface::power::consumer::ReceiptEvent::Command(id.into(), crate::macros::search_arguments(&pending.query)),
+            });
+        }
+        acknowledged
+    }
+    pub fn find_next(&mut self, active: usize, backwards: bool) {
+        self.pump_search_acknowledgment();
+        if self.pending_search_navigation.is_some() || self.acknowledged_search_commands.len() >= 256 { return; }
+        let Some(editor) = self.editors.get_mut(active) else { return; };
+        if editor.busy() { return; }
+        let at = if backwards { editor.selection.anchor.min(editor.selection.caret) } else { editor.selection.anchor.max(editor.selection.caret) };
+        let captured = match editor {
+            WorkspaceEditor::Resident(resident) => self.find.completed_results().map(|results| (SearchNavigationSource::Resident(resident.snapshot().clone()), results.job)),
+            WorkspaceEditor::Paged(paged) => self.find.completed_paged_results().map(|results| (SearchNavigationSource::Paged(paged.snapshot().clone()), results.job)),
         };
+        let query = self.find.query();
         let found = match editor {
             WorkspaceEditor::Resident(resident) => self.find.next(resident.snapshot(), at, backwards),
             WorkspaceEditor::Paged(paged) => self.find.next_paged(paged.snapshot(), paged.viewport_start().0 + at, backwards),
         };
         if let Some(range) = found {
-            match editor {
+            let applied = match editor {
                 WorkspaceEditor::Resident(resident) => {
                     resident.enqueue(Input::SetCaret(range.start.0, false));
                     resident.enqueue(Input::SetCaret(range.end.0, true));
                     resident.search_selection = true;
+                    true
                 }
-                WorkspaceEditor::Paged(paged) => {
-                    if let Err(error) = paged.restore_selection(range.start, range.end) { self.message = Some(error); }
-                }
+                WorkspaceEditor::Paged(paged) => match paged.restore_selection(range.start, range.end) {
+                    Ok(()) => true,
+                    Err(error) => { self.message = Some(error); false }
+                },
+            };
+            if applied && let Some((source, job)) = captured {
+                self.pending_search_navigation = Some(PendingSearchNavigation { source, job, query, range, backwards });
             }
         }
     }
@@ -691,7 +881,7 @@ impl Workspace {
         Some(index)
     }
     pub fn replace(&mut self, active: usize, all: bool) {
-        if self.pending_replace.is_some() {
+        if self.pending_replace.is_some() || self.pending_paged_replace.is_some() {
             return;
         }
         let Some(editor) = self.editors.get(active) else {
@@ -699,6 +889,16 @@ impl Workspace {
         };
         if editor.busy() {
             self.message = Some("Wait for the pending edit before replacing.".into());
+            return;
+        }
+        if let WorkspaceEditor::Paged(paged) = editor {
+            let origin = paged.viewport_start().0;
+            let selection = bareline_document::TextOffset(origin + paged.surface.selection.anchor.min(paged.surface.selection.caret))
+                ..bareline_document::TextOffset(origin + paged.surface.selection.anchor.max(paged.surface.selection.caret));
+            match self.find.start_replace_paged(paged.read_handle(), selection, all, self.notify.clone()) {
+                Ok(ticket) => { self.pending_paged_replace = Some(ticket); self.message = Some("Preparing paged replacement…".into()); }
+                Err(error) => self.message = Some(error.into()),
+            }
             return;
         }
         let selection =
@@ -715,6 +915,7 @@ impl Workspace {
         }
     }
     pub fn cancel_search(&mut self) {
+        self.pending_paged_replace = None;
         self.pending_replace = None;
         self.find.cancel_search();
         self.message = Some("Search / replacement preparation cancelled.".into());
@@ -926,7 +1127,7 @@ mod tests {
             assert_eq!(std::fs::read_to_string(copy).unwrap(),"Xabcdef");assert_eq!(std::fs::read_to_string(&original).unwrap(),"abcdef");assert!(workspace.editors[0].dirty());assert_eq!(workspace.path(0),Some(original.as_path()));
             let alias=root.join(if paged {"paged-alias.txt"} else {"resident-alias.txt"});std::fs::hard_link(&original,&alias).unwrap();workspace.save_copy(0,alias);settle(&mut workspace);assert_eq!(std::fs::read_to_string(&original).unwrap(),"abcdef");assert!(workspace.editors[0].dirty());
             let selection=workspace.editors[0].selection;
-            let mut renderer=bareline_renderer_recording::RecordingBackend::default();workspace.close(0,true,&mut renderer).unwrap();assert!(workspace.can_restore_closed());assert_eq!(workspace.restore_last_closed(),Some(0));assert_eq!(workspace.editors[0].selection,selection);
+            let mut renderer=bareline_renderer_recording::RecordingBackend::default();workspace.close(0,true,&mut renderer).unwrap();assert_eq!(workspace.recent_paths()[0],bareline_platform::SerializedPath::from_native(&original));let mut next=Workspace::new(Arc::new(||{}),Arc::new(PagedFileSystem)).unwrap();next.restore_recent_paths(workspace.recent_paths());assert_eq!(next.recent_paths(),workspace.recent_paths());assert!(workspace.can_restore_closed());assert_eq!(workspace.restore_last_closed(),Some(0));assert_eq!(workspace.editors[0].selection,selection);
             workspace.editors[0].enqueue(Input::Undo);settle(&mut workspace);assert!(!workspace.editors[0].dirty());
         }
         std::fs::remove_dir_all(root).unwrap();
@@ -951,7 +1152,7 @@ mod tests {
         loop { let status=match &workspace.editors[0]{WorkspaceEditor::Paged(editor)=>editor.recovery_status(),_=>unreachable!()}; assert!(status.error.is_none(),"{:?}",status.error); if status.complete {assert_eq!(status.durable.unwrap().revision,2);break;} assert!(std::time::Instant::now()<deadline);std::thread::sleep(std::time::Duration::from_millis(2)); }
         drop(workspace); std::fs::remove_file(&original).unwrap();
         let mut restored=Workspace::new(Arc::new(||{}),Arc::new(PagedFileSystem)).unwrap();restored.restore_paged_recovery(directory.clone());settle(&mut restored);
-        assert_eq!(restored.editors.len(),1,"{:?}",restored.message);assert!(restored.editors[0].dirty());assert!(restored.path(0).is_none());
+        assert_eq!(restored.editors.len(),1,"{:?}",restored.message);assert!(restored.editors[0].dirty());assert!(restored.path(0).is_none());let mut renderer=bareline_renderer_recording::RecordingBackend::default();restored.close(0,true,&mut renderer).unwrap();assert_eq!(restored.restore_last_closed(),Some(0));assert!(restored.recent_paths().is_empty(),"recovery pseudo-path entered MRU");
         restored.save(0,saved.clone());settle(&mut restored);assert_eq!(std::fs::read(&saved).unwrap(),raw);
         drop(restored);
         let journal=std::fs::read(directory.join("journal.bin")).unwrap();let mut corrupt=journal.clone();*corrupt.last_mut().unwrap()^=1;std::fs::write(directory.join("journal.bin"),corrupt).unwrap();
@@ -1219,6 +1420,11 @@ mod tests {
             (4, 11)
         );
         assert_eq!(workspace.editors[0].snapshot().revision, revision);
+        assert!(workspace.acknowledged_search_commands.is_empty(), "dispatch is not acknowledgment");
+        let commands = workspace.take_acknowledged_commands();
+        assert_eq!(commands.len(), 1);
+        assert_eq!(commands[0].0, "search.find_next");
+        assert_eq!(commands[0].1.get("pattern").map(String::as_str), Some("strasse"));
         workspace.find_next(0, false);
         assert_eq!(
             (
@@ -1231,6 +1437,10 @@ mod tests {
         workspace.find_next(0, false);
         assert_eq!(workspace.editors[0].selection.anchor, 4);
         assert_eq!(workspace.editors[0].selection.caret, 11);
+        assert_eq!(workspace.take_acknowledged_commands().len(), 2);
+        workspace.find_next(0, false);
+        workspace.editors[0].enqueue(Input::SetCaret(0, false));
+        assert!(workspace.take_acknowledged_commands().is_empty(), "superseded selection cannot record success");
         operations.clear();
         workspace
             .draw(0, &mut renderer, 1100.0, 700.0, &mut operations)
@@ -1316,3 +1526,5 @@ mod tests {
         assert!(workspace.pending_replace.is_none());
     }
 }
+
+pub mod extensions;

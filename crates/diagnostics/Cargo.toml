@@ -4,4 +4,8 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+perf-spans = ["dep:tracing"]
+
 [dependencies]
+tracing = { version = "=0.1.44", optional = true, default-features = false, features = ["std"] }

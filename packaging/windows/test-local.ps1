@@ -6,7 +6,7 @@ $taskRoot = Join-Path ([IO.Path]::GetTempPath()) ('bareline-package-test-' + [Gu
 try {
     $payload = Join-Path $taskRoot 'payload'
     [IO.Directory]::CreateDirectory($payload) | Out-Null
-    foreach ($name in @('bareline.exe', 'bareline-update-helper.exe', 'LICENSE', 'THIRD-PARTY-NOTICES.md')) { [IO.File]::WriteAllText((Join-Path $payload $name), "fixture: $name") }
+    foreach ($name in @('bareline.exe', 'bareline-update-helper.exe', 'LICENSE', 'THIRD-PARTY-NOTICES.md', 'SBOM.json')) { [IO.File]::WriteAllText((Join-Path $payload $name), "fixture: $name") }
     $one = Join-Path $taskRoot 'one'; $two = Join-Path $taskRoot 'two'
     & (Join-Path $PSScriptRoot 'build.ps1') -PayloadDir $payload -Version 0.1.0 -OutputDir $one
     & (Join-Path $PSScriptRoot 'build.ps1') -PayloadDir $payload -Version 0.1.0 -OutputDir $two
@@ -15,7 +15,7 @@ try {
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $archive = [IO.Compression.ZipFile]::OpenRead((Join-Path $one $zipName))
     try {
-        if ($archive.Entries.Count -ne 5 -or -not $archive.GetEntry('bareline.portable')) { throw 'Portable marker/inventory missing' }
+        if ($archive.Entries.Count -ne 6 -or -not $archive.GetEntry('bareline.portable')) { throw 'Portable marker/inventory missing' }
         foreach ($entry in $archive.Entries) {
             if ($entry.Name -eq 'bareline.portable') { continue }
             $reader = [IO.StreamReader]::new($entry.Open())

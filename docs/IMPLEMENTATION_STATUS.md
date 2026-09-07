@@ -2,14 +2,14 @@
 
 Updated 2026-09-08. The original blueprint is preserved under `blueprint/`; its NOT_STARTED tables describe the supplied specification. This file tracks the implementation.
 
-Latest [integrated development checkpoint](implementation/INTEGRATION-20260908.md): selected 265 tests and Windows backend 35 tests pass; native build passes. Ordinary development gaps and manual/foreign-host acceptance remain open.
+Latest [PR closure checkpoint](implementation/INTEGRATION-20260908-BATCH03.md): 318 effective tests, six pure performance-contract tests, architecture guard, scoped foundation Clippy and default native build pass. Ordinary development gaps and manual/foreign-host acceptance remain open.
 
 | Package | State | Evidence |
 |---|---|---|
-| PR-001 | IN_PROGRESS | [Foundation delivery note](implementation/PR-001.md) |
+| PR-001 | IMPLEMENTATION_COMPLETE_PENDING_ACCEPTANCE | [Foundation closure](implementation/PR-001.md): startup/frame/font consumers, optional compile-off spans, renderer contract and exact seven-baseline workflow delivered; batch03 tests/default build/scoped Clippy pass. Physical/foreign-host/performance acceptance pending. |
 | PR-002 | IN_PROGRESS | [Resident core and bounded scheduler](implementation/PR-002.md) |
 | PR-003 | IN_PROGRESS | [Resident editor surface](implementation/PR-003.md) |
-| PR-004 | IN_PROGRESS | [UTF-8 lifecycle](implementation/PR-004.md) |
+| PR-004 | IMPLEMENTATION_COMPLETE_PENDING_ACCEPTANCE | [Whole lifecycle closure](implementation/PR-004.md): Save Copy/All, recovery/provenance/Center compare, closed views and recent-file persistence connected; batch03 app53/native10 pass. Manual crash/input/visual acceptance pending. |
 | PR-005 | IN_PROGRESS | [Unicode literal/Extended search and replacement preparation](implementation/PR-005.md); replacement UI integration active, not yet accepted. |
 | PR-006 | IN_PROGRESS | Power-edit module lane assigned; implementation evidence pending. |
 | PR-007 | IN_PROGRESS | Codec lane assigned; streaming implementation and lifecycle integration evidence pending. |
@@ -19,13 +19,13 @@ Latest [integrated development checkpoint](implementation/INTEGRATION-20260908.m
 | PR-011 | IMPLEMENTATION_COMPLETE_PENDING_ACCEPTANCE | [Whole command UI closure](implementation/PR-011.md): native menus/palette/mapper/toolbar/context projections and atomic keymap persistence delivered; combined136 tests, scoped Clippy and native build pass. Physical input/scaling/visual and foreign-host acceptance pending. |
 | PR-012 | IN_PROGRESS | Settings core assigned to portability lane; settings behavior and integration evidence pending. |
 | PR-013 | IN_PROGRESS | Completion/syntax follow-on assigned after the power-edit checkpoint. |
-| PR-014 | IN_PROGRESS | [Macro/process backend](implementation/PR-014.md) active after palette work. |
+| PR-014 | IMPLEMENTATION_COMPLETE_PENDING_ACCEPTANCE | [Macro/process closure](implementation/PR-014.md): manager/persistence, ordered acknowledged input/power/search replay, workspace interpolation, output links and accessibility connected; mixed persistence/replay regression and batch03 pass. Manual acceptance pending. |
 | PR-015 | IN_PROGRESS | [Path trust/watch/tail](implementation/PR-015.md) backend active; native behavior and consumer integration pending. |
 | PR-016 | IN_PROGRESS | Extension runtime/protocol/native transport assigned; isolation/package acceptance pending. |
 | PR-017 | IN_PROGRESS | Compare/utilities assigned after the diff checkpoint. |
 | PR-018 | IN_PROGRESS | [Distribution evidence](implementation/PR-018.md): CLI/portable roots, authenticated update worker/helper atomic apply and rollback, notices and deterministic local packaging verified. Actual fresh unsigned debug portable checkpoint packaged and byte-verified; app supervision/shell/tray integration and signed installer acceptance remain pending. |
 | PR-019 | IN_PROGRESS | Benchmark tooling assigned; complete-feature workloads and release measurements remain pending. |
-| PR-022 | IN_PROGRESS | [Portability evidence](implementation/PR-022.md): documented local source slices complete and verified; foreign-host execution and native GUI acceptance pending. This is local implementation completion, not accepted native ports. |
+| PR-022 | IMPLEMENTATION_COMPLETE_PENDING_ACCEPTANCE | [Portability closure](implementation/PR-022.md): adapter skeletons, lossless path/modifier contracts, RecordingBackend probes, derived architecture guard and three-OS CI source complete; guard and negative fixtures pass at 021d8cb. Foreign-host execution and probe acceptance remain pending; no native product port claimed. |
 | PR-023 | IN_PROGRESS | [UI primitives](implementation/PR-023.md) |
 | PR-024 | IN_PROGRESS | [Accessibility adapter](implementation/PR-024.md) active; native assistive-technology acceptance pending. |
 | PR-025 | IMPLEMENTATION_COMPLETE_PENDING_ACCEPTANCE | [Bounded diff core closure](implementation/PR-025.md): AC-025-01/02/03 passed locally; independent source review found no blocking core gap. Cross-platform compile remains pending; no full acceptance claim. |
@@ -34,7 +34,7 @@ Latest [integrated development checkpoint](implementation/INTEGRATION-20260908.m
 | PR-021 | IN_PROGRESS | [Readiness audit](implementation/PR-021.md) and [native QA evidence](implementation/PR-021-NATIVE-20260906.md); full release gates and acceptance remain open. |
 | PR-027 | IN_PROGRESS | [First-party extension evidence](implementation/PR-027.md): component/formatter harness work active; full integration and acceptance remain open. |
 
-Phase count: 27 specified packages; 25 in progress, 2 implementation complete pending acceptance, 0 not started, 0 fully accepted. Assignment means work has started, not that a compiling or verified slice has been delivered. Delivered slices below are usable implementation, not whole-phase completion or a percentage of product readiness.
+Phase count: 27 specified packages; 21 in progress, 6 implementation complete pending acceptance, 0 not started, 0 fully accepted. Assignment means work has started, not that a compiling or verified slice has been delivered. Delivered slices below are usable implementation, not whole-phase completion or a percentage of product readiness.
 
 Owner requirements: work locally; match current mocks; start each PR with its own document; limit reading to necessary references; avoid redundant tests and repeated full builds.
 

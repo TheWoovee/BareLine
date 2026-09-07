@@ -94,7 +94,10 @@ struct Shell {
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut ledger = StartupLedger::default();
     let args: Vec<_> = std::env::args_os().skip(1).collect();
-    let mut launch = launch::parse(&args, &mut ledger)?;
+    let mut launch = {
+        let _phase = bareline_diagnostics::startup_span(StartupAction::ParseCli);
+        launch::parse(&args, &mut ledger)?
+    };
     if launch.help {
         println!(
             "Bareline [--line N] [--column N] [--read-only] [--monitor] [--no-session] [--no-extensions] [--new-instance] [--] [files...]"
@@ -414,15 +417,14 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 }
 impl Shell {
     fn record_acknowledged_inputs(&mut self) {
-        let mut acknowledged = self.views.take_acknowledged_inputs();
+        let mut receipts = self.views.take_ordered_receipts();
         if let Some(workspace) = &mut self.workspace {
+            receipts.extend(workspace.take_ordered_search_receipts());
             for editor in &mut workspace.editors {
-                acknowledged.extend(editor.take_acknowledged_inputs());
+                receipts.extend(editor.take_ordered_receipts());
             }
         }
-        for input in acknowledged {
-            self.macros_record_input(&input);
-        }
+        self.macros_record_receipts(receipts);
     }
     fn editor_bounds(&self) -> bareline_renderer::Rect {
         let (width, height) = self.window.as_ref().map_or((0.0, 0.0), |window| {
@@ -1172,17 +1174,20 @@ impl ApplicationHandler for Shell {
             return;
         }
         self.ledger.record(StartupAction::CreateWindow);
-        let window = match el.create_window(
-            Window::default_attributes()
-                .with_title("Bareline")
-                .with_inner_size(LogicalSize::new(1200.0, 760.0))
-                .with_min_inner_size(LogicalSize::new(640.0, 360.0))
-                .with_visible(false),
-        ) {
-            Ok(window) => window,
-            Err(e) => {
-                self.fail(el, e);
-                return;
+        let window = {
+            let _window_phase = bareline_diagnostics::startup_span(StartupAction::CreateWindow);
+            match el.create_window(
+                Window::default_attributes()
+                    .with_title("Bareline")
+                    .with_inner_size(LogicalSize::new(1200.0, 760.0))
+                    .with_min_inner_size(LogicalSize::new(640.0, 360.0))
+                    .with_visible(false),
+            ) {
+                Ok(window) => window,
+                Err(e) => {
+                    self.fail(el, e);
+                    return;
+                }
             }
         };
         let handle = match window.window_handle() {
@@ -1254,10 +1259,14 @@ impl ApplicationHandler for Shell {
         ) {
             self.applied_settings = None;
         }
+        if self.settings.language_change.take().is_some() {
+            self.applied_settings = None;
+        }
         self.toolbar_refresh();
         let editor_bounds = self.editor_bounds();
         let editor_pointer = self.editor_pointer();
         if self.recovery_event(el, &event)
+            || self.macros_event(el, &event)
             || self.settings_keymap_event(el, &event)
             || self.power_event(el, &event)
             || self.shortcuts_event(el, &event)
@@ -1266,7 +1275,6 @@ impl ApplicationHandler for Shell {
             || self.extensions_event(el, &event)
             || self.language_event(el, &event)
             || self.compare_event(el, &event)
-            || self.macros_event(el, &event)
             || self.panels_event(el, &event)
             || self.views_event(el, &event)
         {
@@ -1934,6 +1942,8 @@ impl ApplicationHandler for Shell {
             WindowEvent::RedrawRequested => {
                 if self.renderer.is_none() {
                     self.ledger.record(StartupAction::CreateRenderer);
+                    let _renderer_phase =
+                        bareline_diagnostics::startup_span(StartupAction::CreateRenderer);
                     match self.platform.as_ref().unwrap().renderer(self.software) {
                         Ok(r) => {
                             bareline_diagnostics::set_renderer_state(if r.software {
@@ -1975,6 +1985,12 @@ impl ApplicationHandler for Shell {
                 if let Some(workspace) = &mut self.workspace {
                     workspace.theme = self.settings.ui_theme();
                     let effective = self.settings.effective();
+                    self.power.configure_history(
+                        effective.clipboard_history_enabled,
+                        effective.clipboard_history_max_entries,
+                        effective.clipboard_history_max_total_bytes,
+                        effective.clipboard_history_max_entry_bytes,
+                    );
                     let detected: Vec<_> = (0..workspace.editors.len())
                         .map(|index| {
                             workspace
@@ -2014,6 +2030,11 @@ impl ApplicationHandler for Shell {
                         let editor_theme = self.settings.editor_theme();
                         for editor in &mut workspace.editors {
                             editor.theme = editor_theme;
+                            if let Err(error) =
+                                editor.set_font_family(&effective.editor_font_family)
+                            {
+                                workspace.message = Some(error);
+                            }
                             editor.apply_visual_preferences(
                                 effective.editor_font_size_pt,
                                 effective.tab_width,
@@ -2106,12 +2127,6 @@ impl ApplicationHandler for Shell {
                     self.fail(el, format!("language layout: {error:?}"));
                     return;
                 }
-                self.macros.draw(
-                    renderer,
-                    size.width as f32 / scale,
-                    size.height as f32 / scale,
-                    &mut operations,
-                );
                 if let Err(error) = self.settings.draw(
                     renderer,
                     size.width as f32 / scale,
@@ -2170,6 +2185,12 @@ impl ApplicationHandler for Shell {
                         return;
                     }
                 }
+                self.macros.draw(
+                    renderer,
+                    size.width as f32 / scale,
+                    size.height as f32 / scale,
+                    &mut operations,
+                );
                 if self.palette.open {
                     match self.palette.draw_with_theme(
                         renderer,
@@ -2274,10 +2295,18 @@ impl ApplicationHandler for Shell {
                     provider.update(accessible);
                 }
                 if let Some(platform) = &self.platform
-                    && let Err(error) = platform.sync_commands(
+                    && let Err(error) = platform.sync_commands_localized(
                         &self.app.commands,
                         &self.command_context(),
                         &self.settings.keymap.keymap,
+                        |id, fallback| {
+                            let key = if id.starts_with("menu.") {
+                                id.to_owned()
+                            } else {
+                                format!("command.{id}")
+                            };
+                            self.settings.controller.label(&key, fallback)
+                        },
                     )
                 {
                     self.fail(el, error);

@@ -39,6 +39,7 @@ enum Action {
     Tail { platform: Arc<dyn LocalFileSystem>, request: bool, follow: bool },
     UnlockTail,
     RetryRecovery,
+    Prepared(EditTransaction),
     Read(usize),
     Edit {
         range: std::ops::Range<TextOffset>,
@@ -54,6 +55,9 @@ enum Action {
     },
 }
 struct Completed {
+    peer_epoch: u64,
+    saved_state: Option<ContentStateId>,
+    save_as_required: bool,
     following: bool,
     tail_pending: bool,
     source_changed: bool,
@@ -66,6 +70,11 @@ struct Completed {
     caret: usize,
     saved: Option<Fingerprint>,
 }
+struct PeerState {
+    epoch: u64,
+    saved_state: Option<ContentStateId>,
+    save_as_required: bool,
+}
 /// Immutable snapshot plus generation-checked page resolver for background consumers.
 /// Never resolve pages on the UI thread. Busy returns without waiting for the actor.
 #[derive(Clone)]
@@ -75,15 +84,42 @@ pub struct PagedReadHandle {
     snapshot: PagedSnapshot,
 }
 impl PagedReadHandle {
+    /// Captures provenance without opening files. Sealed readers are acquired by
+    /// the consumer's worker, never by the UI thread.
+    pub fn original_store(&self) -> Result<bareline_file_io::codecs::disk::DiskDecoded, String> {
+        let opened = self.actor.try_lock().map_err(|_| "Paged source is busy")?;
+        let current = opened.transcoded.document.snapshot();
+        if !current.same_document(&self.snapshot) || current.content_state != self.snapshot.content_state {
+            return Err("Paged source changed".into());
+        }
+        Ok(opened.transcoded.store.clone())
+    }
     pub fn snapshot(&self) -> &PagedSnapshot { &self.snapshot }
     pub fn resolve_page(&self, ticket: bareline_document::source::PageTicket) -> Result<bool, String> {
+        self.resolve(ticket, false)
+    }
+    /// Historical comparisons may retain an immutable root through later edits.
+    /// Resolve only tickets referenced by that captured root and still owned by this
+    /// actor's original/append generation. Reopen/unlock to another document fails closed.
+    pub fn resolve_captured_page(&self, ticket: bareline_document::source::PageTicket) -> Result<bool, String> {
+        self.resolve(ticket, true)
+    }
+    fn resolve(&self, ticket: bareline_document::source::PageTicket, historical: bool) -> Result<bool, String> {
+        let referenced = self.snapshot.pieces().any(|piece| {
+            let (source, range) = match piece {
+                bareline_document::paged::PagedPiece::Original { source, range } | bareline_document::paged::PagedPiece::OriginalOwned { source, range, .. } => (source, range),
+                bareline_document::paged::PagedPiece::Inserted(_) => return false,
+            };
+            ticket.generation == source.generation() && ticket.page.checked_mul(source.page_size() as u64).is_some_and(|start| start < range.end && start.saturating_add(source.page_size() as u64) > range.start)
+        });
+        if !referenced { return Err("Page is not part of the captured source generation".into()); }
         let mut opened = match self.actor.try_lock() {
             Ok(opened) => opened,
             Err(std::sync::TryLockError::WouldBlock) => return Ok(false),
             Err(std::sync::TryLockError::Poisoned(_)) => return Err("Paged source worker failed".into()),
         };
         let current = opened.transcoded.document.snapshot();
-        if !current.same_document(&self.snapshot) || current.content_state != self.snapshot.content_state {
+        if !current.same_document(&self.snapshot) || (!historical && current.content_state != self.snapshot.content_state) {
             return Err("Paged source changed; recompare or search again".into());
         }
         let mut tail = match self.tail.try_lock() { Ok(tail) => tail, Err(std::sync::TryLockError::WouldBlock) => return Ok(false), Err(_) => return Err("Tail worker failed".into()) };
@@ -93,6 +129,9 @@ impl PagedReadHandle {
     }
 }
 pub struct PagedEditorSurface {
+    peer: Arc<Mutex<PeerState>>,
+    peer_epoch: u64,
+    views: Arc<()>,
     tail: Arc<Mutex<Option<bareline_file_io::tail::TailSession>>>,
     following: bool,
     follow_paused: bool,
@@ -119,6 +158,7 @@ pub struct PagedEditorSurface {
     restoring_selection: Option<(usize, usize)>,
     pub fingerprint: Fingerprint,
     pub path: PathBuf,
+    recovery_origin: Option<PathBuf>,
     pub error: Option<String>,
 }
 impl PagedEditorSurface {
@@ -137,6 +177,9 @@ impl PagedEditorSurface {
         let mut surface = EditorSurface::loading(prefix, notify.clone());
         surface.encoding_label = format!("{:?}", opened.transcoded.store.state.save_target);
         let mut view = Self {
+            peer: Arc::new(Mutex::new(PeerState { epoch: 0, saved_state: opened.recovery_origin.is_none().then_some(snapshot.content_state), save_as_required: opened.recovery_origin.is_some() })),
+            peer_epoch: 0,
+            views: Arc::new(()),
             tail: Arc::new(Mutex::new(None)),
             following: false, follow_paused: false, tail_pending: false, tail_changed: false,
             saved_state: opened
@@ -153,6 +196,7 @@ impl PagedEditorSurface {
             snapshot,
             fingerprint: opened.fingerprint.clone(),
             path: opened.path.clone(),
+            recovery_origin: opened.recovery_origin.clone(),
             surface,
             actor: Arc::new(Mutex::new(opened)),
             budget,
@@ -168,6 +212,49 @@ impl PagedEditorSurface {
         view.request_viewport(TextOffset(0))?;
         Ok(view)
     }
+    /// A real peer of the same full paged actor. Only viewport, selection and scrolling
+    /// belong to the new view; no resident prefix is substituted for the document.
+    pub fn clone_view(&self) -> Result<Self, String> {
+        let prefix = DocumentBuilder::new(self.budget.clone(), Budget::new(0)).map_err(|e| format!("{e:?}"))?.prefix();
+        let mut surface = EditorSurface::loading(prefix, self.notify.clone());
+        surface.encoding_label = self.surface.encoding_label.clone();
+        surface.user_read_only = self.surface.user_read_only;
+        surface.theme = self.surface.theme;
+        surface.language = self.surface.language;
+        surface.language_override = self.surface.language_override;
+        surface.detected_language = self.surface.detected_language;
+        surface.syntax_preference = self.surface.syntax_preference;
+        surface.font_pixels = self.surface.font_pixels;
+        surface.font_family = self.surface.font_family.clone();
+        surface.tab_width = self.surface.tab_width;
+        surface.line_numbers = self.surface.line_numbers;
+        surface.highlight_current_line = self.surface.highlight_current_line;
+        surface.whitespace = self.surface.whitespace.clone();
+        let mut view = Self {
+            peer: self.peer.clone(), peer_epoch: self.peer_epoch, views: self.views.clone(),
+            tail: self.tail.clone(), following: self.following, follow_paused: self.follow_paused,
+            tail_pending: self.tail_pending, tail_changed: self.tail_changed, surface,
+            actor: self.actor.clone(), snapshot: self.snapshot.clone(), saved_state: self.saved_state,
+            recovery_config: self.recovery_config.clone(), save_as_required: self.save_as_required,
+            can_undo: self.can_undo, can_redo: self.can_redo, recovery: self.recovery.clone(),
+            recovery_status: self.recovery_status.clone(), failed_retirements: self.failed_retirements.clone(),
+            budget: self.budget.clone(), pending: None, pending_input: None, cancellation: self.cancellation.clone(),
+            notify: self.notify.clone(), viewport_start: self.viewport_start, viewport_valid: false,
+            restoring_selection: Some((self.viewport_start + self.surface.selection.anchor, self.viewport_start + self.surface.selection.caret)),
+            fingerprint: self.fingerprint.clone(), path: self.path.clone(), recovery_origin: self.recovery_origin.clone(), error: None,
+        };
+        view.request_viewport(TextOffset(self.viewport_start))?;
+        Ok(view)
+    }
+    /// Nonblocking peer publication check; the next viewport is fetched on the worker.
+    pub fn refresh_peer(&mut self) -> bool {
+        if self.busy() { return false; }
+        let changed = self.peer.try_lock().is_ok_and(|peer| peer.epoch != self.peer_epoch);
+        if !changed { return false; }
+        self.viewport_valid = false;
+        self.restoring_selection = Some((self.viewport_start + self.surface.selection.anchor, self.viewport_start + self.surface.selection.caret));
+        match self.submit(Action::Read(self.viewport_start)) { Ok(()) => true, Err(error) => { self.error = Some(error); false } }
+    }
     pub fn enable_recovery(&mut self, root: PathBuf, platform: Arc<dyn LocalFileSystem>) {
         self.recovery_config = Some((root, platform));
     }
@@ -182,6 +269,7 @@ impl PagedEditorSurface {
     }
     pub fn mark_recovered(&mut self) {
         self.saved_state = None;
+        if let Ok(mut peer) = self.peer.lock() { peer.saved_state = None; peer.epoch = peer.epoch.wrapping_add(1); }
     }
     pub fn snapshot(&self) -> &PagedSnapshot {
         &self.snapshot
@@ -195,8 +283,17 @@ impl PagedEditorSurface {
     pub fn busy(&self) -> bool {
         self.pending.is_some()
     }
+    pub fn recovery_origin_path(&self) -> Option<&std::path::Path> { self.recovery_origin.as_deref() }
     pub fn viewport_ready(&self) -> bool { self.viewport_valid && !self.busy() }
     pub fn follow_status(&self) -> Option<(bool, bool)> { self.following.then_some((self.follow_paused, self.tail_changed)) }
+    pub fn follow_banner_text(&self) -> Option<String> {
+        self.follow_status().map(|(paused, changed)| {
+            let name = self.path.file_name().unwrap_or_default().to_string_lossy();
+            if changed { format!("{name} · Source changed (rotated, truncated or rewritten) · Reopen and follow") }
+            else if paused { format!("Following {name} · Paused (scrolled up) · Resume ↓ · Unlock to edit") }
+            else { format!("Following {name} · Following new content · Pause · Unlock to edit") }
+        })
+    }
     pub fn start_follow(&mut self, platform: Arc<dyn LocalFileSystem>) -> Result<(), String> {
         if self.dirty() { return Err("Save or discard edits before monitoring.".into()); }
         self.submit(Action::Tail { platform, request: true, follow: true })?;
@@ -256,6 +353,14 @@ impl PagedEditorSurface {
     /// Export the captured document without changing its save identity or recovery.
     pub fn save_copy(&mut self, target: PathBuf, platform: Arc<dyn LocalFileSystem>) -> Result<(), String> {
         self.submit(Action::Save { copy_only: true, target, expected: None, platform })
+    }
+    /// Apply one reviewed multi-edit transaction through the paged actor and recovery journal.
+    pub fn apply_prepared(&mut self, source: &PagedSnapshot, transaction: EditTransaction) -> Result<(), String> {
+        if self.following || self.surface.user_read_only { return Err("Document is read-only".into()); }
+        if !source.same_document(&self.snapshot) || source.revision != self.snapshot.revision || source.content_state != self.snapshot.content_state || transaction.base_revision != source.revision {
+            return Err("Replacement source changed; search again".into());
+        }
+        self.submit(Action::Prepared(transaction))
     }
     pub fn enqueue(&mut self, input: Input) {
         if self.surface.user_read_only
@@ -325,12 +430,12 @@ impl PagedEditorSurface {
             return Err("A paged operation is already pending.".into());
         }
         let actor = self.actor.clone();
+        let peer = self.peer.clone();
         let tail = self.tail.clone();
         let recovery = self.recovery.clone();
         let recovery_config = self.recovery_config.clone();
         let recovery_status = self.recovery_status.clone();
         let failed_retirements = self.failed_retirements.clone();
-        let saved_state = self.saved_state;
         let budget = self.budget.clone();
         let cancellation = self.cancellation.clone();
         let notify = self.notify.clone();
@@ -344,18 +449,28 @@ impl PagedEditorSurface {
                     cancellation.check().map_err(|error| format!("{error:?}"))?;
                     let mut opened = actor.lock().map_err(|_| "Paged actor stopped.")?;
                     let mut tail = tail.lock().map_err(|_| "Tail actor stopped.")?;
-                    if opened.transcoded.document.snapshot().revision != revision {
+                    if tail.is_some() && matches!(&action, Action::Edit { .. } | Action::Prepared(_) | Action::Undo | Action::Redo | Action::Save { .. }) {
+                        return Err("Unlock and capture a fixed generation before editing or saving monitored content.".into());
+                    }
+                    let saved_state = peer.lock().map_err(|_| "Peer state stopped")?.saved_state;
+                    if opened.transcoded.document.snapshot().revision != revision && !matches!(&action, Action::Read(_)) {
                         return Err("Document changed; retry the operation.".into());
                     }
                     let mut start = current_start;
                     let mut caret = current_caret;
                     let mut saved = None;
                     let baseline = opened.transcoded.document.snapshot();
+                    let previous_path = opened.path.clone();
+                    let previous_fingerprint = opened.fingerprint.clone();
+                    let previously_following = tail.is_some();
                     let mut retry_recovery = false;
                     let mut recovery_edits = Vec::new();
                     match action {
                         Action::Tail { platform, request, follow } => {
-                            if tail.is_none() { *tail = Some(bareline_file_io::tail::TailSession::new(&opened, platform, budget.clone(), cancellation.clone()).map_err(|e| format!("{e:?}"))?); }
+                            if tail.is_none() {
+                                *tail = Some(bareline_file_io::tail::TailSession::new(&opened, platform, budget.clone(), cancellation.clone()).map_err(|e| format!("{e:?}"))?);
+                                if follow { caret = opened.transcoded.document.snapshot().len(); start = caret.saturating_sub(WINDOW / 2); }
+                            }
                             let session = tail.as_mut().unwrap();
                             if request { session.request(&opened.path).map_err(|e| format!("{e:?}"))?; }
                             if session.step(&mut opened).map_err(|e| format!("{e:?}"))? && follow {
@@ -412,6 +527,28 @@ impl PagedEditorSurface {
                         Action::Read(offset) => {
                             start = offset;
                             caret = offset;
+                        }
+                        Action::Prepared(transaction) => {
+                            if tail.is_some() { return Err("Monitoring document is read-only".into()); }
+                            let snapshot = opened.transcoded.document.snapshot();
+                            if transaction.base_revision != snapshot.revision { return Err("Replacement source changed".into()); }
+                            let mut windows = Vec::new();
+                            let mut used = 0usize;
+                            for edit in &transaction.edits {
+                                cancellation.check().map_err(|error| format!("{error:?}"))?;
+                                let length = edit.range.end.0.checked_sub(edit.range.start.0).ok_or("Invalid replacement range")?;
+                                used = used.checked_add(length).and_then(|value| value.checked_add(edit.insert.len() + 128)).ok_or("Replacement staging limit")?;
+                                if used > 16 * 1024 * 1024 { return Err("Replacement staging limit".into()); }
+                                let window = read_window(&mut opened, &mut tail, &snapshot, edit.range.start.0.saturating_sub(4), length + 8, &budget, &cancellation)?;
+                                let from = edit.range.start.0.checked_sub(window.range().start.0).ok_or("Invalid replacement boundary")?;
+                                let to = edit.range.end.0.checked_sub(window.range().start.0).ok_or("Invalid replacement boundary")?;
+                                let removed = window.text().get(from..to).ok_or("Invalid replacement boundary")?;
+                                recovery_edits.push(bareline_file_io::recovery::RecoveryEdit { offset: edit.range.start.0 as u64, removed: removed.as_bytes().to_vec(), inserted: edit.insert.as_bytes().to_vec() });
+                                windows.push(window);
+                            }
+                            opened.transcoded.document.apply_materialized(transaction, &windows).map_err(|error| format!("{error:?}"))?;
+                            caret = caret.min(opened.transcoded.document.snapshot().len());
+                            start = start.min(caret);
                         }
                         Action::Edit { range, insert } => {
                             if insert.len() > WINDOW || range.end.0 - range.start.0 > WINDOW {
@@ -517,6 +654,13 @@ impl PagedEditorSurface {
                         }
                     }
                     let snapshot = opened.transcoded.document.snapshot();
+                    let (peer_epoch, shared_saved_state, shared_save_as_required) = {
+                        let mut peer = peer.lock().map_err(|_| "Peer state stopped")?;
+                        if saved.is_some() { peer.saved_state = Some(snapshot.content_state); peer.save_as_required = false; }
+                        if tail.is_some() { peer.saved_state = Some(snapshot.content_state); }
+                        if snapshot.content_state != baseline.content_state || snapshot.revision != baseline.revision || opened.path != previous_path || opened.fingerprint != previous_fingerprint || saved.is_some() || previously_following != tail.is_some() { peer.epoch = peer.epoch.wrapping_add(1); }
+                        (peer.epoch, peer.saved_state, peer.save_as_required)
+                    };
                     if saved.is_some() {
                         let retired = recovery
                             .lock()
@@ -584,6 +728,7 @@ impl PagedEditorSurface {
                         &cancellation,
                     );
                     Ok(Completed {
+                        peer_epoch, saved_state: shared_saved_state, save_as_required: shared_save_as_required,
                         following: tail.is_some(),
                         tail_pending: tail.as_ref().is_some_and(|s| s.pending()),
                         source_changed: tail.as_ref().is_some_and(|s| s.source_changed),
@@ -606,7 +751,7 @@ impl PagedEditorSurface {
     }
     pub fn pump(&mut self) -> bool {
         let Some(receiver) = &self.pending else {
-            return false;
+            return self.refresh_peer();
         };
         let result = match receiver.try_recv() {
             Ok(result) => result,
@@ -616,8 +761,13 @@ impl PagedEditorSurface {
         self.pending = None;
         match result {
             Ok(completed) => {
+                self.peer_epoch = completed.peer_epoch;
+                self.saved_state = completed.saved_state;
+                self.save_as_required = completed.save_as_required;
+                self.fingerprint = completed.fingerprint.clone();
                 let was_following = self.following;
                 self.following = completed.following;
+                if self.following { self.surface.user_read_only = true; }
                 self.tail_pending = completed.tail_pending;
                 self.tail_changed = completed.source_changed;
                 if was_following && !self.following { self.surface.user_read_only = false; }
@@ -700,7 +850,7 @@ impl PagedEditorSurface {
 }
 impl Drop for PagedEditorSurface {
     fn drop(&mut self) {
-        self.cancellation.cancel();
+        if Arc::strong_count(&self.views) == 1 { self.cancellation.cancel(); }
     }
 }
 fn read_window(
@@ -731,5 +881,54 @@ fn read_window(
             }
             WindowPoll::Finished => return Err("Viewport request already finished.".into()),
         }
+    }
+}
+
+#[cfg(test)]
+mod peer_tests {
+    use super::*;
+    use std::{fs::File, path::Path, time::{Duration, Instant}};
+    struct Platform;
+    impl LocalFileSystem for Platform {
+        fn validate_target(&self, _: &Path) -> std::io::Result<()> { Ok(()) }
+        fn available_space(&self, _: &Path) -> std::io::Result<u64> { Ok(u64::MAX) }
+        fn guard_directory(&self, _: &Path) -> std::io::Result<Arc<dyn Send + Sync>> { Ok(Arc::new(())) }
+        fn open_sealed_read(&self, path: &Path) -> std::io::Result<File> { File::open(path) }
+        fn identity(&self, file: &File) -> std::io::Result<bareline_platform::FileIdentity> {
+            let metadata = file.metadata()?;
+            Ok(bareline_platform::FileIdentity { volume: 1, file: 1, length: metadata.len(), modified: metadata.modified()?.duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos() as u64 })
+        }
+        fn commit(&self, _: &Path, _: &Path, _: bool) -> std::io::Result<()> { Err(std::io::Error::other("unused")) }
+    }
+    fn drain(view: &mut PagedEditorSurface) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            view.pump();
+            if !view.busy() { assert!(view.error.is_none(), "{:?}", view.error); break; }
+            assert!(Instant::now() < deadline, "paged worker timed out");
+            std::thread::yield_now();
+        }
+    }
+    #[test]
+    fn peer_owns_full_document_and_survives_other_view_close() {
+        use bareline_file_io::{codecs::disk::DiskOptions, lifecycle::{PagedOpenRequest, TranscodeOutcome, open_paged_encoded}, source::SourceOptions};
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let root = std::env::temp_dir().join(format!("bareline-paged-peer-{}-{}", std::process::id(), NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
+        std::fs::create_dir(&root).unwrap();
+        let path = root.join("source.txt"); std::fs::write(&path, "one\ntwo\nthree\n").unwrap();
+        let budget = Budget::new(16 * 1024 * 1024);
+        let TranscodeOutcome::Complete(opened) = open_paged_encoded(PagedOpenRequest { path, bytes: budget.clone(), history: Budget::new(1024 * 1024), cache: root.clone(), options: DiskOptions { temp_quota_bytes: 1024 * 1024, interpret: None }, source_options: SourceOptions { resident_max_bytes: 0, ..SourceOptions::default() } }, Arc::new(Platform), Cancellation::default(), |_| {}) else { panic!("open failed") };
+        let mut first = PagedEditorSurface::new(opened, budget, Arc::new(|| {})).unwrap(); drain(&mut first);
+        let mut second = first.clone_view().unwrap(); drain(&mut second);
+        assert!(first.snapshot().same_document(second.snapshot()));
+        second.enqueue(Input::Insert("peer ".into())); drain(&mut second);
+        assert!(first.refresh_peer()); drain(&mut first);
+        assert_eq!(first.snapshot().content_state, second.snapshot().content_state);
+        assert!(first.dirty() && second.dirty());
+        assert_eq!(first.surface.snapshot.len(), second.surface.snapshot.len());
+        drop(first);
+        second.enqueue(Input::Insert("alive ".into())); drain(&mut second);
+        assert!(second.surface.snapshot.len() > 14);
+        drop(second); std::fs::remove_dir_all(root).unwrap();
     }
 }

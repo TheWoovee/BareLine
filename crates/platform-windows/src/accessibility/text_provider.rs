@@ -28,6 +28,16 @@ fn array(values: &[IUnknown]) -> Result<*mut SAFEARRAY> {
     }
     Ok(sa)
 }
+fn rectangles(values: &[f64]) -> Result<*mut SAFEARRAY> {
+    let sa = unsafe { SafeArrayCreateVector(VT_R8, 0, values.len() as u32) };
+    if sa.is_null() { return Err(Error::from_hresult(E_OUTOFMEMORY)); }
+    for (index, value) in values.iter().enumerate() {
+        if let Err(error) = unsafe { SafeArrayPutElement(sa, &(index as i32), (value as *const f64).cast()) } {
+            let _ = unsafe { SafeArrayDestroy(sa) }; return Err(error);
+        }
+    }
+    Ok(sa)
+}
 pub(super) struct Factory { life: Arc<Life> }
 struct Life {
     source: RwLock<Option<Arc<dyn AccessibilityTextSource>>>,
@@ -72,6 +82,24 @@ struct View {
     page: usize,
 }
 impl Life {
+    fn geometry(&self, view: &View, enclosing: &IRawElementProviderSimple) -> Result<Vec<AccessibilityTextBox>> {
+        let (mut boxes, origin) = {
+            let shared = self.shared.lock().unwrap_or_else(|e| e.into_inner());
+            if shared.snapshot.text_context.as_ref().map(|c| c.source_identity) != Some(view.source.identity()) { return Err(unavailable()); }
+            // Committed layouts do not describe the IME overlay. Do not publish
+            // misleading rectangles while composition replaces those glyphs.
+            if view.overlay.is_some() { return Ok(Vec::new()); }
+            let node = shared.snapshot.nodes.iter().find(|n| n.id == 2).ok_or_else(unavailable)?;
+            (shared.snapshot.text_geometry.clone(), (node.bounds[0], node.bounds[1]))
+        };
+        let fragment: IRawElementProviderFragment = enclosing.cast()?;
+        let screen = unsafe { fragment.BoundingRectangle()? };
+        for rect in &mut boxes {
+            rect.bounds[0] += screen.left-origin.0;
+            rect.bounds[1] += screen.top-origin.1;
+        }
+        Ok(boxes)
+    }
     fn view(&self) -> Result<View> {
         let source = self.source.read().unwrap_or_else(|e| e.into_inner()).clone().ok_or_else(unavailable)?;
         let shared = self.shared.lock().unwrap_or_else(|e| e.into_inner());
@@ -157,7 +185,23 @@ impl ITextProvider_Impl for Provider_Impl {
         array(&[self.range(view.virtual_offset(view.visible.0), view.virtual_offset(view.visible.1).min(view.len()))?.cast()?])
     }
     fn RangeFromChild(&self, _child: Ref<IRawElementProviderSimple>) -> Result<ITextRangeProvider> { Err(invalid()) }
-    fn RangeFromPoint(&self, _point: &UiaPoint) -> Result<ITextRangeProvider> { Err(unsupported()) }
+    fn RangeFromPoint(&self, point: &UiaPoint) -> Result<ITextRangeProvider> {
+        if !point.x.is_finite() || !point.y.is_finite() { return Err(invalid()); }
+        let life = self.life.upgrade().ok_or_else(unavailable)?;
+        let view = life.view()?;
+        if view.len() == 0 { return self.range(0,0); }
+        let boxes = life.geometry(&view, &self.enclosing)?;
+        let closest = boxes.iter().min_by(|a,b| {
+            let distance = |r: &AccessibilityTextBox| {
+                let [x,y,w,h] = r.bounds;
+                let dx = point.x-point.x.clamp(x,x+w);
+                let dy = point.y-point.y.clamp(y,y+h);
+                dx*dx+dy*dy
+            };
+            distance(a).total_cmp(&distance(b))
+        }).ok_or_else(unavailable)?;
+        self.range(closest.start,closest.start)
+    }
     fn DocumentRange(&self) -> Result<ITextRangeProvider> {
         let view = self.life.upgrade().ok_or_else(unavailable)?.view()?;
         self.range(0, view.len())
@@ -270,7 +314,17 @@ impl ITextRangeProvider_Impl for TextRange_Impl {
         match found {Some(i)=>Ok(self.new_range(start+i,start+i+needle.len())),None=>Err(Error::empty())}
     }
     fn GetAttributeValue(&self, _id: UIA_TEXTATTRIBUTE_ID) -> Result<VARIANT> { self.view()?; Ok(unsafe { UiaGetReservedNotSupportedValue()? }.into()) }
-    fn GetBoundingRectangles(&self) -> Result<*mut SAFEARRAY> { self.view()?; Ok(std::ptr::null_mut()) }
+    fn GetBoundingRectangles(&self) -> Result<*mut SAFEARRAY> {
+        let view = self.view()?;
+        let (start,end) = self.endpoints();
+        let life = self.life.upgrade().ok_or_else(unavailable)?;
+        let boxes = life.geometry(&view, &self.enclosing)?;
+        let mut result = Vec::new();
+        for rect in boxes {
+            if rect.start < end && rect.end > start { result.extend(rect.bounds); }
+        }
+        rectangles(&result)
+    }
     fn GetEnclosingElement(&self) -> Result<IRawElementProviderSimple> { self.view()?; Ok(self.enclosing.clone()) }
     fn GetText(&self, max_length: i32) -> Result<BSTR> {
         if max_length < -1 { return Err(invalid()); }
@@ -324,7 +378,7 @@ mod identity_tests {
             source: RwLock::new(Some(Arc::new(Source((10, 1))))),
             shared: Arc::new(Mutex::new(Shared {
                 snapshot: AccessibilitySnapshot {
-                    root: 1, focus: 2, nodes: vec![], text: None,
+                    root: 1, focus: 2, nodes: vec![], text: None, text_geometry: vec![],
                     text_context: Some(AccessibilityTextContext {
                         source_identity: (10, 1), selection: (2, 4), composition: None,
                     }),

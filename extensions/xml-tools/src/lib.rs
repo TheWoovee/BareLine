@@ -83,8 +83,15 @@ pub fn parse(input: impl Read) -> Result<Document, Error> {
                 }
                 if let Some(encoding) = declaration.encoding() {
                     let encoding = encoding.map_err(|e| err(offset, e))?;
-                    if !encoding.eq_ignore_ascii_case(b"utf-8") {
-                        return Err(err(offset, "text-view XML declaration must use UTF-8"));
+                    // Snapshot bytes are the editor's already-decoded UTF-8 text
+                    // view. The declaration describes its original encoding and
+                    // must be preserved, not used to transcode the snapshot again.
+                    if !encoding.first().is_some_and(u8::is_ascii_alphabetic)
+                        || !encoding.iter().all(|byte| {
+                            byte.is_ascii_alphanumeric() || matches!(*byte, b'.' | b'_' | b'-')
+                        })
+                    {
+                        return Err(err(offset, "invalid XML encoding declaration"));
                     }
                 }
             }
@@ -699,5 +706,19 @@ mod terminal_selection_tests {
         assert_eq!(query(&doc, "/r//text()", &ns).unwrap(), ["x", "y"]);
         assert_eq!(query(&doc, "/r//@id", &ns).unwrap(), ["root", "child"]);
         assert!(query(&doc, "/r/@missing", &ns).unwrap().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod decoded_view_tests {
+    use super::*;
+    #[test]
+    fn original_encoding_declaration_survives_decoded_text_format() {
+        let source = "<?xml version='1.0' encoding='UTF-16'?><r>é</r>";
+        assert!(parse(source.as_bytes()).is_ok());
+        let mut out = Vec::new();
+        format(source.as_bytes(), &mut out).unwrap();
+        assert_eq!(out, source.as_bytes());
+        assert!(parse(b"<?xml version='1.0' encoding='123'?><r/>".as_slice()).is_err());
     }
 }

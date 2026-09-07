@@ -120,19 +120,31 @@ pub struct SettingsController {
 }
 impl SettingsController {
     pub fn label(&self, id: &str, fallback: &str) -> String {
-        self.localizer.format(id, &[]).unwrap_or_else(|_| fallback.into())
+        self.localizer
+            .format(id, &[])
+            .unwrap_or_else(|_| fallback.into())
     }
     pub fn status_description(&self) -> String {
-        if let Some(error) = &self.error { return error.clone(); }
+        if let Some(error) = &self.error {
+            return error.clone();
+        }
         match &self.current().status {
             SaveStatus::Saved => self.label("settings.saved", "All changes saved"),
             SaveStatus::Pending => self.label("settings.unsaved", "Changes not saved"),
-            SaveStatus::Failed(reason) => format!("{}: {reason}", self.label("settings.unsaved", "Changes not saved")),
+            SaveStatus::Failed(reason) => format!(
+                "{}: {reason}",
+                self.label("settings.unsaved", "Changes not saved")
+            ),
         }
     }
     fn reset_dialog_bounds(&self) -> Rect {
-        let sidebar = 164.0_f32.min(self.bounds.width*0.26);
-        rect(self.bounds.x+sidebar+38.0, self.bounds.y+120.0, (self.bounds.width-sidebar-76.0).max(100.0),112.0)
+        let sidebar = 164.0_f32.min(self.bounds.width * 0.26);
+        rect(
+            self.bounds.x + sidebar + 38.0,
+            self.bounds.y + 120.0,
+            (self.bounds.width - sidebar - 76.0).max(100.0),
+            112.0,
+        )
     }
     pub fn new(
         user: SettingsDocument,
@@ -188,8 +200,13 @@ impl SettingsController {
             .name("bareline-settings-save".into())
             .spawn(move || {
                 while let Ok(job) = jobs.recv() {
-                    let prepare = if job.scope == Scope::Workspace { job.path.parent().map_or(Ok(()), std::fs::create_dir_all) } else { Ok(()) };
-                    let error = prepare.and_then(|_| job.snapshot.save(&job.path, platform.as_ref()))
+                    let prepare = if job.scope == Scope::Workspace {
+                        job.path.parent().map_or(Ok(()), std::fs::create_dir_all)
+                    } else {
+                        Ok(())
+                    };
+                    let error = prepare
+                        .and_then(|_| job.snapshot.save(&job.path, platform.as_ref()))
                         .err()
                         .map(|e| e.to_string());
                     if completed
@@ -232,7 +249,23 @@ impl SettingsController {
         }
         self.workspace = Some(SettingsEditor::new(document));
         self.popup = None;
-        if let Some(edit) = self.value_edit.take() { self.retired_fields.push(edit.field); self.focus.close_layer(); }
+        if let Some(edit) = self.value_edit.take() {
+            self.retired_fields.push(edit.field);
+            self.focus.close_layer();
+        }
+    }
+    pub fn clear_workspace_document(&mut self) {
+        self.workspace = None;
+        self.scope = Scope::User;
+        self.popup = None;
+        if let Some(storage) = &mut self.storage {
+            storage.workspace = None;
+            storage.pending.retain(|job| job.scope != Scope::Workspace);
+        }
+        if let Some(edit) = self.value_edit.take() {
+            self.retired_fields.push(edit.field);
+            self.focus.close_layer();
+        }
     }
     pub fn set_workspace_opt_in(&mut self, enabled: bool) -> Result<(), String> {
         let scope = self.scope;
@@ -313,9 +346,13 @@ impl SettingsController {
         self.query_focused = true;
     }
     pub fn dismiss(&mut self) {
+        self.confirm_reset(false);
         self.open = false;
         self.popup = None;
-        if let Some(edit) = self.value_edit.take() { self.retired_fields.push(edit.field); self.focus.close_layer(); }
+        if let Some(edit) = self.value_edit.take() {
+            self.retired_fields.push(edit.field);
+            self.focus.close_layer();
+        }
         self.query.cancel();
     }
     pub fn revert_changes(&mut self) {
@@ -325,12 +362,25 @@ impl SettingsController {
         self.queue_save();
     }
     pub fn request_reset(&mut self) {
-        if self.reset_pending { return; }
+        if self.reset_pending {
+            return;
+        }
         self.reset_pending = true;
-        self.focus.open_layer(ViewId(8003), [8011,8012].into_iter().map(|id| bareline_ui::focus::FocusTarget { id:ViewId(id),enabled:true }).collect());
+        self.focus.open_layer(
+            ViewId(8003),
+            [8011, 8012]
+                .into_iter()
+                .map(|id| bareline_ui::focus::FocusTarget {
+                    id: ViewId(id),
+                    enabled: true,
+                })
+                .collect(),
+        );
     }
     pub fn confirm_reset(&mut self, confirmed: bool) {
-        if !self.reset_pending { return; }
+        if !self.reset_pending {
+            return;
+        }
         if self.reset_pending && confirmed {
             let category = self.category.clone();
             self.current_mut().reset_section(&category);
@@ -394,9 +444,17 @@ impl SettingsController {
         if let Some(storage) = self.storage.as_mut() {
             storage.active = false;
         }
-        let same_destination = self.storage.as_ref().is_some_and(|storage|
-            if completion.scope == Scope::Workspace { storage.workspace.as_ref() == Some(&completion.path) } else { storage.user == completion.path });
-        if !same_destination { self.start_save(); return true; }
+        let same_destination = self.storage.as_ref().is_some_and(|storage| {
+            if completion.scope == Scope::Workspace {
+                storage.workspace.as_ref() == Some(&completion.path)
+            } else {
+                storage.user == completion.path
+            }
+        });
+        if !same_destination {
+            self.start_save();
+            return true;
+        }
         let editor = if completion.scope == Scope::Workspace {
             self.workspace.as_mut()
         } else {
@@ -417,73 +475,187 @@ impl SettingsController {
     }
     pub fn release(&mut self, backend: &mut impl TextBackend) {
         self.query.release(backend);
-        if let Some(edit) = &mut self.value_edit { edit.field.release(backend); }
-        for mut field in self.retired_fields.drain(..) { field.release(backend); }
+        if let Some(edit) = &mut self.value_edit {
+            edit.field.release(backend);
+        }
+        for mut field in self.retired_fields.drain(..) {
+            field.release(backend);
+        }
     }
     pub fn text_field_mut(&mut self) -> Option<&mut TextField> {
-        if let Some(edit) = &mut self.value_edit { return (self.focus.focused() == Some(ViewId(8007))).then_some(&mut edit.field); }
+        if let Some(edit) = &mut self.value_edit {
+            return (self.focus.focused() == Some(ViewId(8007))).then_some(&mut edit.field);
+        }
         self.query_focused.then_some(&mut self.query)
     }
     pub fn text_changed(&mut self) {
-        if let Some(edit) = &mut self.value_edit { edit.field.set_validation(None); }
-        else { self.query_changed(); }
+        if let Some(edit) = &mut self.value_edit {
+            edit.field.set_validation(None);
+        } else {
+            self.query_changed();
+        }
     }
-    pub fn editing_value(&self) -> bool { self.value_edit.is_some() }
+    /// Replaces the committed value of an exposed text field without applying a setting.
+    pub fn accessibility_set_value(&mut self, id: u64, value: &str) -> bool {
+        if !self.open
+            || !matches!(id, 8000 | 8007)
+            || value.len() > 16 * 1024
+            || value.chars().any(char::is_control)
+        {
+            return false;
+        }
+        if !self
+            .semantics()
+            .iter()
+            .any(|node| node.id.0 == id && !node.disabled)
+        {
+            return false;
+        }
+        self.accessibility_action(id, false);
+        let Some(field) = self.text_field_mut() else {
+            return false;
+        };
+        field.cancel();
+        field.select_all();
+        field.insert(value);
+        self.text_changed();
+        true
+    }
+    pub fn editing_value(&self) -> bool {
+        self.value_edit.is_some()
+    }
     pub fn focused_id(&self) -> Option<ViewId> {
-        if !self.open { return None; }
-        if self.reset_pending { return self.focus.focused(); }
-        if self.value_edit.is_some() { return self.focus.focused(); }
-        if let Some(popup) = &self.popup { return popup.list.selected.map(|i| ViewId(8500+i as u64)); }
-        if self.query_focused { Some(ViewId(8000)) } else { self.focus.focused() }
+        if !self.open {
+            return None;
+        }
+        if self.reset_pending {
+            return self.focus.focused();
+        }
+        if self.value_edit.is_some() {
+            return self.focus.focused();
+        }
+        if let Some(popup) = &self.popup {
+            return popup.list.selected.map(|i| ViewId(8500 + i as u64));
+        }
+        if self.query_focused {
+            Some(ViewId(8000))
+        } else {
+            self.focus.focused()
+        }
     }
     pub fn traverse_focus(&mut self, backwards: bool) {
-        if self.value_edit.is_some() { self.focus.traverse(backwards); return; }
-        if self.reset_pending { self.focus.traverse(backwards); return; }
-        if self.popup.is_some() { self.popup = None; }
+        if self.value_edit.is_some() {
+            self.focus.traverse(backwards);
+            return;
+        }
+        if self.reset_pending {
+            self.focus.traverse(backwards);
+            return;
+        }
+        if self.popup.is_some() {
+            self.popup = None;
+        }
         self.refresh_focus();
-        if let Some(id) = self.focus.traverse(backwards) { self.accessibility_action(id.0, false); }
+        if let Some(id) = self.focus.traverse(backwards) {
+            self.accessibility_action(id.0, false);
+        }
     }
     fn refresh_focus(&mut self) {
         let mut nodes = self.semantics();
-        nodes.sort_by_key(|node| match node.id.0 { 8000 => (0,0),8001|8002|8006 => (1,node.id.0),8100..=8199 => (2,node.id.0),2000..=3999 => (3,node.id.0), _ => (4,node.id.0) });
-        let targets = nodes.into_iter().filter(|node| node.actions.contains(&SemanticAction::Focus))
-            .map(|node| bareline_ui::focus::FocusTarget { id: node.id, enabled: !node.disabled }).collect();
+        nodes.sort_by_key(|node| match node.id.0 {
+            8000 => (0, 0),
+            8001 | 8002 | 8006 => (1, node.id.0),
+            8100..=8199 => (2, node.id.0),
+            2000..=3999 => (3, node.id.0),
+            _ => (4, node.id.0),
+        });
+        let targets = nodes
+            .into_iter()
+            .filter(|node| node.actions.contains(&SemanticAction::Focus))
+            .map(|node| bareline_ui::focus::FocusTarget {
+                id: node.id,
+                enabled: !node.disabled,
+            })
+            .collect();
         self.focus.set_targets(targets);
-        if self.query_focused { self.focus.focus(ViewId(8000)); }
+        if self.query_focused {
+            self.focus.focus(ViewId(8000));
+        }
     }
     fn begin_value_edit(&mut self, index: usize) -> Option<SettingsEffect> {
         let row = self.rows.get(index)?;
         let value = self.effective().setting_value(row.definition.key)?;
         let input = config::format_setting_input(&value);
-        if input.len() > 16 * 1024 { return Some(SettingsEffect::OpenToml(self.scope)); }
-        let mut field = TextField::default(); field.insert(&input); field.select_all();
+        if input.len() > 16 * 1024 {
+            return Some(SettingsEffect::OpenToml(self.scope));
+        }
+        let mut field = TextField::default();
+        field.insert(&input);
+        field.select_all();
         field.set_placeholder("Enter value · Enter applies · Escape cancels");
-        self.value_edit = Some(ValueEdit { key: row.definition.key, field, bounds: row.value.bounds, invoker: row.value.id });
-        self.focus.open_layer(row.value.id, [8007,8009,8010].into_iter().map(|id| bareline_ui::focus::FocusTarget { id: ViewId(id), enabled: true }).collect());
+        self.value_edit = Some(ValueEdit {
+            key: row.definition.key,
+            field,
+            bounds: row.value.bounds,
+            invoker: row.value.id,
+        });
+        self.focus.open_layer(
+            row.value.id,
+            [8007, 8009, 8010]
+                .into_iter()
+                .map(|id| bareline_ui::focus::FocusTarget {
+                    id: ViewId(id),
+                    enabled: true,
+                })
+                .collect(),
+        );
         self.query_focused = false;
         None
     }
     fn finish_value_edit(&mut self, commit: bool) -> Option<SettingsEffect> {
         let edit = self.value_edit.as_ref()?;
-        if edit.field.composing() { return None; }
+        if edit.field.composing() {
+            return None;
+        }
         let invoker = edit.invoker;
         let key = edit.key;
         if commit {
             let parsed = config::parse_setting_input(key, edit.field.value());
             let result = parsed.and_then(|value| self.edit(key, value));
             if let Err(reason) = result {
-                self.value_edit.as_mut().unwrap().field.set_validation(Some(reason));
+                self.value_edit
+                    .as_mut()
+                    .unwrap()
+                    .field
+                    .set_validation(Some(reason));
                 return None;
             }
         }
-        if let Some(edit) = self.value_edit.take() { self.retired_fields.push(edit.field); }
+        if let Some(edit) = self.value_edit.take() {
+            self.retired_fields.push(edit.field);
+        }
         self.focus.close_layer();
         self.focus.focus(invoker);
         Some(SettingsEffect::PreviewChanged)
     }
     fn definitions(&self) -> Vec<&'static SettingDefinition> {
-        let mut definitions: Vec<_> = config::search_definitions(self.query.value())
-            .into_iter()
+        let query = self.query.value().to_lowercase();
+        let mut definitions: Vec<_> = config::DEFINITIONS
+            .iter()
+            .filter(|definition| {
+                query.is_empty()
+                    || format!(
+                        "{} {} {}",
+                        definition.key,
+                        self.label(
+                            &format!("setting.{}.title", definition.key),
+                            definition.title
+                        ),
+                        self.label(definition.description_id, definition.description)
+                    )
+                    .to_lowercase()
+                    .contains(&query)
+            })
             .filter(|definition| {
                 !self.query.value().is_empty() || definition.category == self.category
             })
@@ -529,7 +701,10 @@ impl SettingsController {
             "theme.mode" => format!("{:?}", effective.theme),
             "renderer.mode" => format!("{:?}", effective.renderer),
             "language.locale" => effective.locale,
-            _ => "Edit TOML…".into(),
+            _ => effective
+                .setting_value(key)
+                .map(|value| config::format_setting_input(&value))
+                .unwrap_or_default(),
         }
     }
     fn choose(&mut self, index: usize) -> Option<SettingsEffect> {
@@ -539,7 +714,14 @@ impl SettingsController {
             self.error = Some("This setting is controlled by User scope".into());
             return None;
         }
-        if matches!(definition.kind, SettingKind::Text | SettingKind::Integer(_, _) | SettingKind::Number(_, _) | SettingKind::Strings | SettingKind::Map) {
+        if matches!(
+            definition.kind,
+            SettingKind::Text
+                | SettingKind::Integer(_, _)
+                | SettingKind::Number(_, _)
+                | SettingKind::Strings
+                | SettingKind::Map
+        ) {
             return self.begin_value_edit(index);
         }
         let values: Vec<SettingValue> = match definition.kind {
@@ -618,21 +800,44 @@ impl SettingsController {
     pub fn event(&mut self, event: UiEvent) -> Option<SettingsEffect> {
         if self.value_edit.is_some() {
             return match event {
-                UiEvent::Key(Key::Tab) => { self.traverse_focus(false); None },
-                UiEvent::Key(Key::Enter | Key::Space) if self.focus.focused() == Some(ViewId(8010)) => self.finish_value_edit(false),
+                UiEvent::Key(Key::Tab) => {
+                    self.traverse_focus(false);
+                    None
+                }
+                UiEvent::Key(Key::Enter | Key::Space)
+                    if self.focus.focused() == Some(ViewId(8010)) =>
+                {
+                    self.finish_value_edit(false)
+                }
                 UiEvent::Key(Key::Enter) => self.finish_value_edit(true),
-                UiEvent::Key(Key::Space) if self.focus.focused() == Some(ViewId(8009)) => self.finish_value_edit(true),
+                UiEvent::Key(Key::Space) if self.focus.focused() == Some(ViewId(8009)) => {
+                    self.finish_value_edit(true)
+                }
                 UiEvent::Key(Key::Escape) => {
                     if self.value_edit.as_ref().unwrap().field.composing() {
-                        self.value_edit.as_mut().unwrap().field.cancel(); None
-                    } else { self.finish_value_edit(false) }
+                        self.value_edit.as_mut().unwrap().field.cancel();
+                        None
+                    } else {
+                        self.finish_value_edit(false)
+                    }
                 }
-                UiEvent::Focus(false) => { self.value_edit.as_mut().unwrap().field.cancel(); None },
+                UiEvent::Focus(false) => {
+                    self.value_edit.as_mut().unwrap().field.cancel();
+                    None
+                }
                 UiEvent::PointerDown(point) => {
                     let bounds = self.value_edit.as_ref().unwrap().bounds;
-                    if bounds.contains(point) { self.focus.focus(ViewId(8007)); }
-                    else if rect(bounds.x, bounds.y + bounds.height + 24.0, 72.0, 28.0).contains(point) { return self.finish_value_edit(true); }
-                    else if rect(bounds.x + 80.0, bounds.y + bounds.height + 24.0, 72.0, 28.0).contains(point) { return self.finish_value_edit(false); }
+                    if bounds.contains(point) {
+                        self.focus.focus(ViewId(8007));
+                    } else if rect(bounds.x, bounds.y + bounds.height + 24.0, 72.0, 28.0)
+                        .contains(point)
+                    {
+                        return self.finish_value_edit(true);
+                    } else if rect(bounds.x + 80.0, bounds.y + bounds.height + 24.0, 72.0, 28.0)
+                        .contains(point)
+                    {
+                        return self.finish_value_edit(false);
+                    }
                     None
                 }
                 _ => None,
@@ -647,7 +852,10 @@ impl SettingsController {
                 UiEvent::Key(Key::Escape) => self.confirm_reset(false),
                 UiEvent::Key(Key::Tab) => self.traverse_focus(false),
                 UiEvent::PointerDown(point) => {
-                    if let Some(node) = self.semantics().into_iter().find(|node| node.actions.contains(&SemanticAction::Invoke) && node.bounds.contains(point)) {
+                    if let Some(node) = self.semantics().into_iter().find(|node| {
+                        node.actions.contains(&SemanticAction::Invoke)
+                            && node.bounds.contains(point)
+                    }) {
                         self.confirm_reset(node.id == ViewId(8011));
                         return Some(SettingsEffect::PreviewChanged);
                     }
@@ -695,7 +903,12 @@ impl SettingsController {
             return None;
         }
         if let UiEvent::PointerDown(point) = event {
-            if let Some(node) = self.semantics().into_iter().rev().find(|node| !node.disabled && node.bounds.contains(point)) {
+            if let Some(node) = self
+                .semantics()
+                .into_iter()
+                .rev()
+                .find(|node| !node.disabled && node.bounds.contains(point))
+            {
                 self.focus.focus(node.id);
             }
         }
@@ -771,7 +984,9 @@ impl SettingsController {
                 return Some(SettingsEffect::PreviewChanged);
             }
             UiEvent::Key(Key::Enter) | UiEvent::Key(Key::Space) if !self.query_focused => {
-                if let Some(id) = self.focus.focused() { return self.accessibility_action(id.0, true); }
+                if let Some(id) = self.focus.focused() {
+                    return self.accessibility_action(id.0, true);
+                }
                 return self.choose(self.selected.saturating_sub(self.first));
             }
             _ => {}
@@ -806,8 +1021,11 @@ impl SettingsController {
         backend: &mut impl TextBackend,
         ops: &mut Vec<DrawOp>,
     ) -> Result<(), LayoutError> {
-        for mut field in self.retired_fields.drain(..) { field.release(backend); }
-        self.query.set_placeholder(&self.label("settings.search", "Search settings"));
+        for mut field in self.retired_fields.drain(..) {
+            field.release(backend);
+        }
+        self.query
+            .set_placeholder(&self.label("settings.search", "Search settings"));
         self.bounds = bounds;
         let effective = self.effective();
         let theme =
@@ -836,7 +1054,14 @@ impl SettingsController {
                 ));
                 ops.push(DrawOp::Fill(rect(bounds.x, y, 3.0, 38.0), focus));
             }
-            text(ops, bounds.x + 18.0, y + 10.0, self.label(&format!("settings.category.{category}"), category), 13.0, foreground);
+            text(
+                ops,
+                bounds.x + 18.0,
+                y + 10.0,
+                self.label(&format!("settings.category.{category}"), category),
+                13.0,
+                foreground,
+            );
         }
         let x = bounds.x + sidebar + 18.0;
         let width = (bounds.width - sidebar - 36.0).max(1.0);
@@ -870,7 +1095,14 @@ impl SettingsController {
                 ops,
                 target.x + 24.0,
                 target.y + 4.0,
-                self.label(if scope == Scope::User { "settings.scope.user" } else { "settings.scope.workspace" }, label),
+                self.label(
+                    if scope == Scope::User {
+                        "settings.scope.user"
+                    } else {
+                        "settings.scope.workspace"
+                    },
+                    label,
+                ),
                 13.0,
                 foreground,
             );
@@ -890,7 +1122,14 @@ impl SettingsController {
             );
         }
         let header = bounds.y + 88.0;
-        text(ops, x, header, self.label("settings.effective", "Effective values"), 13.0, muted);
+        text(
+            ops,
+            x,
+            header,
+            self.label("settings.effective", "Effective values"),
+            13.0,
+            muted,
+        );
         ops.push(DrawOp::Line {
             from: Point {
                 x: bounds.x + sidebar,
@@ -932,7 +1171,17 @@ impl SettingsController {
                 .map(|r| r.copy.state)
                 .unwrap_or_default();
             let value = self.value_text(definition.key);
-            text(ops, x + 10.0, y + 4.0, self.label(&format!("setting.{}.title",definition.key), definition.title), 13.0, foreground);
+            text(
+                ops,
+                x + 10.0,
+                y + 4.0,
+                self.label(
+                    &format!("setting.{}.title", definition.key),
+                    definition.title,
+                ),
+                13.0,
+                foreground,
+            );
             text(ops, x + 10.0, y + 27.0, definition.key, 11.0, muted);
             if !compact {
                 ops.push(DrawOp::PushClip(rect(
@@ -980,7 +1229,14 @@ impl SettingsController {
             );
             ops.push(DrawOp::PopClip);
             if definition.restart_required {
-                text(ops, x + 10.0, y + 44.0, "Restart required", 10.0, muted);
+                text(
+                    ops,
+                    x + 10.0,
+                    y + 44.0,
+                    self.label("settings.restart", "Restart required"),
+                    10.0,
+                    muted,
+                );
             }
             ops.push(DrawOp::Line {
                 from: Point {
@@ -997,14 +1253,26 @@ impl SettingsController {
             self.rows.push(Row {
                 definition,
                 value: Button {
-                    id: ViewId(2000 + config::DEFINITIONS.iter().position(|d| d.key == definition.key).unwrap() as u64 * 2),
+                    id: ViewId(
+                        2000 + config::DEFINITIONS
+                            .iter()
+                            .position(|d| d.key == definition.key)
+                            .unwrap() as u64
+                            * 2,
+                    ),
                     label: definition.title.into(),
                     bounds: control,
                     toggle: false,
                     state: ControlState { disabled, ..state },
                 },
                 copy: Button {
-                    id: ViewId(2001 + config::DEFINITIONS.iter().position(|d| d.key == definition.key).unwrap() as u64 * 2),
+                    id: ViewId(
+                        2001 + config::DEFINITIONS
+                            .iter()
+                            .position(|d| d.key == definition.key)
+                            .unwrap() as u64
+                            * 2,
+                    ),
                     label: format!("Copy {}", definition.key),
                     bounds: copy,
                     toggle: false,
@@ -1095,10 +1363,22 @@ impl SettingsController {
                 13.0,
                 muted,
             );
-            for (id,label,x) in [(8011,"Reset",dialog.x+12.0),(8012,"Cancel",dialog.x+92.0)] {
-                let button = rect(x,dialog.y+76.0,72.0,28.0);
-                ops.push(DrawOp::StrokeRounded(button,if self.focus.focused()==Some(ViewId(id)) { focus } else {color("border.interactive")},4.0,1.0));
-                text(ops,x+8.0,button.y+6.0,label,13.0,foreground);
+            for (id, label, x) in [
+                (8011, "Reset", dialog.x + 12.0),
+                (8012, "Cancel", dialog.x + 92.0),
+            ] {
+                let button = rect(x, dialog.y + 76.0, 72.0, 28.0);
+                ops.push(DrawOp::StrokeRounded(
+                    button,
+                    if self.focus.focused() == Some(ViewId(id)) {
+                        focus
+                    } else {
+                        color("border.interactive")
+                    },
+                    4.0,
+                    1.0,
+                ));
+                text(ops, x + 8.0, button.y + 6.0, label, 13.0, foreground);
             }
         }
         if let Some(popup) = &self.popup {
@@ -1128,26 +1408,72 @@ impl SettingsController {
             );
         }
         if let Some(edit) = &mut self.value_edit {
-            if let Some(row) = self.rows.iter().find(|row| row.definition.key == edit.key) { edit.bounds = row.value.bounds; }
-            let panel = rect(edit.bounds.x - 4.0, edit.bounds.y - 4.0, edit.bounds.width + 8.0, edit.bounds.height + 64.0);
+            if let Some(row) = self.rows.iter().find(|row| row.definition.key == edit.key) {
+                edit.bounds = row.value.bounds;
+            }
+            let panel = rect(
+                edit.bounds.x - 4.0,
+                edit.bounds.y - 4.0,
+                edit.bounds.width + 8.0,
+                edit.bounds.height + 64.0,
+            );
             ops.push(DrawOp::FillRounded(panel, color("surface.elevated"), 4.0));
-            ops.push(DrawOp::StrokeRounded(panel, color("border.interactive"), 4.0, 1.0));
-            edit.field.draw_with_theme(backend, edit.bounds, self.focus.focused() == Some(ViewId(8007)),
-                bareline_ui::theme::UiTheme::from_tokens(|key| theme.color(key).map(|c| (c.rgb,c.alpha))).unwrap(), ops)?;
+            ops.push(DrawOp::StrokeRounded(
+                panel,
+                color("border.interactive"),
+                4.0,
+                1.0,
+            ));
+            edit.field.draw_with_theme(
+                backend,
+                edit.bounds,
+                self.focus.focused() == Some(ViewId(8007)),
+                bareline_ui::theme::UiTheme::from_tokens(|key| {
+                    theme.color(key).map(|c| (c.rgb, c.alpha))
+                })
+                .unwrap(),
+                ops,
+            )?;
             if let Some(reason) = edit.field.validation() {
-                ops.push(DrawOp::PushClip(rect(edit.bounds.x, edit.bounds.y + edit.bounds.height, edit.bounds.width, 22.0)));
-                text(ops, edit.bounds.x, edit.bounds.y + edit.bounds.height + 2.0, reason, 11.0, color("danger"));
+                ops.push(DrawOp::PushClip(rect(
+                    edit.bounds.x,
+                    edit.bounds.y + edit.bounds.height,
+                    edit.bounds.width,
+                    22.0,
+                )));
+                text(
+                    ops,
+                    edit.bounds.x,
+                    edit.bounds.y + edit.bounds.height + 2.0,
+                    reason,
+                    11.0,
+                    color("danger"),
+                );
                 ops.push(DrawOp::PopClip);
             }
-            for (id, label, x) in [(8009,"Apply",edit.bounds.x),(8010,"Cancel",edit.bounds.x+80.0)] {
+            for (id, label, x) in [
+                (8009, "Apply", edit.bounds.x),
+                (8010, "Cancel", edit.bounds.x + 80.0),
+            ] {
                 let bounds = rect(x, edit.bounds.y + edit.bounds.height + 24.0, 72.0, 28.0);
-                ops.push(DrawOp::StrokeRounded(bounds, if self.focus.focused() == Some(ViewId(id)) { focus } else { color("border.interactive") }, 4.0, 1.0));
-                text(ops, x+8.0, bounds.y+6.0, label, 13.0, foreground);
+                ops.push(DrawOp::StrokeRounded(
+                    bounds,
+                    if self.focus.focused() == Some(ViewId(id)) {
+                        focus
+                    } else {
+                        color("border.interactive")
+                    },
+                    4.0,
+                    1.0,
+                ));
+                text(ops, x + 8.0, bounds.y + 6.0, label, 13.0, foreground);
             }
         }
         if self.value_edit.is_none() && self.popup.is_none() && !self.reset_pending {
             if let Some(id) = self.focused_id().filter(|id| *id != ViewId(8000)) {
-                if let Some(node) = self.semantics().into_iter().find(|node| node.id == id) { ops.push(DrawOp::Stroke(node.bounds,focus,2.0)); }
+                if let Some(node) = self.semantics().into_iter().find(|node| node.id == id) {
+                    ops.push(DrawOp::Stroke(node.bounds, focus, 2.0));
+                }
             }
         }
         ops.push(DrawOp::PopClip);
@@ -1160,20 +1486,62 @@ impl SettingsController {
         }
         if self.reset_pending {
             let dialog = self.reset_dialog_bounds();
-            return [(8011,"Reset section",dialog.x+12.0),(8012,"Cancel reset",dialog.x+92.0)].into_iter().map(|(id,name,x)|
-                Semantics::new(ViewId(id),SemanticRole::Button,name,"settings.reset_section",rect(x,dialog.y+76.0,72.0,28.0),
-                    ControlState { focused:self.focus.focused()==Some(ViewId(id)), ..Default::default() })
-                    .action(SemanticAction::Focus).action(SemanticAction::Invoke)).collect();
+            return [
+                (8011, "Reset section", dialog.x + 12.0),
+                (8012, "Cancel reset", dialog.x + 92.0),
+            ]
+            .into_iter()
+            .map(|(id, name, x)| {
+                Semantics::new(
+                    ViewId(id),
+                    SemanticRole::Button,
+                    name,
+                    "settings.reset_section",
+                    rect(x, dialog.y + 76.0, 72.0, 28.0),
+                    ControlState {
+                        focused: self.focus.focused() == Some(ViewId(id)),
+                        ..Default::default()
+                    },
+                )
+                .action(SemanticAction::Focus)
+                .action(SemanticAction::Invoke)
+            })
+            .collect();
         }
         if let Some(edit) = &self.value_edit {
-            let name = config::DEFINITIONS.iter().find(|d| d.key == edit.key).map_or(edit.key, |d| d.title);
-            let mut nodes = vec![edit.field.semantics(ViewId(8007), name, "settings.edit_value", edit.bounds,
-                ControlState { focused: self.focus.focused() == Some(ViewId(8007)), ..Default::default() })];
-            for (id,label,x) in [(8009,"Apply value",edit.bounds.x),(8010,"Cancel value edit",edit.bounds.x+80.0)] {
-                nodes.push(Semantics::new(ViewId(id),SemanticRole::Button,label,"settings.edit_value",
-                    rect(x,edit.bounds.y+edit.bounds.height+24.0,72.0,28.0),
-                    ControlState { focused:self.focus.focused()==Some(ViewId(id)), ..Default::default() })
-                    .action(SemanticAction::Focus).action(SemanticAction::Invoke));
+            let name = config::DEFINITIONS
+                .iter()
+                .find(|d| d.key == edit.key)
+                .map_or(edit.key, |d| d.title);
+            let mut nodes = vec![edit.field.semantics(
+                ViewId(8007),
+                name,
+                "settings.edit_value",
+                edit.bounds,
+                ControlState {
+                    focused: self.focus.focused() == Some(ViewId(8007)),
+                    ..Default::default()
+                },
+            )];
+            for (id, label, x) in [
+                (8009, "Apply value", edit.bounds.x),
+                (8010, "Cancel value edit", edit.bounds.x + 80.0),
+            ] {
+                nodes.push(
+                    Semantics::new(
+                        ViewId(id),
+                        SemanticRole::Button,
+                        label,
+                        "settings.edit_value",
+                        rect(x, edit.bounds.y + edit.bounds.height + 24.0, 72.0, 28.0),
+                        ControlState {
+                            focused: self.focus.focused() == Some(ViewId(id)),
+                            ..Default::default()
+                        },
+                    )
+                    .action(SemanticAction::Focus)
+                    .action(SemanticAction::Invoke),
+                );
             }
             return nodes;
         }
@@ -1268,7 +1636,10 @@ impl SettingsController {
         }
         for row in &self.rows {
             let mut value = row.value.semantic().into_settings(row.value.bounds);
-            value.name = self.label(&format!("setting.{}.title",row.definition.key), row.definition.title);
+            value.name = self.label(
+                &format!("setting.{}.title", row.definition.key),
+                row.definition.title,
+            );
             value.focused = !self.query_focused
                 && self.popup.is_none()
                 && self
@@ -1333,9 +1704,16 @@ impl SettingsController {
             }
             return None;
         }
-        if self.reset_pending { self.confirm_reset(id == 8011); return Some(SettingsEffect::PreviewChanged); }
+        if self.reset_pending {
+            self.confirm_reset(id == 8011);
+            return Some(SettingsEffect::PreviewChanged);
+        }
         if self.value_edit.is_some() {
-            return match id { 8009 => self.finish_value_edit(true), 8010 => self.finish_value_edit(false), _ => None };
+            return match id {
+                8009 => self.finish_value_edit(true),
+                8010 => self.finish_value_edit(false),
+                _ => None,
+            };
         }
         let point = Point {
             x: node.bounds.x + node.bounds.width / 2.0,
@@ -1389,6 +1767,41 @@ impl SettingSemantic for bareline_ui::controls::SemanticNode {
 mod visual_contract_tests {
     use super::*;
     use bareline_renderer_recording::RecordingBackend;
+    #[test]
+    fn invalid_value_keeps_draft_and_cancel_restores_row_focus() {
+        let mut controller = SettingsController::new(
+            SettingsDocument::empty(Scope::User),
+            None,
+            SystemAppearance {
+                dark: false,
+                high_contrast: false,
+            },
+        );
+        controller.show();
+        controller
+            .draw(
+                rect(0.0, 34.0, 1200.0, 660.0),
+                &mut RecordingBackend::default(),
+                &mut Vec::new(),
+            )
+            .unwrap();
+        let invoker = controller.rows[1].value.id;
+        controller.choose(1);
+        assert_eq!(controller.focused_id(), Some(ViewId(8007)));
+        assert!(controller.accessibility_set_value(8007, "999"));
+        controller.accessibility_action(8009, true);
+        assert!(controller.editing_value());
+        assert_eq!(controller.effective().editor_font_size_pt, 12.0);
+        assert_eq!(controller.text_field_mut().unwrap().value(), "999");
+        controller.accessibility_action(8010, true);
+        assert!(!controller.editing_value());
+        assert_eq!(controller.focused_id(), Some(invoker));
+        controller.request_reset();
+        controller.dismiss();
+        controller.show();
+        assert!(!controller.reset_pending);
+        assert_eq!(controller.focused_id(), Some(ViewId(8000)));
+    }
     #[test]
     fn settings_reference_order_copy_target_and_opaque_popup() {
         let mut controller = SettingsController::new(

@@ -3,6 +3,7 @@
 pub mod cli;
 pub mod update;
 pub mod trust;
+pub mod importer;
 
 use std::path::{Path, PathBuf};
 

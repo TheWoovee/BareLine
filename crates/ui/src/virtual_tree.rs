@@ -32,6 +32,40 @@ struct Branch {
     id: NodeId,
     children: usize,
 }
+
+#[cfg(test)]
+mod refresh_tests {
+    use super::*;
+    #[test]
+    fn reordered_children_keep_descendants_and_deleted_selection_returns_parent() {
+        let mut tree = Tree::new(rect(0.0, 0.0, 100.0, 100.0));
+        tree.expanded.insert(
+            vec![0],
+            Branch {
+                id: NodeId(10),
+                children: 2,
+            },
+        );
+        tree.expanded.insert(
+            vec![0, 0],
+            Branch {
+                id: NodeId(20),
+                children: 1,
+            },
+        );
+        tree.selected = Some(vec![0, 0, 0]);
+        tree.replace_child_ids(
+            NodeId(10),
+            &[NodeId(20), NodeId(30)],
+            &[NodeId(30), NodeId(20)],
+        );
+        assert_eq!(tree.selected, Some(vec![0, 1, 0]));
+        assert_eq!(tree.expanded.get(&vec![0, 1]).unwrap().id, NodeId(20));
+        tree.replace_child_ids(NodeId(10), &[NodeId(30), NodeId(20)], &[NodeId(30)]);
+        assert_eq!(tree.selected, Some(vec![0]));
+        assert_eq!(tree.expanded.len(), 1);
+    }
+}
 pub struct Tree {
     pub bounds: Rect,
     pub state: ControlState,
@@ -81,6 +115,38 @@ impl Tree {
         }) {
             self.selected = Some(path);
         }
+    }
+    /// Reconcile a refreshed branch by stable child identity, including every
+    /// expanded descendant. Removed selection returns to its surviving parent.
+    pub fn replace_child_ids(&mut self, parent: NodeId, old: &[NodeId], new: &[NodeId]) {
+        let Some(parent_path) = self
+            .expanded
+            .iter()
+            .find_map(|(path, branch)| (branch.id == parent).then(|| path.clone()))
+        else {
+            return;
+        };
+        let positions: BTreeMap<_, _> = new
+            .iter()
+            .enumerate()
+            .map(|(index, id)| (id.0, index))
+            .collect();
+        let remap = |mut path: Vec<usize>| -> Option<Vec<usize>> {
+            if path.starts_with(&parent_path) && path.len() > parent_path.len() {
+                let id = old.get(path[parent_path.len()])?;
+                path[parent_path.len()] = *positions.get(&id.0)?;
+            }
+            Some(path)
+        };
+        self.expanded = std::mem::take(&mut self.expanded)
+            .into_iter()
+            .filter_map(|(path, branch)| remap(path).map(|path| (path, branch)))
+            .collect();
+        self.expanded.get_mut(&parent_path).unwrap().children = new.len();
+        self.selected = self
+            .selected
+            .take()
+            .map(|path| remap(path).unwrap_or_else(|| parent_path.clone()));
     }
     fn subtree_rows(&self, path: &[usize]) -> usize {
         1usize.saturating_add(

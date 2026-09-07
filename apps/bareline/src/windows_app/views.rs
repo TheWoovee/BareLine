@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Native two-pane consumer. Both surfaces address the same document actor when cloned.
 use super::*;
+use bareline_app::workspace::WorkspaceEditor;
 use bareline_app::views::{
     Orientation, ScrollPosition, SessionTab, SharedEditorView, SharedSyntaxView, ViewController,
     ViewSnapshot, ViewState,
@@ -136,9 +137,10 @@ pub(super) fn register(registry: &mut CommandRegistry) {
 
 struct QueuedInput {
     pane: u32,
-    document: ViewSnapshot,
+    document: DocumentBinding,
     input: Input,
 }
+#[derive(Clone)]
 enum DocumentBinding {
     Resident(u64, ViewSnapshot),
     Paged(u64, bareline_document::paged::PagedSnapshot),
@@ -192,8 +194,10 @@ struct MruPopup {
 #[derive(Default)]
 pub(super) struct ViewsRuntime {
     documents: Vec<DocumentBinding>,
+    closed_documents: VecDeque<(DocumentBinding, Vec<(usize, SessionTab, Option<u32>)>)>,
     next_document: u64,
     loaded_tabs: [Option<u64>; 2],
+    pending_restore: [Option<ViewState>; 2],
     tab_hits: Vec<TabHit>,
     tab_strips: [Option<Rect>; 2],
     tab_nav: Vec<(u32, bool, Rect)>,
@@ -203,8 +207,8 @@ pub(super) struct ViewsRuntime {
     pending_close: Option<usize>,
     controller: Option<ViewController>,
     primary: Option<ViewSnapshot>,
-    pub(super) secondary: Option<SharedEditorView>,
-    retired: Vec<SharedEditorView>,
+    pub(super) secondary: Option<WorkspaceEditor>,
+    retired: Vec<WorkspaceEditor>,
     pub(super) bounds: [Option<Rect>; 2],
     splitter: Option<Rect>,
     dragging: bool,
@@ -402,6 +406,17 @@ impl ViewsRuntime {
         if self.controller.is_none() {
             self.controller = ViewController::new(Vec::new(), None).ok();
         }
+        if let Some(controller) = &self.controller {
+            for binding in &self.documents {
+                if !workspace.editors.iter().any(|editor| binding.matches(editor)) {
+                    let tabs = controller.tabs().iter().enumerate()
+                        .filter(|(_, tab)| tab.document_id == binding.id())
+                        .map(|(position, tab)| (position, tab.clone(), controller.tab_colors.get(&tab.id).copied())).collect();
+                    self.closed_documents.push_back((binding.clone(), tabs));
+                    while self.closed_documents.len() > 20 { self.closed_documents.pop_front(); }
+                }
+            }
+        }
         self.documents.retain(|binding| {
             workspace
                 .editors
@@ -410,12 +425,20 @@ impl ViewsRuntime {
         });
         for editor in &workspace.editors {
             if !self.documents.iter().any(|binding| binding.matches(editor)) {
+                if let Some(position) = self.closed_documents.iter().position(|(binding, _)| binding.matches(editor)) {
+                    let (binding, tabs) = self.closed_documents.remove(position).unwrap();
+                    self.documents.push(binding);
+                    if let Some(controller) = &mut self.controller {
+                        for (position, tab, color) in tabs { let _ = controller.restore_tab(tab, position, color); }
+                    }
+                    continue;
+                }
                 self.next_document = self.next_document.saturating_add(1);
                 self.documents
                     .push(DocumentBinding::new(self.next_document, editor));
                 if let Some(controller) = &mut self.controller {
                     if let Ok(id) = controller.add_document(self.next_document) {
-                        let _ = controller.set_view_state(id, view_state(editor));
+                        let _ = controller.set_view_state(id, workspace_view_state(editor));
                     }
                 }
             }
@@ -435,15 +458,16 @@ impl ViewsRuntime {
                 self.secondary.as_ref()
             } else {
                 self.primary_index(workspace)
-                    .map(|index| &*workspace.editors[index])
+                    .map(|index| &workspace.editors[index])
             };
             if let Some(editor) = editor {
-                let _ = controller.set_view_state(id, view_state(editor));
+                let state = self.pending_restore[pane].clone().unwrap_or_else(|| workspace_view_state(editor));
+                let _ = controller.set_view_state(id, state);
             }
         }
     }
     fn save_current(&mut self, workspace: &Workspace) {
-        if let Some(mut controller) = self.controller.take() {
+        if let Some(mut controller) = self.controller.clone() {
             self.save_view_states(workspace, &mut controller);
             self.controller = Some(controller);
         }
@@ -471,23 +495,37 @@ impl ViewsRuntime {
                 .as_ref()
                 .and_then(|tab| self.document_index(workspace, tab.document_id));
             if pane == 0 {
+                self.pending_restore[pane] = None;
                 if let (Some(index), Some(tab)) = (index, tab) {
                     self.primary = Some(workspace.editors[index].snapshot().clone());
-                    if !workspace.editors[index].paged() {
-                        restore_view(&mut workspace.editors[index], &tab.view);
+                    if workspace.editors[index].paged() {
+                        self.pending_restore[pane] = Some(tab.view);
+                    } else {
+                        restore_workspace_view(&mut workspace.editors[index], &tab.view);
                     }
                 } else {
                     self.primary = None;
                 }
             } else {
+                self.pending_restore[pane] = None;
                 if let Some(old) = self.secondary.take() {
                     self.retired.push(old);
                 }
                 if let (Some(index), Some(tab)) = (index, tab) {
-                    if !workspace.editors[index].paged() {
-                        let mut peer = workspace.editors[index].clone_view();
-                        restore_view(&mut peer, &tab.view);
-                        self.secondary = Some(peer);
+                    let peer = match &workspace.editors[index] {
+                        WorkspaceEditor::Resident(editor) => Ok(WorkspaceEditor::Resident(editor.clone_view())),
+                        WorkspaceEditor::Paged(editor) => editor.clone_view().map(WorkspaceEditor::Paged),
+                    };
+                    match peer {
+                        Ok(mut peer) => {
+                            if peer.paged() {
+                                self.pending_restore[pane] = Some(tab.view);
+                            } else {
+                                restore_workspace_view(&mut peer, &tab.view);
+                            }
+                            self.secondary = Some(peer);
+                        }
+                        Err(error) => workspace.message = Some(error),
                     }
                 }
             }
@@ -526,7 +564,7 @@ impl ViewsRuntime {
         fallback: usize,
     ) -> Option<&'a SharedEditorView> {
         if self.pane() == 1 {
-            self.secondary.as_ref()
+            self.secondary.as_ref().map(|editor| &**editor)
         } else {
             workspace.editors.get(fallback).map(|editor| &**editor)
         }
@@ -537,7 +575,7 @@ impl ViewsRuntime {
         fallback: usize,
     ) -> Option<&'a mut SharedEditorView> {
         if self.pane() == 1 {
-            self.secondary.as_mut()
+            self.secondary.as_mut().map(|editor| &mut **editor)
         } else {
             workspace
                 .editors
@@ -627,7 +665,7 @@ impl ViewsRuntime {
                 workspace
                     .editors
                     .get(index)
-                    .is_none_or(|editor| editor.paged())
+                    .is_none()
             })
         {
             return false;
@@ -657,6 +695,13 @@ impl ViewsRuntime {
     pub(super) fn compare_geometry(&self) -> [Option<Rect>; 2] {
         self.bounds
     }
+    pub(super) fn compare_snapshots(&self, workspace: &Workspace) -> Option<[ViewSnapshot; 2]> {
+        Some([workspace.editors.get(self.primary_index(workspace)?)?.snapshot().clone(), self.secondary.as_ref()?.snapshot().clone()])
+    }
+    pub(super) fn compare_viewport_starts(&self, workspace: &Workspace) -> [usize; 2] {
+        let start = |editor: &WorkspaceEditor| match editor { WorkspaceEditor::Paged(editor) => editor.viewport_start().0, _ => 0 };
+        [self.primary_index(workspace).map_or(0, |index| start(&workspace.editors[index])), self.secondary.as_ref().map_or(0, start)]
+    }
     pub(super) fn compare_scroll(&self, workspace: &Workspace) -> [f64; 2] {
         [
             self.primary_index(workspace)
@@ -683,12 +728,15 @@ impl ViewsRuntime {
             (
                 left,
                 first
-                    .and_then(|index| workspace.editors.get_mut(index))
-                    .map(|editor| &mut **editor),
+                    .and_then(|index| workspace.editors.get_mut(index)),
             ),
             (right, self.secondary.as_mut()),
         ] {
             if let Some(editor) = editor {
+                if let WorkspaceEditor::Paged(editor) = editor {
+                    if let Err(error) = editor.restore_selection(offset, offset) { editor.error = Some(error); }
+                    continue;
+                }
                 let mut offset = offset.0.min(editor.snapshot().len());
                 while !editor
                     .snapshot()
@@ -800,12 +848,23 @@ impl ViewsRuntime {
         manifest.tabs.sort_by_key(|tab| !tab.pinned);
     }
     pub(super) fn pending_edits(&self) -> bool {
-        !self.queued.is_empty() || self.secondary.as_ref().is_some_and(SharedEditorView::busy)
+        !self.queued.is_empty() || self.secondary.as_ref().is_some_and(WorkspaceEditor::busy)
     }
     pub(super) fn take_acknowledged_inputs(&mut self) -> Vec<Input> {
         self.secondary
             .as_mut()
             .map(|editor| editor.take_acknowledged_inputs())
+            .unwrap_or_default()
+    }
+    pub(super) fn take_ordered_receipts(&mut self) -> Vec<bareline_editor_surface::power::consumer::OrderedReceipt> {
+        self.secondary.as_mut().map(|editor| editor.take_ordered_receipts()).unwrap_or_default()
+    }
+    pub(super) fn take_acknowledged_commands(
+        &mut self,
+    ) -> Vec<(String, std::collections::BTreeMap<String, String>)> {
+        self.secondary
+            .as_mut()
+            .map(|editor| editor.take_acknowledged_commands())
             .unwrap_or_default()
     }
     fn open(&self) -> bool {
@@ -831,31 +890,50 @@ impl ViewsRuntime {
             .and_then(|s| Self::index_of(workspace, s))
     }
     fn secondary_index(&self, workspace: &Workspace) -> Option<usize> {
-        self.secondary
-            .as_ref()
-            .and_then(|e| Self::index_of(workspace, e.snapshot()))
+        self.loaded_tabs[1].and_then(|id| self.tab_index(workspace, id))
     }
     fn busy(&self, workspace: &Workspace) -> bool {
         !self.queued.is_empty()
-            || self.secondary.as_ref().is_some_and(SharedEditorView::busy)
+            || self.secondary.as_ref().is_some_and(WorkspaceEditor::busy)
             || self
                 .primary_index(workspace)
                 .is_some_and(|i| workspace.editors[i].busy())
     }
     pub(super) fn pump(&mut self, workspace: &mut Workspace) -> bool {
         self.sync_documents(workspace);
-        let mut changed = self.secondary.as_mut().is_some_and(SharedEditorView::pump);
+        let mut changed = self.secondary.as_mut().is_some_and(WorkspaceEditor::pump);
         if let Some(index) = self.secondary_index(workspace)
             && let Some(peer) = &mut self.secondary
         {
-            if peer.snapshot().revision.0 > workspace.editors[index].snapshot().revision.0 {
-                changed |= workspace.editors[index].refresh_peer(peer.snapshot());
-            } else if workspace.editors[index].snapshot().revision.0 > peer.snapshot().revision.0 {
-                changed |= peer.refresh_peer(workspace.editors[index].snapshot());
+            match (&mut workspace.editors[index], &mut *peer) {
+                (WorkspaceEditor::Resident(primary), WorkspaceEditor::Resident(secondary)) => {
+                    if secondary.snapshot().revision.0 > primary.snapshot().revision.0 {
+                        changed |= primary.refresh_peer(secondary.snapshot());
+                    } else if primary.snapshot().revision.0 > secondary.snapshot().revision.0 {
+                        changed |= secondary.refresh_peer(primary.snapshot());
+                    }
+                    secondary.sync_saved_from(primary);
+                    secondary.sync_fold_metadata_from(primary);
+                }
+                (WorkspaceEditor::Paged(primary), WorkspaceEditor::Paged(secondary)) => {
+                    changed |= primary.refresh_peer();
+                    changed |= secondary.refresh_peer();
+                }
+                _ => {}
             }
-            peer.sync_saved_from(&workspace.editors[index]);
             peer.theme = workspace.editors[index].theme;
-            peer.sync_fold_metadata_from(&workspace.editors[index]);
+        }
+        for pane in 0..2 {
+            let index = self.primary_index(workspace);
+            let editor = if pane == 1 { self.secondary.as_mut() } else { index.and_then(|index| workspace.editors.get_mut(index)) };
+            if let Some(editor) = editor {
+                if !editor.busy() {
+                    if let Some(state) = self.pending_restore[pane].take() {
+                        restore_workspace_view(editor, &state);
+                        changed = true;
+                    }
+                }
+            } else { self.pending_restore[pane] = None; }
         }
         if self.open() && self.secondary_index(workspace).is_none() {
             self.collapse(workspace, false);
@@ -865,15 +943,12 @@ impl ViewsRuntime {
             .primary_index(workspace)
             .is_some_and(|i| workspace.editors[i].busy());
         if !primary_busy
-            && !self.secondary.as_ref().is_some_and(SharedEditorView::busy)
+            && !self.secondary.as_ref().is_some_and(WorkspaceEditor::busy)
             && let Some(queued) = self.queued.pop_front()
         {
             if queued.pane == 0 {
                 if let Some(index) = self.primary_index(workspace) {
-                    if workspace.editors[index]
-                        .snapshot()
-                        .same_document(&queued.document)
-                    {
+                    if queued.document.matches(&workspace.editors[index]) {
                         workspace.editors[index].enqueue(queued.input);
                     } else {
                         workspace.message =
@@ -881,7 +956,7 @@ impl ViewsRuntime {
                     }
                 }
             } else if let Some(editor) = &mut self.secondary {
-                if editor.snapshot().same_document(&queued.document) {
+                if queued.document.matches(editor) {
                     editor.enqueue(queued.input);
                 } else {
                     workspace.message =
@@ -895,10 +970,10 @@ impl ViewsRuntime {
     fn input(&mut self, workspace: &mut Workspace, pane: u32, input: Input) {
         self.pump(workspace);
         let document = if pane == 1 {
-            self.secondary.as_ref().map(|e| e.snapshot().clone())
+            self.secondary.as_ref().map(|editor| DocumentBinding::new(0, editor))
         } else {
             self.primary_index(workspace)
-                .map(|i| workspace.editors[i].snapshot().clone())
+                .map(|i| DocumentBinding::new(0, &workspace.editors[i]))
         };
         let Some(document) = document else {
             return;
@@ -924,10 +999,10 @@ impl ViewsRuntime {
         if workspace
             .editors
             .get(index)
-            .is_none_or(|editor| editor.paged())
+            .is_none()
         {
             workspace.message =
-                Some("Paged split views require the shared paged-view adapter.".into());
+                Some("The document is no longer available.".into());
             return;
         }
         self.save_current(workspace);
@@ -983,10 +1058,10 @@ impl ViewsRuntime {
         if workspace
             .editors
             .get(app.active)
-            .is_none_or(|editor| editor.paged())
+            .is_none()
         {
             workspace.message =
-                Some("Paged split views require the shared paged-view adapter.".into());
+                Some("The document is no longer available.".into());
             return;
         }
         self.save_current(workspace);
@@ -1087,7 +1162,7 @@ impl ViewsRuntime {
         let position = if pane == 1 {
             self.secondary
                 .as_ref()
-                .map(SharedEditorView::logical_scroll)
+                .map(|editor| editor.logical_scroll())
         } else {
             self.primary_index(workspace)
                 .map(|index| workspace.editors[index].logical_scroll())
@@ -1098,6 +1173,8 @@ impl ViewsRuntime {
         let Some(controller) = &mut self.controller else {
             return;
         };
+        let sync_vertical = controller.sync_vertical;
+        let sync_horizontal = controller.sync_horizontal;
         if let Ok(Some(update)) = controller.begin_scroll(
             pane,
             ScrollPosition { line, fraction, x },
@@ -1105,18 +1182,12 @@ impl ViewsRuntime {
         ) {
             if update.pane == 1 {
                 if let Some(peer) = &mut self.secondary {
-                    peer.set_logical_scroll(
-                        update.position.line,
-                        update.position.fraction,
-                        update.position.x,
-                    );
+                    let old = peer.logical_scroll();
+                    peer.set_logical_scroll(if sync_vertical { update.position.line } else { old.0 }, if sync_vertical { update.position.fraction } else { old.1 }, if sync_horizontal { update.position.x } else { old.2 });
                 }
             } else if let Some(index) = self.primary_index(workspace) {
-                workspace.editors[index].set_logical_scroll(
-                    update.position.line,
-                    update.position.fraction,
-                    update.position.x,
-                );
+                let old = workspace.editors[index].logical_scroll();
+                workspace.editors[index].set_logical_scroll(if sync_vertical { update.position.line } else { old.0 }, if sync_vertical { update.position.fraction } else { old.1 }, if sync_horizontal { update.position.x } else { old.2 });
             }
         }
     }
@@ -1157,15 +1228,8 @@ impl ViewsRuntime {
             .controller
             .as_ref()
             .is_some_and(|controller| controller.vertical_tabs);
-        if workspace
-            .editors
-            .get(app.active)
-            .is_some_and(|editor| editor.paged())
-            && self.open()
-        {
-            self.collapse(workspace, false);
-        }
         if !self.open() {
+            for editor in &mut workspace.editors { let _ = editor.set_view_spacers(&[]); }
             let inset = if vertical {
                 176.0f32.min(width * 0.4)
             } else {
@@ -1259,11 +1323,16 @@ impl ViewsRuntime {
             } else {
                 self.secondary.as_mut().unwrap()
             };
+            let spacers = if editor.paged() { Vec::new() } else {
+                self.alignment.as_ref().map(|alignment| alignment.spacers(side)).unwrap_or_default()
+            };
+            let _ = editor.set_view_spacers(&spacers);
             // EditorSurface already reserves TAB_HEIGHT for this pane's header.
             editor.top_inset = 0.0;
             editor.bottom_inset = 0.0;
             let mut local = Vec::new();
             let local_height = bounds.height + 24.0;
+            let language = editor.language.label();
             let caret = editor.draw_styled(
                 renderer,
                 bounds.width,
@@ -1271,7 +1340,7 @@ impl ViewsRuntime {
                 &mut local,
                 SharedSyntaxView {
                     result: None,
-                    language: editor.language.label(),
+                    language,
                     unavailable: false,
                 },
             )?;
@@ -1419,6 +1488,27 @@ fn translate(op: DrawOp, x: f32, y: f32) -> DrawOp {
     }
 }
 
+fn workspace_view_state(editor: &WorkspaceEditor) -> ViewState {
+    let mut state = view_state(editor);
+    if let WorkspaceEditor::Paged(paged) = editor {
+        state.anchor = state.anchor.saturating_add(paged.viewport_start().0 as u64);
+        state.caret = state.caret.saturating_add(paged.viewport_start().0 as u64);
+    }
+    state
+}
+fn restore_workspace_view(editor: &mut WorkspaceEditor, state: &ViewState) {
+    match editor {
+        WorkspaceEditor::Resident(editor) => restore_view(editor, state),
+        WorkspaceEditor::Paged(editor) => {
+            if let Err(error) = editor.restore_selection(
+                bareline_document::TextOffset(usize::try_from(state.anchor).unwrap_or(usize::MAX)),
+                bareline_document::TextOffset(usize::try_from(state.caret).unwrap_or(usize::MAX)),
+            ) { editor.error = Some(error); }
+            editor.surface.scroll_y = f64::from_bits(state.scroll_y_bits);
+            editor.surface.set_logical_scroll(state.scroll_line, 0.0, state.scroll_x as f64);
+        }
+    }
+}
 fn view_state(editor: &SharedEditorView) -> ViewState {
     let (line, _, x) = editor.logical_scroll();
     ViewState {
@@ -1877,7 +1967,7 @@ impl Shell {
                 .map(Input::Insert),
             Action::Copy | Action::Cut => {
                 let editor = if pane == 1 {
-                    self.views.secondary.as_ref()
+                    self.views.secondary.as_ref().map(|editor| &**editor)
                 } else {
                     self.views
                         .primary_index(workspace)
@@ -1979,7 +2069,7 @@ impl Shell {
                     self.views.activate(workspace, &mut self.app, pane as u32);
                     let bounds = self.views.bounds[pane].unwrap();
                     let editor = if pane == 1 {
-                        self.views.secondary.as_mut()
+                        self.views.secondary.as_mut().map(|editor| &mut **editor)
                     } else {
                         self.views
                             .primary_index(workspace)
@@ -2034,6 +2124,7 @@ impl Shell {
                             if horizontal {
                                 peer.horizontal_scroll(amount);
                             } else {
+                                if amount < 0.0 { if let WorkspaceEditor::Paged(editor) = peer { editor.set_follow_paused(true); } }
                                 peer.scroll(amount, height);
                             }
                         }
@@ -2041,6 +2132,7 @@ impl Shell {
                         if horizontal {
                             workspace.editors[index].horizontal_scroll(amount);
                         } else {
+                            if amount < 0.0 { if let WorkspaceEditor::Paged(editor) = &mut workspace.editors[index] { editor.set_follow_paused(true); } }
                             workspace.editors[index].scroll(amount, height);
                         }
                     }
@@ -2051,7 +2143,7 @@ impl Shell {
             WindowEvent::Ime(ime) => {
                 let pane = self.views.pane();
                 let editor = if pane == 1 {
-                    self.views.secondary.as_mut()
+                    self.views.secondary.as_mut().map(|editor| &mut **editor)
                 } else {
                     self.views
                         .primary_index(workspace)

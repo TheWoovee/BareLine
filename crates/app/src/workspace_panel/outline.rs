@@ -39,6 +39,7 @@ pub struct OutlinePanel {
     definition_extension: String,
     active_extension: String,
     search_cancel: bareline_search::SearchJob,
+    generation: u64,
 }
 impl Default for OutlinePanel {
     fn default() -> Self {
@@ -59,6 +60,7 @@ impl Default for OutlinePanel {
             definition_extension: String::new(),
             active_extension: String::new(),
             search_cancel: Default::default(),
+            generation: 0,
         }
     }
 }
@@ -76,6 +78,7 @@ impl OutlinePanel {
     }
     pub fn definition(&self) -> Option<&bareline_syntax::outline::Definition> { self.definition.as_deref() }
     pub fn clear(&mut self) {
+        self.generation = self.generation.wrapping_add(1);
         self.cancel.cancel();
         self.search_cancel.cancel();
         self.pending = None;
@@ -112,6 +115,7 @@ impl OutlinePanel {
         self.search_cancel.cancel();
         self.pending = None;
         self.symbols.clear();
+        self.generation = self.generation.wrapping_add(1);
         self.filtered.clear();
         self.selected = 0;
         self.offset = 0.0;
@@ -333,6 +337,25 @@ impl OutlinePanel {
         }
         self.selected = ((point.y - self.bounds.y) as f64 / 28.0 + self.offset / 28.0) as usize;
         self.activate(current)
+    }
+    pub fn semantics(&self, parent: bareline_ui::ViewId, prefix: u64, focused: bool) -> Vec<bareline_ui::semantics::SemanticEntry> {
+        use bareline_ui::{controls::ControlState, widgets::{Semantics, SemanticRole, SemanticAction}};
+        if !self.open { return Vec::new(); }
+        visible_rows(self.offset, self.bounds.height as f64, 28.0, Some(self.filtered.len()), 0).take(4096).map(|row| {
+            let index = self.filtered[row];
+            let symbol = &self.symbols[index];
+            let mut node = Semantics::new(bareline_ui::ViewId(prefix + 65536 + self.generation * 8192 + index as u64), SemanticRole::TreeItem,
+                &format!("{} {}", symbol.kind, symbol.name), "outline.navigate", Rect { y: self.bounds.y + row as f32 * 28.0 - self.offset as f32, height: 28.0, ..self.bounds },
+                ControlState { focused: focused && row == self.selected, ..Default::default() }).action(SemanticAction::Focus).action(SemanticAction::Invoke);
+            node.selected = row == self.selected;
+            node.value = Some(format!("bytes {}–{}, nesting {}", symbol.offset.0, symbol.end.0, symbol.depth));
+            bareline_ui::semantics::SemanticEntry { parent, node }
+        }).collect()
+    }
+    pub fn accessibility_action(&mut self, id: u64, prefix: u64, invoke: bool, current: &DocumentSnapshot) -> Option<TextOffset> {
+        let row = visible_rows(self.offset, self.bounds.height as f64, 28.0, Some(self.filtered.len()), 0).find(|&row| prefix + 65536 + self.generation * 8192 + self.filtered[row] as u64 == id)?;
+        self.selected = row;
+        if invoke { self.activate(current) } else { None }
     }
     pub fn draw(&mut self, bounds: Rect, ops: &mut Vec<DrawOp>) {
         if !self.open {

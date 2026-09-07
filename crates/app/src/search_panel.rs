@@ -52,6 +52,13 @@ pub struct SearchPanel {
     pub field: TextField,
     worker: Option<SearchWorker>,
     pending: Option<OpenDocumentTicket>,
+    folder_pending: Option<bareline_search::service::FolderSearchTicket>,
+    folder_results: Option<bareline_search::folders::FolderResults>,
+    folder_activation: Option<(
+        std::path::PathBuf,
+        bareline_file_io::lifecycle::Fingerprint,
+        Range<TextOffset>,
+    )>,
     results: Option<OpenDocumentResults>,
     query: Option<SearchQuery>,
     status: String,
@@ -120,7 +127,7 @@ impl SearchPanel {
                     82.0,
                     24.0,
                 ),
-                self.pending.is_none(),
+                self.pending.is_none() && self.folder_pending.is_none(),
             ),
             (
                 7003,
@@ -242,6 +249,9 @@ impl SearchPanel {
         notify: Arc<dyn Fn() + Send + Sync>,
     ) {
         self.open = true;
+        self.folder_pending = None;
+        self.folder_results = None;
+        self.folder_activation = None;
         query.selection = None;
         if self.field.value() != query.pattern {
             self.field.select_all();
@@ -276,13 +286,88 @@ impl SearchPanel {
                 .submit_open_documents(snapshots, query, notify),
         );
     }
+    pub fn start_folder(
+        &mut self,
+        scope: bareline_search::folders::FolderScope,
+        mut query: SearchQuery,
+        trust: Arc<dyn bareline_platform::PathTrustProvider + Send + Sync>,
+        platform: Arc<dyn bareline_platform::LocalFileSystem>,
+        notify: Arc<dyn Fn() + Send + Sync>,
+    ) {
+        self.open = true;
+        self.pending = None;
+        self.folder_pending = None;
+        self.results = None;
+        self.folder_results = None;
+        self.offsets.clear();
+        self.selected = None;
+        self.scroll = 0.0;
+        self.visible_names.clear();
+        query.selection = None;
+        self.field.select_all();
+        self.field.insert(&query.pattern);
+        self.query = Some(query.clone());
+        if self.worker.is_none() {
+            match SearchWorker::new() {
+                Ok(worker) => self.worker = Some(worker),
+                Err(error) => {
+                    self.status = error.to_string();
+                    return;
+                }
+            }
+        }
+        self.folder_pending = Some(
+            self.worker
+                .as_ref()
+                .unwrap()
+                .submit_folder(scope, query, trust, platform, notify),
+        );
+        self.status = "Searching files…".into();
+    }
+    pub fn take_folder_activation(
+        &mut self,
+    ) -> Option<(
+        std::path::PathBuf,
+        bareline_file_io::lifecycle::Fingerprint,
+        Range<TextOffset>,
+    )> {
+        self.folder_activation.take()
+    }
     pub fn cancel(&mut self) {
+        if let Some(ticket) = &self.folder_pending {
+            ticket.job.cancel();
+            self.status = "Stopping search…".into();
+        }
         if let Some(ticket) = &self.pending {
             ticket.job.cancel();
             self.status = "Stopping search…".into();
         }
     }
     pub fn pump(&mut self) -> bool {
+        if let Some(ticket) = &self.folder_pending {
+            match ticket.try_recv() {
+                Err(TryRecvError::Empty) => {}
+                Ok(Ok(results)) => {
+                    self.status = format!(
+                        "{} matches in {} files; {} skipped; {:?}",
+                        results.summary.count,
+                        results.summary.searched_files,
+                        results.summary.skipped_files,
+                        results.summary.completeness
+                    );
+                    self.collapsed = vec![false; results.groups.len()];
+                    self.folder_results = Some(results);
+                    self.folder_pending = None;
+                    self.rebuild_rows();
+                    return true;
+                }
+                _ => {
+                    self.folder_pending = None;
+                    self.status = "File search stopped".into();
+                    return true;
+                }
+            }
+        }
         let Some(ticket) = &self.pending else {
             return false;
         };
@@ -326,6 +411,17 @@ impl SearchPanel {
     fn rebuild_rows(&mut self) {
         self.offsets.clear();
         self.offsets.push(0);
+        if let Some(results) = &self.folder_results {
+            for (index, group) in results.groups.iter().enumerate() {
+                let rows = 1 + if self.collapsed[index] {
+                    0
+                } else {
+                    group.matches.len()
+                };
+                self.offsets
+                    .push(self.offsets.last().copied().unwrap() + rows);
+            }
+        }
         if let Some(results) = &self.results {
             for (index, document) in results.documents().iter().enumerate() {
                 let rows = if document.is_empty() {
@@ -362,6 +458,15 @@ impl SearchPanel {
     fn activate(&mut self) -> Option<Activation> {
         let (group, matched) = self.row(self.selected?)?;
         if let Some(index) = matched {
+            if let Some(results) = &self.folder_results {
+                let file = &results.groups[group];
+                self.folder_activation = Some((
+                    file.path.clone(),
+                    file.fingerprint.clone(),
+                    file.matches.get(index)?.range.clone(),
+                ));
+                return None;
+            }
             let document = &self.results.as_ref()?.documents()[group];
             Some((
                 document.source().clone(),
@@ -518,7 +623,12 @@ impl SearchPanel {
                 self.field_bounds.x + self.field_bounds.width + 14.0,
                 top + 47.0,
                 format!(
-                    "{mode} · Open documents{}{}",
+                    "{mode} · {}{}{}",
+                    if self.folder_results.is_some() || self.folder_pending.is_some() {
+                        "Files"
+                    } else {
+                        "Open documents"
+                    },
                     if query.case == Case::Sensitive {
                         " · Match case"
                     } else {
@@ -557,6 +667,41 @@ impl SearchPanel {
             let Some((group, matched)) = self.row(row) else {
                 continue;
             };
+            if let Some(results) = &self.folder_results {
+                let file = &results.groups[group];
+                let y = self.list_bounds.y + (row as f64 * ROW_HEIGHT as f64 - self.scroll) as f32;
+                if self.selected == Some(row) {
+                    ops.push(DrawOp::Fill(
+                        rect(18.0, y, width - 36.0, ROW_HEIGHT),
+                        EDITOR,
+                    ));
+                }
+                let label = if let Some(index) = matched {
+                    let found = &file.matches[index];
+                    format!(
+                        "{}: {}",
+                        found.range.start.0,
+                        found.excerpt.replace(['\r', '\n', '\t'], " ")
+                    )
+                } else {
+                    format!(
+                        "{} {}   {} matches",
+                        if self.collapsed[group] { "›" } else { "⌄" },
+                        file.path.display(),
+                        file.matches.len()
+                    )
+                };
+                text(
+                    ops,
+                    if matched.is_some() { 52.0 } else { 24.0 },
+                    y + 6.0,
+                    &label,
+                    13.0,
+                    TEXT,
+                );
+                self.visible_names.push((row, label));
+                continue;
+            }
             let document = &self.results.as_ref().unwrap().documents()[group];
             let y = self.list_bounds.y + (row as f64 * ROW_HEIGHT as f64 - self.scroll) as f32;
             if self.selected == Some(row) {
@@ -627,7 +772,7 @@ impl SearchPanel {
             13.0,
             MUTED,
         );
-        if self.pending.is_some() {
+        if self.pending.is_some() || self.folder_pending.is_some() {
             text(
                 ops,
                 width - 86.0,

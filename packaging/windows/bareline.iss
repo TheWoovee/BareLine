@@ -37,6 +37,7 @@ Name: "association"; Description: "Register Bareline as an available text editor
 Source: "{#PayloadDir}\bareline.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#PayloadDir}\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#PayloadDir}\THIRD-PARTY-NOTICES.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#PayloadDir}\SBOM.json"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#PayloadDir}\bareline-update-helper.exe"; DestDir: "{app}"; Flags: ignoreversion
 [Icons]
 Name: "{group}\Bareline"; Filename: "{app}\bareline.exe"

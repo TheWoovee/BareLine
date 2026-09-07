@@ -81,7 +81,17 @@ impl SettingsRuntime {
     pub fn effective(&self) -> EffectiveSettings {
         self.controller.effective()
     }
-    pub fn set_workspace_root(&mut self, root: PathBuf) { self.workspace_requested = Some(root); }
+    pub fn workspace_root(&self) -> Option<&std::path::Path> {
+        self.workspace_requested.as_deref()
+    }
+    pub fn set_workspace_root(&mut self, root: PathBuf) {
+        if self.workspace_requested.as_ref() == Some(&root) {
+            return;
+        }
+        self.controller.clear_workspace_document();
+        self.workspace_requested = Some(root);
+        (self.notify)();
+    }
     pub fn ui_theme(&self) -> bareline_ui::theme::UiTheme {
         let settings = self.effective();
         let theme = Theme::resolve(
@@ -130,36 +140,72 @@ impl SettingsRuntime {
     }
     pub fn poll(&mut self) -> bool {
         let mut changed = self.controller.poll();
-        if let Some((root, result)) = self.workspace_result.as_ref().and_then(|rx| rx.try_recv().ok()) {
+        if let Some((root, result)) = self
+            .workspace_result
+            .as_ref()
+            .and_then(|rx| rx.try_recv().ok())
+        {
             self.workspace_result = None;
             if self.workspace_requested.as_ref() == Some(&root) {
                 match result {
-                    Ok(document) => self.controller.set_workspace_document(root.join(".bareline").join("settings.toml"), document),
+                    Ok(document) => self.controller.set_workspace_document(
+                        root.join(".bareline").join("settings.toml"),
+                        document,
+                    ),
                     Err(error) => self.controller.error = Some(error),
                 }
-                self.workspace_loaded = Some(root); changed = true;
+                self.workspace_loaded = Some(root);
+                changed = true;
             }
         }
-        if self.keymap_loaded && self.workspace_result.is_none() && self.workspace_requested != self.workspace_loaded {
+        if self.keymap_loaded
+            && self.workspace_result.is_none()
+            && self.workspace_requested != self.workspace_loaded
+        {
             if let Some(root) = self.workspace_requested.clone() {
-                let wake = self.notify.clone(); let (tx,rx) = mpsc::sync_channel(1); self.workspace_result = Some(rx);
-                if let Err(error) = std::thread::Builder::new().name("bareline-workspace-settings".into()).spawn(move || {
-                    let path = root.join(".bareline").join("settings.toml");
-                    let result = match bareline_settings::read_config(&path) {
-                        Ok(bytes) => SettingsDocument::parse(&bytes,Scope::Workspace),
-                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(SettingsDocument::empty(Scope::Workspace)),
-                        Err(error) => Err(error.to_string()),
-                    };
-                    let _ = tx.send((root,result)); wake();
-                }) { self.workspace_result=None; self.controller.error=Some(error.to_string()); self.workspace_loaded=self.workspace_requested.clone(); changed=true; }
+                let wake = self.notify.clone();
+                let (tx, rx) = mpsc::sync_channel(1);
+                self.workspace_result = Some(rx);
+                if let Err(error) = std::thread::Builder::new()
+                    .name("bareline-workspace-settings".into())
+                    .spawn(move || {
+                        let path = root.join(".bareline").join("settings.toml");
+                        let result = match bareline_settings::read_config(&path) {
+                            Ok(bytes) => SettingsDocument::parse(&bytes, Scope::Workspace),
+                            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                                Ok(SettingsDocument::empty(Scope::Workspace))
+                            }
+                            Err(error) => Err(error.to_string()),
+                        };
+                        let _ = tx.send((root, result));
+                        wake();
+                    })
+                {
+                    self.workspace_result = None;
+                    self.controller.error = Some(error.to_string());
+                    self.workspace_loaded = self.workspace_requested.clone();
+                    changed = true;
+                }
             }
         }
         if self.locale_result.is_some() {
-            if let Some(result) = self.locale_result.as_ref().and_then(|rx| rx.try_recv().ok()) {
+            if let Some(result) = self
+                .locale_result
+                .as_ref()
+                .and_then(|rx| rx.try_recv().ok())
+            {
                 self.locale_result = None;
-                match result.and_then(|pack| self.controller.localizer.switch(pack)) {
-                    Ok(change) => { self.language_change = Some(change); changed = true; }
-                    Err(error) => { self.controller.error = Some(error); changed = true; }
+                if self.locale_requested == self.effective().locale {
+                    match result.and_then(|pack| self.controller.localizer.switch(pack)) {
+                        Ok(change) => {
+                            self.language_change = Some(change);
+                            changed = true;
+                        }
+                        Err(error) => {
+                            self.controller.error = Some(error);
+                            changed = true;
+                        }
+                    }
                 }
             }
         }
@@ -168,21 +214,48 @@ impl SettingsRuntime {
             if self.locale_requested != locale {
                 self.locale_requested = locale.clone();
                 if locale == "en" {
-                    self.language_change = self.controller.localizer.switch(bareline_settings::LocalePack::english()).ok();
+                    self.language_change = self
+                        .controller
+                        .localizer
+                        .switch(bareline_settings::LocalePack::english())
+                        .ok();
                     changed = true;
                 } else if let Some(parent) = self.path.as_ref().and_then(|path| path.parent()) {
                     let path = parent.join("locales").join(format!("{locale}.toml"));
-                    let (tx, rx) = mpsc::sync_channel(1); self.locale_result = Some(rx);
+                    let (tx, rx) = mpsc::sync_channel(1);
+                    self.locale_result = Some(rx);
                     let wake = self.notify.clone();
-                    if let Err(error) = std::thread::Builder::new().name("bareline-locale-load".into()).spawn(move || {
-                        use std::io::Read;
-                        let result = (|| { let mut bytes = Vec::new();
-                            std::fs::File::open(path).map_err(|e| e.to_string())?.take(bareline_settings::MAX_CONFIG_BYTES as u64 + 1).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
-                            bareline_settings::LocalePack::parse(&bytes)
-                        })();
-                        let _ = tx.send(result); wake();
-                    }) { self.locale_result = None; self.controller.error = Some(error.to_string()); }
-                } else { self.controller.error = Some("Locale pack folder is unavailable".into()); changed = true; }
+                    if let Err(error) = std::thread::Builder::new()
+                        .name("bareline-locale-load".into())
+                        .spawn(move || {
+                            use std::io::Read;
+                            let result = (|| {
+                                let mut bytes = Vec::new();
+                                std::fs::File::open(path)
+                                    .map_err(|e| e.to_string())?
+                                    .take(bareline_settings::MAX_CONFIG_BYTES as u64 + 1)
+                                    .read_to_end(&mut bytes)
+                                    .map_err(|e| e.to_string())?;
+                                let pack = bareline_settings::LocalePack::parse(&bytes)?;
+                                if pack.locale != locale {
+                                    return Err(
+                                        "Locale pack ID does not match the selected language"
+                                            .into(),
+                                    );
+                                }
+                                Ok(pack)
+                            })();
+                            let _ = tx.send(result);
+                            wake();
+                        })
+                    {
+                        self.locale_result = None;
+                        self.controller.error = Some(error.to_string());
+                    }
+                } else {
+                    self.controller.error = Some("Locale pack folder is unavailable".into());
+                    changed = true;
+                }
             }
         }
         if let Some(result) = self
@@ -391,6 +464,12 @@ impl Shell {
                         workspace.open(path);
                         self.settings.controller.dismiss();
                     }
+                } else if let Some(root) = self.settings.workspace_root() {
+                    let path = root.join(".bareline").join("settings.toml");
+                    if let Some(workspace) = &mut self.workspace {
+                        workspace.open(path);
+                        self.settings.controller.dismiss();
+                    }
                 } else {
                     self.settings.controller.error =
                         Some("Workspace settings path is unavailable".into());
@@ -403,11 +482,16 @@ impl Shell {
     pub(super) fn settings_event(&mut self, _el: &ActiveEventLoop, event: &WindowEvent) -> bool {
         if let WindowEvent::ThemeChanged(theme) = event {
             self.settings.controller.system.dark = *theme == winit::window::Theme::Dark;
-            self.settings.controller.system.high_contrast = bareline_platform_windows::high_contrast_enabled().unwrap_or(false);
+            self.settings.controller.system.high_contrast =
+                bareline_platform_windows::high_contrast_enabled().unwrap_or(false);
             if let Some(window) = &self.window {
                 window.request_redraw();
             }
             return false;
+        }
+        if matches!(event, WindowEvent::Focused(true)) {
+            self.settings.controller.system.high_contrast =
+                bareline_platform_windows::high_contrast_enabled().unwrap_or(false);
         }
         if !self.settings.controller.open {
             return false;
@@ -444,11 +528,7 @@ impl Shell {
                     && let Some(renderer) = &self.renderer
                     && let Some(field) = self.settings.controller.text_field_mut()
                 {
-                    let _ = field.click(
-                        renderer,
-                        self.pointer,
-                        self.modifiers.shift_key(),
-                    );
+                    let _ = field.click(renderer, self.pointer, self.modifiers.shift_key());
                 }
             }
             WindowEvent::Ime(Ime::Preedit(value, cursor)) => {

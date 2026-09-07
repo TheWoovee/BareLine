@@ -81,7 +81,16 @@ impl PerformanceRuntime {
                 metrics.push(format!("\"scroll_step_to_present_p50_us\":{},\"scroll_step_to_present_p95_us\":{},\"scroll_samples\":{},\"scroll_stalls_over_100ms\":{}",
                     ordered[(ordered.len()-1)/2], ordered[(ordered.len()*95).div_ceil(100)-1], ordered.len(), ordered.iter().filter(|v| **v > 100_000).count()));
             }
-            println!("{{\"event\":\"measurement\",\"metrics\":{{{}}}}}", metrics.join(","));
+            let receipt = format!("{{\"event\":\"measurement\",\"metrics\":{{{}}}}}", metrics.join(","));
+            // The external owned-Job adapter reads this create-new receipt after
+            // process exit. No inherited console/pipe handle is necessary.
+            let written = self.config.as_ref().is_some_and(|config| {
+                std::fs::OpenOptions::new().write(true).create_new(true)
+                    .open(config.root.join("performance-result.json"))
+                    .and_then(|mut file| std::io::Write::write_all(&mut file, receipt.as_bytes())).is_ok()
+            });
+            if written { println!("{receipt}"); }
+            else { eprintln!("Performance receipt could not be created; no successful measurement"); }
         } else {
             eprintln!("Performance workload failed or timed out; no success measurement emitted");
         }

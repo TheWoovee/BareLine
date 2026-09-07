@@ -104,6 +104,7 @@ pub struct EditorSurface {
     pending: Option<Pending>,
     queue: VecDeque<Input>,
     acknowledged: VecDeque<Input>,
+    ordered_receipts: VecDeque<power::consumer::OrderedReceipt>,
     acknowledged_commands: VecDeque<(String, BTreeMap<String, String>)>,
     pending_command: Option<(String, BTreeMap<String, String>)>,
     manual_hidden: Vec<std::ops::RangeInclusive<usize>>,
@@ -136,6 +137,8 @@ pub struct EditorSurface {
     occurrence_history: power::OccurrenceHistory,
     group_pending: bool,
     font_pixels: f32,
+    font_family: String,
+    view_spacers: Vec<(usize,usize)>,
     tab_width: usize,
     line_numbers: bool,
     highlight_current_line: bool,
@@ -179,6 +182,7 @@ impl EditorSurface {
             pending: None,
             queue: VecDeque::new(),
             acknowledged: VecDeque::new(),
+            ordered_receipts: VecDeque::new(),
             acknowledged_commands: VecDeque::new(),
             pending_command: None,
             manual_hidden: Vec::new(),
@@ -211,6 +215,8 @@ impl EditorSurface {
             occurrence_history: power::OccurrenceHistory::default(),
             group_pending: false,
             font_pixels: 16.0,
+            font_family: "Cascadia Mono".into(),
+            view_spacers: Vec::new(),
             tab_width: 4,
             line_numbers: true,
             highlight_current_line: true,
@@ -305,7 +311,7 @@ impl EditorSurface {
     }
     pub fn unfold_all(&mut self) {
         self.fold_state.unfold_all();
-        self.hidden_lines.clear();
+        self.refresh_hidden_lines();
     }
     pub fn toggle_current_fold(&mut self) {
         let line = self.snapshot.line_at(TextOffset(self.selection.caret)).unwrap_or(0);
@@ -343,14 +349,18 @@ impl EditorSurface {
         let hidden: usize = self.hidden_lines.iter().map(|r| {
             if line < *r.start() { 0 } else { line.min(*r.end()) - r.start() + 1 }
         }).sum();
-        line.saturating_sub(hidden)
+        let spacers = self.view_spacers.iter().filter(|(before,_)| *before <= line && !self.hidden_lines.iter().any(|range| range.contains(before))).fold(0usize,|total,(_,rows)| total.saturating_add(*rows));
+        line.saturating_sub(hidden).saturating_add(spacers)
     }
     fn logical_line(&self, row: usize) -> usize {
-        let mut line = row;
-        for range in &self.hidden_lines {
-            if line >= *range.start() { line = line.saturating_add(range.end() - range.start() + 1); }
+        // Lower bound also maps a spacer hit to the next real logical line.
+        let mut first = 0;
+        let mut last = self.snapshot.line_count();
+        while first < last {
+            let middle = first + (last-first)/2;
+            if self.visual_line(middle) < row { first=middle+1; } else { last=middle; }
         }
-        line
+        first
     }
     pub fn apply_visual_preferences(
         &mut self,
@@ -403,6 +413,7 @@ impl EditorSurface {
         view.pending_folds = self.pending_folds.clone();
         view.encoding_label = self.encoding_label.clone();
         view.font_pixels = self.font_pixels;
+        view.font_family = self.font_family.clone();
         view.tab_width = self.tab_width;
         view.line_numbers = self.line_numbers;
         view.highlight_current_line = self.highlight_current_line;
@@ -617,13 +628,17 @@ impl EditorSurface {
         if self.busy() {
             return Err("Wait for the pending edit before copying.");
         }
-        let range = self.selection.range();
-        self.snapshot
-            .read(
-                TextOffset(range.start)..TextOffset(range.end),
-                4 * 1024 * 1024,
-            )
-            .map_err(|_| "Selection exceeds the 4 MiB clipboard limit.")
+        let limit=4*1024*1024;
+        if let Some(rectangle)=self.power_rectangle {
+            return power::rectangle_copy(&self.snapshot,rectangle,power::Limits {max_bytes:limit,..self.power_limits()}).map_err(|_|"Rectangle exceeds the clipboard limit.");
+        }
+        let mut text=String::new();
+        for (index,selection) in self.selection_set().selections.iter().enumerate() {
+            if index>0 {if text.len()>=limit{return Err("Selection exceeds the clipboard limit.");}text.push('\n');}
+            let range=selection.range();
+            text.push_str(&self.snapshot.read(TextOffset(range.start)..TextOffset(range.end),limit-text.len()).map_err(|_|"Selection exceeds the clipboard limit.")?);
+        }
+        Ok(text)
     }
     pub fn mark_saved(&mut self, captured: &DocumentSnapshot) {
         if self.snapshot.same_document(captured) {
@@ -710,6 +725,7 @@ impl EditorSurface {
     }
     pub fn take_acknowledged_inputs(&mut self) -> Vec<Input> { self.acknowledged.drain(..).collect() }
     fn acknowledge(&mut self, input: Input) {
+        self.acknowledge_event(power::consumer::ReceiptEvent::Input(input.clone()));
         if self.acknowledged.len() == MAX_QUEUED_INPUTS { self.acknowledged.pop_front(); }
         self.acknowledged.push_back(input);
     }
@@ -804,7 +820,7 @@ impl EditorSurface {
             if matches!(input, Input::SetCaret(..)) { self.power_rectangle = None; }
             let before = self.selection_set();
             let smart = self.smart_typing && self.language != bareline_syntax::Language::PlainText;
-            if smart && self.smart_pairs && let Input::Insert(value) = &input && value.chars().count() == 1 {
+            if smart && self.smart_pairs && self.power_rectangle.is_none() && let Input::Insert(value) = &input && value.chars().count() == 1 {
                 if let Ok(Some(next)) = completion::overtype_closer(&self.snapshot, &before, value.chars().next().unwrap(), self.power_limits()) {
                     self.selection = next.primary(); self.selections = next;
                     self.acknowledge(input); changed = true; continue;
@@ -1040,6 +1056,47 @@ impl EditorSurface {
             self.selection.anchor = target;
         }
     }
+    /// Copies bounded glyph geometry from existing layouts only. Coordinates are
+    /// logical editor pixels; no shaping or source paging occurs here.
+    pub fn accessibility_geometry(&self, backend: &impl TextBackend, width: f32, height: f32) -> Vec<(std::ops::Range<usize>, Rect)> {
+        let mut result = Vec::new();
+        let mut remaining = MAX_LAYOUT_BYTES;
+        for (line, layout) in &self.layouts {
+            let start = layout.start.max(self.visible_text.start.0);
+            let end = layout.end.min(self.visible_text.end.0);
+            if start >= end || end-start > remaining { continue; }
+            let Ok(text) = self.snapshot.read(TextOffset(start)..TextOffset(end), remaining) else { continue; };
+            remaining -= text.len();
+            let origin_y = self.top() + (self.visual_line(*line) as f64 * self.line_height() as f64-self.scroll_y) as f32;
+            for (offset, grapheme) in text.grapheme_indices(true) {
+                if result.len() >= 4096 { return result; }
+                let a = start+offset;
+                let b = a+grapheme.len();
+                let Ok(rects) = backend.range_rects(layout.id, a-layout.start..b-layout.start) else { continue; };
+                for r in rects {
+                    let x = r.x+LEFT-self.scroll_x as f32;
+                    let y = r.y+origin_y;
+                    let left = x.max(LEFT);
+                    let top = y.max(self.top());
+                    let right = (x+r.width).min(width);
+                    let bottom = (y+r.height).min(height-STATUS_HEIGHT-self.bottom_inset);
+                    if right > left && bottom > top {
+                        result.push((a..b, rect(left, top, right-left, bottom-top)));
+                    }
+                    if result.len() >= 4096 { return result; }
+                }
+            }
+        }
+        result
+    }
+    /// Reveal a canonical text offset without changing selection or document.
+    pub fn accessibility_scroll_to(&mut self, offset: usize, height: f32) -> bool {
+        let Ok(line) = self.snapshot.line_at(TextOffset(offset)) else { return false; };
+        let destination = self.visual_line(line) as f64*self.line_height() as f64;
+        self.reveal_caret = false;
+        self.scroll(destination-self.scroll_y, height);
+        true
+    }
     pub fn scroll(&mut self, delta: f64, height: f32) {
         let max = (self.visual_line(self.snapshot.line_count()) as f64 * self.line_height() as f64
             - (height - self.top() - STATUS_HEIGHT) as f64)
@@ -1204,6 +1261,7 @@ impl EditorSurface {
         let mut caret_rect = None;
         for row in visible {
             let number = self.logical_line(row);
+            if self.visual_line(number) != row { continue; }
             let y = self.top() + (row as f64 * self.line_height() as f64 - self.scroll_y) as f32;
             let range = self.content_range(number).unwrap();
             let mut start = range.start;
@@ -1236,10 +1294,11 @@ impl EditorSurface {
                 self.layouts.insert(
                     number,
                     LineLayout {
-                        id: backend.shape(
+                        id: backend.shape_with_font_family(
                             &value,
                             self.font_pixels,
                             (width - LEFT - 16.0).max(1.0),
+                            &self.font_family,
                         )?,
                         start,
                         end,
@@ -1295,10 +1354,11 @@ impl EditorSurface {
                     if let Some(old) = self.composition_layout.take() {
                         backend.release_layout(old);
                     }
-                    draw_id = backend.shape(
+                    draw_id = backend.shape_with_font_family(
                         &displayed,
                         self.font_pixels,
                         (width - LEFT - 16.0).max(1.0),
+                        &self.font_family,
                     )?;
                     self.composition_layout = Some(draw_id);
                     for r in backend

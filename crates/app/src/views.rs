@@ -240,6 +240,25 @@ impl ViewController {
     }
     /// Attach a newly opened document identity to the active pane. The owner has
     /// already created the document service; this allocates view metadata only.
+    /// Restore a previously closed view in this process without creating a second tab model.
+    pub fn restore_tab(&mut self, tab: SessionTab, position: usize, color: Option<u32>) -> Result<(), ViewError> {
+        if self.tabs.len() >= 10_000 || self.tabs.iter().any(|existing| existing.id == tab.id) {
+            return Err(ViewError::InvalidState);
+        }
+        let mut probe = tab.clone();
+        probe.view.split = 0;
+        Self::new(vec![probe], None)?;
+        if color.is_some_and(|color| color > 0xffffff) { return Err(ViewError::InvalidState); }
+        let next = tab.id.checked_add(1).ok_or(ViewError::IdentityExhausted)?;
+        let id = tab.id;
+        self.split |= tab.view.split == 1;
+        self.tabs.insert(position.min(self.tabs.len()), tab);
+        self.tabs.sort_by_key(|tab| !tab.pinned);
+        self.next_id = self.next_id.max(next);
+        if let Some(color) = color { self.tab_colors.insert(id, color); }
+        self.repair_active();
+        self.activate(id)
+    }
     pub fn add_document(&mut self, document_id: u64) -> Result<u64, ViewError> {
         if self.tabs.len() >= 10_000 {
             return Err(ViewError::InvalidState);

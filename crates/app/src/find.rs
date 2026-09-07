@@ -40,7 +40,7 @@ pub struct FindController {
     worker: Option<SearchWorker>,
     pending: Option<SearchTicket>,
     paged_pending: Option<bareline_search::service::PagedSearchTicket>,
-    paged_results: Option<bareline_search::paged::PagedResults>,
+    paged_results: Option<Arc<bareline_search::paged::PagedResults>>,
     paged_requested: Option<(bareline_document::paged::PagedSnapshot, SearchQuery)>,
     results: Option<Arc<SearchResults>>,
     requested: Option<(DocumentSnapshot, String, bool, bool, SearchMode)>,
@@ -101,7 +101,7 @@ impl FindController {
     }
     pub fn completed_paged_results(&self) -> Option<&bareline_search::paged::PagedResults> {
         self.paged_results
-            .as_ref()
+            .as_deref()
             .filter(|results| results.completeness == Completeness::Complete)
     }
     pub fn query(&self) -> SearchQuery {
@@ -175,6 +175,14 @@ impl FindController {
         at: usize,
         backwards: bool,
     ) -> Option<std::ops::Range<TextOffset>> {
+        if self.field.composing()
+            || !self
+                .paged_requested
+                .as_ref()
+                .is_some_and(|(_, query)| query == &self.query())
+        {
+            return None;
+        }
         let results = self.paged_results.as_ref()?;
         if !results.source.same_document(snapshot)
             || results.source.content_state != snapshot.content_state
@@ -246,6 +254,46 @@ impl FindController {
         self.pending = None;
         self.results = None;
         self.status = "Cancelled".into();
+    }
+    pub fn start_replace_paged(
+        &self,
+        handle: bareline_editor_surface::paged_view::PagedReadHandle,
+        selection: std::ops::Range<TextOffset>,
+        all: bool,
+        notify: Arc<dyn Fn() + Send + Sync>,
+    ) -> Result<bareline_search::service::PagedReplaceTicket, &'static str> {
+        if self.field.composing() || self.replacement.composing() {
+            return Err("Finish composing before replacing");
+        }
+        let results = self
+            .paged_results
+            .as_ref()
+            .ok_or("Search the document first")?;
+        if results.query != self.query() || results.completeness != Completeness::Complete {
+            return Err("Complete the current search before replacing");
+        }
+        let snapshot = handle.snapshot().clone();
+        if !results.source.same_document(&snapshot)
+            || results.source.content_state != snapshot.content_state
+        {
+            return Err("Search results are stale");
+        }
+        Ok(self
+            .worker
+            .as_ref()
+            .ok_or("Search worker unavailable")?
+            .replace_paged(
+                results.clone(),
+                snapshot,
+                self.replacement.value().into(),
+                if all {
+                    ReplaceScope::All
+                } else {
+                    ReplaceScope::One(selection)
+                },
+                move |ticket| handle.resolve_page(ticket),
+                notify,
+            ))
     }
     pub fn start_replace(
         &mut self,
@@ -443,7 +491,7 @@ impl FindController {
                     } else {
                         format!("{} matches; {:?}", results.count, results.completeness)
                     };
-                    self.paged_results = Some(results);
+                    self.paged_results = Some(Arc::new(results));
                     self.paged_pending = None;
                     return true;
                 }
