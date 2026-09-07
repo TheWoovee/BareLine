@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none">
+  <title>Bareline two-line document mark</title>
+  <!-- Stroke 3; rounded caps and joins radius 1.5. Stem reaches y=0..24.
+       Bowl outer bounds y=10..24. Fold top right; accent cut delta=(2,-2). -->
+  <g stroke="#E6E8EA" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+    <path id="stem" d="M3 1.5V22.5"/>
+    <path id="bowl" d="M3 11.5H17L21 15.5V20.5L19 22.5H4.5Q3 22.5 3 21"/>
+    <path id="fold" d="M17 11.5V15.5H21"/>
+    <path id="text-lines" d="M8 15.5H13.5M8 19.5H13.5"/>
+  </g>
+  <path id="accent-notch" d="M19 22.5L21 20.5" stroke="#2ED3C4" stroke-width="3" stroke-linecap="butt"/>
+</svg>

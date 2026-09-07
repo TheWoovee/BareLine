@@ -1,0 +1,18 @@
+[package]
+name = "bareline-extension-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version = "1.95"
+
+[dependencies]
+bareline-extensions-protocol = { path = "../../crates/extensions-protocol" }
+wasmtime = { version = "=48.0.1", default-features = false, features = ["component-model", "cranelift", "runtime", "std", "wat", "anyhow"] }
+wasmtime-wasi = { version = "=48.0.1", default-features = false, features = ["p2"] }
+[target.'cfg(windows)'.dependencies]
+bareline-platform-windows = { path = "../../crates/platform-windows" }
+
+sha2 = "=0.10.9"
+
+[dev-dependencies]
+bareline-macros = { path = "../../crates/macros" }

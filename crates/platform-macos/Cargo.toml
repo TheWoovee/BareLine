@@ -1,0 +1,19 @@
+[package]
+name = "bareline-platform-macos"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+bareline-platform = { path = "../platform" }
+
+[dev-dependencies]
+winit.workspace = true
+bareline-renderer = { path = "../renderer" }
+bareline-renderer-recording = { path = "../renderer-recording" }
+bareline-ui = { path = "../ui" }
+
+[[example]]
+name = "recording_probe_macos"
+path = "../platform/recording_probe.rs"
+

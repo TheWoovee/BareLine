@@ -1,0 +1,39 @@
+{
+  "version": "1.2",
+  "units": {
+    "chrome_font_px": 13,
+    "editor_font_pt": 12,
+    "tab_height_px": 34,
+    "row_height_px": 28,
+    "status_height_px": 24,
+    "focus_width_px": 2
+  },
+  "light": {
+    "surface.editor": "#FAF8F5",
+    "surface.chrome": "#F1EEE9",
+    "surface.elevated": "#FFFFFF",
+    "text": "#23272B",
+    "text.muted": "#5C6570",
+    "text.gutter": "#5C6570",
+    "syntax.comment": "#5C6570",
+    "accent": "#14A89A",
+    "accent.text": "#0B7A6F",
+    "focus.ring": "#0B7A6F",
+    "caret": "#0B7A6F",
+    "border.interactive": "#5C6570"
+  },
+  "dark": {
+    "surface.editor": "#1F2328",
+    "surface.chrome": "#181B1F",
+    "surface.elevated": "#262B31",
+    "text": "#E6E8EA",
+    "text.muted": "#9AA3AD",
+    "text.gutter": "#9AA3AD",
+    "syntax.comment": "#9AA3AD",
+    "accent": "#2ED3C4",
+    "accent.text": "#2ED3C4",
+    "focus.ring": "#2ED3C4",
+    "caret": "#2ED3C4",
+    "border.interactive": "#9AA3AD"
+  }
+}

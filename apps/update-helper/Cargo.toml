@@ -1,0 +1,11 @@
+[package]
+name = "bareline-update-helper"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+bareline-distribution = { path = "../../crates/distribution" }
+
+[target.'cfg(windows)'.dependencies]
+bareline-platform-windows = { path = "../../crates/platform-windows" }

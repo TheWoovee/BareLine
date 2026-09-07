@@ -1,0 +1,6 @@
+/target/
+/tests/perf/results/
+/tests/visual/results/
+*.log
+*.pdb
+/tests/e2e/results/

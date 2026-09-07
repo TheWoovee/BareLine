@@ -1,0 +1,93 @@
+[
+  {
+    "id": "compare-final",
+    "file": "bareline-compare-dark.png",
+    "score": 8.5,
+    "notes": "Directional merge, complete menus, aligned four-line sample and unsaved target; all five diff states still require interactive verification.",
+    "tool": "ChatGPT image generation (image_gen.imagegen)",
+    "date": "2026-09-05",
+    "supersedes": "mockups/superseded/bareline-compare-dark-v2.png",
+    "prompt_file": "mockups/prompts/bareline-compare-dark-v1.2.txt",
+    "width": 1672,
+    "height": 941,
+    "path": "mockups/bareline-compare-dark.png"
+  },
+  {
+    "id": "workspace",
+    "file": "bareline-workspace-split.png",
+    "score": 8,
+    "notes": "Correct Rust outline/content and full chrome; second pane needs its own visible config.rs tab and placeholder icon needs production replacement.",
+    "tool": "ChatGPT image generation (image_gen.imagegen)",
+    "date": "2026-09-05",
+    "supersedes": "mockups/superseded/bareline-workspace-split-v2.png",
+    "prompt_file": "mockups/prompts/bareline-workspace-split-v1.2.txt",
+    "width": 1672,
+    "height": 941,
+    "path": "mockups/bareline-workspace-split.png"
+  },
+  {
+    "id": "settings",
+    "file": "bareline-settings.png",
+    "score": 8.5,
+    "notes": "Point units, scope, saved-state feedback and full menu; generated title/tab arrangement and sample footer require implementation normalization.",
+    "tool": "ChatGPT image generation (image_gen.imagegen)",
+    "date": "2026-09-05",
+    "supersedes": "mockups/superseded/bareline-settings-v1.png",
+    "prompt_file": "mockups/prompts/bareline-settings-v1.2.txt",
+    "width": 1672,
+    "height": 941,
+    "path": "mockups/bareline-settings.png"
+  },
+  {
+    "id": "extensions",
+    "file": "bareline-extensions.png",
+    "score": 8.5,
+    "notes": "Runtime removal, per-extension controls and byte-mode labels; generated publisher/version are placeholders and JSON panel chip is omitted.",
+    "tool": "ChatGPT image generation (image_gen.imagegen)",
+    "date": "2026-09-05",
+    "supersedes": "mockups/superseded/bareline-extensions-v1.png",
+    "prompt_file": "mockups/prompts/bareline-extensions-v1.2.txt",
+    "width": 1672,
+    "height": 941,
+    "path": "mockups/bareline-extensions.png"
+  },
+  {
+    "id": "recovery",
+    "file": "bareline-recovery-center.png",
+    "score": 8.5,
+    "notes": "Complete/edits-only/corrupt-tail states and separate recovered copy; general help should be distinguished from selected row status.",
+    "tool": "ChatGPT image generation (image_gen.imagegen)",
+    "date": "2026-09-05",
+    "supersedes": "mockups/superseded/bareline-recovery-center-v1.png",
+    "prompt_file": "mockups/prompts/bareline-recovery-center-v1.2.txt",
+    "width": 1672,
+    "height": 941,
+    "path": "mockups/bareline-recovery-center.png"
+  },
+  {
+    "id": "source-fixed",
+    "file": "bareline-source-changed.png",
+    "score": 8.5,
+    "notes": "Unavailable regions, journal timestamp and partial export; restore explanatory text beside the hatched-area ellipsis in implementation.",
+    "tool": "ChatGPT image generation (image_gen.imagegen)",
+    "date": "2026-09-05",
+    "supersedes": null,
+    "prompt_file": "mockups/prompts/bareline-source-changed-v1.2.txt",
+    "width": 1672,
+    "height": 941,
+    "path": "mockups/bareline-source-changed.png"
+  },
+  {
+    "id": "replace-preview",
+    "file": "bareline-replace-preview.png",
+    "score": 9,
+    "notes": "Changed-since-preview exclusion and explicit eligible-file count; footer/context values remain illustrative.",
+    "tool": "ChatGPT image generation (image_gen.imagegen)",
+    "date": "2026-09-05",
+    "supersedes": null,
+    "prompt_file": "mockups/prompts/bareline-replace-preview-v1.2.txt",
+    "width": 1672,
+    "height": 941,
+    "path": "mockups/bareline-replace-preview.png"
+  }
+]

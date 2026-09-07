@@ -1,0 +1,1 @@
+Edit this exact screen. Set title text to exactly Bareline. Replace the greeting tab at far left with notes.txt, retain Recovery Center active below menu. Use one small placeholder b at title left. Preserve all other content and visual design. No additional command row.

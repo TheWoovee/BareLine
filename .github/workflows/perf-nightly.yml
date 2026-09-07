@@ -1,0 +1,36 @@
+name: Informational nightly performance
+on:
+  schedule:
+    - cron: '23 3 * * *'
+  workflow_dispatch:
+# Local workflow definition only. An owner must opt in on the repository before it runs.
+permissions:
+  contents: read
+jobs:
+  measure:
+    if: vars.BARELINE_PERF_ENABLED == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.98.1'
+      - run: cargo build -p bareline -p xtask --release --locked
+      - name: Hosted Windows launch and idle series
+        run: .\target\release\xtask.exe perf launch --release --samples 3
+      - name: Bounded source and product workload series
+        if: always()
+        run: .\target\release\xtask.exe perf document --bytes 1048576 --samples 2 --product
+      - name: Preserve raw run history
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hosted-windows-perf-${{ github.sha }}-${{ github.run_id }}
+          path: tests/perf/results/
+          retention-days: 90
+          if-no-files-found: warn
+# Numbers never fail CI. These hosted runs are a separate noise series, not comparative
+# marketing evidence. Rolling-baseline issue creation remains a later owner-enabled
+# integration; this workflow has no issues/write permission and never publishes claims.

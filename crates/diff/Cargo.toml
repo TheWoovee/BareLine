@@ -1,0 +1,11 @@
+[package]
+name = "bareline-diff"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+bareline-document = { path = "../document" }
+unicode-segmentation = "=1.13.3"
+
+bareline-unicode-fold = { path = "../unicode-fold" }

@@ -1,0 +1,8 @@
+[package]
+name = "bareline-first-party-common"
+version.workspace = true
+edition.workspace = true
+license = "MIT OR Apache-2.0"
+[dependencies]
+bareline-extension-sdk = { path = "../../crates/extension-sdk" }
+postcard = { version = "1", features = ["use-std"] }

@@ -1,0 +1,13 @@
+[package]
+name = "bareline-ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+bareline-renderer = { path = "../renderer" }
+unicode-segmentation = "=1.13.3"
+
+[dev-dependencies]
+bareline-settings = { path = "../settings" }
+bareline-renderer-recording = { path = "../renderer-recording" }

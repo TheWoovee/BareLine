@@ -1,0 +1,1 @@
+Edit only by removing the horizontal command-icon row between the menu and the server.log tab. Move remaining content up to close that gap and extend existing editor background at bottom as needed. Preserve every label, source state, warning, footer, title, icon, line of text and other control exactly. Do not redesign anything.

@@ -1,0 +1,26 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "extensions/*", "apps/bareline", "apps/extension-host", "apps/update-helper", "native/lexilla-bridge", "xtask"]
+default-members = ["apps/bareline"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MPL-2.0"
+rust-version = "1.85"
+
+[workspace.dependencies]
+winit = "=0.30.13"
+windows = "=0.62.2"
+
+[profile.release]
+panic = "abort"
+lto = "fat"
+codegen-units = 1
+opt-level = 3
+debug = "line-tables-only"
+
+
+
+
+

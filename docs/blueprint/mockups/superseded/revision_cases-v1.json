@@ -1,0 +1,299 @@
+[
+  [
+    1,
+    "FC-06, FC-07, FC-09",
+    "FR-030, FR-031",
+    "Foundation contracts; Windows text/input prototype; command and render scaffold",
+    [
+      "Render mixed Arabic/Latin with emoji and IME composition; candidate window follows caret at 100%, 150% and 200% DPI.",
+      "Open 5,000 lazy tabs; worker count remains bounded and no document reads occur before the first frame.",
+      "Verify codec, filesystem-capability and VerifiedPackageSource interfaces compile with fake providers; online provider fails closed."
+    ]
+  ],
+  [
+    2,
+    "FC-01, FC-02, FC-03, FC-06",
+    "FR-005, FR-009",
+    "Owning sources; piece aggregates; undo and snapshot availability",
+    [
+      "Generate random CR/LF/CRLF edits, including separators split across pieces; line counts match the reference model.",
+      "Delete a range, evict its base pages and externally replace the source; undo restores owned inverse bytes exactly.",
+      "Race a Resident background fill with truncation; missing old-generation bytes return Unavailable and never new contents."
+    ]
+  ],
+  [
+    3,
+    "FC-01, FC-02, FC-09",
+    "FR-005, FR-006, FR-013, FR-030",
+    "Virtual surface; input; long-line and opaque-span boundaries",
+    [
+      "Select across emoji clusters, combining accents and opaque byte markers; text edits never split their atomic boundaries.",
+      "Scroll a 20 MiB single line; layout is bounded and cancellation leaves input responsive.",
+      "Commit and cancel IME preedit; only committed text enters undo and recovery; verify real Windows shaping and BiDi hit testing."
+    ]
+  ],
+  [
+    4,
+    "FC-03, FC-04",
+    "FR-001, FR-002, FR-003, FR-017",
+    "UTF-8 lifecycle first; durable recovery; codec and watcher integration later",
+    [
+      "Edit, save, edit again and undo to saved ContentStateId; the dirty marker clears without comparing monotonic revisions.",
+      "Kill the process after each segment/journal/checkpoint flush boundary; recovery stops at the last valid durable record.",
+      "Start a save then type; successful save clears only its captured state. Missing source regions disable Save/Save As and offer export with gaps."
+    ]
+  ],
+  [
+    5,
+    "FC-05, FC-06",
+    "FR-007",
+    "UTF-8 search; bounded regex adapters; linked open-document replace",
+    [
+      "Match across a 16 MiB window in a 20 MiB line; case-fold results map to correct original TextOffsets.",
+      "Exercise lookbehind, anchors, empty matches and partial regex contexts; unsupported cases report incomplete and disable replacement.",
+      "Replace in two dirty open documents while one revision changes; prepare aborts before either mutates; successful linked undo reverses both."
+    ]
+  ],
+  [
+    6,
+    "FC-01, FC-02, FC-06",
+    "FR-005, FR-006, FR-008",
+    "Power editing; budgets; comment provider hook",
+    [
+      "Column insertion across tabs, wide glyphs and short lines follows display columns and undoes in one transaction.",
+      "Enable clipboard history then exceed 20 entries and 16 MiB total; bounded eviction occurs and history never persists to disk.",
+      "Invoke comment commands before PR-013; show unavailable with a reason and do not mutate text."
+    ]
+  ],
+  [
+    7,
+    "FC-01, FC-02, FC-04",
+    "FR-009",
+    "Codec implementation; staged integration with lifecycle and search",
+    [
+      "Round-trip invalid UTF-8, genuine U+FFFD/private-use characters and noncanonical legacy sequences without provenance collisions.",
+      "Open/save UTF-16LE/BE, UTF-32LE/BE and true Latin-1 fixtures with BOM and mixed EOL; exact unedited bytes survive.",
+      "Transcode a generated 5 GiB UTF-16 file under the RAM budget; disk quota exhaustion is visible and original data remains intact."
+    ]
+  ],
+  [
+    8,
+    "FC-01, FC-02, FC-09",
+    "FR-010, FR-011",
+    "Named language catalog; provisional syntax; bounded parsing",
+    [
+      "Validate paired Lexilla/native definitions for all 15 languages listed in FC-09; publish coverage and known grammar gaps.",
+      "Open in the middle of a multiline string; provisional highlighting is labelled until a valid lexer checkpoint resolves context.",
+      "Import malformed/oversized UDL input; reject unsafe structure and preserve the previous definition."
+    ]
+  ],
+  [
+    9,
+    "FC-02, FC-09",
+    "FR-014, FR-015, FR-016",
+    "Workspace discovery; matching outline; progressive map",
+    [
+      "Select main.rs then Cargo.toml; outline changes language and old-revision results never appear in the new document.",
+      "Open a folder with symlink cycles and inaccessible descendants; traversal is bounded and shows partial results.",
+      "Scroll before line indexing completes; minimap and outline use estimates explicitly and do not allocate per-line objects."
+    ]
+  ],
+  [
+    10,
+    "FC-06",
+    "FR-003, FR-004",
+    "Tab/view model; alignment map; synchronization",
+    [
+      "Pin a tab and reorder across views; pinned-first default and per-view selection persist after restore.",
+      "Add a compare alignment spacer; it receives no document line number and synchronized scrolling maps logical lines correctly.",
+      "Clone a document in a second pane; edits share a document while caret, selection, folds and scroll remain independent."
+    ]
+  ],
+  [
+    11,
+    "FC-09",
+    "FR-023",
+    "Registry projections; keyboard contract; discoverability",
+    [
+      "Every menu/toolbar/palette action resolves to one stable ID; unavailable actions have a reason and no handler mutation.",
+      "Press Escape in nested popup, panel and editor states; only the topmost transient layer closes and focus returns predictably.",
+      "Test AltGr text, menu mnemonics and remapped shortcuts together; text entry is not consumed as a global shortcut."
+    ]
+  ],
+  [
+    12,
+    "FC-09",
+    "FR-013, FR-023, FR-024",
+    "Settings scopes; theme tokens; units and persistence",
+    [
+      "Change font size to 12 pt at mixed DPI; preview, persisted value and restored editor use the same point unit.",
+      "Attempt workspace override of execution, network or extension grants; reject it while accepting allowed indentation preferences.",
+      "Check Light/Dark/System tokens and override persistence; normal text meets 4.5:1 and focus indicators 3:1 on actual surfaces."
+    ]
+  ],
+  [
+    13,
+    "FC-01, FC-09",
+    "FR-008, FR-012",
+    "Completion; comment provider integration; stale suggestions",
+    [
+      "Register PR-006 CommentProvider with a language; line/block toggles handle empty selections and undo correctly.",
+      "Type while completion computes; old-generation/revision suggestions cannot replace newer text.",
+      "Complete within strings and comments using bounded local indexes; suppress semantically unsupported suggestions."
+    ]
+  ],
+  [
+    14,
+    "FC-06, FC-09",
+    "FR-019, FR-020",
+    "Macro transactions; safe process spawn; output limits",
+    [
+      "Record/replay only stable command IDs and explicit text; playback failure stops with a resumable location.",
+      "Run a path and argument containing spaces, quotes and shell metacharacters using direct spawn; no implicit shell interpretation occurs.",
+      "Cancel a process producing unlimited output; output storage stays bounded, process cleanup completes and the editor remains usable."
+    ]
+  ],
+  [
+    15,
+    "FC-02, FC-04",
+    "FR-018",
+    "Watcher generations; tail continuity; remote capability integration",
+    [
+      "Append to a log with a partial final page; verify continuity before accepting the new generation, without falsely entering SourceChanged.",
+      "Rotate, truncate and rewrite same-size content; uncertain continuity becomes SourceChanged and preserves owned edits.",
+      "Pause tail scrolling while appends continue; unlock stops following and captures a fixed generation after confirmation."
+    ]
+  ],
+  [
+    16,
+    "FC-07, FC-08",
+    "FR-022",
+    "Verified offline runtime; capabilities; host quotas",
+    [
+      "Install a signed offline runtime and extension using the PR-001 provider contract; no PR-018 online code is required.",
+      "Disable all extensions; host exits and installed files remain. Explicit Remove runtime deletes only its verified owned files.",
+      "Send oversized frames, unauthorized capabilities and a CPU loop; reject/terminate the offending extension within per-extension limits."
+    ]
+  ],
+  [
+    17,
+    "FC-04, FC-06",
+    "FR-021, FR-021A",
+    "Compare UI; source versions; export and print",
+    [
+      "Copy a hunk left-to-right then undo; source labels, dirty state and selection match the actual target revision.",
+      "Choose ignore options and recompare; cancellation is distinct from a completed coarse result and stale merge buttons disable.",
+      "Print/export Unicode with syntax/theme options; unsupported printer/filesystem errors preserve the original and show a clear retry path."
+    ]
+  ],
+  [
+    18,
+    "FC-04, FC-07, FC-08, FC-09",
+    "FR-025, FR-026, FR-027, FR-028, FR-031",
+    "Package signing; verified online provider; Windows integration",
+    [
+      "Reject an expired, rollback, wrong-channel, wrong-publisher or hash-mismatched update before staging application files.",
+      "Verify signatures on inner executables after extracting final ZIP/installer; compare reproducibility only before signing.",
+      "Launch CLI with non-BMP paths and arguments via authenticated same-user IPC; portable mode writes only to its configured data root."
+    ]
+  ],
+  [
+    19,
+    "FC-02, FC-06, FC-10",
+    "FR-001, FR-007, FR-018",
+    "Benchmark methodology; populated tabs; measured claims",
+    [
+      "Run paired baseline trials with pinned executable hashes, alternating app order and separate first-frame/editable/full-load timings.",
+      "Measure 100 and 500 tabs plus extension process memory; report peak total private bytes, disk growth and downloads separately.",
+      "Publish all raw runs, sample counts, P50/P95 and timeouts; hosted CI noise never becomes a comparative marketing claim."
+    ]
+  ],
+  [
+    20,
+    "FC-03, FC-04, FC-07, FC-08",
+    "FR-017, FR-022, FR-027, FR-029, FR-031",
+    "Fault injection; trust attacks; durable receipt reconciliation",
+    [
+      "Inject disk-full and process death at every recovery/replace receipt transition; reconcile originals, backups and committed targets by fingerprint.",
+      "Test archive traversal, reparse escapes, IPC spoofing, stale signed metadata and compromised release-key recovery.",
+      "Verify diagnostics contain no document text or sensitive path data and no telemetry upload occurs."
+    ]
+  ],
+  [
+    21,
+    "FC-01 through FC-10",
+    "FR-001 through FR-031",
+    "Integrated parity evidence; release QA; honest claim table",
+    [
+      "Resolve every atomic case and every registered command to an implementation commit and independent result; exclusions retain rationale.",
+      "Run the key workflows with keyboard and screen reader on both Windows floor builds and mixed DPI.",
+      "Publish release readiness with unresolved correctness items, performance measurements and limited parity claims; mockups never count as runtime evidence."
+    ]
+  ],
+  [
+    22,
+    "FC-09",
+    "FR-030, FR-031",
+    "Portable contracts; lossless paths; platform skeletons",
+    [
+      "Compile neutral crates without Windows imports on Linux/macOS; platform gaps return explicit Unsupported.",
+      "Round-trip unpaired Windows UTF-16 and Unix non-UTF-8 path encodings through versioned state without lossy identity conversion.",
+      "Run RecordingBackend tests on each OS and record separate real-platform readiness rather than claiming complete ports."
+    ]
+  ],
+  [
+    23,
+    "FC-09",
+    "FR-023, FR-030",
+    "Control primitives; keyboard semantics; DPI focus",
+    [
+      "Navigate every control with Tab/Shift+Tab/arrows; focus is visible and disabled controls do not dispatch edits.",
+      "Use IME, clipboard and validation in text fields; cancellation returns focus without leaking preedit into undo.",
+      "At 100/125/150/200/250% DPI, hit targets align with paint and popovers stay on-screen."
+    ]
+  ],
+  [
+    24,
+    "FC-09",
+    "FR-030",
+    "AccessKit tree; UI Automation; assistive workflow",
+    [
+      "Use Narrator through open, edit, find, conflict and recovery; names, roles, values and focused state are announced.",
+      "Change selection/scroll in a 5 GiB file; semantic text-range requests are bounded and do not materialize the entire document.",
+      "Enable high contrast and test focus/selection/error distinction without color; real DirectWrite results supplement headless tests."
+    ]
+  ],
+  [
+    25,
+    "FC-02, FC-06",
+    "FR-021A",
+    "Bounded diff; normalized equality; original byte ranges",
+    [
+      "With all ignore options off, applying all hunks reproduces the target bytes; with ignores on, only explicit nonignored ranges change.",
+      "Force normalized-hash collisions and whitespace/case equality; compare normalized bytes, retaining original byte ranges for edits.",
+      "Compare divergent multi-GB files under anchor/output caps; distinguish CompletedCoarse, Cancelled and Unavailable without claiming incomplete output is exact."
+    ]
+  ],
+  [
+    26,
+    "FC-04, FC-05",
+    "FR-007",
+    "Workspace preview; revalidation; durable backups and receipts",
+    [
+      "Preview then externally modify a file; Apply skips it for re-review instead of re-matching and changing unseen contents.",
+      "Replace in a mix of dirty open files and disk files; revisions/fingerprints are checked, backups unique and per-file receipts durable.",
+      "Kill between replacement and receipt commit; restart reconciles by target/backup fingerprints and never reapplies blindly."
+    ]
+  ],
+  [
+    27,
+    "FC-01, FC-07",
+    "FR-022",
+    "First-party extension fidelity; XML security; Hex domains",
+    [
+      "Format JSON containing large integers and exponent lexemes; preserve numeric values and documented lexical policy.",
+      "Reject XML DTD/external entities/XInclude and unsupported XPath syntax; network stays inaccessible and depth/time limits hold.",
+      "Open Hex original-byte mode on UTF-16 with unsaved text edits; display original generation explicitly and distinguish an encoded edited preview."
+    ]
+  ]
+]

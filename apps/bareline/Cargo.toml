@@ -1,0 +1,31 @@
+[package]
+name = "bareline"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+bareline-app = { path = "../../crates/app" }
+bareline-commands = { path = "../../crates/commands" }
+bareline-diagnostics = { path = "../../crates/diagnostics" }
+bareline-platform = { path = "../../crates/platform" }
+bareline-platform-windows = { path = "../../crates/platform-windows" }
+bareline-renderer = { path = "../../crates/renderer" }
+bareline-settings = { path = "../../crates/settings" }
+bareline-ui = { path = "../../crates/ui" }
+bareline-file-io = { path = "../../crates/file-io" }
+bareline-document = { path = "../../crates/document" }
+bareline-syntax = { path = "../../crates/syntax" }
+
+bareline-distribution = { path = "../../crates/distribution" }
+bareline-editor-surface = { path = "../../crates/editor-surface" }
+
+bareline-extensions-protocol = { path = '../../crates/extensions-protocol' }
+
+
+bareline-diff = { path = "../../crates/diff" }
+
+[target.'cfg(windows)'.dependencies]
+winit.workspace = true
+
+

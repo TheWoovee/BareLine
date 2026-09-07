@@ -1,0 +1,10 @@
+[package]
+name = "bareline-extension-sdk"
+version.workspace = true
+edition.workspace = true
+license = "MIT OR Apache-2.0"
+[dependencies]
+bareline-extensions-protocol = { path = "../extensions-protocol" }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wit-bindgen = { version = "=0.61.1", default-features = false, features = ["macros", "realloc", "std"] }

@@ -1,0 +1,1 @@
+Edit only by removing the horizontal command-icon row between menu bar and Replace in workspace panel. Move remaining content up to close gap, extend existing background at bottom as needed. Preserve all labels, comparison text, eligibility counts, buttons, warnings, footer, title and other controls exactly. Do not redesign anything.

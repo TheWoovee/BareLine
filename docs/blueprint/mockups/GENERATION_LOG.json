@@ -1,0 +1,1075 @@
+[
+  {
+    "id": "compare-final",
+    "file": "bareline-compare-dark-v3.png",
+    "score": 8.5,
+    "notes": "Directional merge, complete menus, aligned four-line sample and unsaved target; all five diff states still require interactive verification.",
+    "tool": "ChatGPT image generation (image_gen.imagegen)",
+    "date": "2026-09-05",
+    "supersedes": "mockups/superseded/bareline-compare-dark-v2.png",
+    "prompt_file": "mockups/superseded/bareline-compare-dark-v1.2-v1.txt",
+    "width": 1672,
+    "height": 941,
+    "path": "mockups/superseded/bareline-compare-dark-v3.png",
+    "status": "superseded"
+  },
+  {
+    "id": "workspace",
+    "file": "bareline-workspace-split-v3.png",
+    "score": 8,
+    "notes": "Correct Rust outline/content and full chrome; second pane needs its own visible config.rs tab and placeholder icon needs production replacement.",
+    "tool": "ChatGPT image generation (image_gen.imagegen)",
+    "date": "2026-09-05",
+    "supersedes": "mockups/superseded/bareline-workspace-split-v2.png",
+    "prompt_file": "mockups/superseded/bareline-workspace-split-v1.2-v1.txt",
+    "width": 1672,
+    "height": 941,
+    "path": "mockups/superseded/bareline-workspace-split-v3.png",
+    "status": "superseded"
+  },
+  {
+    "id": "settings",
+    "file": "bareline-settings-v2.png",
+    "score": 8.5,
+    "notes": "Point units, scope, saved-state feedback and full menu; generated title/tab arrangement and sample footer require implementation normalization.",
+    "tool": "ChatGPT image generation (image_gen.imagegen)",
+    "date": "2026-09-05",
+    "supersedes": "mockups/superseded/bareline-settings-v1.png",
+    "prompt_file": "mockups/superseded/bareline-settings-v1.2-v1.txt",
+    "width": 1672,
+    "height": 941,
+    "path": "mockups/superseded/bareline-settings-v2.png",
+    "status": "superseded"
+  },
+  {
+    "id": "extensions",
+    "file": "bareline-extensions-v2.png",
+    "score": 8.5,
+    "notes": "Runtime removal, per-extension controls and byte-mode labels; generated publisher/version are placeholders and JSON panel chip is omitted.",
+    "tool": "ChatGPT image generation (image_gen.imagegen)",
+    "date": "2026-09-05",
+    "supersedes": "mockups/superseded/bareline-extensions-v1.png",
+    "prompt_file": "mockups/superseded/bareline-extensions-v1.2-v1.txt",
+    "width": 1672,
+    "height": 941,
+    "path": "mockups/superseded/bareline-extensions-v2.png",
+    "status": "superseded"
+  },
+  {
+    "id": "recovery",
+    "file": "bareline-recovery-center-v2.png",
+    "score": 8.5,
+    "notes": "Complete/edits-only/corrupt-tail states and separate recovered copy; general help should be distinguished from selected row status.",
+    "tool": "ChatGPT image generation (image_gen.imagegen)",
+    "date": "2026-09-05",
+    "supersedes": "mockups/superseded/bareline-recovery-center-v1.png",
+    "prompt_file": "mockups/superseded/bareline-recovery-center-v1.2-v1.txt",
+    "width": 1672,
+    "height": 941,
+    "path": "mockups/superseded/bareline-recovery-center-v2.png",
+    "status": "superseded"
+  },
+  {
+    "id": "source-fixed",
+    "file": "bareline-source-changed-v1.png",
+    "score": 8.5,
+    "notes": "Unavailable regions, journal timestamp and partial export; restore explanatory text beside the hatched-area ellipsis in implementation.",
+    "tool": "ChatGPT image generation (image_gen.imagegen)",
+    "date": "2026-09-05",
+    "supersedes": null,
+    "prompt_file": "mockups/superseded/bareline-source-changed-v1.2-v1.txt",
+    "width": 1672,
+    "height": 941,
+    "path": "mockups/superseded/bareline-source-changed-v1.png",
+    "status": "superseded"
+  },
+  {
+    "id": "replace-preview",
+    "file": "bareline-replace-preview-v1.png",
+    "score": 9,
+    "notes": "Changed-since-preview exclusion and explicit eligible-file count; footer/context values remain illustrative.",
+    "tool": "ChatGPT image generation (image_gen.imagegen)",
+    "date": "2026-09-05",
+    "supersedes": null,
+    "prompt_file": "mockups/superseded/bareline-replace-preview-v1.2-v1.txt",
+    "width": 1672,
+    "height": 941,
+    "path": "mockups/superseded/bareline-replace-preview-v1.png",
+    "status": "superseded"
+  },
+  {
+    "id": "compare-merge",
+    "file": "bareline-compare-merge.png",
+    "score": 8.5,
+    "notes": "Directional copy controls and the dirty target make this useful as the merge-affordance reference; use compare-dark for the five semantic states.",
+    "tool": "ChatGPT image generation (image_gen.imagegen)",
+    "date": "2026-09-05",
+    "supersedes": "mockups/superseded/bareline-compare-dark-v2.png",
+    "prompt_file": "mockups/superseded/bareline-compare-dark-v1.2-v1.txt",
+    "width": 1672,
+    "height": 941,
+    "path": "mockups/bareline-compare-merge.png"
+  },
+  {
+    "type": "image",
+    "id": "settings-initial-v1.3",
+    "path": "mockups/superseded/bareline-settings-v1.3-attempt-v1.png",
+    "file": "bareline-settings-v1.3-attempt-v1.png",
+    "width": 1672,
+    "height": 941,
+    "prompt_file": "mockups/prompts/bareline-settings-v1.3.txt",
+    "supersedes": null,
+    "tool": "image_gen.imagegen",
+    "date": "2026-09-05",
+    "status": "superseded refinement attempt"
+  },
+  {
+    "type": "image",
+    "id": "settings-v1.3",
+    "path": "mockups/bareline-settings.png",
+    "file": "bareline-settings.png",
+    "width": 1672,
+    "height": 941,
+    "score": 9,
+    "notes": "Every setting row now shows its key, scope and pt units remain visible, and Reset section plus six neutral footer groups resolve the Settings-specific defects.",
+    "prompt_file": "mockups/prompts/bareline-settings-v1.3.txt",
+    "supersedes": "mockups/superseded/bareline-settings-v2.png",
+    "restored_from": null,
+    "tool": "image_gen.imagegen",
+    "date": "2026-09-05",
+    "status": "concept"
+  },
+  {
+    "type": "image",
+    "id": "workspace-initial-v1.3",
+    "path": "mockups/superseded/bareline-workspace-split-v1.3-attempt-v1.png",
+    "file": "bareline-workspace-split-v1.3-attempt-v1.png",
+    "width": 1586,
+    "height": 992,
+    "prompt_file": "mockups/prompts/bareline-workspace-split-v1.3.txt",
+    "supersedes": null,
+    "tool": "image_gen.imagegen",
+    "date": "2026-09-05",
+    "status": "superseded refinement attempt"
+  },
+  {
+    "type": "image",
+    "id": "workspace-v1.3",
+    "path": "mockups/bareline-workspace-split.png",
+    "file": "bareline-workspace-split.png",
+    "width": 1586,
+    "height": 992,
+    "score": 8.5,
+    "notes": "Both Rust panes now show over 30 numbered lines, their own labels and divider sync control, but generated tree spacing still does not establish an exact 28 px layout.",
+    "prompt_file": "mockups/prompts/bareline-workspace-split-v1.3.txt",
+    "supersedes": "mockups/superseded/bareline-workspace-split-v3.png",
+    "restored_from": null,
+    "tool": "image_gen.imagegen",
+    "date": "2026-09-05",
+    "status": "concept"
+  },
+  {
+    "type": "image",
+    "id": "extensions-v1.3",
+    "path": "mockups/bareline-extensions.png",
+    "file": "bareline-extensions.png",
+    "width": 1586,
+    "height": 992,
+    "score": 9,
+    "notes": "Installed/Discover/Updates/Disabled, the isolation banner, runtime removal and per-extension Permissions are visible with Bareline project publishers and readable capabilities.",
+    "prompt_file": "mockups/prompts/bareline-extensions-v1.3.txt",
+    "supersedes": "mockups/superseded/bareline-extensions-v2.png",
+    "restored_from": null,
+    "tool": "image_gen.imagegen",
+    "date": "2026-09-05",
+    "status": "concept"
+  },
+  {
+    "type": "image",
+    "id": "hero-v1.3",
+    "path": "mockups/logo-brand/bareline-hero.png",
+    "file": "bareline-hero.png",
+    "width": 1672,
+    "height": 941,
+    "score": 9,
+    "notes": "Windows controls, all twelve menus, the standard six tabs and sequential 1-24 lines replace the macOS chrome while leaving only the tagline outside the window.",
+    "prompt_file": "mockups/prompts/bareline-hero-v1.3.txt",
+    "supersedes": "mockups/superseded/bareline-hero-v1.png",
+    "restored_from": null,
+    "tool": "image_gen.imagegen",
+    "date": "2026-09-05",
+    "status": "concept"
+  },
+  {
+    "type": "image",
+    "id": "recovery-v1.3",
+    "path": "mockups/bareline-recovery-center.png",
+    "file": "bareline-recovery-center.png",
+    "width": 1672,
+    "height": 941,
+    "score": 8.5,
+    "notes": "The title is Bareline and the unrelated greeting tab is replaced with notes.txt while Complete, Edits only and Corrupt tail actions remain legible.",
+    "prompt_file": "mockups/prompts/bareline-recovery-center-v1.3.txt",
+    "supersedes": "mockups/superseded/bareline-recovery-center-v2.png",
+    "restored_from": null,
+    "tool": "image_gen.imagegen",
+    "date": "2026-09-05",
+    "status": "concept"
+  },
+  {
+    "type": "image",
+    "id": "source-v1.3",
+    "path": "mockups/bareline-source-changed.png",
+    "file": "bareline-source-changed.png",
+    "width": 1672,
+    "height": 941,
+    "score": 8.5,
+    "notes": "The command-icon row is removed while missing-region hatching, recovery protection time and export-gap messaging remain intact; title normalization is outside this requested edit.",
+    "prompt_file": "mockups/prompts/bareline-source-changed-v1.3.txt",
+    "supersedes": "mockups/superseded/bareline-source-changed-v1.png",
+    "restored_from": null,
+    "tool": "image_gen.imagegen",
+    "date": "2026-09-05",
+    "status": "concept"
+  },
+  {
+    "type": "image",
+    "id": "replace-v1.3",
+    "path": "mockups/bareline-replace-preview.png",
+    "file": "bareline-replace-preview.png",
+    "width": 1672,
+    "height": 941,
+    "score": 9,
+    "notes": "The command-icon row is removed while changed-since-preview exclusion and Apply to 2 unchanged files remain visible; the existing title is retained by the edit-only constraint.",
+    "prompt_file": "mockups/prompts/bareline-replace-preview-v1.3.txt",
+    "supersedes": "mockups/superseded/bareline-replace-preview-v1.png",
+    "restored_from": null,
+    "tool": "image_gen.imagegen",
+    "date": "2026-09-05",
+    "status": "concept"
+  },
+  {
+    "type": "image",
+    "id": "compare-initial-v1.3",
+    "path": "mockups/superseded/bareline-compare-dark-v1.3-attempt-v1.png",
+    "file": "bareline-compare-dark-v1.3-attempt-v1.png",
+    "width": 1672,
+    "height": 941,
+    "prompt_file": "mockups/prompts/bareline-compare-dark-v1.3.txt",
+    "supersedes": null,
+    "tool": "image_gen.imagegen",
+    "date": "2026-09-05",
+    "status": "superseded refinement attempt"
+  },
+  {
+    "type": "image",
+    "id": "compare-v1.3",
+    "path": "mockups/bareline-compare-dark.png",
+    "file": "bareline-compare-dark.png",
+    "width": 1672,
+    "height": 941,
+    "score": 8.5,
+    "notes": "The restored reference shows all five diff states and the complete menu; compare counts and alignment remain illustrative rather than verified fixture evidence.",
+    "prompt_file": "mockups/prompts/bareline-compare-dark-v1.3.txt",
+    "supersedes": "mockups/superseded/bareline-compare-dark-v3.png",
+    "restored_from": "mockups/superseded/bareline-compare-dark-v2.png",
+    "tool": "image_gen.imagegen",
+    "date": "2026-09-05",
+    "status": "concept"
+  },
+  {
+    "type": "document",
+    "path": "PRs/PR-001_WORKSPACE_SCAFFOLD_COMMAND_CORE_AND_WINDOWS_SHELL.md",
+    "supersedes": "mockups/superseded/PR-001_WORKSPACE_SCAFFOLD_COMMAND_CORE_AND_WINDOWS_SHELL-v1.md",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement"
+  },
+  {
+    "type": "document",
+    "path": "PRs/PR-002_PAGED_DOCUMENT_ENGINE_AND_CORE_UNDO.md",
+    "supersedes": "mockups/superseded/PR-002_PAGED_DOCUMENT_ENGINE_AND_CORE_UNDO-v1.md",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement"
+  },
+  {
+    "type": "document",
+    "path": "PRs/PR-003_VIRTUALIZED_EDITOR_SURFACE_INPUT_AND_SELECTION_MODEL.md",
+    "supersedes": "mockups/superseded/PR-003_VIRTUALIZED_EDITOR_SURFACE_INPUT_AND_SELECTION_MODEL-v1.md",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement"
+  },
+  {
+    "type": "document",
+    "path": "PRs/PR-004_FILE_LIFECYCLE_TABS_SESSIONS_AND_CRASH_RECOVERY.md",
+    "supersedes": "mockups/superseded/PR-004_FILE_LIFECYCLE_TABS_SESSIONS_AND_CRASH_RECOVERY-v1.md",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement"
+  },
+  {
+    "type": "document",
+    "path": "PRs/PR-005_SEARCH_REPLACE_AND_RESULTS_ENGINE.md",
+    "supersedes": "mockups/superseded/PR-005_SEARCH_REPLACE_AND_RESULTS_ENGINE-v1.md",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement"
+  },
+  {
+    "type": "document",
+    "path": "PRs/PR-006_POWER_EDITING_MULTI-CURSOR_COLUMN_LINES_AND_BOOKMARKS.md",
+    "supersedes": "mockups/superseded/PR-006_POWER_EDITING_MULTI-CURSOR_COLUMN_LINES_AND_BOOKMARKS-v1.md",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement"
+  },
+  {
+    "type": "document",
+    "path": "PRs/PR-007_ENCODING_EOL_AND_UNICODE_FIDELITY.md",
+    "supersedes": "mockups/superseded/PR-007_ENCODING_EOL_AND_UNICODE_FIDELITY-v1.md",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement"
+  },
+  {
+    "type": "document",
+    "path": "PRs/PR-008_LANGUAGE_CATALOG_SYNTAX_HIGHLIGHTING_FOLDING_AND_UDL.md",
+    "supersedes": "mockups/superseded/PR-008_LANGUAGE_CATALOG_SYNTAX_HIGHLIGHTING_FOLDING_AND_UDL-v1.md",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement"
+  },
+  {
+    "type": "document",
+    "path": "PRs/PR-009_WORKSPACE_EXPLORER_DOCUMENT_LIST_OUTLINE_AND_DOCUMENT_MAP.md",
+    "supersedes": "mockups/superseded/PR-009_WORKSPACE_EXPLORER_DOCUMENT_LIST_OUTLINE_AND_DOCUMENT_MAP-v1.md",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement"
+  },
+  {
+    "type": "document",
+    "path": "PRs/PR-010_SPLIT_VIEWS_TAB_MANAGEMENT_AND_SYNCHRONIZED_SCROLLING.md",
+    "supersedes": "mockups/superseded/PR-010_SPLIT_VIEWS_TAB_MANAGEMENT_AND_SYNCHRONIZED_SCROLLING-v1.md",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement"
+  },
+  {
+    "type": "document",
+    "path": "PRs/PR-011_MENUS_COMMAND_PALETTE_SHORTCUTS_TOOLBAR_AND_CONTEXT_ACTIONS.md",
+    "supersedes": "mockups/superseded/PR-011_MENUS_COMMAND_PALETTE_SHORTCUTS_TOOLBAR_AND_CONTEXT_ACTIONS-v1.md",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement"
+  },
+  {
+    "type": "document",
+    "path": "PRs/PR-012_SETTINGS_THEMES_LOCALIZATION_DPI_AND_ACCESSIBILITY.md",
+    "supersedes": "mockups/superseded/PR-012_SETTINGS_THEMES_LOCALIZATION_DPI_AND_ACCESSIBILITY-v1.md",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement"
+  },
+  {
+    "type": "document",
+    "path": "PRs/PR-013_COMPLETION_SMART_TYPING_AND_LANGUAGE-AWARE_EDITING.md",
+    "supersedes": "mockups/superseded/PR-013_COMPLETION_SMART_TYPING_AND_LANGUAGE-AWARE_EDITING-v1.md",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement"
+  },
+  {
+    "type": "document",
+    "path": "PRs/PR-014_MACROS_EXTERNAL_COMMANDS_AND_OUTPUT_PANEL.md",
+    "supersedes": "mockups/superseded/PR-014_MACROS_EXTERNAL_COMMANDS_AND_OUTPUT_PANEL-v1.md",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement"
+  },
+  {
+    "type": "document",
+    "path": "PRs/PR-015_FILE_WATCHING_MONITORING_TAIL_AND_SAFE_REMOTE_PATHS.md",
+    "supersedes": "mockups/superseded/PR-015_FILE_WATCHING_MONITORING_TAIL_AND_SAFE_REMOTE_PATHS-v1.md",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement"
+  },
+  {
+    "type": "document",
+    "path": "PRs/PR-016_EXTENSION_PLATFORM_AND_ISOLATED_PLUGIN_MANAGER.md",
+    "supersedes": "mockups/superseded/PR-016_EXTENSION_PLATFORM_AND_ISOLATED_PLUGIN_MANAGER-v1.md",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement"
+  },
+  {
+    "type": "document",
+    "path": "PRs/PR-017_BUILT-IN_UTILITIES_COMPARE_FOUNDATION_EXPORT_AND_PRINT.md",
+    "supersedes": "mockups/superseded/PR-017_BUILT-IN_UTILITIES_COMPARE_FOUNDATION_EXPORT_AND_PRINT-v1.md",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement"
+  },
+  {
+    "type": "document",
+    "path": "PRs/PR-018_WINDOWS_INTEGRATION_CLI_INSTALLER_PORTABLE_MODE_TRAY_AND_UPDATER.md",
+    "supersedes": "mockups/superseded/PR-018_WINDOWS_INTEGRATION_CLI_INSTALLER_PORTABLE_MODE_TRAY_AND_UPDATER-v1.md",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement"
+  },
+  {
+    "type": "document",
+    "path": "PRs/PR-019_HUGE-FILE_OPTIMIZATION_AND_PERFORMANCE_BENCHMARK_SUITE.md",
+    "supersedes": "mockups/superseded/PR-019_HUGE-FILE_OPTIMIZATION_AND_PERFORMANCE_BENCHMARK_SUITE-v1.md",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement"
+  },
+  {
+    "type": "document",
+    "path": "PRs/PR-020_SECURITY_RECOVERY_AND_UPDATE_HARDENING.md",
+    "supersedes": "mockups/superseded/PR-020_SECURITY_RECOVERY_AND_UPDATE_HARDENING-v1.md",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement"
+  },
+  {
+    "type": "document",
+    "path": "PRs/PR-021_WINDOWS_PRODUCT_POLISH_PARITY_MATRIX_AND_RELEASE_QA.md",
+    "supersedes": "mockups/superseded/PR-021_WINDOWS_PRODUCT_POLISH_PARITY_MATRIX_AND_RELEASE_QA-v1.md",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement"
+  },
+  {
+    "type": "document",
+    "path": "PRs/PR-022_CROSS-PLATFORM_READINESS_AND_LINUX_MACOS_ADAPTER_SKELETONS.md",
+    "supersedes": "mockups/superseded/PR-022_CROSS-PLATFORM_READINESS_AND_LINUX_MACOS_ADAPTER_SKELETONS-v1.md",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement"
+  },
+  {
+    "type": "document",
+    "path": "PRs/PR-023_UI_PRIMITIVES_AND_CONTROLS.md",
+    "supersedes": "mockups/superseded/PR-023_UI_PRIMITIVES_AND_CONTROLS-v1.md",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement"
+  },
+  {
+    "type": "document",
+    "path": "PRs/PR-024_ACCESSIBILITY_AND_UI_AUTOMATION.md",
+    "supersedes": "mockups/superseded/PR-024_ACCESSIBILITY_AND_UI_AUTOMATION-v1.md",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement"
+  },
+  {
+    "type": "document",
+    "path": "PRs/PR-025_DIFF_CORE_ENGINE.md",
+    "supersedes": "mockups/superseded/PR-025_DIFF_CORE_ENGINE-v1.md",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement"
+  },
+  {
+    "type": "document",
+    "path": "PRs/PR-026_REPLACE_IN_FILES_AND_WORKSPACE_REPLACE.md",
+    "supersedes": "mockups/superseded/PR-026_REPLACE_IN_FILES_AND_WORKSPACE_REPLACE-v1.md",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement"
+  },
+  {
+    "type": "document",
+    "path": "PRs/PR-027_FIRST-PARTY_EXTENSIONS_JSON_XML_AND_HEX.md",
+    "supersedes": "mockups/superseded/PR-027_FIRST-PARTY_EXTENSIONS_JSON_XML_AND_HEX-v1.md",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement"
+  },
+  {
+    "type": "document",
+    "path": "00_RESEARCH_BASELINE.md",
+    "supersedes": "mockups/superseded/00_RESEARCH_BASELINE-v1.md",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement"
+  },
+  {
+    "type": "document",
+    "path": "02_IMPLEMENTATION.md",
+    "supersedes": "mockups/superseded/02_IMPLEMENTATION-v1.md",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement"
+  },
+  {
+    "type": "document",
+    "path": "01_REQUIREMENTS.md",
+    "supersedes": "mockups/superseded/01_REQUIREMENTS-v1.md",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement"
+  },
+  {
+    "type": "document",
+    "path": "09_FOUNDATION_CONTRACTS.md",
+    "supersedes": "mockups/superseded/09_FOUNDATION_CONTRACTS-v1.md",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement"
+  },
+  {
+    "type": "document",
+    "path": "11_UI_INTERACTION_SPEC.md",
+    "supersedes": "mockups/superseded/11_UI_INTERACTION_SPEC-v1.md",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement"
+  },
+  {
+    "type": "document",
+    "path": "07_DECISION_LOG.md",
+    "supersedes": "mockups/superseded/07_DECISION_LOG-v1.md",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement"
+  },
+  {
+    "type": "document",
+    "path": "08_IMAGEN_PROMPTS.md",
+    "supersedes": "mockups/superseded/08_IMAGEN_PROMPTS-v1.md",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement"
+  },
+  {
+    "type": "document",
+    "path": "10_ACCEPTANCE_AND_TRACEABILITY.md",
+    "supersedes": "mockups/superseded/10_ACCEPTANCE_AND_TRACEABILITY-v1.md",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement"
+  },
+  {
+    "type": "document",
+    "path": "README.md",
+    "supersedes": "mockups/superseded/README-v1.md",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement"
+  },
+  {
+    "type": "document",
+    "path": "scripts/revision_cases.json",
+    "supersedes": "mockups/superseded/revision_cases-v1.json",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement"
+  },
+  {
+    "type": "document",
+    "path": "mockups/superseded/bareline-compare-dark-v1.2-v1.txt",
+    "supersedes": "mockups/superseded/bareline-compare-dark-v1.2-v1.txt",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement",
+    "original_path": "mockups/prompts/bareline-compare-dark-v1.2.txt"
+  },
+  {
+    "type": "document",
+    "path": "mockups/superseded/bareline-extensions-v1.2-v1.txt",
+    "supersedes": "mockups/superseded/bareline-extensions-v1.2-v1.txt",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement",
+    "original_path": "mockups/prompts/bareline-extensions-v1.2.txt"
+  },
+  {
+    "type": "document",
+    "path": "mockups/superseded/bareline-recovery-center-v1.2-v1.txt",
+    "supersedes": "mockups/superseded/bareline-recovery-center-v1.2-v1.txt",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement",
+    "original_path": "mockups/prompts/bareline-recovery-center-v1.2.txt"
+  },
+  {
+    "type": "document",
+    "path": "mockups/superseded/bareline-replace-preview-v1.2-v1.txt",
+    "supersedes": "mockups/superseded/bareline-replace-preview-v1.2-v1.txt",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement",
+    "original_path": "mockups/prompts/bareline-replace-preview-v1.2.txt"
+  },
+  {
+    "type": "document",
+    "path": "mockups/superseded/bareline-settings-v1.2-v1.txt",
+    "supersedes": "mockups/superseded/bareline-settings-v1.2-v1.txt",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement",
+    "original_path": "mockups/prompts/bareline-settings-v1.2.txt"
+  },
+  {
+    "type": "document",
+    "path": "mockups/superseded/bareline-source-changed-v1.2-v1.txt",
+    "supersedes": "mockups/superseded/bareline-source-changed-v1.2-v1.txt",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement",
+    "original_path": "mockups/prompts/bareline-source-changed-v1.2.txt"
+  },
+  {
+    "type": "document",
+    "path": "mockups/superseded/bareline-workspace-split-v1.2-v1.txt",
+    "supersedes": "mockups/superseded/bareline-workspace-split-v1.2-v1.txt",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement",
+    "original_path": "mockups/prompts/bareline-workspace-split-v1.2.txt"
+  },
+  {
+    "type": "document",
+    "path": "REVIEW_V1.2_2026-09-05.md",
+    "supersedes": "mockups/superseded/REVIEW_V1.2_2026-09-05-v1.md",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement"
+  },
+  {
+    "type": "document",
+    "path": "CODEX_FIX_BRIEF_v1.3.md",
+    "supersedes": "mockups/superseded/CODEX_FIX_BRIEF_v1.3-v1.md",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement"
+  },
+  {
+    "type": "document",
+    "path": "00_BRAND_AND_LOGO.md",
+    "supersedes": "mockups/superseded/00_BRAND_AND_LOGO-v1.md",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement"
+  },
+  {
+    "type": "supersession",
+    "path": "mockups/bareline-settings.png",
+    "supersedes": "mockups/superseded/bareline-settings-v2.png",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement",
+    "width": 1672,
+    "height": 941
+  },
+  {
+    "type": "supersession",
+    "path": "mockups/bareline-workspace-split.png",
+    "supersedes": "mockups/superseded/bareline-workspace-split-v3.png",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement",
+    "width": 1586,
+    "height": 992
+  },
+  {
+    "type": "supersession",
+    "path": "mockups/bareline-extensions.png",
+    "supersedes": "mockups/superseded/bareline-extensions-v2.png",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement",
+    "width": 1586,
+    "height": 992
+  },
+  {
+    "type": "supersession",
+    "path": "mockups/logo-brand/bareline-hero.png",
+    "supersedes": "mockups/superseded/bareline-hero-v1.png",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement",
+    "width": 1672,
+    "height": 941
+  },
+  {
+    "type": "supersession",
+    "path": "mockups/bareline-recovery-center.png",
+    "supersedes": "mockups/superseded/bareline-recovery-center-v2.png",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement",
+    "width": 1672,
+    "height": 941
+  },
+  {
+    "type": "supersession",
+    "path": "mockups/bareline-source-changed.png",
+    "supersedes": "mockups/superseded/bareline-source-changed-v1.png",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement",
+    "width": 1672,
+    "height": 941
+  },
+  {
+    "type": "supersession",
+    "path": "mockups/bareline-replace-preview.png",
+    "supersedes": "mockups/superseded/bareline-replace-preview-v1.png",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement",
+    "width": 1672,
+    "height": 941
+  },
+  {
+    "type": "supersession",
+    "path": "mockups/bareline-compare-dark.png",
+    "supersedes": "mockups/superseded/bareline-compare-dark-v3.png",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement",
+    "width": 1672,
+    "height": 941
+  },
+  {
+    "type": "document",
+    "path": "mockups/GENERATION_LOG.json",
+    "supersedes": "mockups/superseded/GENERATION_LOG-v1.json",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement"
+  },
+  {
+    "type": "image",
+    "id": "vector-icon-16",
+    "path": "mockups/logo-brand/bareline-icon-16.png",
+    "file": "bareline-icon-16.png",
+    "width": 16,
+    "height": 16,
+    "date": "2026-09-05",
+    "tool": "resvg-py 0.5.0; hand-authored SVG",
+    "prompt_file": "scripts/render_icons.py",
+    "source_file": "mockups/logo-brand/bareline-mark-16.svg",
+    "supersedes": null,
+    "status": "draft; human 16 px review pending",
+    "score": 8,
+    "notes": "The 16 px plain b retains an open bowl without fold, notch or text lines, but native-size human approval is still pending."
+  },
+  {
+    "type": "image",
+    "id": "vector-icon-20",
+    "path": "mockups/logo-brand/bareline-icon-20.png",
+    "file": "bareline-icon-20.png",
+    "width": 20,
+    "height": 20,
+    "date": "2026-09-05",
+    "tool": "resvg-py 0.5.0; hand-authored SVG",
+    "prompt_file": "scripts/render_icons.py",
+    "source_file": "mockups/logo-brand/bareline-mark-16.svg",
+    "supersedes": null,
+    "status": "draft; human 16 px review pending",
+    "score": 8,
+    "notes": "The 20 px plain b keeps the simplified silhouette for fractional Windows scaling without adding crowded interior details."
+  },
+  {
+    "type": "document",
+    "path": "mockups/GENERATION_LOG.json",
+    "supersedes": "mockups/superseded/GENERATION_LOG-v2.json",
+    "date": "2026-09-05",
+    "tool": "render_icons.py"
+  },
+  {
+    "type": "image",
+    "id": "vector-icon-24-bareline-icon-24-v1",
+    "path": "mockups/superseded/bareline-icon-24-v1.png",
+    "file": "bareline-icon-24.png",
+    "width": 24,
+    "height": 24,
+    "date": "2026-09-05",
+    "tool": "resvg-py 0.5.0; hand-authored SVG",
+    "prompt_file": "scripts/render_icons.py",
+    "source_file": "mockups/logo-brand/bareline-mark-dark.svg",
+    "supersedes": null,
+    "status": "superseded"
+  },
+  {
+    "type": "image",
+    "id": "vector-icon-24",
+    "path": "mockups/logo-brand/bareline-icon-24.png",
+    "file": "bareline-icon-24.png",
+    "width": 24,
+    "height": 24,
+    "date": "2026-09-05",
+    "tool": "resvg-py 0.5.0; hand-authored SVG",
+    "prompt_file": "scripts/render_icons.py",
+    "source_file": "mockups/logo-brand/bareline-mark-dark.svg",
+    "supersedes": "mockups/superseded/bareline-icon-24-v1.png",
+    "status": "draft; human 16 px review pending",
+    "score": 7.5,
+    "notes": "The 24 px mark includes the two interior lines and accent cut, although the small fold remains visually dense."
+  },
+  {
+    "type": "image",
+    "id": "vector-icon-32-bareline-icon-32-v1",
+    "path": "mockups/superseded/bareline-icon-32-v1.png",
+    "file": "bareline-icon-32.png",
+    "width": 32,
+    "height": 32,
+    "date": "2026-09-05",
+    "tool": "resvg-py 0.5.0; hand-authored SVG",
+    "prompt_file": "scripts/render_icons.py",
+    "source_file": "mockups/logo-brand/bareline-mark-dark.svg",
+    "supersedes": null,
+    "status": "superseded"
+  },
+  {
+    "type": "image",
+    "id": "vector-icon-32",
+    "path": "mockups/logo-brand/bareline-icon-32.png",
+    "file": "bareline-icon-32.png",
+    "width": 32,
+    "height": 32,
+    "date": "2026-09-05",
+    "tool": "resvg-py 0.5.0; hand-authored SVG",
+    "prompt_file": "scripts/render_icons.py",
+    "source_file": "mockups/logo-brand/bareline-mark-dark.svg",
+    "supersedes": "mockups/superseded/bareline-icon-32-v1.png",
+    "status": "draft; human 16 px review pending",
+    "score": 8,
+    "notes": "The 32 px raster separates the two text bars while preserving the full-height stem and diagonal accent."
+  },
+  {
+    "type": "image",
+    "id": "vector-icon-40-bareline-icon-40-v1",
+    "path": "mockups/superseded/bareline-icon-40-v1.png",
+    "file": "bareline-icon-40.png",
+    "width": 40,
+    "height": 40,
+    "date": "2026-09-05",
+    "tool": "resvg-py 0.5.0; hand-authored SVG",
+    "prompt_file": "scripts/render_icons.py",
+    "source_file": "mockups/logo-brand/bareline-mark-dark.svg",
+    "supersedes": null,
+    "status": "superseded"
+  },
+  {
+    "type": "image",
+    "id": "vector-icon-40",
+    "path": "mockups/logo-brand/bareline-icon-40.png",
+    "file": "bareline-icon-40.png",
+    "width": 40,
+    "height": 40,
+    "date": "2026-09-05",
+    "tool": "resvg-py 0.5.0; hand-authored SVG",
+    "prompt_file": "scripts/render_icons.py",
+    "source_file": "mockups/logo-brand/bareline-mark-dark.svg",
+    "supersedes": "mockups/superseded/bareline-icon-40-v1.png",
+    "status": "draft; human 16 px review pending",
+    "score": 8,
+    "notes": "The 40 px raster preserves the bowl opening and both text bars at the 250% small-icon scale."
+  },
+  {
+    "type": "image",
+    "id": "vector-icon-48-bareline-icon-48-v1",
+    "path": "mockups/superseded/bareline-icon-48-v1.png",
+    "file": "bareline-icon-48.png",
+    "width": 48,
+    "height": 48,
+    "date": "2026-09-05",
+    "tool": "resvg-py 0.5.0; hand-authored SVG",
+    "prompt_file": "scripts/render_icons.py",
+    "source_file": "mockups/logo-brand/bareline-mark-dark.svg",
+    "supersedes": null,
+    "status": "superseded"
+  },
+  {
+    "type": "image",
+    "id": "vector-icon-48",
+    "path": "mockups/logo-brand/bareline-icon-48.png",
+    "file": "bareline-icon-48.png",
+    "width": 48,
+    "height": 48,
+    "date": "2026-09-05",
+    "tool": "resvg-py 0.5.0; hand-authored SVG",
+    "prompt_file": "scripts/render_icons.py",
+    "source_file": "mockups/logo-brand/bareline-mark-dark.svg",
+    "supersedes": "mockups/superseded/bareline-icon-48-v1.png",
+    "status": "draft; human 16 px review pending",
+    "score": 8.5,
+    "notes": "The 48 px raster shows the fold and cyan corner distinctly while retaining the plain left stem."
+  },
+  {
+    "type": "image",
+    "id": "vector-icon-64-bareline-icon-64-v1",
+    "path": "mockups/superseded/bareline-icon-64-v1.png",
+    "file": "bareline-icon-64.png",
+    "width": 64,
+    "height": 64,
+    "date": "2026-09-05",
+    "tool": "resvg-py 0.5.0; hand-authored SVG",
+    "prompt_file": "scripts/render_icons.py",
+    "source_file": "mockups/logo-brand/bareline-mark-dark.svg",
+    "supersedes": null,
+    "status": "superseded"
+  },
+  {
+    "type": "image",
+    "id": "vector-icon-64",
+    "path": "mockups/logo-brand/bareline-icon-64.png",
+    "file": "bareline-icon-64.png",
+    "width": 64,
+    "height": 64,
+    "date": "2026-09-05",
+    "tool": "resvg-py 0.5.0; hand-authored SVG",
+    "prompt_file": "scripts/render_icons.py",
+    "source_file": "mockups/logo-brand/bareline-mark-dark.svg",
+    "supersedes": "mockups/superseded/bareline-icon-64-v1.png",
+    "status": "draft; human 16 px review pending",
+    "score": 8.5,
+    "notes": "The 64 px raster makes both interior lines readable with clean rounded tile edges."
+  },
+  {
+    "type": "image",
+    "id": "vector-icon-128-bareline-icon-128-v1",
+    "path": "mockups/superseded/bareline-icon-128-v1.png",
+    "file": "bareline-icon-128.png",
+    "width": 128,
+    "height": 128,
+    "date": "2026-09-05",
+    "tool": "resvg-py 0.5.0; hand-authored SVG",
+    "prompt_file": "scripts/render_icons.py",
+    "source_file": "mockups/logo-brand/bareline-mark-dark.svg",
+    "supersedes": null,
+    "status": "superseded"
+  },
+  {
+    "type": "image",
+    "id": "vector-icon-128",
+    "path": "mockups/logo-brand/bareline-icon-128.png",
+    "file": "bareline-icon-128.png",
+    "width": 128,
+    "height": 128,
+    "date": "2026-09-05",
+    "tool": "resvg-py 0.5.0; hand-authored SVG",
+    "prompt_file": "scripts/render_icons.py",
+    "source_file": "mockups/logo-brand/bareline-mark-dark.svg",
+    "supersedes": "mockups/superseded/bareline-icon-128-v1.png",
+    "status": "draft; human 16 px review pending",
+    "score": 9,
+    "notes": "The 128 px raster clearly separates the folded corner, two text lines and accent cut on the dark tile."
+  },
+  {
+    "type": "image",
+    "id": "vector-icon-256-bareline-icon-256-v1",
+    "path": "mockups/superseded/bareline-icon-256-v1.png",
+    "file": "bareline-icon-256.png",
+    "width": 256,
+    "height": 256,
+    "date": "2026-09-05",
+    "tool": "resvg-py 0.5.0; hand-authored SVG",
+    "prompt_file": "scripts/render_icons.py",
+    "source_file": "mockups/logo-brand/bareline-mark-dark.svg",
+    "supersedes": null,
+    "status": "superseded"
+  },
+  {
+    "type": "image",
+    "id": "vector-icon-256",
+    "path": "mockups/logo-brand/bareline-icon-256.png",
+    "file": "bareline-icon-256.png",
+    "width": 256,
+    "height": 256,
+    "date": "2026-09-05",
+    "tool": "resvg-py 0.5.0; hand-authored SVG",
+    "prompt_file": "scripts/render_icons.py",
+    "source_file": "mockups/logo-brand/bareline-mark-dark.svg",
+    "supersedes": "mockups/superseded/bareline-icon-256-v1.png",
+    "status": "draft; human 16 px review pending",
+    "score": 9,
+    "notes": "The 256 px raster exposes the adopted two-line construction cleanly enough to inspect the stroke and corner geometry."
+  },
+  {
+    "type": "supersession",
+    "path": "mockups/logo-brand/bareline.ico",
+    "supersedes": "mockups/superseded/bareline-v1.ico",
+    "date": "2026-09-05",
+    "tool": "Pillow 12.3.0; ICO directory assembly"
+  },
+  {
+    "type": "document",
+    "path": "mockups/GENERATION_LOG.json",
+    "supersedes": "mockups/superseded/GENERATION_LOG-v3.json",
+    "date": "2026-09-05",
+    "tool": "render_icons.py"
+  },
+  {
+    "type": "document",
+    "path": "scripts/validate_blueprint.py",
+    "supersedes": "mockups/superseded/validate_blueprint-v1.py",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement"
+  },
+  {
+    "type": "document",
+    "path": "MANIFEST.json",
+    "supersedes": "mockups/superseded/MANIFEST-v1.json",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement"
+  },
+  {
+    "type": "supersession",
+    "path": "mockups/logo-brand/bareline-mark.svg",
+    "supersedes": "mockups/superseded/bareline-mark-v1.svg",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement"
+  },
+  {
+    "type": "supersession",
+    "path": "mockups/logo-brand/bareline-mark-light.svg",
+    "supersedes": "mockups/superseded/bareline-mark-light-v1.svg",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement"
+  },
+  {
+    "type": "supersession",
+    "path": "mockups/logo-brand/bareline-mark-dark.svg",
+    "supersedes": "mockups/superseded/bareline-mark-dark-v1.svg",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement"
+  },
+  {
+    "type": "document",
+    "path": "mockups/superseded/bareline-compare-dark-v1.2-v1.txt",
+    "supersedes": "mockups/superseded/bareline-compare-dark-v1.2-v1.txt",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement",
+    "original_path": "mockups/prompts/bareline-compare-dark-v1.2.txt"
+  },
+  {
+    "type": "document",
+    "path": "mockups/superseded/bareline-extensions-v1.2-v1.txt",
+    "supersedes": "mockups/superseded/bareline-extensions-v1.2-v1.txt",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement",
+    "original_path": "mockups/prompts/bareline-extensions-v1.2.txt"
+  },
+  {
+    "type": "document",
+    "path": "mockups/superseded/bareline-recovery-center-v1.2-v1.txt",
+    "supersedes": "mockups/superseded/bareline-recovery-center-v1.2-v1.txt",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement",
+    "original_path": "mockups/prompts/bareline-recovery-center-v1.2.txt"
+  },
+  {
+    "type": "document",
+    "path": "mockups/superseded/bareline-replace-preview-v1.2-v1.txt",
+    "supersedes": "mockups/superseded/bareline-replace-preview-v1.2-v1.txt",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement",
+    "original_path": "mockups/prompts/bareline-replace-preview-v1.2.txt"
+  },
+  {
+    "type": "document",
+    "path": "mockups/superseded/bareline-settings-v1.2-v1.txt",
+    "supersedes": "mockups/superseded/bareline-settings-v1.2-v1.txt",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement",
+    "original_path": "mockups/prompts/bareline-settings-v1.2.txt"
+  },
+  {
+    "type": "document",
+    "path": "mockups/superseded/bareline-source-changed-v1.2-v1.txt",
+    "supersedes": "mockups/superseded/bareline-source-changed-v1.2-v1.txt",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement",
+    "original_path": "mockups/prompts/bareline-source-changed-v1.2.txt"
+  },
+  {
+    "type": "document",
+    "path": "mockups/superseded/bareline-workspace-split-v1.2-v1.txt",
+    "supersedes": "mockups/superseded/bareline-workspace-split-v1.2-v1.txt",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement",
+    "original_path": "mockups/prompts/bareline-workspace-split-v1.2.txt"
+  },
+  {
+    "type": "document",
+    "path": "mockups/README.md",
+    "supersedes": "mockups/superseded/README-v2.md",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement"
+  },
+  {
+    "type": "document",
+    "path": "mockups/NOTES.md",
+    "supersedes": "mockups/superseded/NOTES-v1.md",
+    "date": "2026-09-05",
+    "tool": "Python pathlib/shutil; preserve original before replacement"
+  },
+  {
+    "type": "image",
+    "id": "workspace-density-rejected",
+    "path": "mockups/superseded/bareline-workspace-density-attempt-v1.png",
+    "width": 1586,
+    "height": 992,
+    "tool": "image_gen.imagegen",
+    "prompt_file": "mockups/prompts/bareline-workspace-density-v1.3.txt",
+    "supersedes": null,
+    "date": "2026-09-05",
+    "status": "superseded attempt; requested 28 px row centers were not achieved"
+  }
+]

@@ -1,0 +1,18 @@
+[package]
+name = "bareline-editor-surface"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+bareline-document = { path = "../document" }
+bareline-file-io = { path = "../file-io" }
+bareline-platform = { path = "../platform" }
+bareline-renderer = { path = "../renderer" }
+bareline-ui = { path = "../ui" }
+bareline-syntax = { path = "../syntax" }
+bareline-commands = { path = "../commands" }
+unicode-segmentation = "=1.13.3"
+
+[dev-dependencies]
+bareline-renderer-recording = { path = "../renderer-recording" }

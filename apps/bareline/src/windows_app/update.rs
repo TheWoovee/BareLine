@@ -1,0 +1,254 @@
+// SPDX-License-Identifier: MPL-2.0
+//! Explicit native update controller. No check is scheduled automatically.
+use bareline_platform_windows::update as native;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+    mpsc::{self, Receiver},
+};
+
+#[derive(Default)]
+pub(super) struct UpdateRuntime {
+    worker: Option<Receiver<Result<(), String>>>,
+    worker_marks_ready: bool,
+    cancel: Arc<AtomicBool>,
+    pub status: String,
+    pub ready: bool,
+    apply_on_exit: bool,
+    acknowledged: bool,
+}
+struct Config {
+    key: &'static str,
+    publisher: &'static str,
+    certificate: [u8; 32],
+    channel: &'static str,
+    floor: u64,
+    host: &'static str,
+    manifest: &'static str,
+    signature: &'static str,
+    artifact: &'static str,
+}
+impl Config {
+    fn compiled() -> Result<Self, String> {
+        let missing =
+            || "Updates are unavailable in this build: release configuration is missing".to_owned();
+        let publisher = option_env!("BARELINE_PUBLISHER_CERT_SHA256").ok_or_else(missing)?;
+        if publisher.len() != 64 || !publisher.is_ascii() {
+            return Err("Invalid publisher configuration".into());
+        }
+        let mut certificate = [0; 32];
+        for (i, byte) in certificate.iter_mut().enumerate() {
+            *byte = u8::from_str_radix(&publisher[i * 2..i * 2 + 2], 16)
+                .map_err(|_| "Invalid publisher configuration")?;
+        }
+        Ok(Self {
+            key: option_env!("BARELINE_RELEASE_PUBLIC_KEY").ok_or_else(missing)?,
+            publisher,
+            certificate,
+            channel: option_env!("BARELINE_RELEASE_CHANNEL").ok_or_else(missing)?,
+            floor: option_env!("BARELINE_METADATA_FLOOR")
+                .ok_or_else(missing)?
+                .parse()
+                .map_err(|_| "Invalid metadata floor")?,
+            host: option_env!("BARELINE_UPDATE_HOST").ok_or_else(missing)?,
+            manifest: option_env!("BARELINE_UPDATE_MANIFEST_PATH").ok_or_else(missing)?,
+            signature: option_env!("BARELINE_UPDATE_SIGNATURE_PATH").ok_or_else(missing)?,
+            artifact: option_env!("BARELINE_UPDATE_ARTIFACT_PATH").ok_or_else(missing)?,
+        })
+    }
+}
+fn installation() -> Result<std::path::PathBuf, String> {
+    let executable = std::env::current_exe().map_err(|e| e.to_string())?;
+    let root = executable
+        .parent()
+        .ok_or("Missing installation directory")?
+        .to_owned();
+    native::validate_install_root(&root).map_err(|e| e.to_string())?;
+    Ok(root)
+}
+impl UpdateRuntime {
+    pub fn check(&mut self, notify: Arc<dyn Fn() + Send + Sync>) {
+        if self.worker.is_some() || self.ready {
+            return;
+        }
+        let config = match Config::compiled() {
+            Ok(c) => c,
+            Err(e) => {
+                self.status = e;
+                return;
+            }
+        };
+        self.cancel = Arc::new(AtomicBool::new(false));
+        self.worker_marks_ready = true;
+        let cancel = self.cancel.clone();
+        let (tx, rx) = mpsc::sync_channel(1);
+        let spawn = std::thread::Builder::new()
+            .name("bareline-update-check".into())
+            .spawn(move || {
+                let result = (|| {
+                    use std::io::Read;
+                    let root = installation()?;
+                    let mut floor = config.floor;
+                    let ledger = root.join("bareline.update-versions");
+                    if ledger.try_exists().map_err(|e| e.to_string())? {
+                        let mut bytes = Vec::new();
+                        native::open_update_read_file(&ledger)
+                            .map_err(|e| e.to_string())?
+                            .take(65537)
+                            .read_to_end(&mut bytes)
+                            .map_err(|e| e.to_string())?;
+                        if bytes.len() > 65536 {
+                            return Err("Version ledger limit".into());
+                        }
+                        for line in std::str::from_utf8(&bytes)
+                            .map_err(|_| "Invalid version ledger")?
+                            .lines()
+                        {
+                            floor = floor
+                                .max(line.parse::<u64>().map_err(|_| "Invalid version ledger")?);
+                        }
+                    }
+                    let policy = bareline_distribution::update::TrustPolicy {
+                        release_public_key: config.key,
+                        channel: config.channel,
+                        artifact_type: "bareline-executable-x64",
+                        platform: "windows-x64",
+                        publisher: config.publisher,
+                        protocol: 1,
+                        highest_metadata_version: floor,
+                        maximum_package_bytes: 256 * 1024 * 1024,
+                    };
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_err(|_| "Clock unavailable")?
+                        .as_secs();
+                    let prepared = native::fetch_verified_update(
+                        config.host,
+                        config.manifest,
+                        config.signature,
+                        config.artifact,
+                        &policy,
+                        now,
+                        &config.certificate,
+                        &std::env::temp_dir(),
+                        &cancel,
+                    )
+                    .map_err(|e| format!("Update verification: {e:?}"))?;
+                    if cancel.load(Ordering::Acquire) {
+                        return Err("Update cancelled".into());
+                    }
+                    native::transfer_update(prepared, &root)
+                        .map_err(|e| format!("Update staging: {e}"))
+                })();
+                let _ = tx.send(result);
+                notify();
+            });
+        match spawn {
+            Ok(_) => {
+                self.worker = Some(rx);
+                self.status = "Checking for an update…".into();
+            }
+            Err(e) => self.status = e.to_string(),
+        }
+    }
+    pub fn poll(&mut self) {
+        if let Some(result) = self.worker.as_ref().and_then(|rx| rx.try_recv().ok()) {
+            self.worker = None;
+            match result {
+                Ok(()) => {
+                    self.ready = self.worker_marks_ready;
+                    self.status = if self.ready {
+                        "Verified update ready. Choose Apply Update on Exit."
+                    } else {
+                        "Unapplied staging retained in update history. A fresh check is available."
+                    }
+                    .into();
+                }
+                Err(e) => self.status = e,
+            }
+        }
+    }
+    pub fn apply_on_exit(&mut self) {
+        if self.ready {
+            self.apply_on_exit = true;
+            self.status = "Update will apply after the editor closes.".into();
+        }
+    }
+    pub fn cancel(&mut self) {
+        self.cancel.store(true, Ordering::Release);
+        self.apply_on_exit = false;
+    }
+    pub fn discard(&mut self, notify: Arc<dyn Fn() + Send + Sync>) {
+        self.cancel();
+        if self.worker.is_some() {
+            self.status =
+                "Cancelling current check; retry Discard Pending Update after it stops.".into();
+            return;
+        }
+        let (tx, rx) = mpsc::sync_channel(1);
+        match std::thread::Builder::new()
+            .name("bareline-update-discard".into())
+            .spawn(move || {
+                let result = installation().and_then(|root| {
+                    native::discard_pending_update(&root).map_err(|e| e.to_string())
+                });
+                let _ = tx.send(result);
+                notify();
+            }) {
+            Ok(_) => {
+                self.worker_marks_ready = false;
+                self.worker = Some(rx);
+                self.status = "Retaining unapplied staging…".into();
+            }
+            Err(e) => self.status = e.to_string(),
+        }
+    }
+    /// Invoke only after the normal event loop has returned and dirty-close choices resolved.
+    pub fn finish(&mut self) -> Result<(), String> {
+        self.cancel.store(true, Ordering::Release);
+        if self.apply_on_exit {
+            let config = Config::compiled()?;
+            native::launch_update_helper(&installation()?, &config.certificate, false)
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+    /// Call after a successful ordinary frame, never during startup probes.
+    pub fn healthy_frame(&mut self) {
+        if self.acknowledged {
+            return;
+        }
+        self.acknowledged = true;
+        if let Ok(config) = Config::compiled() {
+            let _ = std::thread::Builder::new()
+                .name("bareline-update-ack".into())
+                .spawn(move || {
+                    if let Ok(root) = installation() {
+                        let _ = native::launch_update_helper(&root, &config.certificate, true);
+                    }
+                });
+        }
+    }
+}
+impl Drop for UpdateRuntime {
+    fn drop(&mut self) {
+        self.cancel.store(true, Ordering::Release);
+    }
+}
+pub(super) fn commands() -> Vec<bareline_commands::CommandSpec> {
+    [
+        ("update.check", "Check for Updates"),
+        ("update.apply_on_exit", "Apply Update on Exit"),
+        ("update.cancel", "Cancel Update"),
+        ("update.discard", "Discard Pending Update"),
+    ]
+    .into_iter()
+    .map(|(id, title)| bareline_commands::CommandSpec {
+        id: bareline_commands::CommandId(id),
+        title,
+        category: "Help",
+        shortcut: "",
+        action: bareline_commands::Action::Contributed(bareline_commands::CommandId(id)),
+    })
+    .collect()
+}
