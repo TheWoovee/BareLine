@@ -15,6 +15,37 @@ pub struct LanguageMetadata {
     pub keywords: &'static str,
     pub indent_after: &'static str,
 }
+impl LanguageMetadata {
+    /// Versioned data definition consumed by the same bounded native engine.
+    /// Built-in Rust/raw-string handling additionally uses its typed language ID.
+    pub fn native_definition(&self) -> crate::udl::Definition {
+        crate::udl::Definition {
+            version: 1,
+            id: self.id.into(),
+            name: self.label.into(),
+            extensions: self.extensions.iter().map(|s| (*s).into()).collect(),
+            keywords: self
+                .keywords
+                .split_ascii_whitespace()
+                .map(str::to_owned)
+                .collect(),
+            operators: "{}[]():;,.+-*/%=!<>|&^?~".into(),
+            line_comment: self.line_comment.map(str::to_owned),
+            block_comment: self.block_comment.map(|(a, b)| (a.into(), b.into())),
+            strings: if self.language == Language::Json {
+                vec!['"']
+            } else if matches!(
+                self.language,
+                Language::JavaScript | Language::TypeScript | Language::Go
+            ) {
+                vec!['"', '\'', '`']
+            } else {
+                vec!['"', '\'']
+            },
+            fold_pairs: vec![('{', '}'), ('[', ']')],
+        }
+    }
+}
 macro_rules! entry {
     ($lang:ident,$id:literal,$label:literal,$ext:expr,$lexer:literal,$line:expr,$block:expr,$keys:expr,$indent:literal) => {
         LanguageMetadata {
@@ -232,6 +263,16 @@ impl Language {
         explicit: Option<Self>,
         association: Option<Self>,
     ) -> Self {
+        Self::detect_with_regions(path, prefix, "", explicit, association)
+    }
+    /// Inputs are bounded before parsing; callers read prefix/suffix on a worker.
+    pub fn detect_with_regions(
+        path: &Path,
+        prefix: &str,
+        suffix: &str,
+        explicit: Option<Self>,
+        association: Option<Self>,
+    ) -> Self {
         if let Some(language) = explicit.or(association) {
             return language;
         }
@@ -239,6 +280,15 @@ impl Language {
         if detected != Self::PlainText {
             return detected;
         }
+        fn bounded(text: &str) -> &str {
+            let mut end = text.len().min(8192);
+            while !text.is_char_boundary(end) {
+                end -= 1;
+            }
+            &text[..end]
+        }
+        let prefix = bounded(prefix);
+        let suffix = bounded(suffix);
         let first = prefix.lines().next().unwrap_or("");
         if first.starts_with("#!") {
             if first.contains("python") {
@@ -248,11 +298,39 @@ impl Language {
                 return Self::JavaScript;
             }
         }
+        for line in prefix.lines().take(5).chain(suffix.lines().rev().take(5)) {
+            for marker in ["mode:", "filetype=", "ft="] {
+                if let Some((_, value)) = line.split_once(marker) {
+                    let id = value
+                        .trim_start()
+                        .split(|c: char| {
+                            !c.is_ascii_alphanumeric() && !matches!(c, '+' | '#' | '-')
+                        })
+                        .next()
+                        .unwrap_or("");
+                    let alias = match id {
+                        "c++" => "cpp",
+                        "c#" => "csharp",
+                        "js" => "javascript",
+                        "ts" => "typescript",
+                        "py" => "python",
+                        other => other,
+                    };
+                    if let Some(language) = Self::from_id(alias) {
+                        return language;
+                    }
+                }
+            }
+        }
         let trimmed = prefix.trim_start();
         if trimmed.starts_with("<?xml") {
             Self::Xml
         } else if trimmed.to_ascii_lowercase().starts_with("<!doctype html") {
             Self::Html
+        } else if (trimmed.starts_with('{') && trimmed.contains("\":"))
+            || (trimmed.starts_with('[') && trimmed.contains("{\""))
+        {
+            Self::Json
         } else {
             Self::PlainText
         }

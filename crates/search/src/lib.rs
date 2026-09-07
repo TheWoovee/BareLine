@@ -3,6 +3,7 @@
 mod extended;
 mod fold;
 pub mod folders;
+pub mod paged;
 mod regex;
 pub mod replace_disk;
 pub mod replace_files;
@@ -61,7 +62,7 @@ pub enum Case {
     Sensitive,
     Folded,
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SearchQuery {
     pub pattern: String,
     pub mode: SearchMode,
@@ -70,6 +71,8 @@ pub struct SearchQuery {
     /// Text-domain bounds; None searches the complete snapshot.
     pub selection: Option<Range<TextOffset>>,
     pub results_ram_bytes: usize,
+    /// Continue counting after retained matches reach the result budget.
+    pub count_beyond_limit: bool,
 }
 impl SearchQuery {
     pub fn literal(pattern: impl Into<String>) -> Self {
@@ -80,6 +83,7 @@ impl SearchQuery {
             whole_word: false,
             selection: None,
             results_ram_bytes: MAX_RESULT_BYTES,
+            count_beyond_limit: false,
         }
     }
 }
@@ -111,6 +115,8 @@ pub struct SearchResults {
     completeness: Completeness,
     captures: Option<Vec<Vec<Option<Range<TextOffset>>>>>,
     capture_names: Vec<(String, usize)>,
+    total_count: usize,
+    count_complete: bool,
 }
 impl SearchResults {
     /// Stable source identity and revision for grouped results/navigation.
@@ -145,7 +151,10 @@ impl SearchResults {
     }
     /// Count is exact only for Complete results, otherwise it is a lower bound.
     pub fn count(&self) -> usize {
-        self.matches.len()
+        self.total_count
+    }
+    pub fn count_complete(&self) -> bool {
+        self.count_complete
     }
     pub fn is_empty(&self) -> bool {
         self.matches.is_empty()
@@ -301,6 +310,8 @@ pub fn scan(
         completeness: Completeness::Complete,
         captures: None,
         capture_names: Vec::new(),
+        total_count: 0,
+        count_complete: false,
     };
     if job.cancelled.load(Ordering::Acquire) {
         result.completeness = Completeness::Cancelled;
@@ -415,8 +426,14 @@ pub fn scan(
                         }
                     }
                 }
+                result.total_count += 1;
                 if result.matches.len() == capacity {
                     result.completeness = Completeness::ResultLimit;
+                    if query.count_beyond_limit {
+                        matched = 0;
+                        continue;
+                    }
+                    result.total_count -= 1;
                     break 'scan;
                 }
                 if result.matches.len() == result.matches.capacity() {
@@ -455,6 +472,8 @@ pub fn scan(
     if job.cancelled.load(Ordering::Acquire) {
         result.completeness = Completeness::Cancelled;
     }
+    result.count_complete = result.completeness == Completeness::Complete
+        || (query.count_beyond_limit && result.completeness == Completeness::ResultLimit);
     result
 }
 
@@ -477,6 +496,22 @@ mod tests {
                 Completeness::InvalidQuery
             );
         }
+    }
+    #[test]
+    fn count_can_finish_after_retained_results_fill_without_enabling_replace() {
+        let snapshot = document("a a a a").snapshot();
+        let mut query = SearchQuery::literal("a");
+        query.results_ram_bytes = std::mem::size_of::<SearchMatch>();
+        query.count_beyond_limit = true;
+        let result = scan(&snapshot, &query, &SearchJob::default(), |_| {});
+        assert_eq!(result.matches().len(), 1);
+        assert_eq!(result.count(), 4);
+        assert!(result.count_complete());
+        assert_eq!(result.completeness(), Completeness::ResultLimit);
+        assert_eq!(
+            result.prepare_replace(&snapshot, "b", 4096).err(),
+            Some(ReplaceError::Incomplete)
+        );
     }
     fn document(text: &str) -> Document {
         Document::from_utf8(text, Budget::new(64 << 20), Budget::new(32 << 20)).unwrap()

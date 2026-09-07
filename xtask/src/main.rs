@@ -7,12 +7,13 @@ mod controller_fixture;
 // SPDX-License-Identifier: MPL-2.0
 #[cfg(windows)]
 mod render;
+mod capture;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
     fs,
     io::Read,
-    process::{Command, Stdio},
+    process::Command,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -77,7 +78,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         hash.update(&chunk[..read]);
     }
     let digest = format!("{:x}", hash.finalize());
+    let stamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
+    let directory = root.join("tests/perf/results");
+    let isolated = directory.join(format!("launch-{stamp}"));
+    fs::create_dir_all(isolated.join("data"))?;
+    let measured_executable = isolated.join("bareline.exe");
+    fs::copy(&executable, &measured_executable)?;
+    fs::write(isolated.join("bareline.portable"), [])?;
     let mut samples = Vec::new();
+    let mut failures = 0usize;
     for repetition in 0..repetitions {
         // Alternate modes to reduce ordering bias; no claim that this clears the OS cache.
         for software in if repetition % 2 == 0 {
@@ -86,50 +95,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             [true, false]
         } {
             let started = Instant::now();
-            let mut command = Command::new(&executable);
+            let mut command = Command::new(&measured_executable);
             command
                 .arg(if smoke { "--smoke" } else { "--perf" })
-                .arg(if software { "--software" } else { "--hardware" });
-            let mut child = command
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn()?;
-            loop {
-                if child.try_wait()?.is_some() {
-                    break;
+                .arg(if software { "--software" } else { "--hardware" })
+                .args(["--no-session", "--no-extensions", "--new-instance"]);
+            let result = match capture::run(&mut command, Duration::from_secs(30)) {
+                Ok(result) => result,
+                Err(error) => {
+                    failures += 1;
+                    samples.push(json!({"repetition": repetition, "requested_software": software,
+                        "status": "spawn_or_capture_error", "error": error.to_string(), "frame": null, "idle": null}));
+                    continue;
                 }
-                if started.elapsed() > Duration::from_secs(30) {
-                    child.kill()?;
-                    child.wait()?;
-                    return Err(
-                        "Native measurement timed out after 30 seconds; child reaped".into(),
-                    );
-                }
-                std::thread::sleep(Duration::from_millis(20));
-            }
-            let result = child.wait_with_output()?;
-            if !result.status.success() {
-                return Err(
-                    format!("Shell failed: {}", String::from_utf8_lossy(&result.stderr)).into(),
-                );
-            }
-            let output = String::from_utf8(result.stdout)?;
-            let events: Vec<Value> = output
+            };
+            let events: Vec<Value> = result.stdout
                 .lines()
                 .filter_map(|line| serde_json::from_str(line).ok())
                 .collect();
             let frame = events
                 .iter()
-                .find(|e| e["event"] == "first_frame")
-                .ok_or("No first-frame marker")?;
+                .find(|e| e["event"] == "first_frame");
             let idle = events.iter().find(|e| e["event"] == "idle");
-            if !smoke && idle.is_none() {
-                return Err("No 10-second idle sample".into());
-            }
-            samples.push(json!({"repetition": repetition, "requested_software": software, "process_duration_us": started.elapsed().as_micros(), "frame": frame, "idle": idle}));
+            let status = if result.status == "ok" && (frame.is_none() || (!smoke && idle.is_none())) { "missing_marker" } else { result.status };
+            failures += usize::from(status != "ok");
+            samples.push(json!({"repetition": repetition, "requested_software": software, "process_duration_us": started.elapsed().as_micros(), "frame": frame, "idle": idle,
+                "status": status, "exit_code": result.exit_code, "stdout": result.stdout, "stderr": result.stderr}));
         }
     }
-    let timestamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
     let os_build = Command::new("cmd")
         .args(["/c", "ver"])
         .output()
@@ -138,11 +131,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let result = json!({"schema_version": 2, "kind": if smoke { "hidden_render_smoke" } else { "visible_launch_idle" },
         "profile": if release { "release" } else { "debug" }, "os": std::env::consts::OS, "os_build": os_build,
         "arch": std::env::consts::ARCH, "machine": std::env::var("COMPUTERNAME").ok(), "logical_cpus": std::thread::available_parallelism().ok().map(|n| n.get()),
-        "binary_sha256": digest, "cache_state": "uncontrolled", "idle_delay_seconds": if smoke { 0 } else { 10 }, "samples": samples});
-    let directory = root.join("tests/perf/results");
-    fs::create_dir_all(&directory)?;
-    let path = directory.join(format!("launch-{timestamp}.json"));
+        "binary_sha256": digest, "cache_state": "uncontrolled", "isolated_directory": isolated, "failure_count": failures, "idle_delay_seconds": if smoke { 0 } else { 10 }, "samples": samples});
+    let path = directory.join(format!("launch-{stamp}.json"));
     fs::write(&path, serde_json::to_vec_pretty(&result)?)?;
     println!("{}", path.display());
+    if failures != 0 { return Err(format!("{failures} measurement trials failed; raw evidence preserved").into()); }
     Ok(())
 }

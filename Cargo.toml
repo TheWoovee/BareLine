@@ -24,3 +24,6 @@ debug = "line-tables-only"
 
 
 
+
+[patch.crates-io]
+accesskit_windows = { path = "vendor/accesskit_windows-0.35.0" }

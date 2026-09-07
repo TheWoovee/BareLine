@@ -41,12 +41,14 @@ pub struct WindowsRenderer {
     write: IDWriteFactory,
     target: Option<ID2D1RenderTarget>,
     surface: Option<Surface>,
-    formats: BTreeMap<u32, IDWriteTextFormat>,
+    formats: BTreeMap<(String, u32), IDWriteTextFormat>,
+    font_family: Option<String>,
     brushes: BTreeMap<u32, ID2D1SolidColorBrush>,
     layouts: BTreeMap<LayoutId, ShapedLine>,
     size: (u32, u32),
     scale: f32,
     pub software: bool,
+    init_failure: Option<(i32, bool)>,
     // Last field: COM resources above must drop before the apartment guard.
     #[cfg(feature = "offscreen")]
     apartment: Option<Apartment>,
@@ -62,11 +64,13 @@ impl WindowsRenderer {
                 target: None,
                 surface: None,
                 formats: BTreeMap::new(),
+                font_family: None,
                 brushes: BTreeMap::new(),
                 layouts: BTreeMap::new(),
                 size: (1, 1),
                 scale: 1.0,
                 software,
+                init_failure: None,
                 #[cfg(feature = "offscreen")]
                 apartment: None,
             })
@@ -85,6 +89,7 @@ impl WindowsRenderer {
                     return Ok(());
                 }
                 Err(error) => {
+                    self.init_failure = Some((error.code().0, false));
                     eprintln!("event=hardware_fallback code={}", error.code().0);
                     self.software = true;
                 }
@@ -117,6 +122,10 @@ impl WindowsRenderer {
         self.target = Some(target.cast()?);
         self.surface = Some(Surface::Software(target));
         Ok(())
+    }
+    /// Actual HRESULT and attempted software mode, retained across fallback.
+    pub fn take_init_failure(&mut self) -> Option<(i32, bool)> {
+        self.init_failure.take()
     }
     fn create_hardware(&self) -> windows::core::Result<HardwareSurface> {
         // SAFETY: device/context/swap chain belong to this UI thread and live HWND.
@@ -174,16 +183,18 @@ impl WindowsRenderer {
         Ok(brush)
     }
     fn format(&mut self, size: f32) -> windows::core::Result<IDWriteTextFormat> {
-        if let Some(format) = self.formats.get(&size.to_bits()) {
+        let name = self.font_family.as_deref().unwrap_or(if size >= 16.0 { "Cascadia Mono" } else { "Segoe UI" }).to_owned();
+        let key = (name.clone(), size.to_bits());
+        if let Some(format) = self.formats.get(&key) {
             return Ok(format.clone());
         }
+        if self.formats.len() >= MAX_LAYOUTS {
+            return Err(windows::core::Error::from_hresult(E_OUTOFMEMORY));
+        }
+        let family: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
         let format = unsafe {
             self.write.CreateTextFormat(
-                if size >= 16.0 {
-                    w!("Cascadia Mono")
-                } else {
-                    w!("Segoe UI")
-                },
+                windows::core::PCWSTR(family.as_ptr()),
                 None,
                 DWRITE_FONT_WEIGHT_NORMAL,
                 DWRITE_FONT_STYLE_NORMAL,
@@ -195,7 +206,7 @@ impl WindowsRenderer {
         unsafe {
             format.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)?;
         }
-        self.formats.insert(size.to_bits(), format.clone());
+        self.formats.insert(key, format.clone());
         Ok(format)
     }
     pub fn invalidate_device(&mut self) {
@@ -296,10 +307,33 @@ impl RenderBackend for WindowsRenderer {
             }
         }
         let target = self.target.as_ref().unwrap();
+        // Device-dependent images live only for this frame and are recreated after loss.
+        let mut images = BTreeMap::new();
+        for (index, op) in operations.iter().enumerate() {
+            if let DrawOp::Image { image, .. } = op {
+                let mut pixels = image.pixels().to_vec();
+                for pixel in pixels.chunks_exact_mut(4) {
+                    let alpha = u16::from(pixel[3]);
+                    for channel in &mut pixel[..3] {
+                        *channel = ((u16::from(*channel) * alpha + 127) / 255) as u8;
+                    }
+                    pixel.swap(0, 2);
+                }
+                let bitmap = unsafe { target.CreateBitmap(
+                    D2D_SIZE_U { width: image.width(), height: image.height() },
+                    Some(pixels.as_ptr().cast()), image.width() * 4,
+                    &D2D1_BITMAP_PROPERTIES {
+                        pixelFormat: D2D1_PIXEL_FORMAT { format: DXGI_FORMAT_B8G8R8A8_UNORM, alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED },
+                        dpiX: 96.0, dpiY: 96.0,
+                    },
+                )? };
+                images.insert(index, bitmap);
+            }
+        }
         // SAFETY: cached resources belong to this target; all calls occur on its owner thread.
         unsafe {
             target.BeginDraw();
-            for op in operations {
+            for (index, op) in operations.iter().enumerate() {
                 match op {
                     DrawOp::Fill(r, c) => target.FillRectangle(&rectangle(*r), &self.brushes[&c.0]),
                     DrawOp::FillRounded(r, c, radius) => target.FillRoundedRectangle(
@@ -337,7 +371,7 @@ impl RenderBackend for WindowsRenderer {
                         };
                         target.DrawText(
                             &text.encode_utf16().collect::<Vec<_>>(),
-                            &self.formats[&size.to_bits()],
+                            &self.formats[&(if *size >= 16.0 { "Cascadia Mono" } else { "Segoe UI" }.to_owned(), size.to_bits())],
                             &bounds,
                             &self.brushes[&color.0],
                             D2D1_DRAW_TEXT_OPTIONS_CLIP,
@@ -347,6 +381,20 @@ impl RenderBackend for WindowsRenderer {
                     DrawOp::PushClip(r) => target
                         .PushAxisAlignedClip(&rectangle(*r), D2D1_ANTIALIAS_MODE_PER_PRIMITIVE),
                     DrawOp::PopClip => target.PopAxisAlignedClip(),
+                    DrawOp::Image { destination, opacity, .. } => target.DrawBitmap(
+                        &images[&index], Some(&rectangle(*destination)), *opacity,
+                        D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, None,
+                    ),
+                    DrawOp::PushLayer { bounds, opacity } => target.PushLayer(
+                        &D2D1_LAYER_PARAMETERS {
+                            contentBounds: rectangle(*bounds),
+                            maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+                            maskTransform: windows_numerics::Matrix3x2::identity(),
+                            opacity: *opacity,
+                            ..Default::default()
+                        }, None::<&ID2D1Layer>,
+                    ),
+                    DrawOp::PopLayer => target.PopLayer(),
                     DrawOp::Layout {
                         origin,
                         layout,
@@ -420,6 +468,13 @@ fn vector(point: Point) -> windows_numerics::Vector2 {
     }
 }
 impl TextBackend for WindowsRenderer {
+    fn shape_with_font_family(&mut self, text: &str, size: f32, width: f32, family: &str) -> Result<LayoutId, LayoutError> {
+        if !bareline_renderer::valid_font_family(family) { return Err(LayoutError::InvalidOffset); }
+        self.font_family = Some(family.to_owned());
+        let result = self.shape(text, size, width);
+        self.font_family = None;
+        result
+    }
     fn set_styles(
         &mut self,
         id: LayoutId,

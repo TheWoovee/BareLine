@@ -51,15 +51,20 @@ impl EventRouter {
             UiEvent::PointerMove(p) | UiEvent::PointerDown(p) | UiEvent::PointerUp(p) => Some(p),
             _ => None,
         };
-        let hit = pointer.and_then(|p| {
-            self.pointer_capture.or_else(|| {
-                targets
-                    .iter()
-                    .rev()
-                    .find(|t| t.enabled && t.bounds.contains(p))
-                    .map(|t| t.id)
+        let losing_focus = matches!(event, UiEvent::Focus(false));
+        let hit = if losing_focus {
+            self.pointer_capture
+        } else {
+            pointer.and_then(|p| {
+                self.pointer_capture.or_else(|| {
+                    targets
+                        .iter()
+                        .rev()
+                        .find(|t| t.enabled && t.bounds.contains(p))
+                        .map(|t| t.id)
+                })
             })
-        });
+        };
         let mut order = Vec::new();
         for id in [self.popup_capture, focused, hit].into_iter().flatten() {
             if !order.contains(&id) {
@@ -84,7 +89,10 @@ impl EventRouter {
         let mut invalidated = Vec::new();
         let mut handled = false;
         for id in order {
-            if !targets.iter().any(|t| t.id == id && t.enabled) {
+            if !targets
+                .iter()
+                .any(|t| t.id == id && (t.enabled || losing_focus))
+            {
                 continue;
             }
             let result = handler(id, event);
@@ -93,7 +101,9 @@ impl EventRouter {
             }
             if result.handled {
                 handled = true;
-                break;
+                if !losing_focus {
+                    break;
+                }
             }
         }
         if matches!(event, UiEvent::PointerUp(_) | UiEvent::Focus(false)) {

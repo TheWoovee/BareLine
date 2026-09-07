@@ -143,3 +143,27 @@ impl TextBackend for RecordingBackend {
         }])
     }
 }
+
+#[cfg(test)]
+mod frame_tests {
+    use super::*;
+    use bareline_renderer::Image;
+    #[test]
+    fn frames_cancel_recover_and_reject_crossed_stacks() {
+        let mut backend = RecordingBackend::default();
+        let image = Image::rgba(1, 1, vec![255, 0, 0, 128]).unwrap();
+        let ops = [DrawOp::PushLayer { bounds: Rect::default(), opacity: 0.5 },
+            DrawOp::Image { image, destination: Rect::default(), opacity: 1.0 }, DrawOp::PopLayer];
+        { let mut frame = backend.begin_frame(); frame.extend(&ops); }
+        assert!(backend.operations.is_empty());
+        backend.simulate_device_loss();
+        let mut frame = backend.begin_frame(); frame.extend(&ops);
+        assert_eq!(frame.finish(), Ok(FrameStatus::Recreate));
+        let mut frame = backend.begin_frame(); frame.extend(&ops);
+        assert_eq!(frame.finish(), Ok(FrameStatus::Presented));
+        assert_eq!(backend.operations, ops);
+        assert!(backend.render(&[DrawOp::PushClip(Rect::default()), ops[0].clone(), DrawOp::PopClip, DrawOp::PopLayer]).is_err());
+        assert_eq!(backend.operations, ops);
+        assert!(Image::rgba(u32::MAX, u32::MAX, vec![]).is_err());
+    }
+}

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Only this optional process links Wasmtime/WASI. Each invocation owns a fresh
 //! store and an operation-scoped watchdog; no timer survives an idle invocation.
-use bareline_extensions_protocol::{INTERACTIVE_TIMEOUT_MS, MEMORY_LIMIT};
+use bareline_extensions_protocol::MEMORY_LIMIT;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
@@ -60,12 +60,29 @@ impl Runtime {
         broker: Broker,
         cancelled: Arc<AtomicBool>,
     ) -> wasmtime::Result<()> {
+        self.invoke_with_policy(
+            bytes,
+            invocation,
+            broker,
+            cancelled,
+            bareline_extensions_protocol::ExecutionBudget::Interactive,
+        )
+    }
+    pub fn invoke_with_policy(
+        &self,
+        bytes: &[u8],
+        invocation: Vec<u8>,
+        broker: Broker,
+        cancelled: Arc<AtomicBool>,
+        policy: bareline_extensions_protocol::ExecutionBudget,
+    ) -> wasmtime::Result<()> {
         self.execute(
             bytes,
             invocation,
             broker,
             cancelled,
-            Duration::from_millis(INTERACTIVE_TIMEOUT_MS),
+            Duration::from_millis(policy.timeout_ms()),
+            policy.fuel(),
         )
     }
     #[cfg(test)]
@@ -81,6 +98,7 @@ impl Runtime {
             Box::new(|_| Err("denied".into())),
             cancelled,
             budget,
+            50_000_000,
         )
     }
     fn execute(
@@ -90,6 +108,7 @@ impl Runtime {
         broker: Broker,
         cancelled: Arc<AtomicBool>,
         budget: Duration,
+        fuel: u64,
     ) -> wasmtime::Result<()> {
         if cancelled.load(Ordering::Acquire) {
             wasmtime::bail!("cancelled");
@@ -121,7 +140,7 @@ impl Runtime {
         };
         let mut store = Store::new(&self.engine, state);
         store.limiter(|state| &mut state.limits);
-        store.set_fuel(50_000_000)?;
+        store.set_fuel(fuel)?;
         store.set_epoch_deadline(1);
         let mut linker = Linker::new(&self.engine);
         wasmtime_wasi::p2::add_to_linker_sync(&mut linker)?;
@@ -216,4 +235,3 @@ mod tests {
             .unwrap();
     }
 }
-

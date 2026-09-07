@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 use std::collections::BTreeMap;
+mod contributions;
+pub use contributions::*;
 mod discovery;
 mod keymap;
 pub use discovery::*;
@@ -53,6 +55,7 @@ pub struct CommandSpec {
 pub struct CommandRegistry {
     entries: BTreeMap<CommandId, CommandSpec>,
     presentations: BTreeMap<CommandId, CommandPresentation>,
+    pub contributions: DynamicContributions,
 }
 
 impl CommandRegistry {
@@ -222,6 +225,24 @@ pub fn shell_commands() -> CommandRegistry {
             )
             .expect("registered command");
     }
+    registry
+        .register(CommandSpec {
+            id: CommandId("internal.dynamic.invoke"),
+            title: "Invoke contributed command",
+            category: "Tools",
+            shortcut: "",
+            action: Action::Contributed(CommandId("internal.dynamic.invoke")),
+        })
+        .expect("unique dynamic envelope");
+    registry
+        .set_presentation(
+            CommandId("internal.dynamic.invoke"),
+            CommandPresentation {
+                internal: true,
+                ..Default::default()
+            },
+        )
+        .expect("registered dynamic envelope");
     registry
 }
 

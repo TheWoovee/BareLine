@@ -91,7 +91,7 @@ pub fn verify_manifest(
     validate_metadata(&metadata, policy, now_unix)?;
     Ok(VerifiedManifest(metadata))
 }
-fn verify_minisign(bytes: &[u8], signature: &str, key: &str) -> Result<(), VerifyError> {
+pub(super) fn verify_minisign(bytes: &[u8], signature: &str, key: &str) -> Result<(), VerifyError> {
     if bytes.len() > MAX_MANIFEST_BYTES || signature.len() > 8192 {
         return Err(VerifyError::Size);
     }

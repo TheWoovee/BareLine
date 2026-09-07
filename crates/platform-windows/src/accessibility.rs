@@ -10,6 +10,7 @@ use windows::Win32::{
     Foundation::HWND,
     UI::WindowsAndMessaging::{IsWindow, IsWindowVisible},
 };
+mod text_provider;
 
 fn tree(snapshot: &AccessibilitySnapshot) -> TreeUpdate {
     let mut nodes = Vec::new();
@@ -250,7 +251,8 @@ impl ActionHandler for Actions {
                     };
                     offset(selection.anchor)
                         .zip(offset(selection.focus))
-                        .map(|(anchor, caret)| AccessibilityAction::SetSelection { anchor, caret })
+                        .zip(state.snapshot.text_context.as_ref())
+                        .map(|((anchor, caret), context)| AccessibilityAction::SetSelection { source_identity: context.source_identity, anchor, caret })
                 } else {
                     None
                 }
@@ -268,6 +270,8 @@ impl ActionHandler for Actions {
 pub struct WindowsAccessibility {
     adapter: SubclassingAdapter,
     shared: Arc<Mutex<Shared>>,
+    _registration: accesskit_windows::PatternRegistration,
+    text_provider: Arc<text_provider::Factory>,
 }
 impl WindowsAccessibility {
     /// # Safety
@@ -292,10 +296,16 @@ impl WindowsAccessibility {
             Activate(shared.clone()),
             Actions {
                 shared: shared.clone(),
-                notify,
+                notify: notify.clone(),
             },
         );
-        Ok(Self { adapter, shared })
+        let text_provider = Arc::new(text_provider::Factory::new(shared.clone(), notify));
+        let factory: Arc<dyn accesskit_windows::PatternOverride> = text_provider.clone();
+        let registration = accesskit_windows::register_pattern_override(hwnd, &factory);
+        Ok(Self { adapter, shared, _registration: registration, text_provider })
+    }
+    pub fn set_text_source(&mut self, source: Option<Arc<dyn AccessibilityTextSource>>) {
+        self.text_provider.set_source(source);
     }
     pub fn update(&mut self, snapshot: AccessibilitySnapshot) {
         if let Err(reason) = validate(&snapshot) {
@@ -334,6 +344,7 @@ mod tests {
         AccessibilitySnapshot {
             root: 1,
             focus: 2,
+            text_context: Some(AccessibilityTextContext { source_identity: (7, 3), selection: (5_000_000_001, 5_000_000_003), composition: None }),
             nodes: vec![
                 AccessibilityNode {
                     id: 1,
@@ -448,6 +459,7 @@ mod tests {
         assert_eq!(
             shared.lock().unwrap().actions,
             vec![AccessibilityAction::SetSelection {
+                source_identity: (7, 3),
                 anchor: 5_000_000_001,
                 caret: 5_000_000_003
             }]

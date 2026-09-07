@@ -20,7 +20,6 @@ pub(super) struct UpdateRuntime {
 struct Config {
     key: &'static str,
     publisher: &'static str,
-    certificate: [u8; 32],
     channel: &'static str,
     floor: u64,
     host: &'static str,
@@ -36,15 +35,9 @@ impl Config {
         if publisher.len() != 64 || !publisher.is_ascii() {
             return Err("Invalid publisher configuration".into());
         }
-        let mut certificate = [0; 32];
-        for (i, byte) in certificate.iter_mut().enumerate() {
-            *byte = u8::from_str_radix(&publisher[i * 2..i * 2 + 2], 16)
-                .map_err(|_| "Invalid publisher configuration")?;
-        }
         Ok(Self {
             key: option_env!("BARELINE_RELEASE_PUBLIC_KEY").ok_or_else(missing)?,
             publisher,
-            certificate,
             channel: option_env!("BARELINE_RELEASE_CHANNEL").ok_or_else(missing)?,
             floor: option_env!("BARELINE_METADATA_FLOOR")
                 .ok_or_else(missing)?
@@ -88,7 +81,9 @@ impl UpdateRuntime {
                 let result = (|| {
                     use std::io::Read;
                     let root = installation()?;
-                    let mut floor = config.floor;
+                    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|_| "Clock unavailable")?.as_secs();
+                    let authority = native::resolve_release_authority(&root,config.key,config.publisher,config.floor,now).map_err(|e|e.to_string())?;
+                    let mut floor = authority.minimum_metadata_version;
                     let ledger = root.join("bareline.update-versions");
                     if ledger.try_exists().map_err(|e| e.to_string())? {
                         let mut bytes = Vec::new();
@@ -109,11 +104,11 @@ impl UpdateRuntime {
                         }
                     }
                     let policy = bareline_distribution::update::TrustPolicy {
-                        release_public_key: config.key,
+                        release_public_key: &authority.release_public_key,
                         channel: config.channel,
                         artifact_type: "bareline-executable-x64",
                         platform: "windows-x64",
-                        publisher: config.publisher,
+                        publisher: &authority.publisher,
                         protocol: 1,
                         highest_metadata_version: floor,
                         maximum_package_bytes: 256 * 1024 * 1024,
@@ -129,7 +124,7 @@ impl UpdateRuntime {
                         config.artifact,
                         &policy,
                         now,
-                        &config.certificate,
+                        &authority.certificate,
                         &std::env::temp_dir(),
                         &cancel,
                     )
@@ -208,7 +203,10 @@ impl UpdateRuntime {
         self.cancel.store(true, Ordering::Release);
         if self.apply_on_exit {
             let config = Config::compiled()?;
-            native::launch_update_helper(&installation()?, &config.certificate, false)
+            let root=installation()?;
+            let now=std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|e|e.to_string())?.as_secs();
+            let authority=native::resolve_release_authority(&root,config.key,config.publisher,config.floor,now).map_err(|e|e.to_string())?;
+            native::launch_update_helper(&root, &authority.certificate, false)
                 .map_err(|e| e.to_string())?;
         }
         Ok(())
@@ -224,7 +222,10 @@ impl UpdateRuntime {
                 .name("bareline-update-ack".into())
                 .spawn(move || {
                     if let Ok(root) = installation() {
-                        let _ = native::launch_update_helper(&root, &config.certificate, true);
+                        if let Ok(now)=std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+                            && let Ok(authority)=native::resolve_release_authority(&root,config.key,config.publisher,config.floor,now.as_secs()) {
+                            let _ = native::launch_update_helper(&root, &authority.certificate, true);
+                        }
                     }
                 });
         }

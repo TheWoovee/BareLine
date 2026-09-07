@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Revision-bound power edits. Offsets address UTF-8 text, never original bytes.
+pub mod consumer;
 use crate::Selection;
 use bareline_document::{DocumentSnapshot, Edit, EditTransaction, Error, TextOffset};
 use std::ops::Range;

@@ -628,6 +628,25 @@ fn save_impl(
         captured: snapshot,
     })
 }
+/// Hold the source file against mutation for the entire copy, including alias targets.
+/// A removed source is fine: the immutable document is still exportable.
+pub fn guard_copy_source(source: &Path, target: &Path, platform: &dyn LocalFileSystem) -> Result<Option<File>, FileError> {
+    let source = match platform.open_sealed_read(source) {
+        Ok(file)=>file,
+        Err(error) if error.kind()==io::ErrorKind::NotFound=>return Ok(None),
+        Err(error)=>return Err(error.into()),
+    };
+    let identity=platform.identity(&source)?;
+    platform.validate_target(target)?;
+    match File::open(target) {
+        Ok(target)=>{ let target=platform.identity(&target)?; if identity.volume==target.volume && identity.file==target.file {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput,"Save Copy destination is the document source or an alias").into());
+        } },
+        Err(error) if error.kind()==io::ErrorKind::NotFound=>{},
+        Err(error)=>return Err(error.into()),
+    }
+    Ok(Some(source))
+}
 fn save_bytes(
     target: &Path,
     expected: Option<&Fingerprint>,
@@ -731,11 +750,14 @@ fn save_bytes(
 // preserves the existing worker/UI message contract.
 #[allow(clippy::large_enum_variant)]
 pub enum IoCompletion {
+    ResidentSpilled { captured: DocumentSnapshot, result: Result<PagedTranscoded, FileError> },
     Transcode(TranscodeOutcome),
     Open(Result<Opened, FileError>),
     Save(Result<Saved, FileError>),
 }
 pub enum IoRequest {
+    SpillResident { captured: DocumentSnapshot, encoding: Option<ResidentEncoding>, bom: bool, cache: PathBuf, quota: u64, options: crate::source::SourceOptions, bytes: Budget, history: Budget },
+    SaveCopy { snapshot: DocumentSnapshot, target: PathBuf, source: Option<PathBuf>, bom: bool, encoding: Option<ResidentEncoding> },
     RestorePagedRecovery { directory: PathBuf, bytes: Budget, history: Budget },
     OpenPagedEncoded(PagedOpenRequest),
     ResumeTranscode {
@@ -829,6 +851,10 @@ impl IoService {
             .spawn(move || {
                 while let Ok(job) = receiver.recv() {
                     let result = match job.request {
+                        IoRequest::SpillResident { captured, encoding, bom, cache, quota, options, bytes, history } => {
+                            let result = crate::owned_store::prepare_resident(&captured, encoding.as_ref(), bom, &cache, quota, platform.clone(), options, bytes, history, job.cancellation.clone());
+                            IoCompletion::ResidentSpilled { captured, result }
+                        }
                         IoRequest::RestorePagedRecovery { directory, bytes, history } => IoCompletion::Transcode(match crate::paged_recovery::restore(&directory, platform.clone(), bytes, history, &job.cancellation) {
                             Ok(opened) => TranscodeOutcome::Complete(Box::new(opened)),
                             Err(error) => TranscodeOutcome::Failed(FileError::Io(io::Error::other(error))),
@@ -910,6 +936,12 @@ impl IoService {
                                 (job.notify)();
                             },
                         )),
+                        IoRequest::SaveCopy {snapshot,target,source,bom,encoding} => IoCompletion::Save((|| {
+                            let _source = source.as_ref().map(|source|guard_copy_source(source,&target,platform.as_ref())).transpose()?;
+                            if let Some(encoding)=encoding {
+                                save_encoded_cancellable(snapshot,&target,None,bom,platform.as_ref(),&job.cancellation,&encoding)
+                            } else { save_utf8_cancellable(snapshot,&target,None,bom,platform.as_ref(),&job.cancellation) }
+                        })()),
                         IoRequest::SaveEncoded {
                             snapshot,
                             target,

@@ -4,6 +4,7 @@
 pub mod catalog;
 pub mod folding;
 mod lexilla;
+pub mod outline;
 pub mod service;
 pub mod udl;
 use bareline_document::{DocumentSnapshot, TextOffset};
@@ -19,6 +20,17 @@ use std::{
 
 pub const MAX_REQUEST_BYTES: usize = 256 * 1024;
 pub const MAX_SPANS: usize = 32 * 1024;
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LexerPreference {
+    #[default]
+    Lexilla,
+    Native,
+}
+#[derive(Clone, Default)]
+struct LexOptions {
+    preference: LexerPreference,
+    definition: Option<Arc<udl::Definition>>,
+}
 
 /// A worker-local verified forward pass. Opaque Lexilla state stays in this
 /// object; callers can cancel between bounded windows and cannot seek it.
@@ -28,9 +40,18 @@ pub struct ForwardLexer {
     next: TextOffset,
     checkpoint: Option<Checkpoint>,
     native: Option<bareline_lexilla_bridge::LexerSession>,
+    options: LexOptions,
 }
 impl ForwardLexer {
     pub fn new(source: DocumentSnapshot, language: Language) -> Self {
+        Self::configured(source, language, LexerPreference::Lexilla, None)
+    }
+    pub fn configured(
+        source: DocumentSnapshot,
+        language: Language,
+        preference: LexerPreference,
+        definition: Option<Arc<udl::Definition>>,
+    ) -> Self {
         use bareline_lexilla_bridge::CppMode;
         let mode = match language {
             Language::JavaScript | Language::TypeScript => CppMode::JavaScript,
@@ -44,12 +65,20 @@ impl ForwardLexer {
             language,
             next: TextOffset(0),
             checkpoint: None,
-            native: bareline_lexilla_bridge::LexerSession::new(
-                language.metadata().lexilla,
-                language.metadata().keywords,
-                mode,
-            )
-            .ok(),
+            native: if preference == LexerPreference::Lexilla && definition.is_none() {
+                bareline_lexilla_bridge::LexerSession::new(
+                    language.metadata().lexilla,
+                    language.metadata().keywords,
+                    mode,
+                )
+                .ok()
+            } else {
+                None
+            },
+            options: LexOptions {
+                preference,
+                definition,
+            },
         }
     }
     pub fn advance(
@@ -57,13 +86,14 @@ impl ForwardLexer {
         end: TextOffset,
         cancel: &Cancellation,
     ) -> Result<SyntaxResult, Error> {
-        let result = lex_with_session(
+        let result = lex_configured(
             self.source.clone(),
             self.language,
             self.next..end,
             self.checkpoint.as_ref(),
             cancel,
             self.native.as_mut(),
+            self.options.clone(),
         )?;
         self.next = end;
         self.checkpoint = result.checkpoint.clone();
@@ -184,6 +214,8 @@ pub struct SyntaxResult {
     pub checkpoints: Vec<Checkpoint>,
     // Present only when actual Lexilla produced this verified window.
     pub(crate) fold_levels: Option<Vec<i32>>,
+    pub(crate) fold_pairs: Vec<(char, char)>,
+    pub(crate) indent_folding: bool,
 }
 impl SyntaxResult {
     pub fn is_current(&self, snapshot: &DocumentSnapshot) -> bool {
@@ -218,7 +250,10 @@ pub fn lex_udl(
         checkpoint,
         cancel,
         None,
-        Some(definition),
+        LexOptions {
+            preference: LexerPreference::Native,
+            definition: Some(definition),
+        },
     )
 }
 fn lex_with_session(
@@ -229,7 +264,15 @@ fn lex_with_session(
     cancel: &Cancellation,
     session: Option<&mut bareline_lexilla_bridge::LexerSession>,
 ) -> Result<SyntaxResult, Error> {
-    lex_configured(source, language, range, checkpoint, cancel, session, None)
+    lex_configured(
+        source,
+        language,
+        range,
+        checkpoint,
+        cancel,
+        session,
+        LexOptions::default(),
+    )
 }
 fn lex_configured(
     source: DocumentSnapshot,
@@ -238,8 +281,12 @@ fn lex_configured(
     checkpoint: Option<&Checkpoint>,
     cancel: &Cancellation,
     session: Option<&mut bareline_lexilla_bridge::LexerSession>,
-    definition: Option<Arc<udl::Definition>>,
+    options: LexOptions,
 ) -> Result<SyntaxResult, Error> {
+    let definition = options.definition;
+    if let Some(definition) = &definition {
+        definition.validate()?;
+    }
     cancel.check()?;
     if range.start > range.end
         || range.end.0 > source.len()
@@ -282,6 +329,8 @@ fn lex_configured(
             checkpoint: None,
             checkpoints: Vec::new(),
             fold_levels: None,
+            fold_pairs: Vec::new(),
+            indent_folding: false,
         });
     }
     let text = source
@@ -294,6 +343,10 @@ fn lex_configured(
         .map_err(|_| Error::InvalidRange)?;
     let mut i = 0;
     let custom = definition.as_deref();
+    let custom_keywords: std::collections::BTreeSet<&str> = custom
+        .into_iter()
+        .flat_map(|d| d.keywords.iter().map(String::as_str))
+        .collect();
     let line_comment = custom.map_or(language.metadata().line_comment, |d| {
         d.line_comment.as_deref()
     });
@@ -438,7 +491,7 @@ fn lex_configured(
                                     .split_ascii_whitespace()
                                     .any(|k| k == word)
                             },
-                            |d| d.keywords.iter().any(|k| k == word),
+                            |_| custom_keywords.contains(word),
                         );
                         keyword.then_some(StyleKind::Keyword)
                     } else {
@@ -501,7 +554,10 @@ fn lex_configured(
     // Lexilla is primary at a verified document origin. Native checkpoints retain
     // their own state and are never misrepresented as Lexilla continuation state.
     let mut fold_levels = None;
-    if (range.start.0 == 0 || session.is_some()) && language != Language::PlainText {
+    if options.preference == LexerPreference::Lexilla
+        && (range.start.0 == 0 || session.is_some())
+        && language != Language::PlainText
+    {
         let lexer = language.metadata().lexilla;
         let mode = match language {
             Language::JavaScript | Language::TypeScript => {
@@ -553,6 +609,11 @@ fn lex_configured(
         checkpoint,
         checkpoints,
         fold_levels,
+        fold_pairs: definition.as_ref().map_or_else(
+            || vec![('{', '}'), ('[', ']')],
+            |definition| definition.fold_pairs.clone(),
+        ),
+        indent_folding: language == Language::Python && definition.is_none(),
     })
 }
 
@@ -611,6 +672,31 @@ const RUST_KEYWORDS: &str = "as async await break const continue crate dyn else 
 mod tests {
     use super::*;
     use bareline_document::{Budget, Document, Edit, EditTransaction};
+    #[test]
+    fn configured_udl_carries_comments_and_custom_folds_and_rejects_replacement_checkpoint() {
+        let definition = Arc::new(udl::Definition { version:1,id:"angle".into(),name:"Angle".into(),extensions:vec!["angle".into()],keywords:vec!["begin".into()],operators:"<>".into(),line_comment:Some("#".into()),block_comment:Some(("/*".into(),"*/".into())),strings:vec!['"'],fold_pairs:vec![('<','>')] });
+        let first="begin <\n/* hidden\n";
+        let text=format!("{first}> */\nvalue\n>\n");
+        let source=document(&text).snapshot();
+        let mut pass=ForwardLexer::configured(source.clone(),Language::PlainText,LexerPreference::Native,Some(definition.clone()));
+        let one=pass.advance(TextOffset(first.len()),&Cancellation::default()).unwrap();
+        let two=pass.advance(TextOffset(text.len()),&Cancellation::default()).unwrap();
+        let mut folds=folding::FoldAccumulator::default();
+        folds.advance(&source,&one,10).unwrap(); folds.advance(&source,&two,10).unwrap();
+        assert_eq!(folds.known(), &[folding::Fold{header:0,end:4,level:1}]);
+        assert!(two.spans.iter().any(|span| span.kind==StyleKind::Comment && span.range.start==TextOffset(first.len())));
+        assert!(matches!(lex_udl(source,Arc::new((*definition).clone()),TextOffset(first.len())..TextOffset(text.len()),one.checkpoint.as_ref(),&Cancellation::default()),Err(Error::StaleCheckpoint)));
+    }
+    #[test]
+    fn all_fifteen_native_definitions_validate_and_native_python_folds() {
+        for entry in catalog::CATALOG { entry.native_definition().validate().unwrap(); }
+        let text="def f():\n    value = 1\n    return value\nother = 2\n";
+        let source=document(text).snapshot();
+        let mut pass=ForwardLexer::configured(source.clone(),Language::Python,LexerPreference::Native,None);
+        let result=pass.advance(TextOffset(text.len()),&Cancellation::default()).unwrap();
+        assert!(result.fold_levels.is_none());
+        assert_eq!(folding::folds(&source,&result,10).unwrap(),vec![folding::Fold{header:0,end:2,level:1}]);
+    }
     fn document(text: &str) -> Document {
         Document::from_utf8(text, Budget::new(4 << 20), Budget::new(4 << 20)).unwrap()
     }

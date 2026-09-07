@@ -5,13 +5,13 @@ use bareline_platform::LocalFileSystem;
 use std::{
     fs::{File, OpenOptions},
     io,
-    mem::{offset_of, size_of},
+    mem::size_of,
     os::windows::{
         ffi::OsStrExt,
         fs::{MetadataExt, OpenOptionsExt},
         io::AsRawHandle,
     },
-    path::{Component, Path},
+    path::{Component, Path, PathBuf},
 };
 use windows::Win32::{Foundation::HANDLE, Storage::FileSystem::*};
 fn error(e: windows::core::Error) -> io::Error {
@@ -74,36 +74,21 @@ pub fn create(fs: &dyn LocalFileSystem, path: &Path, directory: bool) -> io::Res
 }
 pub fn rename(fs: &dyn LocalFileSystem, source: &Path, target: &Path) -> io::Result<()> {
     let _source_parents = parents(fs, source)?;
-    let _target_parents = parents(fs, target)?;
+    let target_parents = parents(fs, target)?;
     let file = nofollow(source, DELETE.0 | FILE_READ_ATTRIBUTES.0)?;
-    let name: Vec<u16> = target.as_os_str().encode_wide().collect();
+    let target_parent = target_parents.last().ok_or_else(|| {
+        io::Error::new(io::ErrorKind::InvalidInput, "destination parent required")
+    })?;
+    let name: Vec<u16> = target.file_name().ok_or_else(|| {
+        io::Error::new(io::ErrorKind::InvalidInput, "destination filename required")
+    })?.encode_wide().collect();
     if name.contains(&0) || name.len() > 32767 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "invalid destination name",
         ));
     }
-    let bytes = offset_of!(FILE_RENAME_INFO, FileName) + name.len() * 2;
-    let mut storage = vec![0u64; bytes.max(size_of::<FILE_RENAME_INFO>()).div_ceil(8)];
-    // SAFETY: u64 allocation aligns FILE_RENAME_INFO on Windows x64; sufficient
-    // bytes include the variable UTF-16 tail. File and ancestor handles remain
-    // alive throughout the call. ReplaceIfExists stays false (zero initialized).
-    unsafe {
-        let info = storage.as_mut_ptr().cast::<FILE_RENAME_INFO>();
-        (*info).FileNameLength = (name.len() * 2) as u32;
-        std::ptr::copy_nonoverlapping(
-            name.as_ptr(),
-            std::ptr::addr_of_mut!((*info).FileName).cast::<u16>(),
-            name.len(),
-        );
-        SetFileInformationByHandle(
-            HANDLE(file.as_raw_handle()),
-            FileRenameInfo,
-            info.cast(),
-            bytes as u32,
-        )
-        .map_err(error)
-    }
+    crate::rename::rename(&file, target_parent, &name, false)
 }
 pub fn delete(fs: &dyn LocalFileSystem, path: &Path) -> io::Result<()> {
     let _parents = parents(fs, path)?;
@@ -120,6 +105,31 @@ pub fn delete(fs: &dyn LocalFileSystem, path: &Path) -> io::Result<()> {
         .map_err(error)
     }
 }
+/// Reversible explorer deletion moves the entire entry without traversing its
+/// children. Retained siblings are never automatically purged, including at exit.
+#[derive(Clone, Debug)]
+pub struct WorkspaceDeleteUndo {
+    pub original: PathBuf,
+    pub retained: PathBuf,
+}
+pub fn retain_deleted_entry(fs: &dyn LocalFileSystem, path: &Path) -> io::Result<WorkspaceDeleteUndo> {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    let parent = path.parent().ok_or_else(|| io::Error::other("Cannot delete a volume root"))?;
+    for _ in 0..16 {
+        let retained = parent.join(format!(".bareline-deleted-{}-{}-{}", std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
+        match rename(fs, path, &retained) {
+            Ok(()) => return Ok(WorkspaceDeleteUndo { original: path.to_owned(), retained }),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Err(io::Error::other("Could not reserve retained deletion name"))
+}
+pub fn restore_deleted_entry(fs: &dyn LocalFileSystem, undo: &WorkspaceDeleteUndo) -> io::Result<()> {
+    rename(fs, &undo.retained, &undo.original)
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -133,8 +143,12 @@ mod tests {
         let b = root.join("b");
         create(&WindowsFileSystem, &a, false).unwrap();
         create(&WindowsFileSystem, &b, false).unwrap();
+        std::fs::write(&a, b"source content").unwrap();
+        std::fs::write(&b, b"destination content").unwrap();
         assert!(rename(&WindowsFileSystem, &a, &b).is_err());
         assert!(a.exists() && b.exists());
+        assert_eq!(std::fs::read(&a).unwrap(), b"source content");
+        assert_eq!(std::fs::read(&b).unwrap(), b"destination content");
         assert!(delete(&WindowsFileSystem, &root).is_err());
         let c = root.join("c");
         rename(&WindowsFileSystem, &a, &c).unwrap();

@@ -23,6 +23,7 @@ pub struct PaletteController {
     input_bounds: Rect,
     list_bounds: Rect,
     pub status: Option<String>,
+    dynamic_activation: Option<bareline_commands::DynamicCommandIdentity>,
 }
 impl PaletteController {
     pub fn accessibility_focus(&mut self, id: u64) -> bool {
@@ -52,6 +53,9 @@ impl PaletteController {
             false
         }
     }
+    pub fn take_dynamic_activation(&mut self) -> Option<bareline_commands::DynamicCommandIdentity> {
+        self.dynamic_activation.take()
+    }
     pub fn results(&self) -> &[PaletteEntry] {
         &self.entries
     }
@@ -79,10 +83,17 @@ impl PaletteController {
         context: &CommandContext,
         keymap: &Keymap,
     ) {
-        let selected = self.selected();
+        let selected = self
+            .entries
+            .get(self.selected)
+            .map(|entry| (entry.id, entry.dynamic.clone()));
         self.entries = registry.palette(self.field.value(), context, keymap, usize::MAX);
         self.selected = selected
-            .and_then(|id| self.entries.iter().position(|entry| entry.id == id))
+            .and_then(|(id, dynamic)| {
+                self.entries
+                    .iter()
+                    .position(|entry| entry.id == id && entry.dynamic == dynamic)
+            })
             .unwrap_or(0);
         self.status = None;
         self.reveal();
@@ -147,6 +158,16 @@ impl PaletteController {
     ) -> Option<CommandId> {
         if !self.open || self.field.composing() {
             return None;
+        }
+        let entry = self.entries.get(self.selected)?;
+        if let Some(identity) = &entry.dynamic {
+            if registry.contributions.resolve(identity).is_none() {
+                self.status = Some("Extension command is unavailable or changed".into());
+                return None;
+            }
+            self.dynamic_activation = Some(identity.clone());
+            self.dismiss();
+            return Some(CommandId("internal.dynamic.invoke"));
         }
         let id = self.selected()?;
         match registry.dispatch_in(id, context) {
@@ -442,6 +463,44 @@ impl PaletteController {
 mod tests {
     use super::*;
     use bareline_commands::{CommandState, shell_commands};
+    #[test]
+    fn contributed_activation_keeps_owned_identity_and_rejects_revocation() {
+        use bareline_commands::{DynamicCommandIdentity, DynamicCommandRecord};
+        let mut registry = shell_commands();
+        let identity = DynamicCommandIdentity {
+            owner: "fixture".into(),
+            id: "fixture.format".into(),
+            generation: 4,
+        };
+        let record = DynamicCommandRecord {
+            identity: identity.clone(),
+            title: "Fixture Format".into(),
+            enabled: true,
+            disabled_reason: None,
+        };
+        registry
+            .contributions
+            .replace_owner("fixture", vec![record.clone()])
+            .unwrap();
+        let keymap = Keymap::defaults(&registry);
+        let context = CommandContext::default();
+        let mut palette = PaletteController::default();
+        palette.show(&registry, &context, &keymap);
+        palette.insert("Fixture Format", &registry, &context, &keymap);
+        registry.contributions.remove_owner("fixture");
+        assert!(palette.activate(&registry, &context).is_none());
+        assert!(palette.open);
+        registry
+            .contributions
+            .replace_owner("fixture", vec![record])
+            .unwrap();
+        assert_eq!(
+            palette.activate(&registry, &context),
+            Some(CommandId("internal.dynamic.invoke"))
+        );
+        assert_eq!(palette.take_dynamic_activation(), Some(identity));
+        assert!(palette.take_dynamic_activation().is_none());
+    }
     #[test]
     fn paint_and_pointer_use_current_results_and_expose_semantics() {
         let registry = shell_commands();

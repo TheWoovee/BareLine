@@ -35,7 +35,10 @@ pub struct Macro {
 }
 impl Macro {
     pub fn validate(&self, registry: &CommandRegistry) -> Result<(), String> {
-        if self.name.trim().is_empty() {
+        if self.name.trim().is_empty()
+            || self.name.len() > 4096
+            || self.name.chars().any(char::is_control)
+        {
             return Err("Macro name is empty".into());
         }
         if self.events.is_empty() || self.events.len() > MAX_EVENTS {
@@ -72,11 +75,43 @@ impl Macro {
                 return Err("Macro exceeds 4 MiB".into());
             }
         }
+        if self.serialized_bound(&self.name) > MAX_FILE_BYTES {
+            return Err("Macro exceeds the serialized TOML size limit".into());
+        }
         Ok(())
     }
+    // Conservative TOML escaping/framing bound, checked before serialization allocates.
+    fn serialized_bound(&self, name: &str) -> usize {
+        self.events.iter().fold(
+            128usize.saturating_add(name.len().saturating_mul(6)),
+            |total, event| {
+                total.saturating_add(128).saturating_add(match event {
+                    MacroEvent::Command { id, arguments } => {
+                        id.len().saturating_mul(6).saturating_add(
+                            arguments
+                                .iter()
+                                .map(|(key, value)| {
+                                    key.len()
+                                        .saturating_add(value.len())
+                                        .saturating_mul(6)
+                                        .saturating_add(16)
+                                })
+                                .sum::<usize>(),
+                        )
+                    }
+                    MacroEvent::TypeText { id, text, .. } => {
+                        id.len().saturating_add(text.len()).saturating_mul(6)
+                    }
+                })
+            },
+        )
+    }
     pub fn rename(&mut self, name: &str) -> Result<(), String> {
-        if name.trim().is_empty() || name.len() > 4096 {
+        if name.trim().is_empty() || name.len() > 4096 || name.chars().any(char::is_control) {
             return Err("Invalid macro name".into());
+        }
+        if self.serialized_bound(name) > MAX_FILE_BYTES {
+            return Err("Renamed macro exceeds the serialized TOML size limit".into());
         }
         self.name = name.into();
         Ok(())
@@ -217,7 +252,7 @@ fn quote(value: &str) -> String {
     output
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct Recorder {
     recording: bool,
     events: Vec<MacroEvent>,
@@ -252,16 +287,22 @@ impl Recorder {
         }
         let bytes = match &event {
             MacroEvent::Command { id, arguments } => {
-                id.len()
+                id.len().saturating_mul(6)
                     + arguments
                         .iter()
-                        .map(|(k, v)| k.len() + v.len())
+                        .map(|(k, v)| (k.len() + v.len()).saturating_mul(6).saturating_add(16))
                         .sum::<usize>()
             }
-            MacroEvent::TypeText { id, text, .. } => id.len() + text.len(),
-        };
-        if self.events.len() >= MAX_EVENTS || self.bytes.saturating_add(bytes) > MAX_FILE_BYTES {
-            self.recording = false;
+            MacroEvent::TypeText { id, text, .. } => (id.len() + text.len()).saturating_mul(6),
+        }
+        .saturating_add(128);
+        if self.events.len() >= MAX_EVENTS
+            || self
+                .bytes
+                .saturating_add(bytes)
+                .saturating_add(128 + 4096 * 6)
+                > MAX_FILE_BYTES
+        {
             return Err("Macro recording limit reached".into());
         }
         self.bytes += bytes;
@@ -521,6 +562,45 @@ pub mod process;
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn serialized_bound_and_name_validation_do_not_discard_recording() {
+        let registry = bareline_commands::shell_commands();
+        let mut recorder = Recorder::default();
+        recorder.start();
+        recorder
+            .executed(
+                MacroEvent::Command {
+                    id: "file.new".into(),
+                    arguments: BTreeMap::new(),
+                },
+                true,
+                &registry,
+            )
+            .unwrap();
+        assert!(recorder.stop("bad\nname", &registry).is_err());
+        assert!(recorder.recording());
+        assert_eq!(recorder.stop("Saved", &registry).unwrap().events.len(), 1);
+        let oversized = Macro {
+            name: "Large".into(),
+            events: vec![MacroEvent::TypeText {
+                id: "file.new".into(),
+                text: "\u{1}".repeat(800_000),
+                interval_ms: 1,
+            }],
+        };
+        assert!(oversized.validate(&registry).is_err());
+        let mut near_limit = Macro {
+            name: "a".into(),
+            events: vec![MacroEvent::TypeText {
+                id: "file.new".into(),
+                text: "a".repeat(695_000),
+                interval_ms: 1,
+            }],
+        };
+        near_limit.validate(&registry).unwrap();
+        assert!(near_limit.rename(&"b".repeat(4096)).is_err());
+        assert_eq!(near_limit.name, "a");
+    }
     use bareline_commands::shell_commands;
     fn definition() -> Macro {
         Macro {

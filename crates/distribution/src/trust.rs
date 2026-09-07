@@ -1,0 +1,66 @@
+// SPDX-License-Identifier: MPL-2.0
+//! Offline-root-authorized release-key rotation and explicit revocation.
+//! Deployment supplies the root key and monotonic floor; no package chooses its root.
+use serde::Deserialize;
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReleaseAuthority {
+    pub schema_version: u32,
+    pub root_version: u64,
+    pub expires_unix: u64,
+    pub minimum_metadata_version: u64,
+    pub release_public_key: String,
+    pub catalog_public_key: String,
+    pub publisher_certificate_sha256: String,
+    pub revoked_release_keys: Vec<String>,
+    pub revoked_publishers: Vec<String>,
+}
+pub fn verify_authority(bytes: &[u8], signature: &str, offline_root_key: &str, highest_root_version: u64, now: u64) -> Result<ReleaseAuthority, super::update::VerifyError> {
+    use super::update::{VerifyError, verify_minisign};
+    if bytes.len() > 16384 { return Err(VerifyError::Size); }
+    verify_minisign(bytes, signature, offline_root_key)?;
+    let root: ReleaseAuthority = serde_json::from_slice(bytes).map_err(|_| VerifyError::Metadata)?;
+    if root.schema_version != 1 || root.root_version < highest_root_version { return Err(VerifyError::Rollback); }
+    if now == 0 || root.expires_unix <= now { return Err(VerifyError::Expired); }
+    if root.revoked_release_keys.len() > 32 || root.revoked_publishers.len() > 32 || root.release_public_key.len() > 128
+        || root.publisher_certificate_sha256.len() != 64
+        || !root.publisher_certificate_sha256.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        || root.revoked_release_keys.contains(&root.release_public_key)
+        || root.catalog_public_key == root.release_public_key || root.catalog_public_key == offline_root_key || root.release_public_key == offline_root_key
+        || root.revoked_publishers.iter().any(|p| p.eq_ignore_ascii_case(&root.publisher_certificate_sha256)) {
+        return Err(VerifyError::Policy);
+    }
+    minisign_verify::PublicKey::from_base64(&root.release_public_key).map_err(|_| VerifyError::Policy)?;
+    minisign_verify::PublicKey::from_base64(&root.catalog_public_key).map_err(|_| VerifyError::Policy)?;
+    Ok(root)
+}
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RootTransition {
+    pub schema_version: u32,
+    pub version: u64,
+    pub old_root_key: String,
+    pub new_root_key: String,
+    pub expires_unix: u64,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SignedTransition { payload: String, old_signature: String, new_signature: String }
+/// Each exact transition payload must be authorized by both its prior and successor
+/// root. The chain is persisted verbatim and reevaluated from the compiled root.
+pub fn verify_root_chain(bytes: &[u8], compiled_root: &str, now: u64) -> Result<(String,u64,Vec<String>),super::update::VerifyError> {
+    use super::update::{VerifyError,verify_minisign};
+    if bytes.len()>262144 {return Err(VerifyError::Size);}
+    let chain:Vec<SignedTransition>=serde_json::from_slice(bytes).map_err(|_|VerifyError::Metadata)?;
+    if chain.is_empty() || chain.len()>16 {return Err(VerifyError::Policy);}
+    let mut key=compiled_root.to_owned(); let mut version=0; let mut lineage=vec![key.clone()];
+    for signed in chain {
+        verify_minisign(signed.payload.as_bytes(),&signed.old_signature,&key)?;
+        let next:RootTransition=serde_json::from_str(&signed.payload).map_err(|_|VerifyError::Metadata)?;
+        if next.schema_version!=1 || next.old_root_key!=key || next.new_root_key==key || next.version<=version || next.new_root_key.len()>128 {return Err(VerifyError::Policy);}
+        if now==0 || next.expires_unix<=now {return Err(VerifyError::Expired);}
+        verify_minisign(signed.payload.as_bytes(),&signed.new_signature,&next.new_root_key)?;
+        key=next.new_root_key; version=next.version; lineage.push(key.clone());
+    }
+    Ok((key,version,lineage))
+}

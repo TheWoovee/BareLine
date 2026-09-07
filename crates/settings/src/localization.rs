@@ -71,10 +71,17 @@ impl LocalePack {
         let mut pack =
             Self::parse(include_bytes!("../locales/en.toml")).expect("valid built-in English");
         for definition in DEFINITIONS {
+            pack.messages.insert(format!("setting.{}.title", definition.key), definition.title.into());
             pack.messages.insert(
                 definition.description_id.into(),
                 definition.description.into(),
             );
+        }
+        for category in ["Editor","Appearance","Files","Search","Keyboard","Language","Extensions","Advanced"] {
+            pack.messages.insert(format!("settings.category.{category}"), if category == "Language" { "Languages" } else { category }.into());
+        }
+        for command in bareline_commands::shell_commands().entries() {
+            pack.messages.insert(format!("command.{}",command.id.0),command.title.into());
         }
         pack
     }

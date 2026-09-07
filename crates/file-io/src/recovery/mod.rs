@@ -22,6 +22,8 @@ const CHUNK: usize = 64 * 1024;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RecoveryMetadata {
+    #[serde(default)]
+    pub original_path: Option<PathBuf>,
     pub source_generation: String,
     pub codec_catalog_version: String,
     pub original_len: u64,
@@ -1120,6 +1122,7 @@ mod tests {
         let mut writer = RecoveryWriter::create(
             &temp.0.join("item"),
             RecoveryMetadata {
+                original_path: None,
                 source_generation: "full-sha256-test".into(),
                 codec_catalog_version: "utf8-v1".into(),
                 original_len: 5,

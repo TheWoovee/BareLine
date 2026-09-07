@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 use super::*;
-use bareline_app::language::{LanguageController, LanguageEffect};
+use bareline_app::language::{LanguageConfiguration, LanguageController, LanguageEffect};
 use bareline_renderer::{DrawOp, LayoutError, Rect};
 use bareline_ui::controls::{Key as UiKey, UiEvent};
 
@@ -8,10 +8,24 @@ use bareline_ui::controls::{Key as UiKey, UiEvent};
 pub(super) struct LanguageRuntime {
     pub controller: LanguageController,
     restored: Option<bareline_document::DocumentSnapshot>,
+    restored_language: Option<bareline_syntax::Language>,
+    restored_definition: Option<std::sync::Arc<bareline_syntax::udl::Definition>>,
+    restored_preference: bareline_syntax::LexerPreference,
     applied_definition: Option<std::sync::Arc<bareline_syntax::udl::Definition>>,
     definition_target: Option<bareline_document::DocumentSnapshot>,
     definition_editor: Option<bareline_document::DocumentSnapshot>,
     validated_revision: Option<u64>,
+    detection: Option<
+        std::sync::mpsc::Receiver<
+            Result<
+                (
+                    bareline_document::DocumentSnapshot,
+                    bareline_syntax::Language,
+                ),
+                String,
+            >,
+        >,
+    >,
 }
 impl LanguageRuntime {
     pub fn draw(
@@ -132,15 +146,26 @@ impl Shell {
                     } else if id == "view.fold.toggleCurrent" {
                         editor.toggle_current_fold();
                     } else if !editor.paged() {
+                        self.language.restored = Some(editor.snapshot().clone());
+                        self.language.restored_language = Some(editor.language);
+                        self.language.restored_definition = editor.udl.clone();
+                        self.language.restored_preference = editor.syntax_preference;
                         let level = id
                             .strip_prefix("view.fold.level")
                             .and_then(|n| n.parse::<usize>().ok())
                             .unwrap_or(1);
-                        self.language.controller.request_folds(
+                        self.language.controller.request_folds_configured(
                             editor.snapshot().clone(),
                             editor.language,
                             level,
                             self.notify.clone(),
+                            LanguageConfiguration {
+                                policy: self
+                                    .settings
+                                    .effective()
+                                    .language_policy(editor.udl.as_ref().map_or(editor.language.metadata().id, |definition| definition.id.as_str())),
+                                definition: editor.udl.clone(),
+                            },
                         );
                     }
                 }
@@ -153,6 +178,80 @@ impl Shell {
         true
     }
     pub(super) fn language_pump(&mut self, _el: &ActiveEventLoop) {
+        if let Some(result) = self
+            .language
+            .detection
+            .as_ref()
+            .and_then(|rx| rx.try_recv().ok())
+        {
+            self.language.detection = None;
+            match result {
+                Ok((source, language)) => {
+                    if let Some(editor) = self.workspace.as_mut().and_then(|w| {
+                        w.editors.iter_mut().find(|editor| {
+                            editor.snapshot().same_document(&source)
+                                && editor.snapshot().revision == source.revision
+                        })
+                    }) {
+                        editor.detected_language = Some(language);
+                    }
+                }
+                Err(error) => self.language.controller.status = error,
+            }
+        }
+        if self.language.detection.is_none()
+            && let Some(workspace) = &self.workspace
+            && let Some(editor) = workspace.editors.get(self.app.active)
+            && !editor.paged()
+            && editor.detected_language.is_none()
+            && editor.language_override.is_none()
+        {
+            let source = editor.snapshot().clone();
+            let path = workspace
+                .path(self.app.active)
+                .map_or_else(std::path::PathBuf::new, std::path::Path::to_path_buf);
+            let notify = self.notify.clone();
+            let (tx, rx) = std::sync::mpsc::sync_channel(1);
+            self.language.detection = Some(rx);
+            if let Err(error) = std::thread::Builder::new()
+                .name("bareline-language-detect".into())
+                .spawn(move || {
+                    let result = (|| {
+                        let mut end = source.len().min(8192);
+                        while !source.is_boundary(bareline_document::TextOffset(end)) {
+                            end -= 1;
+                        }
+                        let mut start = source.len().saturating_sub(8192);
+                        while !source.is_boundary(bareline_document::TextOffset(start)) {
+                            start += 1;
+                        }
+                        let prefix = source
+                            .read(
+                                bareline_document::TextOffset(0)
+                                    ..bareline_document::TextOffset(end),
+                                8192,
+                            )
+                            .map_err(|e| format!("{e:?}"))?;
+                        let suffix = source
+                            .read(
+                                bareline_document::TextOffset(start)
+                                    ..bareline_document::TextOffset(source.len()),
+                                8192,
+                            )
+                            .map_err(|e| format!("{e:?}"))?;
+                        let language = bareline_syntax::Language::detect_with_regions(
+                            &path, &prefix, &suffix, None, None,
+                        );
+                        Ok((source, language))
+                    })();
+                    let _ = tx.send(result);
+                    notify();
+                })
+            {
+                self.language.detection = None;
+                self.language.controller.status = error.to_string();
+            }
+        }
         if !self.language.controller.busy()
             && let Some(identity) = &self.language.definition_editor
             && let Some(editor) = self.workspace.as_ref().and_then(|w| {
@@ -172,22 +271,50 @@ impl Shell {
             .workspace
             .as_ref()
             .and_then(|w| w.editors.get(self.app.active))
-            && editor.has_pending_folds()
             && !editor.paged()
-            && editor.language != bareline_syntax::Language::PlainText
+            && (editor.language != bareline_syntax::Language::PlainText || editor.udl.is_some())
             && !self.language.restored.as_ref().is_some_and(|s| {
                 s.same_document(editor.snapshot()) && s.revision == editor.snapshot().revision
+                    && self.language.restored_language == Some(editor.language)
+                    && self.language.restored_preference == editor.syntax_preference
+                    && match (&self.language.restored_definition, &editor.udl) { (None,None) => true, (Some(a),Some(b)) => std::sync::Arc::ptr_eq(a,b), _ => false }
             })
         {
             self.language.restored = Some(editor.snapshot().clone());
-            self.language.controller.request_folds(
+            self.language.restored_language = Some(editor.language);
+            self.language.restored_definition = editor.udl.clone();
+            self.language.restored_preference = editor.syntax_preference;
+            self.language.controller.request_folds_configured(
                 editor.snapshot().clone(),
                 editor.language,
-                1,
+                0,
                 self.notify.clone(),
+                LanguageConfiguration {
+                    policy: self
+                        .settings
+                        .effective()
+                        .language_policy(editor.udl.as_ref().map_or(editor.language.metadata().id, |definition| definition.id.as_str())),
+                    definition: editor.udl.clone(),
+                },
             );
         }
-        if !self.language.controller.poll() {
+        let definition_snapshot = self
+            .language
+            .definition_editor
+            .as_ref()
+            .and_then(|identity| {
+                self.workspace
+                    .as_ref()?
+                    .editors
+                    .iter()
+                    .find(|editor| editor.snapshot().same_document(identity))
+                    .map(|editor| editor.snapshot().clone())
+            });
+        if !self
+            .language
+            .controller
+            .poll_definition(definition_snapshot.as_ref())
+        {
             return;
         }
         if self.language.definition_editor.is_some()
@@ -282,6 +409,12 @@ impl Shell {
                 .and_then(|w| w.editors.get_mut(self.app.active))
         {
             match effect {
+                LanguageEffect::ChooseDefinition(definition) => {
+                    self.language.definition_target=Some(editor.snapshot().clone());
+                    self.language.applied_definition=Some(definition.clone());
+                    self.language.controller.definition=Some(definition.clone());
+                    editor.udl=Some(definition);
+                }
                 LanguageEffect::Choose(language) => {
                     editor.udl = None;
                     editor.language_override = Some(language);

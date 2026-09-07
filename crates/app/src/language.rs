@@ -22,7 +22,23 @@ use std::{
 };
 pub enum LanguageEffect {
     Choose(Language),
+    ChooseDefinition(Arc<bareline_syntax::udl::Definition>),
     Accept(usize),
+}
+#[derive(Clone, Default)]
+pub struct LanguageConfiguration {
+    pub policy: bareline_settings::LanguagePolicy,
+    pub definition: Option<Arc<bareline_syntax::udl::Definition>>,
+}
+impl LanguageConfiguration {
+    pub fn lexer(&self) -> bareline_syntax::LexerPreference {
+        match self.policy.lexer {
+            bareline_settings::LexerPreference::Primary => {
+                bareline_syntax::LexerPreference::Lexilla
+            }
+            bareline_settings::LexerPreference::Native => bareline_syntax::LexerPreference::Native,
+        }
+    }
 }
 enum WorkerResult {
     Saved,
@@ -31,6 +47,7 @@ enum WorkerResult {
     Udl(
         bareline_syntax::udl::Definition,
         Vec<bareline_syntax::udl::Mapping>,
+        Option<DocumentSnapshot>,
     ),
 }
 #[derive(Default)]
@@ -47,6 +64,7 @@ impl ItemSource for Rows {
     }
 }
 pub struct LanguageController {
+    definitions: std::collections::BTreeMap<String, Arc<bareline_syntax::udl::Definition>>,
     pub open: bool,
     pub title: String,
     pub status: String,
@@ -58,6 +76,8 @@ pub struct LanguageController {
     list: List,
     choosing: bool,
     receiver: Option<Receiver<Result<WorkerResult, String>>>,
+    fold_receiver: Option<Receiver<Result<WorkerResult, String>>>,
+    fold_cancel: Cancellation,
     cancel: Cancellation,
 }
 impl Default for LanguageController {
@@ -69,6 +89,7 @@ impl Default for LanguageController {
             completion: None,
             folds: None,
             definition: None,
+            definitions: Default::default(),
             fold_level: 1,
             rows: Rows::default(),
             list: List {
@@ -83,6 +104,8 @@ impl Default for LanguageController {
             },
             choosing: false,
             receiver: None,
+            fold_receiver: None,
+            fold_cancel: Cancellation::default(),
             cancel: Cancellation::default(),
         }
     }
@@ -91,6 +114,7 @@ impl LanguageController {
     pub fn busy(&self) -> bool {
         self.receiver.is_some()
     }
+    pub fn cancel_folds(&mut self) { self.fold_cancel.cancel(); self.fold_receiver=None; }
     pub fn validate_definition(
         &mut self,
         snapshot: DocumentSnapshot,
@@ -105,7 +129,7 @@ impl LanguageController {
                 .map_err(|e| format!("{e:?}"))?;
             let definition = bareline_syntax::udl::Definition::from_json(&text)
                 .map_err(|e| format!("Definition unchanged: {e:?}"))?;
-            Ok(WorkerResult::Udl(definition, Vec::new()))
+            Ok(WorkerResult::Udl(definition, Vec::new(), Some(snapshot)))
         });
         self.open = false;
     }
@@ -172,6 +196,7 @@ impl LanguageController {
                 )
                 .collect(),
         );
+        self.rows.0.extend(self.definitions.values().map(|definition| definition.name.clone()));
         self.list.selected = Some(0);
     }
     pub fn close(&mut self) {
@@ -269,20 +294,38 @@ impl LanguageController {
         level: usize,
         notify: Arc<dyn Fn() + Send + Sync>,
     ) {
-        self.fold_level = level.clamp(1, 8);
-        if self.receiver.is_some() {
-            self.status = "Language worker is busy".into();
-            return;
-        }
-        self.cancel = Cancellation::default();
-        let cancel = self.cancel.clone();
+        self.request_folds_configured(
+            snapshot,
+            language,
+            level,
+            notify,
+            LanguageConfiguration::default(),
+        );
+    }
+    pub fn request_folds_configured(
+        &mut self,
+        snapshot: DocumentSnapshot,
+        language: Language,
+        level: usize,
+        notify: Arc<dyn Fn() + Send + Sync>,
+        configuration: LanguageConfiguration,
+    ) {
+        self.fold_level = level.min(8);
+        self.fold_cancel.cancel();
+        self.fold_cancel = Cancellation::default();
+        let cancel = self.fold_cancel.clone();
         let (tx, rx) = mpsc::sync_channel(1);
-        self.receiver = Some(rx);
+        self.fold_receiver = Some(rx);
         self.status = "Discovering folds…".into();
         let spawn = std::thread::Builder::new()
             .name("bareline-folds".into())
             .spawn(move || {
-                let mut lexer = bareline_syntax::ForwardLexer::new(snapshot.clone(), language);
+                let mut lexer = bareline_syntax::ForwardLexer::configured(
+                    snapshot.clone(),
+                    language,
+                    configuration.lexer(),
+                    configuration.definition,
+                );
                 let mut accumulator = bareline_syntax::folding::FoldAccumulator::default();
                 let mut start = 0;
                 loop {
@@ -329,7 +372,7 @@ impl LanguageController {
                 }
             });
         if let Err(error) = spawn {
-            self.receiver = None;
+            self.fold_receiver = None;
             self.status = error.to_string();
         }
     }
@@ -357,17 +400,22 @@ impl LanguageController {
                     Vec::new(),
                 )
             };
-            Ok(WorkerResult::Udl(definition, report))
+            Ok(WorkerResult::Udl(definition, report, None))
         });
     }
     pub fn poll(&mut self) -> bool {
-        let Some(result) = self.receiver.as_ref().and_then(|rx| rx.try_recv().ok()) else {
+        self.poll_definition(None)
+    }
+    pub fn poll_definition(&mut self, current: Option<&DocumentSnapshot>) -> bool {
+        let primary_result = self.receiver.as_ref().and_then(|rx| rx.try_recv().ok());
+        let is_fold = primary_result.is_none();
+        let Some(result) = primary_result.or_else(|| self.fold_receiver.as_ref().and_then(|rx| rx.try_recv().ok())) else {
             return false;
         };
         if !matches!(&result, Ok(WorkerResult::Folds(_, _, true))) {
-            self.receiver = None;
+            if is_fold { self.fold_receiver = None; } else { self.receiver = None; }
         }
-        if self.cancel.is_cancelled() {
+        if if is_fold { self.fold_cancel.is_cancelled() } else { self.cancel.is_cancelled() } {
             return false;
         }
         match result {
@@ -395,7 +443,19 @@ impl LanguageController {
                 self.folds = Some((snapshot, folds, partial));
                 self.open = false;
             }
-            Ok(WorkerResult::Udl(definition, report)) => {
+            Ok(WorkerResult::Udl(definition, report, source)) => {
+                if source.as_ref().is_some_and(|source| {
+                    !current.is_some_and(|current| {
+                        source.same_document(current) && source.revision == current.revision
+                    })
+                }) {
+                    self.status =
+                        "Definition changed during validation; previous definition retained".into();
+                    return true;
+                }
+                if self.definitions.len() >= 128 && !self.definitions.contains_key(&definition.id) {
+                    self.status="Language catalog limit reached; existing definitions retained".into(); return true;
+                }
                 self.status = format!(
                     "Imported {} · {} mapping notes",
                     definition.name,
@@ -407,7 +467,9 @@ impl LanguageController {
                         .map(|r| format!("{:?}: {} — {}", r.kind, r.field, r.reason))
                         .collect(),
                 );
-                self.definition = Some(Arc::new(definition));
+                let definition=Arc::new(definition);
+                self.definitions.insert(definition.id.clone(),definition.clone());
+                self.definition = Some(definition);
             }
             Err(error) => self.status = error,
         }
@@ -424,6 +486,10 @@ impl LanguageController {
         if self.list.event(event, &self.rows) == Some(ControlAction::Activated) {
             let n = self.list.selected?;
             if self.choosing {
+                if n > bareline_syntax::catalog::CATALOG.len() {
+                    let definition = self.definitions.values().nth(n-bareline_syntax::catalog::CATALOG.len()-1)?.clone();
+                    self.close(); return Some(LanguageEffect::ChooseDefinition(definition));
+                }
                 let language = if n == 0 {
                     Language::PlainText
                 } else {

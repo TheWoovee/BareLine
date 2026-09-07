@@ -18,6 +18,25 @@ impl Rect {
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Color(pub u32);
+/// Immutable straight-alpha RGBA8 pixels; validation happens before native allocation.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Image {
+    width: u32,
+    height: u32,
+    pixels: std::sync::Arc<[u8]>,
+}
+impl Image {
+    pub fn rgba(width: u32, height: u32, pixels: Vec<u8>) -> Result<Self, LayoutError> {
+        let bytes = u64::from(width).checked_mul(u64::from(height)).and_then(|n| n.checked_mul(4)).ok_or(LayoutError::ResourceLimit)?;
+        if width == 0 || height == 0 || bytes > 16 * 1024 * 1024 || bytes != pixels.len() as u64 {
+            return Err(LayoutError::ResourceLimit);
+        }
+        Ok(Self { width, height, pixels: pixels.into() })
+    }
+    pub fn width(&self) -> u32 { self.width }
+    pub fn height(&self) -> u32 { self.height }
+    pub fn pixels(&self) -> &[u8] { &self.pixels }
+}
 #[derive(Clone, Debug, PartialEq)]
 pub enum DrawOp {
     Fill(Rect, Color),
@@ -32,6 +51,9 @@ pub enum DrawOp {
     },
     PushClip(Rect),
     PopClip,
+    Image { image: Image, destination: Rect, opacity: f32 },
+    PushLayer { bounds: Rect, opacity: f32 },
+    PopLayer,
     Layout {
         origin: Point,
         layout: LayoutId,
@@ -76,6 +98,10 @@ pub struct TextStyle {
     pub color: Color,
 }
 pub trait TextBackend {
+    fn shape_with_font_family(&mut self, text: &str, size: f32, width: f32, family: &str) -> Result<LayoutId, LayoutError> {
+        if !valid_font_family(family) { return Err(LayoutError::InvalidOffset); }
+        self.shape(text, size, width)
+    }
     fn shape(&mut self, text: &str, size: f32, width: f32) -> Result<LayoutId, LayoutError>;
     /// Replace foreground styles without reshaping text or changing hit tests.
     /// Invalid ranges fail before changing the existing styles.
@@ -90,19 +116,31 @@ pub trait TextBackend {
     ) -> Result<Vec<Rect>, LayoutError>;
     fn release_layout(&mut self, layout: LayoutId);
 }
+pub fn valid_font_family(family: &str) -> bool {
+    !family.trim().is_empty() && family.len() <= 256 && !family.chars().any(char::is_control)
+}
 
 /// Validate before entering a native draw frame. Prevents stack underflow at FFI boundaries.
 pub fn balanced_clips(ops: &[DrawOp]) -> bool {
-    let mut depth = 0usize;
+    fn valid_rect(r: Rect) -> bool {
+        [r.x, r.y, r.width, r.height, r.x + r.width, r.y + r.height].iter().all(|n| n.is_finite()) && r.width >= 0.0 && r.height >= 0.0
+    }
+    let mut stack = Vec::new();
     for op in ops {
         match op {
-            DrawOp::PushClip(_) => depth += 1,
-            DrawOp::PopClip if depth == 0 => return false,
-            DrawOp::PopClip => depth -= 1,
+            DrawOp::PushClip(_) => stack.push(false),
+            DrawOp::PushLayer { bounds, opacity } => {
+                if !valid_rect(*bounds) || !opacity.is_finite() || !(0.0..=1.0).contains(opacity) { return false; }
+                stack.push(true);
+            }
+            DrawOp::PopClip if stack.pop() != Some(false) => return false,
+            DrawOp::PopLayer if stack.pop() != Some(true) => return false,
+            DrawOp::Image { destination, opacity, .. } if !valid_rect(*destination) || !opacity.is_finite() || !(0.0..=1.0).contains(opacity) => return false,
             _ => {}
         }
+        if stack.len() > 256 { return false; }
     }
-    depth == 0
+    stack.is_empty()
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FrameStatus {
@@ -113,4 +151,19 @@ pub trait RenderBackend {
     type Error;
     fn resize(&mut self, width: u32, height: u32, scale: f32) -> Result<(), Self::Error>;
     fn render(&mut self, operations: &[DrawOp]) -> Result<FrameStatus, Self::Error>;
+    fn begin_frame(&mut self) -> Painter<'_, Self> where Self: Sized {
+        Painter { backend: self, operations: Vec::new() }
+    }
+}
+
+/// A frame owns its commands and exclusively borrows its backend. Dropping cancels
+/// the frame; only `finish` enters native drawing, after backend validation.
+pub struct Painter<'a, B: RenderBackend + ?Sized> {
+    backend: &'a mut B,
+    operations: Vec<DrawOp>,
+}
+impl<B: RenderBackend + ?Sized> Painter<'_, B> {
+    pub fn draw(&mut self, operation: DrawOp) { self.operations.push(operation); }
+    pub fn extend(&mut self, operations: &[DrawOp]) { self.operations.extend_from_slice(operations); }
+    pub fn finish(self) -> Result<FrameStatus, B::Error> { self.backend.render(&self.operations) }
 }

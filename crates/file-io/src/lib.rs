@@ -3,6 +3,7 @@
 pub mod cancellation;
 pub mod codecs;
 pub mod lifecycle;
+pub mod owned_store;
 pub mod recovery;
 pub mod paged_recovery;
 pub mod resident_recovery;

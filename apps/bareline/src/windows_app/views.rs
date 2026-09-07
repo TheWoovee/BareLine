@@ -93,6 +93,26 @@ pub(super) fn register(registry: &mut CommandRegistry) {
         ("view.close_split", "Close Split View", ""),
         ("view.focus_other", "Focus Other View", "F6"),
         ("view.sync_vertical", "Synchronize Vertical Scrolling", ""),
+        (
+            "view.sync_horizontal",
+            "Synchronize Horizontal Scrolling",
+            "",
+        ),
+        ("view.tabs.vertical", "Vertical Tabs", ""),
+        ("view.tabs.pin", "Pin or Unpin Tab", ""),
+        ("view.tabs.color", "Cycle Tab Color", ""),
+        ("view.tabs.sort_name", "Sort Tabs by Name", ""),
+        ("view.tabs.sort_path", "Sort Tabs by Path", ""),
+        ("view.tabs.sort_descending", "Sort Tabs Descending", ""),
+        ("view.tabs.move_left", "Move Tab Left", "Ctrl+Shift+PageUp"),
+        (
+            "view.tabs.move_right",
+            "Move Tab Right",
+            "Ctrl+Shift+PageDown",
+        ),
+        ("view.tabs.previous", "Previous Tab", "Ctrl+PageUp"),
+        ("view.tabs.next", "Next Tab", "Ctrl+PageDown"),
+        ("view.tabs.mru", "Recent Document Switcher", "Ctrl+Tab"),
     ] {
         let id = CommandId(id);
         let _ = registry.register(CommandSpec {
@@ -119,13 +139,73 @@ struct QueuedInput {
     document: ViewSnapshot,
     input: Input,
 }
+enum DocumentBinding {
+    Resident(u64, ViewSnapshot),
+    Paged(u64, bareline_document::paged::PagedSnapshot),
+}
+impl DocumentBinding {
+    fn id(&self) -> u64 {
+        match self {
+            Self::Resident(id, _) | Self::Paged(id, _) => *id,
+        }
+    }
+    fn new(id: u64, editor: &bareline_app::workspace::WorkspaceEditor) -> Self {
+        match editor {
+            bareline_app::workspace::WorkspaceEditor::Resident(editor) => {
+                Self::Resident(id, editor.snapshot().clone())
+            }
+            bareline_app::workspace::WorkspaceEditor::Paged(editor) => {
+                Self::Paged(id, editor.snapshot().clone())
+            }
+        }
+    }
+    fn matches(&self, editor: &bareline_app::workspace::WorkspaceEditor) -> bool {
+        match (self, editor) {
+            (
+                Self::Resident(_, snapshot),
+                bareline_app::workspace::WorkspaceEditor::Resident(editor),
+            ) => snapshot.same_document(editor.snapshot()),
+            (Self::Paged(_, snapshot), bareline_app::workspace::WorkspaceEditor::Paged(editor)) => {
+                snapshot.same_document(editor.snapshot())
+            }
+            _ => false,
+        }
+    }
+}
+#[derive(Clone, Copy)]
+struct TabHit {
+    id: u64,
+    pane: u32,
+    bounds: Rect,
+    close: Rect,
+}
+struct TabDrag {
+    id: u64,
+    start: Point,
+    moved: bool,
+}
+struct MruPopup {
+    ids: Vec<u64>,
+    selected: usize,
+    bounds: Rect,
+}
 #[derive(Default)]
 pub(super) struct ViewsRuntime {
+    documents: Vec<DocumentBinding>,
+    next_document: u64,
+    loaded_tabs: [Option<u64>; 2],
+    tab_hits: Vec<TabHit>,
+    tab_strips: [Option<Rect>; 2],
+    tab_nav: Vec<(u32, bool, Rect)>,
+    tab_offset: [usize; 2],
+    tab_drag: Option<TabDrag>,
+    mru_popup: Option<MruPopup>,
+    pending_close: Option<usize>,
     controller: Option<ViewController>,
     primary: Option<ViewSnapshot>,
-    secondary: Option<SharedEditorView>,
+    pub(super) secondary: Option<SharedEditorView>,
     retired: Vec<SharedEditorView>,
-    bounds: [Option<Rect>; 2],
+    pub(super) bounds: [Option<Rect>; 2],
     splitter: Option<Rect>,
     dragging: bool,
     queued: VecDeque<QueuedInput>,
@@ -133,6 +213,338 @@ pub(super) struct ViewsRuntime {
     alignment: Option<bareline_app::views::AlignmentMap>,
 }
 impl ViewsRuntime {
+    fn draw_tab_strip(
+        &mut self,
+        workspace: &Workspace,
+        pane: u32,
+        bounds: Rect,
+        vertical: bool,
+        ops: &mut Vec<DrawOp>,
+    ) {
+        self.tab_strips[pane as usize] = Some(bounds);
+        let Some(controller) = &self.controller else {
+            return;
+        };
+        let tabs: Vec<_> = controller.pane_tabs(pane).cloned().collect();
+        let step = if vertical {
+            TAB_HEIGHT
+        } else {
+            bareline_ui::controls::TabStrip::TAB_WIDTH
+        };
+        let extent = if vertical {
+            bounds.height
+        } else {
+            bounds.width
+        };
+        let count = ((extent - 48.0) / step).floor().max(1.0) as usize;
+        let start = self.tab_offset[pane as usize].min(tabs.len().saturating_sub(count));
+        self.tab_offset[pane as usize] = start;
+        ops.push(DrawOp::Fill(bounds, workspace.theme.chrome));
+        ops.push(DrawOp::PushClip(bounds));
+        let titles = workspace.titles();
+        for (row, tab) in tabs.iter().skip(start).take(count).enumerate() {
+            let bounds = if vertical {
+                rect(
+                    bounds.x,
+                    bounds.y + row as f32 * step,
+                    bounds.width,
+                    TAB_HEIGHT,
+                )
+            } else {
+                rect(bounds.x + row as f32 * step, bounds.y, step, TAB_HEIGHT)
+            };
+            let selected = controller.active_tab(pane) == Some(tab.id);
+            let index = self.document_index(workspace, tab.document_id);
+            let title = index
+                .and_then(|index| titles.get(index))
+                .map(String::as_str)
+                .unwrap_or("Document");
+            let dirty = index.is_some_and(|index| workspace.editors[index].dirty());
+            ops.push(DrawOp::Fill(
+                bounds,
+                if selected {
+                    workspace.theme.editor
+                } else {
+                    workspace.theme.chrome
+                },
+            ));
+            ops.push(DrawOp::Stroke(bounds, workspace.theme.border, 1.0));
+            if let Some(color) = controller.tab_colors.get(&tab.id) {
+                ops.push(DrawOp::Fill(
+                    rect(bounds.x, bounds.y, 4.0, bounds.height),
+                    bareline_renderer::Color(*color),
+                ));
+            }
+            let label = format!(
+                "{}{}{}",
+                if tab.pinned { "◆ " } else { "" },
+                title.chars().take(18).collect::<String>(),
+                if dirty { " •" } else { "" }
+            );
+            text(
+                ops,
+                bounds.x + 10.0,
+                bounds.y + 8.0,
+                label,
+                13.0,
+                if selected {
+                    workspace.theme.text
+                } else {
+                    workspace.theme.muted
+                },
+            );
+            let close = rect(
+                bounds.x + bounds.width - 24.0,
+                bounds.y,
+                24.0,
+                bounds.height,
+            );
+            text(
+                ops,
+                close.x + 6.0,
+                close.y + 7.0,
+                "×",
+                14.0,
+                workspace.theme.muted,
+            );
+            if selected {
+                ops.push(DrawOp::Fill(
+                    rect(bounds.x, bounds.y + bounds.height - 2.0, bounds.width, 2.0),
+                    workspace.theme.focus,
+                ));
+            }
+            self.tab_hits.push(TabHit {
+                id: tab.id,
+                pane,
+                bounds,
+                close,
+            });
+        }
+        for (next, offset, label) in [(false, 48.0, "‹"), (true, 24.0, "›")] {
+            let nav = if vertical {
+                rect(
+                    bounds.x + if next { bounds.width / 2.0 } else { 0.0 },
+                    bounds.y + bounds.height - 24.0,
+                    bounds.width / 2.0,
+                    24.0,
+                )
+            } else {
+                rect(bounds.x + bounds.width - offset, bounds.y, 24.0, TAB_HEIGHT)
+            };
+            text(
+                ops,
+                nav.x + 8.0,
+                nav.y + 6.0,
+                label,
+                14.0,
+                workspace.theme.text,
+            );
+            self.tab_nav.push((pane, next, nav));
+        }
+        ops.push(DrawOp::PopClip);
+    }
+    fn draw_mru(&mut self, workspace: &Workspace, width: f32, height: f32, ops: &mut Vec<DrawOp>) {
+        let Some(popup) = &self.mru_popup else {
+            return;
+        };
+        let ids = popup.ids.clone();
+        let selected = popup.selected;
+        let bounds = rect(
+            (width - 360.0).max(0.0) / 2.0,
+            TAB_HEIGHT + 12.0,
+            width.min(360.0),
+            (height - 80.0).clamp(0.0, 12.0 * TAB_HEIGHT),
+        );
+        self.mru_popup.as_mut().unwrap().bounds = bounds;
+        ops.push(DrawOp::Fill(bounds, workspace.theme.chrome));
+        ops.push(DrawOp::Stroke(bounds, workspace.theme.border, 1.0));
+        ops.push(DrawOp::PushClip(bounds));
+        let titles = workspace.titles();
+        let start = selected.saturating_sub(10);
+        for (row, id) in ids.iter().skip(start).take(12).enumerate() {
+            let row_bounds = rect(
+                bounds.x,
+                bounds.y + row as f32 * TAB_HEIGHT,
+                bounds.width,
+                TAB_HEIGHT,
+            );
+            if row + start == selected {
+                ops.push(DrawOp::Fill(row_bounds, workspace.theme.interactive));
+            }
+            let title = self
+                .tab_index(workspace, *id)
+                .and_then(|index| titles.get(index))
+                .cloned()
+                .unwrap_or_default();
+            text(
+                ops,
+                row_bounds.x + 12.0,
+                row_bounds.y + 8.0,
+                title,
+                13.0,
+                workspace.theme.text,
+            );
+        }
+        ops.push(DrawOp::PopClip);
+    }
+    fn document_index(&self, workspace: &Workspace, id: u64) -> Option<usize> {
+        let binding = self.documents.iter().find(|binding| binding.id() == id)?;
+        workspace
+            .editors
+            .iter()
+            .position(|editor| binding.matches(editor))
+    }
+    fn tab_index(&self, workspace: &Workspace, id: u64) -> Option<usize> {
+        self.document_index(workspace, self.controller.as_ref()?.tab(id)?.document_id)
+    }
+    fn sync_documents(&mut self, workspace: &Workspace) {
+        if self.controller.is_some() && self.documents.len()==workspace.editors.len() && self.documents.iter().zip(&workspace.editors).all(|(binding,editor)|binding.matches(editor)) {return;}
+        if self.controller.is_none() {
+            self.controller = ViewController::new(Vec::new(), None).ok();
+        }
+        self.documents.retain(|binding| {
+            workspace
+                .editors
+                .iter()
+                .any(|editor| binding.matches(editor))
+        });
+        for editor in &workspace.editors {
+            if !self.documents.iter().any(|binding| binding.matches(editor)) {
+                self.next_document = self.next_document.saturating_add(1);
+                self.documents
+                    .push(DocumentBinding::new(self.next_document, editor));
+                if let Some(controller) = &mut self.controller {
+                    if let Ok(id) = controller.add_document(self.next_document) {
+                        let _ = controller.set_view_state(id, view_state(editor));
+                    }
+                }
+            }
+        }
+        let live: Vec<_> = self.documents.iter().map(DocumentBinding::id).collect();
+        if let Some(controller) = &mut self.controller {
+            controller.retain_documents(&live);
+        }
+        self.documents.sort_by_key(|binding|workspace.editors.iter().position(|editor|binding.matches(editor)).unwrap_or(usize::MAX));
+    }
+    fn save_view_states(&self, workspace: &Workspace, controller: &mut ViewController) {
+        for pane in 0..2 {
+            let Some(id) = self.loaded_tabs[pane] else {
+                continue;
+            };
+            let editor = if pane == 1 {
+                self.secondary.as_ref()
+            } else {
+                self.primary_index(workspace)
+                    .map(|index| &*workspace.editors[index])
+            };
+            if let Some(editor) = editor {
+                let _ = controller.set_view_state(id, view_state(editor));
+            }
+        }
+    }
+    fn save_current(&mut self, workspace: &Workspace) {
+        if let Some(mut controller) = self.controller.take() {
+            self.save_view_states(workspace, &mut controller);
+            self.controller = Some(controller);
+        }
+    }
+    fn install_views(&mut self, workspace: &mut Workspace) {
+        let Some(controller) = &self.controller else {
+            return;
+        };
+        let ids = [
+            controller.active_tab(0),
+            if controller.split {
+                controller.active_tab(1)
+            } else {
+                None
+            },
+        ];
+        for pane in 0..2 {
+            if ids[pane] == self.loaded_tabs[pane] {
+                continue;
+            }
+            let tab = ids[pane]
+                .and_then(|id| self.controller.as_ref().unwrap().tab(id))
+                .cloned();
+            let index = tab
+                .as_ref()
+                .and_then(|tab| self.document_index(workspace, tab.document_id));
+            if pane == 0 {
+                if let (Some(index), Some(tab)) = (index, tab) {
+                    self.primary = Some(workspace.editors[index].snapshot().clone());
+                    if !workspace.editors[index].paged() {
+                        restore_view(&mut workspace.editors[index], &tab.view);
+                    }
+                } else {
+                    self.primary = None;
+                }
+            } else {
+                if let Some(old) = self.secondary.take() {
+                    self.retired.push(old);
+                }
+                if let (Some(index), Some(tab)) = (index, tab) {
+                    if !workspace.editors[index].paged() {
+                        let mut peer = workspace.editors[index].clone_view();
+                        restore_view(&mut peer, &tab.view);
+                        self.secondary = Some(peer);
+                    }
+                }
+            }
+            self.loaded_tabs[pane] = ids[pane];
+        }
+    }
+    fn select_tab(&mut self, workspace: &mut Workspace, app: &mut App, id: u64) {
+        if self.busy(workspace) {
+            workspace.message = Some("Wait for pending edits before changing tabs.".into());
+            return;
+        }
+        self.save_current(workspace);
+        if self
+            .controller
+            .as_mut()
+            .is_some_and(|controller| controller.activate(id).is_ok())
+        {
+            self.install_views(workspace);
+            if let Some(index) = self.tab_index(workspace, id) {
+                app.active = index;
+            }
+            if !self.tab_hits.iter().any(|hit| hit.id == id) {
+                if let Some(controller) = &self.controller {
+                    let pane = controller.active_pane();
+                    self.tab_offset[pane as usize] = controller
+                        .pane_tabs(pane)
+                        .position(|tab| tab.id == id)
+                        .unwrap_or(0);
+                }
+            }
+        }
+    }
+    pub(super) fn active_editor<'a>(
+        &'a self,
+        workspace: &'a Workspace,
+        fallback: usize,
+    ) -> Option<&'a SharedEditorView> {
+        if self.pane() == 1 {
+            self.secondary.as_ref()
+        } else {
+            workspace.editors.get(fallback).map(|editor| &**editor)
+        }
+    }
+    pub(super) fn active_editor_mut<'a>(
+        &'a mut self,
+        workspace: &'a mut Workspace,
+        fallback: usize,
+    ) -> Option<&'a mut SharedEditorView> {
+        if self.pane() == 1 {
+            self.secondary.as_mut()
+        } else {
+            workspace
+                .editors
+                .get_mut(fallback)
+                .map(|editor| &mut **editor)
+        }
+    }
     pub(super) fn history_available(
         &self,
         workspace: Option<&Workspace>,
@@ -151,6 +563,26 @@ impl ViewsRuntime {
     }
 
     pub(super) fn annotate_context(&self, context: &mut bareline_commands::CommandContext) {
+        if let Some(controller) = &self.controller {
+            context
+                .states
+                .entry(CommandId("view.tabs.vertical"))
+                .or_default()
+                .checked = controller.vertical_tabs;
+            context
+                .states
+                .entry(CommandId("view.sync_horizontal"))
+                .or_default()
+                .checked = controller.sync_horizontal;
+            context
+                .states
+                .entry(CommandId("view.tabs.pin"))
+                .or_default()
+                .checked = controller
+                .active_tab(controller.active_pane())
+                .and_then(|id| controller.tab(id))
+                .is_some_and(|tab| tab.pinned);
+        }
         for id in ["view.close_split", "view.focus_other", "view.sync_vertical"] {
             let state = context.states.entry(CommandId(id)).or_default();
             state.enabled = self.open();
@@ -201,13 +633,19 @@ impl ViewsRuntime {
             return false;
         }
         self.split(workspace, left, Orientation::Vertical);
-        self.primary = Some(workspace.editors[left].snapshot().clone());
-        if let Some(old) = self
-            .secondary
-            .replace(workspace.editors[right].clone_view())
-        {
-            self.retired.push(old);
+        let document = self
+            .documents
+            .iter()
+            .find(|binding| binding.matches(&workspace.editors[right]))
+            .map(DocumentBinding::id)
+            .unwrap();
+        if let Some(controller) = &mut self.controller {
+            if let Some(id) = controller.active_tab(1) {
+                let _ = controller.assign_document(id, document);
+            }
         }
+        self.loaded_tabs = [None, None];
+        self.install_views(workspace);
         self.compare = true;
         true
     }
@@ -275,146 +713,91 @@ impl ViewsRuntime {
         manifest: &bareline_file_io::session::SessionManifest,
         tabs: &[(u64, usize)],
     ) {
-        if !manifest.layout.split {
-            return;
-        }
-        let find = |pane: usize| {
-            manifest.layout.active_tabs[pane].and_then(|id| {
-                tabs.iter()
-                    .find(|(tab, _)| *tab == id)
-                    .map(|(_, index)| (id, *index))
-            })
-        };
-        let (Some((first_id, first)), Some((second_id, second))) = (find(0), find(1)) else {
-            return;
-        };
-        if workspace.editors[first].paged() || workspace.editors[second].paged() {
-            return;
-        }
         let Ok(controller) = ViewController::from_session(manifest) else {
             return;
         };
-        self.primary = Some(workspace.editors[first].snapshot().clone());
-        self.secondary = Some(workspace.editors[second].clone_view());
-        self.controller = Some(controller);
-        for (id, editor) in [
-            (first_id, &mut *workspace.editors[first]),
-            (second_id, self.secondary.as_mut().unwrap()),
-        ] {
-            if let Some(tab) = manifest.tabs.iter().find(|tab| tab.id == id) {
-                let bound = |offset: u64| {
-                    let mut offset = usize::try_from(offset)
-                        .unwrap_or(usize::MAX)
-                        .min(editor.snapshot().len());
-                    while !editor
-                        .snapshot()
-                        .is_boundary(bareline_document::TextOffset(offset))
-                    {
-                        offset -= 1;
-                    }
-                    offset
-                };
-                let anchor = bound(tab.view.anchor);
-                let caret = bound(tab.view.caret);
-                editor.selection.anchor = anchor;
-                editor.selection.caret = caret;
-                editor.scroll_y = f64::from_bits(tab.view.scroll_y_bits);
-                editor.restore_folds(&tab.view.folds);
+        self.documents.clear();
+        for (id, index) in tabs {
+            if let (Some(tab), Some(editor)) = (
+                manifest.tabs.iter().find(|tab| tab.id == *id),
+                workspace.editors.get(*index),
+            ) {
+                if !self
+                    .documents
+                    .iter()
+                    .any(|binding| binding.id() == tab.document_id)
+                {
+                    self.documents
+                        .push(DocumentBinding::new(tab.document_id, editor));
+                }
             }
         }
-        self.activate(workspace, app, manifest.layout.active_pane);
+        self.next_document = manifest
+            .documents
+            .iter()
+            .map(|document| document.id)
+            .max()
+            .unwrap_or(0);
+        self.controller = Some(controller);
+        self.loaded_tabs = [None, None];
+        self.install_views(workspace);
+        if let Some(id) = manifest
+            .active_tab
+            .and_then(|id| self.tab_index(workspace, id))
+        {
+            app.active = id;
+        }
     }
-
     pub(super) fn capture_session(
         &self,
         workspace: &Workspace,
         manifest: &mut bareline_file_io::session::SessionManifest,
         tabs: &[(usize, u64)],
     ) {
-        if !self.open() {
-            for tab in &mut manifest.tabs {
-                tab.view.split = 0;
-            }
-            manifest.layout.split = false;
-            manifest.layout.active_pane = 0;
-            manifest.layout.active_tabs = [manifest.active_tab, None];
-            return;
-        }
-        let Some(primary) = self
-            .primary_index(workspace)
-            .and_then(|index| tabs.iter().find(|(i, _)| *i == index).map(|(_, id)| *id))
-        else {
+        let Some(mut controller) = self.controller.clone() else {
             return;
         };
-        let Some(secondary) = self
-            .secondary_index(workspace)
-            .and_then(|index| tabs.iter().find(|(i, _)| *i == index).map(|(_, id)| *id))
-        else {
-            return;
-        };
-        let Some(mut secondary_tab) = manifest
-            .tabs
+        self.save_view_states(workspace, &mut controller);
+        let remap: Vec<_> = self
+            .documents
             .iter()
-            .find(|tab| tab.id == secondary)
-            .cloned()
-        else {
-            return;
-        };
-        for tab in &mut manifest.tabs {
-            tab.view.split = 0;
-        }
-        let duplicate = manifest
-            .tabs
-            .iter()
-            .find(|tab| {
-                tab.document_id == secondary_tab.document_id
-                    && tab.id != primary
-                    && tab.id != secondary
+            .filter_map(|binding| {
+                let index = self.document_index(workspace, binding.id())?;
+                let (_, tab_id) = tabs.iter().find(|(i, _)| *i == index)?;
+                let document_id = manifest
+                    .tabs
+                    .iter()
+                    .find(|tab| tab.id == *tab_id)?
+                    .document_id;
+                Some((binding.id(), document_id))
             })
-            .map(|tab| tab.id);
-        let secondary_id = if primary != secondary {
-            secondary
-        } else if let Some(id) = duplicate {
-            id
-        } else {
-            let Some(id) = manifest
-                .tabs
-                .iter()
-                .map(|tab| tab.id)
-                .max()
-                .unwrap_or(0)
-                .checked_add(1)
-            else {
-                return;
-            };
-            secondary_tab.id = id;
-            manifest.tabs.push(secondary_tab);
-            id
-        };
-        if let Some(peer) = &self.secondary {
-            let tab = manifest
-                .tabs
-                .iter_mut()
-                .find(|tab| tab.id == secondary_id)
-                .unwrap();
-            tab.view.split = 1;
-            tab.view.anchor = peer.selection.anchor as u64;
-            tab.view.caret = peer.selection.caret as u64;
-            tab.view.scroll_y_bits = peer.scroll_y.to_bits();
-            tab.view.folds = peer.persisted_folds();
+            .collect();
+        let retained: Vec<_> = manifest
+            .tabs
+            .iter()
+            .filter(|tab| !remap.iter().any(|(_, id)| *id == tab.document_id))
+            .cloned()
+            .collect();
+        controller.write_session(manifest);
+        manifest.tabs.retain_mut(|tab| {
+            if let Some((_, id)) = remap.iter().find(|(old, _)| *old == tab.document_id) {
+                tab.document_id = *id;
+                true
+            } else {
+                false
+            }
+        });
+        manifest.mru = manifest
+            .mru
+            .iter()
+            .filter_map(|old| remap.iter().find(|(id, _)| id == old).map(|(_, id)| *id))
+            .collect();
+        for tab in retained {
+            if !manifest.tabs.iter().any(|existing| existing.id == tab.id) {
+                manifest.tabs.push(tab);
+            }
         }
-        let controller = self.controller.as_ref().unwrap();
-        manifest.layout.split = true;
-        manifest.layout.orientation = match controller.orientation {
-            Orientation::Vertical => bareline_file_io::session::SplitOrientation::Vertical,
-            Orientation::Horizontal => bareline_file_io::session::SplitOrientation::Horizontal,
-        };
-        manifest.layout.ratio_bits = controller.ratio.to_bits();
-        manifest.layout.sync_vertical = controller.sync_vertical;
-        manifest.layout.sync_horizontal = controller.sync_horizontal;
-        manifest.layout.active_pane = self.pane();
-        manifest.layout.active_tabs = [Some(primary), Some(secondary_id)];
-        manifest.active_tab = manifest.layout.active_tabs[self.pane() as usize];
+        manifest.tabs.sort_by_key(|tab| !tab.pinned);
     }
     pub(super) fn pending_edits(&self) -> bool {
         !self.queued.is_empty() || self.secondary.as_ref().is_some_and(SharedEditorView::busy)
@@ -428,7 +811,7 @@ impl ViewsRuntime {
     fn open(&self) -> bool {
         self.secondary.is_some() && self.controller.as_ref().is_some_and(|c| c.split)
     }
-    fn pane(&self) -> u32 {
+    pub(super) fn pane(&self) -> u32 {
         self.controller
             .as_ref()
             .map_or(0, ViewController::active_pane)
@@ -440,6 +823,9 @@ impl ViewsRuntime {
             .position(|e| e.snapshot().same_document(document))
     }
     fn primary_index(&self, workspace: &Workspace) -> Option<usize> {
+        if let Some(index) = self.loaded_tabs[0].and_then(|id| self.tab_index(workspace, id)) {
+            return Some(index);
+        }
         self.primary
             .as_ref()
             .and_then(|s| Self::index_of(workspace, s))
@@ -457,6 +843,7 @@ impl ViewsRuntime {
                 .is_some_and(|i| workspace.editors[i].busy())
     }
     pub(super) fn pump(&mut self, workspace: &mut Workspace) -> bool {
+        self.sync_documents(workspace);
         let mut changed = self.secondary.as_mut().is_some_and(SharedEditorView::pump);
         if let Some(index) = self.secondary_index(workspace)
             && let Some(peer) = &mut self.secondary
@@ -481,20 +868,25 @@ impl ViewsRuntime {
             && !self.secondary.as_ref().is_some_and(SharedEditorView::busy)
             && let Some(queued) = self.queued.pop_front()
         {
-            let editor = if queued.pane == 1 {
-                self.secondary.as_mut()
-            } else {
-                self.primary_index(workspace)
-                    .and_then(|i| workspace.editors.get_mut(i))
-                    .map(|editor| &mut **editor)
-            };
-            if let Some(editor) = editor
-                && editor.snapshot().same_document(&queued.document)
-            {
-                editor.enqueue(queued.input);
-            } else {
-                workspace.message =
-                    Some("The view changed before queued input could be applied.".into());
+            if queued.pane == 0 {
+                if let Some(index) = self.primary_index(workspace) {
+                    if workspace.editors[index]
+                        .snapshot()
+                        .same_document(&queued.document)
+                    {
+                        workspace.editors[index].enqueue(queued.input);
+                    } else {
+                        workspace.message =
+                            Some("The view changed before queued input could be applied.".into());
+                    }
+                }
+            } else if let Some(editor) = &mut self.secondary {
+                if editor.snapshot().same_document(&queued.document) {
+                    editor.enqueue(queued.input);
+                } else {
+                    workspace.message =
+                        Some("The view changed before queued input could be applied.".into());
+                }
             }
             changed = true;
         }
@@ -524,122 +916,126 @@ impl ViewsRuntime {
         self.pump(workspace);
     }
     fn split(&mut self, workspace: &mut Workspace, index: usize, orientation: Orientation) {
+        self.sync_documents(workspace);
         if self.busy(workspace) {
             workspace.message = Some("Wait for pending edits before changing views.".into());
             return;
         }
-        let Some(editor) = workspace.editors.get(index) else {
-            return;
-        };
-        if editor.paged() {
-            workspace.message = Some("Split views are unavailable for paged documents.".into());
+        if workspace
+            .editors
+            .get(index)
+            .is_none_or(|editor| editor.paged())
+        {
+            workspace.message =
+                Some("Paged split views require the shared paged-view adapter.".into());
             return;
         }
-        if !self.open() {
-            let mut peer = editor.clone_view();
-            peer.selection = editor.selection;
-            peer.scroll_y = editor.scroll_y;
-            self.primary = Some(editor.snapshot().clone());
-            self.secondary = Some(peer);
-            let mut controller = ViewController::new(
-                vec![SessionTab {
-                    id: 1,
-                    document_id: 1,
-                    pinned: false,
-                    view: ViewState::default(),
-                }],
-                Some(1),
-            )
+        self.save_current(workspace);
+        let document = self
+            .documents
+            .iter()
+            .find(|binding| binding.matches(&workspace.editors[index]))
+            .map(DocumentBinding::id)
             .unwrap();
-            let _ = controller.clone_to_other(1);
-            self.controller = Some(controller);
+        let controller = self.controller.as_mut().unwrap();
+        let id = controller
+            .tabs()
+            .iter()
+            .find(|tab| tab.document_id == document && tab.view.split == controller.active_pane())
+            .or_else(|| {
+                controller
+                    .tabs()
+                    .iter()
+                    .find(|tab| tab.document_id == document)
+            })
+            .map(|tab| tab.id)
+            .unwrap();
+        let _ = controller.activate(id);
+        if !controller.split {
+            let _ = controller.clone_to_other(id);
         }
-        if let Some(controller) = &mut self.controller {
-            controller.orientation = orientation;
-            controller.split = true;
-        }
+        controller.orientation = orientation;
+        controller.split = true;
+        self.install_views(workspace);
     }
     fn collapse(&mut self, workspace: &mut Workspace, keep_secondary: bool) {
-        if keep_secondary
-            && let Some(index) = self.secondary_index(workspace)
-            && let Some(peer) = &mut self.secondary
-        {
-            std::mem::swap(&mut *workspace.editors[index], peer);
-        }
-        if let Some(peer) = self.secondary.take() {
-            self.retired.push(peer);
-        }
+        self.save_current(workspace);
         if let Some(controller) = &mut self.controller {
+            if keep_secondary {
+                if let Some(id) = controller.active_tab(1) {
+                    let _ = controller.activate(id);
+                }
+            }
             controller.collapse();
         }
+        self.loaded_tabs = [None, None];
+        self.install_views(workspace);
         self.bounds = [None, None];
         self.splitter = None;
         self.dragging = false;
     }
     fn clone_active(&mut self, workspace: &mut Workspace, app: &mut App) {
+        self.sync_documents(workspace);
+        if self.busy(workspace) {
+            workspace.message = Some("Wait for pending edits before cloning a view.".into());
+            return;
+        }
         if workspace
             .editors
             .get(app.active)
-            .is_some_and(|editor| editor.paged())
+            .is_none_or(|editor| editor.paged())
         {
-            workspace.message = Some("Split views are unavailable for paged documents.".into());
+            workspace.message =
+                Some("Paged split views require the shared paged-view adapter.".into());
             return;
         }
-        if !self.open() {
-            self.split(workspace, app.active, Orientation::Vertical);
-            return;
-        }
-        if self.busy(workspace) {
-            workspace.message = Some("Wait for pending edits before changing views.".into());
-            return;
-        }
-        if self.pane() == 0 {
-            let Some(index) = self.primary_index(workspace) else {
-                return;
-            };
-            let mut clone = workspace.editors[index].clone_view();
-            clone.selection = workspace.editors[index].selection;
-            clone.scroll_y = workspace.editors[index].scroll_y;
-            if let Some(old) = self.secondary.replace(clone) {
-                self.retired.push(old);
+        self.save_current(workspace);
+        if let Some(controller) = &mut self.controller {
+            if let Some(id) = controller.active_tab(controller.active_pane()) {
+                let _ = controller.clone_to_other(id);
             }
-            self.activate(workspace, app, 1);
-        } else {
-            let Some(index) = self.secondary_index(workspace) else {
-                return;
-            };
-            if let Some(peer) = &self.secondary {
-                workspace.editors[index].selection = peer.selection;
-                workspace.editors[index].scroll_y = peer.scroll_y;
-            }
-            self.primary = Some(workspace.editors[index].snapshot().clone());
-            self.activate(workspace, app, 0);
+        }
+        self.install_views(workspace);
+        if let Some(id) = self
+            .controller
+            .as_ref()
+            .and_then(|controller| controller.active_tab(controller.active_pane()))
+            .and_then(|id| self.tab_index(workspace, id))
+        {
+            app.active = id;
         }
     }
     fn move_active(&mut self, workspace: &mut Workspace, app: &mut App) {
+        self.sync_documents(workspace);
         if self.busy(workspace) {
             workspace.message = Some("Wait for pending edits before moving a view.".into());
             return;
         }
-        if self.open() && self.pane() == 1 {
-            self.collapse(workspace, true);
-            return;
+        self.save_current(workspace);
+        if let Some(controller) = &mut self.controller {
+            if let Some(id) = controller.active_tab(controller.active_pane()) {
+                let _ = controller.move_to_other(id);
+            }
+            if controller.active_tab(0).is_none() || controller.active_tab(1).is_none() {
+                controller.collapse();
+            }
         }
-        let moving = app.active;
-        self.clone_active(workspace, app);
-        if let Some(other) =
-            (0..workspace.editors.len()).find(|i| *i != moving && !workspace.editors[*i].paged())
+        self.loaded_tabs = [None, None];
+        self.install_views(workspace);
+        if let Some(index) = self
+            .controller
+            .as_ref()
+            .and_then(|controller| controller.active_tab(controller.active_pane()))
+            .and_then(|id| self.tab_index(workspace, id))
         {
-            self.primary = Some(workspace.editors[other].snapshot().clone());
-        } else {
-            self.collapse(workspace, true);
+            app.active = index;
         }
     }
     fn activate(&mut self, workspace: &Workspace, app: &mut App, pane: u32) {
-        if let Some(controller) = &mut self.controller
-            && let Some(id) = controller.active_tab(pane)
-        {
-            let _ = controller.activate(id);
+        if let Some(controller) = &mut self.controller {
+            if let Some(id) = controller.active_tab(pane) {
+                let _ = controller.activate(id);
+            }
         }
         if let Some(index) = if pane == 0 {
             self.primary_index(workspace)
@@ -649,14 +1045,54 @@ impl ViewsRuntime {
             app.active = index;
         }
     }
+    fn close_tab(&mut self, workspace: &mut Workspace, app: &mut App, id: u64) {
+        if self.busy(workspace) {
+            workspace.message = Some("Wait for pending edits before closing a view.".into());
+            return;
+        }
+        let Some(index) = self.tab_index(workspace, id) else {
+            return;
+        };
+        self.save_current(workspace);
+        let controller = self.controller.as_ref().unwrap();
+        let document = controller.tab(id).unwrap().document_id;
+        if controller
+            .tabs()
+            .iter()
+            .filter(|tab| tab.document_id == document)
+            .count()
+            == 1
+        {
+            app.active = index;
+            self.pending_close = Some(index);
+            return;
+        }
+        let _ =
+            self.controller
+                .as_mut()
+                .unwrap()
+                .close(id, workspace.editors[index].dirty(), false);
+        self.loaded_tabs = [None, None];
+        self.install_views(workspace);
+        if let Some(index) = self
+            .controller
+            .as_ref()
+            .and_then(|controller| controller.active_tab(controller.active_pane()))
+            .and_then(|id| self.tab_index(workspace, id))
+        {
+            app.active = index;
+        }
+    }
     fn sync_scroll(&mut self, workspace: &mut Workspace, pane: u32) {
-        let y = if pane == 1 {
-            self.secondary.as_ref().map(|e| e.scroll_y)
+        let position = if pane == 1 {
+            self.secondary
+                .as_ref()
+                .map(SharedEditorView::logical_scroll)
         } else {
             self.primary_index(workspace)
-                .map(|i| workspace.editors[i].scroll_y)
+                .map(|index| workspace.editors[index].logical_scroll())
         };
-        let Some(y) = y else {
+        let Some((line, fraction, x)) = position else {
             return;
         };
         let Some(controller) = &mut self.controller else {
@@ -664,20 +1100,23 @@ impl ViewsRuntime {
         };
         if let Ok(Some(update)) = controller.begin_scroll(
             pane,
-            ScrollPosition {
-                line: (y / 19.2).floor() as u64,
-                fraction: (y / 19.2).fract(),
-                x: 0.0,
-            },
+            ScrollPosition { line, fraction, x },
             self.alignment.as_ref(),
         ) {
-            let y = (update.position.line as f64 + update.position.fraction) * 19.2;
             if update.pane == 1 {
                 if let Some(peer) = &mut self.secondary {
-                    peer.scroll_y = y;
+                    peer.set_logical_scroll(
+                        update.position.line,
+                        update.position.fraction,
+                        update.position.x,
+                    );
                 }
             } else if let Some(index) = self.primary_index(workspace) {
-                workspace.editors[index].scroll_y = y;
+                workspace.editors[index].set_logical_scroll(
+                    update.position.line,
+                    update.position.fraction,
+                    update.position.x,
+                );
             }
         }
     }
@@ -694,6 +1133,30 @@ impl ViewsRuntime {
             peer.release_layouts(renderer);
         }
         self.pump(workspace);
+        let desired = self.controller.as_ref().and_then(|controller| {
+            controller
+                .pane_tabs(controller.active_pane())
+                .find(|tab| self.document_index(workspace, tab.document_id) == Some(app.active))
+                .or_else(|| {
+                    controller.tabs().iter().find(|tab| {
+                        self.document_index(workspace, tab.document_id) == Some(app.active)
+                    })
+                })
+                .map(|tab| tab.id)
+        });
+        if let Some(id) = desired {
+            if self.loaded_tabs[self.pane() as usize] != Some(id) {
+                self.select_tab(workspace, app, id);
+            }
+        }
+        self.install_views(workspace);
+        self.tab_hits.clear();
+        self.tab_nav.clear();
+        self.tab_strips = [None, None];
+        let vertical = self
+            .controller
+            .as_ref()
+            .is_some_and(|controller| controller.vertical_tabs);
         if workspace
             .editors
             .get(app.active)
@@ -703,26 +1166,39 @@ impl ViewsRuntime {
             self.collapse(workspace, false);
         }
         if !self.open() {
-            return workspace.draw(app.active, renderer, width, height, ops);
+            let inset = if vertical {
+                176.0f32.min(width * 0.4)
+            } else {
+                0.0
+            };
+            let mut local = Vec::new();
+            let caret = workspace.draw(
+                app.active,
+                renderer,
+                (width - inset).max(0.0),
+                height,
+                &mut local,
+            )?;
+            ops.extend(local.into_iter().map(|op| translate(op, inset, 0.0)));
+            self.bounds = [
+                Some(rect(inset, 0.0, (width - inset).max(0.0), height - 24.0)),
+                None,
+            ];
+            self.draw_tab_strip(
+                workspace,
+                0,
+                if vertical {
+                    rect(0.0, 0.0, inset, height - 24.0)
+                } else {
+                    rect(0.0, 0.0, width, TAB_HEIGHT)
+                },
+                vertical,
+                ops,
+            );
+            self.draw_mru(workspace, width, height, ops);
+            return Ok(caret.map(|caret| rect(caret.x + inset, caret.y, caret.width, caret.height)));
         }
         let pane = self.pane();
-        let expected = if pane == 0 {
-            self.primary_index(workspace)
-        } else {
-            self.secondary_index(workspace)
-        };
-        if expected != Some(app.active)
-            && !self.busy(workspace)
-            && let Some(editor) = workspace.editors.get(app.active)
-        {
-            if pane == 0 {
-                self.primary = Some(editor.snapshot().clone());
-            } else {
-                if let Some(old) = self.secondary.replace(editor.clone_view()) {
-                    self.retired.push(old);
-                }
-            }
-        }
         let Some(first) = self.primary_index(workspace) else {
             self.collapse(workspace, true);
             return workspace.draw(app.active, renderer, width, height, ops);
@@ -742,10 +1218,38 @@ impl ViewsRuntime {
         ));
         self.bounds = geometry.panes;
         self.splitter = geometry.splitter;
+        let strips = self.bounds.map(|bounds| {
+            bounds.map(|bounds| {
+                if vertical {
+                    rect(
+                        bounds.x,
+                        bounds.y,
+                        176.0f32.min(bounds.width * 0.4),
+                        bounds.height,
+                    )
+                } else {
+                    rect(bounds.x, bounds.y, bounds.width, TAB_HEIGHT)
+                }
+            })
+        });
+        if vertical {
+            for bounds in self.bounds.iter_mut().flatten() {
+                let inset = 176.0f32.min(bounds.width * 0.4);
+                bounds.x += inset;
+                bounds.width -= inset;
+            }
+        }
         let titles = workspace.titles();
         let second = self.secondary_index(workspace).unwrap_or(first);
         let mut active_caret = None;
         let mut status = Vec::new();
+        self.draw_tab_strip(
+            workspace,
+            pane,
+            rect(0.0, 0.0, width, TAB_HEIGHT),
+            false,
+            ops,
+        );
         for side in 0..2 {
             let Some(bounds) = self.bounds[side] else {
                 continue;
@@ -818,6 +1322,11 @@ impl ViewsRuntime {
         if let Some(splitter) = self.splitter {
             ops.push(DrawOp::Fill(splitter, BORDER));
         }
+        for (pane, bounds) in strips.into_iter().enumerate() {
+            if let Some(bounds) = bounds {
+                self.draw_tab_strip(workspace, pane as u32, bounds, vertical, ops);
+            }
+        }
         ops.push(DrawOp::Fill(rect(0.0, height - 24.0, width, 24.0), CHROME));
         for (index, label) in status.into_iter().take(6).enumerate() {
             text(
@@ -848,6 +1357,7 @@ impl ViewsRuntime {
         {
             active_caret = Some(caret);
         }
+        self.draw_mru(workspace, width, height, ops);
         Ok(active_caret)
     }
 }
@@ -885,6 +1395,16 @@ fn translate(op: DrawOp, x: f32, y: f32) -> DrawOp {
         },
         DrawOp::PushClip(a) => DrawOp::PushClip(r(a)),
         DrawOp::PopClip => DrawOp::PopClip,
+        DrawOp::Image { image, destination, opacity } => DrawOp::Image {
+            image,
+            destination: r(destination),
+            opacity,
+        },
+        DrawOp::PushLayer { bounds, opacity } => DrawOp::PushLayer {
+            bounds: r(bounds),
+            opacity,
+        },
+        DrawOp::PopLayer => DrawOp::PopLayer,
         DrawOp::Line {
             from,
             to,
@@ -899,8 +1419,358 @@ fn translate(op: DrawOp, x: f32, y: f32) -> DrawOp {
     }
 }
 
+fn view_state(editor: &SharedEditorView) -> ViewState {
+    let (line, _, x) = editor.logical_scroll();
+    ViewState {
+        anchor: editor.selection.anchor as u64,
+        caret: editor.selection.caret as u64,
+        scroll_line: line,
+        scroll_x: x.clamp(0.0, u32::MAX as f64) as u32,
+        scroll_y_bits: editor.scroll_y.max(0.0).to_bits(),
+        folds: editor.persisted_folds(),
+        ..Default::default()
+    }
+}
+fn restore_view(editor: &mut SharedEditorView, state: &ViewState) {
+    let bound = |offset: u64| {
+        let mut offset = usize::try_from(offset)
+            .unwrap_or(usize::MAX)
+            .min(editor.snapshot().len());
+        while !editor
+            .snapshot()
+            .is_boundary(bareline_document::TextOffset(offset))
+        {
+            offset -= 1;
+        }
+        offset
+    };
+    let anchor = bound(state.anchor);
+    let caret = bound(state.caret);
+    editor.selection.anchor = anchor;
+    editor.selection.caret = caret;
+    editor.set_logical_scroll(state.scroll_line, 0.0, state.scroll_x as f64);
+    editor.scroll_y = f64::from_bits(state.scroll_y_bits);
+    editor.restore_folds(&state.folds);
+}
+
 impl Shell {
+    fn tabs_dispatch(&mut self, id: &str) -> bool {
+        if !id.starts_with("view.tabs.") {
+            return false;
+        }
+        let Some(workspace) = &mut self.workspace else {
+            return true;
+        };
+        self.views.sync_documents(workspace);
+        self.views.save_current(workspace);
+        let Some(controller) = &mut self.views.controller else {
+            return true;
+        };
+        let active = controller.active_tab(controller.active_pane());
+        match id {
+            "view.tabs.vertical" => controller.vertical_tabs = !controller.vertical_tabs,
+            "view.tabs.pin" => {
+                if let Some(id) = active {
+                    let pinned = controller.tab(id).unwrap().pinned;
+                    let _ = controller.pin(id, !pinned);
+                }
+            }
+            "view.tabs.color" => {
+                if let Some(id) = active {
+                    let colors = [0x36c9c6, 0xd19a66, 0xc678dd, 0x61afef];
+                    let current = controller.tab_colors.get(&id).copied();
+                    let next = current
+                        .and_then(|color| colors.iter().position(|value| *value == color))
+                        .map_or(Some(colors[0]), |index| colors.get(index + 1).copied());
+                    let _ = controller.color(id, next);
+                }
+            }
+            "view.tabs.sort_name" | "view.tabs.sort_descending" | "view.tabs.sort_path" => {
+                let titles = workspace.titles();
+                let labels: Vec<_> = self
+                    .views
+                    .documents
+                    .iter()
+                    .filter_map(|binding| {
+                        workspace
+                            .editors
+                            .iter()
+                            .position(|editor| binding.matches(editor))
+                            .map(|index| {
+                                (
+                                    binding.id(),
+                                    if id == "view.tabs.sort_path" {
+                                        workspace
+                                            .path(index)
+                                            .map(|path| path.to_string_lossy().into_owned())
+                                            .unwrap_or_else(|| titles[index].clone())
+                                    } else {
+                                        titles[index].clone()
+                                    },
+                                )
+                            })
+                    })
+                    .collect();
+                controller.sort_by_label(&labels, id == "view.tabs.sort_descending");
+                if id == "view.tabs.sort_path" {
+                    controller.tab_sort = "path".into();
+                }
+            }
+            "view.tabs.move_left" | "view.tabs.move_right" => {
+                if let Some(id_active) = active {
+                    let _ = controller.keyboard_reorder(id_active, id == "view.tabs.move_left");
+                }
+            }
+            "view.tabs.previous" | "view.tabs.next" => {
+                let tabs: Vec<_> = controller
+                    .pane_tabs(controller.active_pane())
+                    .map(|tab| tab.id)
+                    .collect();
+                if let Some(index) = active.and_then(|id| tabs.iter().position(|tab| *tab == id)) {
+                    let next = if id == "view.tabs.previous" {
+                        (index + tabs.len() - 1) % tabs.len()
+                    } else {
+                        (index + 1) % tabs.len()
+                    };
+                    let id = tabs[next];
+                    self.views.select_tab(workspace, &mut self.app, id);
+                }
+            }
+            "view.tabs.mru" => {
+                if let Some(popup) = &mut self.views.mru_popup {
+                    if !popup.ids.is_empty() {
+                        popup.selected = (popup.selected + 1) % popup.ids.len();
+                    }
+                } else {
+                    let mut seen = std::collections::HashSet::new();
+                    let ids = controller
+                        .mru()
+                        .filter(|id| {
+                            controller
+                                .tab(*id)
+                                .is_some_and(|tab| seen.insert(tab.document_id))
+                        })
+                        .collect::<Vec<_>>();
+                    let selected = usize::from(ids.len() > 1);
+                    self.views.mru_popup = Some(MruPopup {
+                        ids,
+                        selected,
+                        bounds: Rect::default(),
+                    });
+                }
+            }
+            _ => return false,
+        }
+        if let Some(window) = &self.window {
+            window.request_redraw();
+        }
+        true
+    }
+    fn tabs_event(&mut self, el: &ActiveEventLoop, event: &WindowEvent) -> bool {
+        if self.palette.open {
+            return false;
+        }
+        let origin = self.editor_bounds();
+        let point = Point {
+            x: self.pointer.x - origin.x,
+            y: self.pointer.y - origin.y,
+        };
+        let mut handled = false;
+        let Some(workspace) = &mut self.workspace else {
+            return false;
+        };
+        if self.views.mru_popup.is_some() {
+            let mut accept = false;
+            let mut cancel = false;
+            let popup = self.views.mru_popup.as_mut().unwrap();
+            match event {
+                WindowEvent::ModifiersChanged(modifiers) if !modifiers.state().control_key() => {
+                    accept = true
+                }
+                WindowEvent::KeyboardInput { event, .. }
+                    if event.state == ElementState::Pressed =>
+                {
+                    match event.logical_key {
+                        Key::Named(NamedKey::Escape) => cancel = true,
+                        Key::Named(NamedKey::Enter) => accept = true,
+                        Key::Named(NamedKey::ArrowUp) => {
+                            popup.selected = popup.selected.saturating_sub(1);
+                        }
+                        Key::Named(NamedKey::ArrowDown) | Key::Named(NamedKey::Tab) => {
+                            if !popup.ids.is_empty() {
+                                popup.selected = (popup.selected + 1) % popup.ids.len();
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                WindowEvent::MouseInput {
+                    state: ElementState::Pressed,
+                    button: MouseButton::Left,
+                    ..
+                } => {
+                    if popup.bounds.contains(point) {
+                        let start = popup.selected.saturating_sub(10);
+                        popup.selected = (start
+                            + ((point.y - popup.bounds.y) / TAB_HEIGHT) as usize)
+                            .min(popup.ids.len().saturating_sub(1));
+                        accept = true;
+                    } else {
+                        cancel = true;
+                    }
+                }
+                _ => return false,
+            }
+            if accept || cancel {
+                let popup = self.views.mru_popup.take().unwrap();
+                if accept {
+                    if let Some(id) = popup.ids.get(popup.selected) {
+                        self.views.select_tab(workspace, &mut self.app, *id);
+                    }
+                }
+            }
+            handled = true;
+        } else {
+            match event {
+                WindowEvent::MouseInput {
+                    state: ElementState::Pressed,
+                    button: MouseButton::Left,
+                    ..
+                } => {
+                    if let Some((pane, next, _)) = self
+                        .views
+                        .tab_nav
+                        .iter()
+                        .find(|(_, _, bounds)| bounds.contains(point))
+                        .copied()
+                    {
+                        let offset = &mut self.views.tab_offset[pane as usize];
+                        *offset = if next {
+                            offset.saturating_add(1)
+                        } else {
+                            offset.saturating_sub(1)
+                        };
+                        handled = true;
+                    } else if let Some(hit) = self
+                        .views
+                        .tab_hits
+                        .iter()
+                        .find(|hit| hit.bounds.contains(point))
+                        .copied()
+                    {
+                        if hit.close.contains(point) {
+                            self.views.close_tab(workspace, &mut self.app, hit.id);
+                        } else {
+                            self.views.select_tab(workspace, &mut self.app, hit.id);
+                            self.views.tab_drag = Some(TabDrag {
+                                id: hit.id,
+                                start: point,
+                                moved: false,
+                            });
+                        }
+                        handled = true;
+                    }
+                }
+                WindowEvent::CursorMoved { position, .. } if self.views.tab_drag.is_some() => {
+                    let scale = self
+                        .window
+                        .as_ref()
+                        .map_or(1.0, |window| window.scale_factor());
+                    let p = position.to_logical::<f32>(scale);
+                    self.pointer = Point { x: p.x, y: p.y };
+                    let point = Point {
+                        x: p.x - origin.x,
+                        y: p.y - origin.y,
+                    };
+                    let drag = self.views.tab_drag.as_mut().unwrap();
+                    drag.moved |=
+                        (point.x - drag.start.x).abs() + (point.y - drag.start.y).abs() > 5.0;
+                    handled = true;
+                }
+                WindowEvent::MouseInput {
+                    state: ElementState::Released,
+                    button: MouseButton::Left,
+                    ..
+                } if self.views.tab_drag.is_some() => {
+                    let drag = self.views.tab_drag.take().unwrap();
+                    if drag.moved && !self.views.busy(workspace) {
+                        let target = self
+                            .views
+                            .tab_hits
+                            .iter()
+                            .find(|hit| hit.bounds.contains(point))
+                            .map(|hit| (hit.pane, Some(hit.id)))
+                            .or_else(|| {
+                                self.views
+                                    .bounds
+                                    .iter()
+                                    .enumerate()
+                                    .find(|(_, bounds)| {
+                                        bounds.is_some_and(|bounds| bounds.contains(point))
+                                    })
+                                    .map(|(pane, _)| (pane as u32, None))
+                            });
+                        if let Some((pane, before)) = target {
+                            self.views.save_current(workspace);
+                            if let Some(controller) = &mut self.views.controller {
+                                if let Err(error) = controller.move_to_pane(drag.id, pane, before) {
+                                    workspace.message =
+                                        Some(format!("Tab cannot be moved: {error:?}"));
+                                }
+                            }
+                            self.views.loaded_tabs = [None, None];
+                            self.views.install_views(workspace);
+                            self.views.select_tab(workspace, &mut self.app, drag.id);
+                        }
+                    }
+                    handled = true;
+                }
+                WindowEvent::MouseWheel { delta, .. }
+                    if self
+                        .views
+                        .tab_strips
+                        .iter()
+                        .any(|bounds| bounds.is_some_and(|bounds| bounds.contains(point))) =>
+                {
+                    let pane = self
+                        .views
+                        .tab_strips
+                        .iter()
+                        .position(|bounds| bounds.is_some_and(|bounds| bounds.contains(point)))
+                        .unwrap();
+                    let down = match delta {
+                        MouseScrollDelta::LineDelta(_, y) => *y < 0.0,
+                        MouseScrollDelta::PixelDelta(point) => point.y < 0.0,
+                    };
+                    let offset = &mut self.views.tab_offset[pane];
+                    *offset = if down {
+                        offset.saturating_add(1)
+                    } else {
+                        offset.saturating_sub(1)
+                    };
+                    handled = true;
+                }
+                WindowEvent::Focused(false) => {
+                    self.views.tab_drag = None;
+                }
+                _ => {}
+            }
+        }
+        let close = self.views.pending_close.take();
+        if close.is_some() {
+            self.dispatch(el, Action::Close);
+        }
+        if handled {
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+        }
+        handled
+    }
     pub(super) fn views_dispatch(&mut self, _el: &ActiveEventLoop, id: &str) -> bool {
+        if self.tabs_dispatch(id) {
+            return true;
+        }
         if !matches!(
             id,
             "view.split_vertical"
@@ -910,6 +1780,7 @@ impl Shell {
                 | "view.close_split"
                 | "view.focus_other"
                 | "view.sync_vertical"
+                | "view.sync_horizontal"
         ) {
             return false;
         }
@@ -940,6 +1811,11 @@ impl Shell {
                     controller.sync_vertical = !controller.sync_vertical;
                 }
             }
+            "view.sync_horizontal" => {
+                if let Some(controller) = &mut self.views.controller {
+                    controller.sync_horizontal = !controller.sync_horizontal;
+                }
+            }
             _ => {}
         }
         if let Some(window) = &self.window {
@@ -948,7 +1824,7 @@ impl Shell {
         true
     }
     pub(super) fn views_action(&mut self, _el: &ActiveEventLoop, action: Action) -> bool {
-        if !self.views.open() {
+        if !self.views.open() && action != Action::Close {
             return false;
         }
         let Some(workspace) = &mut self.workspace else {
@@ -964,15 +1840,30 @@ impl Shell {
                 Some("Wait for pending split-view edits before saving or closing.".into());
             return true;
         }
-        if action == Action::Close
-            && (self.views.pane() == 1
-                || self.views.primary_index(workspace) == self.views.secondary_index(workspace))
-        {
-            self.views.collapse(workspace, self.views.pane() == 0);
-            if let Some(window) = &self.window {
-                window.request_redraw();
+        if action == Action::Close {
+            if let Some(id) = self
+                .views
+                .controller
+                .as_ref()
+                .and_then(|controller| controller.active_tab(controller.active_pane()))
+            {
+                let controller = self.views.controller.as_ref().unwrap();
+                let document = controller.tab(id).unwrap().document_id;
+                if controller
+                    .tabs()
+                    .iter()
+                    .filter(|tab| tab.document_id == document)
+                    .count()
+                    > 1
+                {
+                    self.views.close_tab(workspace, &mut self.app, id);
+                    if let Some(window) = &self.window {
+                        window.request_redraw();
+                    }
+                    return true;
+                }
             }
-            return true;
+            return false;
         }
         let pane = self.views.pane();
         let input = match action {
@@ -1019,7 +1910,17 @@ impl Shell {
         true
     }
     pub(super) fn views_event(&mut self, _el: &ActiveEventLoop, event: &WindowEvent) -> bool {
-        if !self.views.open() || self.palette.open {
+        if self.tabs_event(_el, event) {
+            return true;
+        }
+        if (!self.views.open()
+            && !self
+                .views
+                .controller
+                .as_ref()
+                .is_some_and(|controller| controller.vertical_tabs))
+            || self.palette.open
+        {
             return false;
         }
         let editor_bounds = self.editor_bounds();
@@ -1119,17 +2020,29 @@ impl Shell {
                     .iter()
                     .position(|r| r.is_some_and(|r| r.contains(pointer)))
                 {
+                    let horizontal = self.modifiers.shift_key()
+                        || matches!(delta,MouseScrollDelta::LineDelta(x,y) if x.abs()>y.abs());
                     let amount = match delta {
+                        MouseScrollDelta::LineDelta(x, _) if horizontal && !self.modifiers.shift_key() => -*x as f64 * 72.0,
+                        MouseScrollDelta::PixelDelta(p) if horizontal && !self.modifiers.shift_key() => -p.x / window.scale_factor(),
                         MouseScrollDelta::LineDelta(_, y) => -*y as f64 * 72.0,
                         MouseScrollDelta::PixelDelta(p) => -p.y / window.scale_factor(),
                     };
                     let height = self.views.bounds[pane].unwrap().height + 24.0;
                     if pane == 1 {
                         if let Some(peer) = &mut self.views.secondary {
-                            peer.scroll(amount, height);
+                            if horizontal {
+                                peer.horizontal_scroll(amount);
+                            } else {
+                                peer.scroll(amount, height);
+                            }
                         }
                     } else if let Some(index) = self.views.primary_index(workspace) {
-                        workspace.editors[index].scroll(amount, height);
+                        if horizontal {
+                            workspace.editors[index].horizontal_scroll(amount);
+                        } else {
+                            workspace.editors[index].scroll(amount, height);
+                        }
                     }
                     self.views.sync_scroll(workspace, pane as u32);
                     handled = true;

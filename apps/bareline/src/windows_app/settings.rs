@@ -25,6 +25,12 @@ pub(super) struct SettingsRuntime {
     notify: Arc<dyn Fn() + Send + Sync>,
     keymap_result: Option<Receiver<Result<KeymapDocument, String>>>,
     keymap_loaded: bool,
+    locale_requested: String,
+    locale_result: Option<Receiver<Result<bareline_settings::LocalePack, String>>>,
+    pub language_change: Option<bareline_settings::LanguageChange>,
+    workspace_requested: Option<PathBuf>,
+    workspace_loaded: Option<PathBuf>,
+    workspace_result: Option<Receiver<(PathBuf, Result<SettingsDocument, String>)>>,
     pending: Vec<KeyChord>,
     pending_at: Instant,
     alt_gr: bool,
@@ -47,7 +53,7 @@ impl SettingsRuntime {
             None,
             SystemAppearance {
                 dark: true,
-                high_contrast: false,
+                high_contrast: bareline_platform_windows::high_contrast_enabled().unwrap_or(false),
             },
         );
         let keymap_path = path.as_ref().map(|p| p.with_file_name("keymap.toml"));
@@ -59,6 +65,12 @@ impl SettingsRuntime {
             notify,
             keymap_result: None,
             keymap_loaded: false,
+            locale_requested: String::new(),
+            locale_result: None,
+            language_change: None,
+            workspace_requested: None,
+            workspace_loaded: None,
+            workspace_result: None,
             pending: Vec::new(),
             pending_at: Instant::now(),
             alt_gr: false,
@@ -69,6 +81,7 @@ impl SettingsRuntime {
     pub fn effective(&self) -> EffectiveSettings {
         self.controller.effective()
     }
+    pub fn set_workspace_root(&mut self, root: PathBuf) { self.workspace_requested = Some(root); }
     pub fn ui_theme(&self) -> bareline_ui::theme::UiTheme {
         let settings = self.effective();
         let theme = Theme::resolve(
@@ -117,6 +130,61 @@ impl SettingsRuntime {
     }
     pub fn poll(&mut self) -> bool {
         let mut changed = self.controller.poll();
+        if let Some((root, result)) = self.workspace_result.as_ref().and_then(|rx| rx.try_recv().ok()) {
+            self.workspace_result = None;
+            if self.workspace_requested.as_ref() == Some(&root) {
+                match result {
+                    Ok(document) => self.controller.set_workspace_document(root.join(".bareline").join("settings.toml"), document),
+                    Err(error) => self.controller.error = Some(error),
+                }
+                self.workspace_loaded = Some(root); changed = true;
+            }
+        }
+        if self.keymap_loaded && self.workspace_result.is_none() && self.workspace_requested != self.workspace_loaded {
+            if let Some(root) = self.workspace_requested.clone() {
+                let wake = self.notify.clone(); let (tx,rx) = mpsc::sync_channel(1); self.workspace_result = Some(rx);
+                if let Err(error) = std::thread::Builder::new().name("bareline-workspace-settings".into()).spawn(move || {
+                    let path = root.join(".bareline").join("settings.toml");
+                    let result = match bareline_settings::read_config(&path) {
+                        Ok(bytes) => SettingsDocument::parse(&bytes,Scope::Workspace),
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(SettingsDocument::empty(Scope::Workspace)),
+                        Err(error) => Err(error.to_string()),
+                    };
+                    let _ = tx.send((root,result)); wake();
+                }) { self.workspace_result=None; self.controller.error=Some(error.to_string()); self.workspace_loaded=self.workspace_requested.clone(); changed=true; }
+            }
+        }
+        if self.locale_result.is_some() {
+            if let Some(result) = self.locale_result.as_ref().and_then(|rx| rx.try_recv().ok()) {
+                self.locale_result = None;
+                match result.and_then(|pack| self.controller.localizer.switch(pack)) {
+                    Ok(change) => { self.language_change = Some(change); changed = true; }
+                    Err(error) => { self.controller.error = Some(error); changed = true; }
+                }
+            }
+        }
+        if self.keymap_loaded && self.locale_result.is_none() {
+            let locale = self.effective().locale;
+            if self.locale_requested != locale {
+                self.locale_requested = locale.clone();
+                if locale == "en" {
+                    self.language_change = self.controller.localizer.switch(bareline_settings::LocalePack::english()).ok();
+                    changed = true;
+                } else if let Some(parent) = self.path.as_ref().and_then(|path| path.parent()) {
+                    let path = parent.join("locales").join(format!("{locale}.toml"));
+                    let (tx, rx) = mpsc::sync_channel(1); self.locale_result = Some(rx);
+                    let wake = self.notify.clone();
+                    if let Err(error) = std::thread::Builder::new().name("bareline-locale-load".into()).spawn(move || {
+                        use std::io::Read;
+                        let result = (|| { let mut bytes = Vec::new();
+                            std::fs::File::open(path).map_err(|e| e.to_string())?.take(bareline_settings::MAX_CONFIG_BYTES as u64 + 1).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+                            bareline_settings::LocalePack::parse(&bytes)
+                        })();
+                        let _ = tx.send(result); wake();
+                    }) { self.locale_result = None; self.controller.error = Some(error.to_string()); }
+                } else { self.controller.error = Some("Locale pack folder is unavailable".into()); changed = true; }
+            }
+        }
         if let Some(result) = self
             .keymap_result
             .as_ref()
@@ -335,6 +403,7 @@ impl Shell {
     pub(super) fn settings_event(&mut self, _el: &ActiveEventLoop, event: &WindowEvent) -> bool {
         if let WindowEvent::ThemeChanged(theme) = event {
             self.settings.controller.system.dark = *theme == winit::window::Theme::Dark;
+            self.settings.controller.system.high_contrast = bareline_platform_windows::high_contrast_enabled().unwrap_or(false);
             if let Some(window) = &self.window {
                 window.request_redraw();
             }
@@ -372,10 +441,10 @@ impl Shell {
                         UiEvent::PointerUp(self.pointer)
                     });
                 if *state == ElementState::Pressed
-                    && self.settings.controller.query_focused
                     && let Some(renderer) = &self.renderer
+                    && let Some(field) = self.settings.controller.text_field_mut()
                 {
-                    let _ = self.settings.controller.query.click(
+                    let _ = field.click(
                         renderer,
                         self.pointer,
                         self.modifiers.shift_key(),
@@ -383,26 +452,22 @@ impl Shell {
                 }
             }
             WindowEvent::Ime(Ime::Preedit(value, cursor)) => {
-                if self.settings.controller.query_focused {
-                    self.settings
-                        .controller
-                        .query
-                        .preedit(value.clone(), *cursor);
+                if let Some(field) = self.settings.controller.text_field_mut() {
+                    field.preedit(value.clone(), *cursor);
                 }
             }
             WindowEvent::Ime(Ime::Commit(value)) => {
-                if self.settings.controller.query_focused {
-                    self.settings.controller.query.commit(value);
-                    self.settings.controller.query_changed();
+                if let Some(field) = self.settings.controller.text_field_mut() {
+                    field.commit(value);
+                    self.settings.controller.text_changed();
                 }
             }
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
                 let ctrl = self.modifiers.control_key();
                 let shift = self.modifiers.shift_key();
-                if self.settings.controller.query_focused
-                    && !self.settings.controller.query.composing()
+                if let Some(field) = self.settings.controller.text_field_mut()
+                    && !field.composing()
                 {
-                    let field = &mut self.settings.controller.query;
                     match &event.logical_key {
                         Key::Named(NamedKey::Backspace) => {
                             field.delete(false);
@@ -442,7 +507,7 @@ impl Shell {
                         }
                         _ => {}
                     }
-                    self.settings.controller.query_changed();
+                    self.settings.controller.text_changed();
                 }
                 let normalized = match &event.logical_key {
                     Key::Named(NamedKey::Escape) => Some(UiKey::Escape),
@@ -453,7 +518,9 @@ impl Shell {
                     Key::Named(NamedKey::ArrowUp) => Some(UiKey::Up),
                     _ => None,
                 };
-                if let Some(key) = normalized {
+                if normalized == Some(UiKey::Tab) {
+                    self.settings.controller.traverse_focus(shift);
+                } else if let Some(key) = normalized {
                     effect = self.settings.controller.event(UiEvent::Key(key));
                 }
             }
@@ -611,8 +678,7 @@ impl Shell {
         {
             return false;
         }
-        if self.settings.controller.query_focused {
-            let field = &mut self.settings.controller.query;
+        if let Some(field) = self.settings.controller.text_field_mut() {
             match action {
                 Action::SelectAll => field.select_all(),
                 Action::Undo => field.undo(false),
@@ -634,7 +700,7 @@ impl Shell {
                 }
                 _ => {}
             }
-            self.settings.controller.query_changed();
+            self.settings.controller.text_changed();
         }
         if let Some(window) = &self.window {
             window.request_redraw();

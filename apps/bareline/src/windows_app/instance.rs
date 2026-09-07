@@ -14,7 +14,7 @@ pub(super) fn prepare(
     config: &mut launch::LaunchConfig,
     notify: std::sync::Arc<dyn Fn() + Send + Sync>,
 ) -> Result<Option<InstanceRuntime>, Box<dyn std::error::Error>> {
-    if config.smoke || config.perf || config.prototype {
+    if config.smoke || config.perf || config.prototype || config.performance.is_some() {
         return Ok(Some(InstanceRuntime::default()));
     }
     let scope = config
@@ -32,7 +32,7 @@ pub(super) fn prepare(
     let outcome = bareline_platform_windows::instance::coordinate(
         &scope,
         request,
-        config.new_instance || config.no_extensions,
+        config.new_instance || config.no_extensions || config.no_session,
         notify,
     )?;
     Ok(match outcome {

@@ -74,6 +74,12 @@ fn run() -> Result<(), String> {
         }
     }
     let target = root.join("bareline.exe");
+    let authority_now=std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|e|e.to_string())?.as_secs();
+    let authority=bareline_platform_windows::update::resolve_release_authority(root,key,publisher,embedded_floor,authority_now).map_err(|e|e.to_string())?;
+    let key=authority.release_public_key.as_str();
+    let publisher=authority.publisher.as_str();
+    let certificate=authority.certificate;
+    let embedded_floor=authority.minimum_metadata_version;
     if action.len() == 5 && action[0] == "--apply" {
         let pid = action[2]
             .to_str()

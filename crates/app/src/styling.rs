@@ -16,6 +16,7 @@ pub struct Styling {
     source: Option<DocumentSnapshot>,
     language: Option<Language>,
     definition: Option<Arc<bareline_syntax::udl::Definition>>,
+    preference: bareline_syntax::LexerPreference,
     requested: Option<Range<TextOffset>>,
     checkpoints: Vec<Checkpoint>,
     pub result: Option<SyntaxResult>,
@@ -48,6 +49,7 @@ impl Styling {
         }
         true
     }
+    #[cfg(test)]
     pub fn refresh(
         &mut self,
         source: &DocumentSnapshot,
@@ -55,6 +57,26 @@ impl Styling {
         visible: Range<TextOffset>,
         notify: Arc<dyn Fn() + Send + Sync>,
     ) {
+        self.refresh_preferred(
+            source,
+            language,
+            visible,
+            notify,
+            bareline_syntax::LexerPreference::Lexilla,
+        );
+    }
+    pub fn refresh_preferred(
+        &mut self,
+        source: &DocumentSnapshot,
+        language: Language,
+        visible: Range<TextOffset>,
+        notify: Arc<dyn Fn() + Send + Sync>,
+        preference: bareline_syntax::LexerPreference,
+    ) {
+        if self.preference != preference {
+            self.source = None;
+            self.preference = preference;
+        }
         self.refresh_configured(source, language, visible, notify, None);
     }
     pub fn refresh_udl(
@@ -149,7 +171,14 @@ impl Styling {
                     .ok()
             } else {
                 worker
-                    .submit(source.clone(), language, range, checkpoint, notify)
+                    .submit_preferred(
+                        source.clone(),
+                        language,
+                        range,
+                        checkpoint,
+                        notify,
+                        self.preference,
+                    )
                     .ok()
             }
         });

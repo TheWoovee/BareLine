@@ -105,15 +105,13 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn unpaired_utf16_is_not_replaced() {
-        use std::os::windows::ffi::{OsStrExt, OsStringExt};
-        let path = OsString::from_wide(&[67, 58, 92, 0xd800]);
-        let parsed = parse([path.clone()]).unwrap();
-        assert_eq!(
-            parsed.paths[0]
-                .as_os_str()
-                .encode_wide()
-                .collect::<Vec<_>>(),
-            path.encode_wide().collect::<Vec<_>>()
-        );
+        let path = bareline_platform::SerializedPath {
+            version: 1,
+            encoding: bareline_platform::PathEncoding::WindowsUtf16Le,
+            data: "QwA6AFwAANg=".into(),
+            display: "unpaired UTF-16 fixture".into(),
+        }.to_native().unwrap();
+        let parsed = parse([path.clone().into_os_string()]).unwrap();
+        assert_eq!(parsed.paths[0].as_os_str(), path.as_os_str());
     }
 }

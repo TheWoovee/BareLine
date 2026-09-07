@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 use super::*;
+mod location;
 use bareline_app::macros::{
     MacrosController,
     model::{
@@ -21,6 +22,8 @@ enum FileResult {
     Macro(String),
     External(String),
     Saved,
+    Library(Vec<(usize, String)>, Option<String>),
+    Prepared(bareline_app::macros::model::process::ProcessRequest),
 }
 pub struct MacrosRuntime {
     pub controller: MacrosController,
@@ -29,6 +32,25 @@ pub struct MacrosRuntime {
     bounds: Rect,
     focused: bool,
     next_name: u32,
+    directory: Option<PathBuf>,
+    loaded: bool,
+    storage_ready: bool,
+    dirty: bool,
+    output_target: Option<bareline_app::macros::model::process::OutputLink>,
+    location: Option<
+        mpsc::Receiver<
+            Result<
+                (
+                    bareline_document::paged::PagedSnapshot,
+                    bareline_document::TextOffset,
+                ),
+                String,
+            >,
+        >,
+    >,
+    location_cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    prepare_cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    output_directory: Option<PathBuf>,
 }
 impl Default for MacrosRuntime {
     fn default() -> Self {
@@ -39,12 +61,151 @@ impl Default for MacrosRuntime {
             bounds: Rect::default(),
             focused: false,
             next_name: 1,
+            directory: None,
+            loaded: false,
+            storage_ready: false,
+            dirty: false,
+            output_target: None,
+            location: None,
+            location_cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            prepare_cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            output_directory: None,
         }
     }
 }
 impl MacrosRuntime {
+    pub fn configure(&mut self, directory: Option<PathBuf>) {
+        self.directory = directory;
+    }
+    fn load_library(
+        &mut self,
+        notify: std::sync::Arc<dyn Fn() + Send + Sync>,
+    ) -> Result<(), String> {
+        if self.loaded || self.pending.is_some() {
+            return Ok(());
+        }
+        self.loaded = true;
+        let Some(directory) = self.directory.clone() else {
+            self.storage_ready = true;
+            return Ok(());
+        };
+        let (tx, rx) = mpsc::sync_channel(1);
+        std::thread::Builder::new()
+            .name("bareline-macro-load".into())
+            .spawn(move || {
+                let result = (|| {
+                    let mut entries = Vec::new();
+                    let mut budget = 0usize;
+                    for slot in 0..32 {
+                        let path = directory.join(format!("macro-{:02}.toml", slot + 1));
+                        let bytes = match bounded_read(&path) {
+                            Ok(bytes) => bytes,
+                            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                            Err(error) => return Err(error.to_string()),
+                        };
+                        budget = budget.saturating_add(bytes.len());
+                        if bytes.len() > 4 * 1024 * 1024 || budget > 16 * 1024 * 1024 {
+                            return Err("Saved macro library exceeds its size limit".into());
+                        }
+                        entries.push((
+                            slot,
+                            String::from_utf8(bytes)
+                                .map_err(|_| "Saved macro is not UTF-8".to_string())?,
+                        ));
+                    }
+                    let external = match bounded_read(&directory.join("external-command.toml")) {
+                        Ok(bytes) => Some(
+                            String::from_utf8(bytes)
+                                .map_err(|_| "External command is not UTF-8".to_string())?,
+                        ),
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                        Err(error) => return Err(error.to_string()),
+                    };
+                    Ok(FileResult::Library(entries, external))
+                })();
+                let _ = tx.send(result);
+                notify();
+            })
+            .map_err(|error| error.to_string())?;
+        self.pending = Some(rx);
+        Ok(())
+    }
+    fn save_library(
+        &mut self,
+        notify: std::sync::Arc<dyn Fn() + Send + Sync>,
+    ) -> Result<(), String> {
+        if !self.storage_ready {
+            return Err("Macro storage has not loaded successfully. Use Retry Loading Macros before saving.".into());
+        }
+        if self.pending.is_some() {
+            self.dirty = true;
+            return Ok(());
+        }
+        let directory = self
+            .directory
+            .clone()
+            .ok_or("Macro storage is unavailable; use Export to save the selected macro")?;
+        let mut entries: Vec<_> = self
+            .controller
+            .serialized_slots()
+            .into_iter()
+            .map(|(slot, text)| (format!("macro-{:02}.toml", slot + 1), text))
+            .collect();
+        if let Some(definition) = &self.external {
+            entries.push(("external-command.toml".into(), definition.export_toml()));
+        }
+        let (tx, rx) = mpsc::sync_channel(1);
+        std::thread::Builder::new()
+            .name("bareline-macro-library-save".into())
+            .spawn(move || {
+                let result = (|| {
+                    std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+                    for (name, text) in entries {
+                        atomic_text(&directory.join(name), &text)?;
+                    }
+                    Ok(FileResult::Saved)
+                })();
+                let _ = tx.send(result);
+                notify();
+            })
+            .map_err(|error| error.to_string())?;
+        self.pending = Some(rx);
+        self.dirty = false;
+        self.controller.status = "Saving macros…".into();
+        Ok(())
+    }
     pub fn annotate_context(&self, context: &mut bareline_commands::CommandContext) {
         use bareline_commands::{CommandId, CommandState};
+        if !self.storage_ready {
+            for id in [
+                "macro.record",
+                "macro.stop",
+                "macro.import",
+                "macro.rename",
+                "macro.ghost",
+                "macro.save",
+                "run.load",
+            ] {
+                context.states.insert(
+                    CommandId(id),
+                    CommandState::disabled(
+                        "Macro storage is loading or failed; use Retry Loading Macros",
+                    ),
+                );
+            }
+        }
+        for (index, id) in bareline_app::macros::SAVED_COMMANDS.iter().enumerate() {
+            context.states.insert(
+                CommandId(id),
+                match self.controller.slot_name(index) {
+                    Some(name) => CommandState {
+                        label: Some(format!("Play {name}")),
+                        ..Default::default()
+                    },
+                    None => CommandState::disabled("Saved macro slot is empty"),
+                },
+            );
+        }
         for (id, reason) in [
             (
                 "macro.stop",
@@ -101,7 +262,7 @@ impl MacrosRuntime {
     }
     pub fn draw(
         &mut self,
-        _renderer: &mut WindowsRenderer,
+        renderer: &mut WindowsRenderer,
         width: f32,
         height: f32,
         ops: &mut Vec<DrawOp>,
@@ -113,6 +274,16 @@ impl MacrosRuntime {
             self.height(),
         );
         self.controller.draw_output(self.bounds, ops);
+        if let Err(error) = self.controller.manager.draw(
+            renderer,
+            width,
+            height,
+            &self.controller.status,
+            bareline_ui::theme::UiTheme::default(),
+            ops,
+        ) {
+            self.controller.status = format!("Macro manager layout failed: {error:?}");
+        }
     }
     fn read(
         &mut self,
@@ -202,7 +373,119 @@ impl MacrosRuntime {
         Ok(())
     }
 }
+fn bounded_read(path: &std::path::Path) -> std::io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)?
+        .take(4 * 1024 * 1024 + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > 4 * 1024 * 1024 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Configuration exceeds 4 MiB",
+        ));
+    }
+    Ok(bytes)
+}
+fn atomic_text(path: &std::path::Path, text: &str) -> Result<(), String> {
+    use bareline_platform::LocalFileSystem;
+    let fs = bareline_platform_windows::WindowsFileSystem;
+    fs.validate_target(path)
+        .map_err(|error| error.to_string())?;
+    let stage = path.with_file_name(format!(
+        ".bareline-macro-{}-{}.tmp",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    let result = (|| {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&stage)
+            .map_err(|error| error.to_string())?;
+        file.write_all(text.as_bytes())
+            .and_then(|()| file.sync_all())
+            .map_err(|error| error.to_string())?;
+        drop(file);
+        fs.commit(&stage, path, path.exists())
+            .map_err(|error| error.to_string())
+    })();
+    let _ = std::fs::remove_file(&stage);
+    result
+}
 impl Shell {
+    pub(super) fn macros_accessibility(
+        &mut self,
+        el: &ActiveEventLoop,
+        id: u64,
+        invoke: bool,
+        value: Option<String>,
+    ) -> bool {
+        if !self
+            .macros
+            .controller
+            .semantics()
+            .iter()
+            .any(|node| node.id.0 == id)
+        {
+            return false;
+        }
+        if id >= 2_000_000 {
+            if let Some(link) = self.macros.controller.output_accessibility(id, invoke) {
+                self.macros_open_link(link);
+            }
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+            return true;
+        }
+        let effect = self.macros.controller.manager.accessibility(id, invoke);
+        if let Some(value) = value {
+            if let Some(field) = self.macros.controller.manager.active_field() {
+                field.select_all();
+                field.commit(&value);
+            }
+        }
+        self.macros_manager_effect(el, effect);
+        if let Some(window) = &self.window {
+            window.request_redraw();
+        }
+        true
+    }
+    fn macros_manager_effect(
+        &mut self,
+        el: &ActiveEventLoop,
+        effect: Option<bareline_app::macros::ManagerEffect>,
+    ) {
+        match effect {
+            Some(bareline_app::macros::ManagerEffect::Select(name)) => {
+                self.macros.controller.selected = Some(name)
+            }
+            Some(bareline_app::macros::ManagerEffect::Command(id)) => {
+                if let Ok(action) = self.app.commands.dispatch_in(id, &self.command_context()) {
+                    self.dispatch(el, action);
+                }
+            }
+            None => {}
+        }
+    }
+    /// Owner supplies this only after an acknowledged deterministic command.
+    pub(super) fn macros_record_command(&mut self, id: &str, arguments: BTreeMap<String, String>) {
+        if self.macros.controller.recorder.recording() {
+            if let Err(error) = self.macros.controller.recorded(
+                MacroEvent::Command {
+                    id: id.into(),
+                    arguments,
+                },
+                true,
+                &self.app.commands,
+            ) {
+                self.macros.controller.status = error;
+            }
+        }
+    }
     /// Call after the exact normalized Input has acknowledged success, including navigation.
     pub(super) fn macros_record_input(&mut self, input: &Input) {
         if !self.macros.controller.recorder.recording() {
@@ -249,7 +532,125 @@ impl Shell {
         }
     }
     pub(super) fn macros_dispatch(&mut self, _el: &ActiveEventLoop, id: &str) -> bool {
+        if !self.macros.storage_ready
+            && matches!(
+                id,
+                "macro.record"
+                    | "macro.stop"
+                    | "macro.import"
+                    | "macro.rename"
+                    | "macro.ghost"
+                    | "macro.save"
+                    | "run.load"
+            )
+        {
+            self.macros.controller.status =
+                "Macro storage is loading or failed; use Retry Loading Macros before changing it."
+                    .into();
+            self.macros.controller.output_open = true;
+            return true;
+        }
+        if matches!(
+            id,
+            "macro.rename" | "macro.play_n" | "macro.shortcut" | "macro.ghost"
+        ) && !self.macros.controller.manager.open
+        {
+            self.palette.dismiss();
+            self.macros.controller.show_manager();
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+            return true;
+        }
+        if let Some(slot) = bareline_app::macros::SAVED_COMMANDS
+            .iter()
+            .position(|value| *value == id)
+        {
+            let result = self.macros.controller.select_slot(slot).and_then(|()| {
+                self.macros
+                    .controller
+                    .play(Repeat::Once, &self.app.commands)
+            });
+            if let Err(error) = result {
+                self.macros.controller.status = error;
+                self.macros.controller.output_open = true;
+            } else if let Some(workspace) = &self.workspace {
+                self.macros
+                    .controller
+                    .capture_replay_target(workspace, self.app.active);
+            }
+            return true;
+        }
         let result: Result<(), String> = match id {
+            "macro.reload" => {
+                if self.macros.pending.is_some() {
+                    Err("Wait for the current macro file operation".into())
+                } else if self.macros.storage_ready {
+                    Err("Macro storage is already loaded".into())
+                } else {
+                    self.macros.loaded = false;
+                    self.macros.load_library(self.notify.clone())
+                }
+            }
+            "macro.manager" => {
+                self.palette.dismiss();
+                self.macros.controller.show_manager();
+                Ok(())
+            }
+            "macro.manager_close" => {
+                self.macros.controller.manager.dismiss();
+                Ok(())
+            }
+            "macro.save" => self.macros.save_library(self.notify.clone()),
+            "macro.rename" => {
+                let name = self.macros.controller.manager.name.value().to_string();
+                let old = self.macros.controller.selected.clone().unwrap_or_default();
+                self.macros.controller.rename(&old, &name).and_then(|()| {
+                    self.macros.controller.show_manager();
+                    self.macros.save_library(self.notify.clone())
+                })
+            }
+            "macro.play_n" => self
+                .macros
+                .controller
+                .manager
+                .repetitions
+                .value()
+                .parse::<u32>()
+                .map_err(|_| "Repeat count must be 1–10000".to_string())
+                .and_then(|count| {
+                    self.macros
+                        .controller
+                        .play(Repeat::Times(count), &self.app.commands)
+                }),
+            "macro.resume" => {
+                if self
+                    .macros
+                    .controller
+                    .playback
+                    .as_mut()
+                    .is_some_and(|playback| playback.resume())
+                {
+                    Ok(())
+                } else {
+                    Err("No failed macro location can be resumed".into())
+                }
+            }
+            "macro.ghost" => self
+                .macros
+                .controller
+                .manager
+                .delay
+                .value()
+                .parse::<u64>()
+                .map_err(|_| "Typing delay must be 0–60000 ms".to_string())
+                .and_then(|delay| {
+                    self.macros
+                        .controller
+                        .set_typing_delay(delay, &self.app.commands)
+                })
+                .and_then(|()| self.macros.save_library(self.notify.clone())),
+            "macro.shortcut" => self.macros_assign_shortcut(),
             "macro.record" => self.macros.controller.record(),
             "macro.stop" => {
                 if self.views.pending_edits()
@@ -261,6 +662,14 @@ impl Shell {
                         "Wait for the pending edit before stopping recording.".into();
                     return true;
                 }
+                while self
+                    .macros
+                    .controller
+                    .library
+                    .contains_key(&format!("Macro {}", self.macros.next_name))
+                {
+                    self.macros.next_name += 1;
+                }
                 let name = format!("Macro {}", self.macros.next_name);
                 let result = self
                     .macros
@@ -268,6 +677,7 @@ impl Shell {
                     .stop_recording(&name, &self.app.commands);
                 if result.is_ok() {
                     self.macros.next_name += 1;
+                    self.macros.dirty = true;
                 }
                 result
             }
@@ -284,6 +694,9 @@ impl Shell {
                 Ok(())
             }
             "run.cancel" => {
+                self.macros
+                    .prepare_cancel
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
                 self.macros.controller.cancel_process();
                 Ok(())
             }
@@ -292,6 +705,10 @@ impl Shell {
                 Ok(())
             }
             "output.close" => {
+                self.macros
+                    .location_cancel
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+                self.macros.output_target = None;
                 self.macros.controller.output_open = false;
                 self.macros.focused = false;
                 Ok(())
@@ -302,6 +719,18 @@ impl Shell {
                 .unwrap()
                 .set_clipboard_text(&self.macros.controller.copy_output())
                 .map_err(|error| error.to_string()),
+            "output.open_link" => {
+                if let Some(link) = self
+                    .macros
+                    .controller
+                    .output_event(UiEvent::Key(UiKey::Enter))
+                {
+                    self.macros_open_link(link);
+                    Ok(())
+                } else {
+                    Err("Select a path:line:column output location first".into())
+                }
+            }
             "macro.import" | "run.load" => match self.platform.as_ref().unwrap().open_file() {
                 Ok(Some(path)) => self
                     .macros
@@ -327,6 +756,13 @@ impl Shell {
             "run.execute" => self.macros_run_loaded(),
             _ => return false,
         };
+        if result.is_ok() && matches!(id, "macro.play" | "macro.play_eof" | "macro.play_n") {
+            if let Some(workspace) = &self.workspace {
+                self.macros
+                    .controller
+                    .capture_replay_target(workspace, self.app.active);
+            }
+        }
         if let Err(error) = result {
             self.macros.controller.status = error;
             self.macros.controller.output_open = true;
@@ -336,58 +772,183 @@ impl Shell {
         }
         true
     }
+    fn macros_assign_shortcut(&mut self) -> Result<(), String> {
+        use bareline_commands::{CommandId, KeyBinding, KeyChord};
+        if self.settings.keymap_busy() {
+            return Err("Wait for the current shortcut save".into());
+        }
+        let slot = self
+            .macros
+            .controller
+            .selected_slot()
+            .ok_or("Select a macro first")?;
+        let chord = KeyChord::parse(self.macros.controller.manager.shortcut.value())?;
+        let mut document = self.settings.keymap.clone();
+        document.set_binding(
+            KeyBinding {
+                command: CommandId(bareline_app::macros::SAVED_COMMANDS[slot]),
+                sequence: vec![chord],
+            },
+            &self.app.commands,
+        )?;
+        self.settings.save_keymap(document, None);
+        if let Some(error) = &self.settings.controller.error {
+            return Err(error.clone());
+        }
+        self.macros.controller.status = "Saving shortcut…".into();
+        Ok(())
+    }
     fn macros_run_loaded(&mut self) -> Result<(), String> {
         let definition = self
             .macros
             .external
             .as_ref()
-            .ok_or("Load a user command definition first")?;
-        let context = match &self.workspace {
-            Some(workspace) => {
-                bareline_app::macros::placeholder_context(workspace, self.app.active)?
+            .ok_or("Load a user command definition first")?
+            .clone();
+        if let Some(workspace) = &self.workspace {
+            if let Some(bareline_app::workspace::WorkspaceEditor::Paged(editor)) =
+                workspace.editors.get(self.app.active)
+            {
+                if definition
+                    .arguments
+                    .iter()
+                    .any(|argument| argument.contains("${line}") || argument.contains("${column}"))
+                {
+                    if self.macros.pending.is_some() {
+                        return Err("Wait for the pending macro configuration operation".into());
+                    }
+                    let templates: Vec<_> = definition
+                        .arguments
+                        .iter()
+                        .map(|argument| argument.replace("${line}", "").replace("${column}", ""))
+                        .collect();
+                    let mut context = bareline_app::macros::placeholder_context(
+                        workspace,
+                        self.app.active,
+                        &templates,
+                    )?;
+                    let source = editor.read_handle();
+                    let offset = editor
+                        .viewport_start()
+                        .0
+                        .saturating_add(editor.surface.selection.caret);
+                    let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+                    self.macros.prepare_cancel = cancel.clone();
+                    let notify = self.notify.clone();
+                    let (tx, rx) = mpsc::sync_channel(1);
+                    std::thread::Builder::new()
+                        .name("bareline-command-position".into())
+                        .spawn(move || {
+                            let result = location::paged_line_column(&source, offset, &cancel)
+                                .and_then(|(line, column)| {
+                                    context.line = line;
+                                    context.column = column;
+                                    definition.request(&context)
+                                })
+                                .map(FileResult::Prepared);
+                            let _ = tx.send(result);
+                            notify();
+                        })
+                        .map_err(|error| error.to_string())?;
+                    self.macros.pending = Some(rx);
+                    self.macros.controller.output_open = true;
+                    self.macros.controller.status =
+                        "Preparing command position… Cancel External Command stops this scan."
+                            .into();
+                    return Ok(());
+                }
             }
+        }
+        let context = match &self.workspace {
+            Some(workspace) => bareline_app::macros::placeholder_context(
+                workspace,
+                self.app.active,
+                &definition.arguments,
+            )?,
             None => PlaceholderContext::default(),
         };
         let request = definition.request(&context)?;
+        self.macros_confirm_run(request)
+    }
+    fn macros_confirm_run(
+        &mut self,
+        request: bareline_app::macros::model::process::ProcessRequest,
+    ) -> Result<(), String> {
+        let shell = matches!(request.mode, LaunchMode::Shell { .. });
         let (program, arguments) = match &request.mode {
             LaunchMode::Direct { program, arguments }
             | LaunchMode::Shell { program, arguments } => (program, arguments),
         };
-        if !bareline_platform_windows::confirm_external_command(
-            program,
-            arguments,
-            definition.shell,
-        ) {
+        if !bareline_platform_windows::confirm_external_command(program, arguments, shell) {
             return Ok(());
         }
+        let directory = request
+            .directory
+            .clone()
+            .or_else(|| std::env::current_dir().ok());
         self.macros.controller.run(
             request,
-            if definition.shell {
+            if shell {
                 ProcessPermission::UserGrantedShell
             } else {
                 ProcessPermission::UserGrantedDirect
             },
             std::sync::Arc::new(bareline_platform_windows::WindowsProcessLauncher),
-        )
+        )?;
+        self.macros.output_directory = directory;
+        Ok(())
     }
     pub(super) fn macros_pump(&mut self, el: &ActiveEventLoop) {
+        self.macros_poll_location();
+        if let Err(error) = self.macros.load_library(self.notify.clone()) {
+            self.macros.controller.status = error;
+        }
         if let Some(receiver) = &self.macros.pending {
             match receiver.try_recv() {
                 Ok(result) => {
                     self.macros.pending = None;
                     let result = match result {
-                        Ok(FileResult::Macro(text)) => {
-                            self.macros.controller.import(&text, &self.app.commands)
-                        }
+                        Ok(FileResult::Macro(text)) => self
+                            .macros
+                            .controller
+                            .import(&text, &self.app.commands)
+                            .map(|()| {
+                                self.macros.dirty = true;
+                                self.macros.controller.show_manager();
+                            }),
                         Ok(FileResult::External(text)) => ExternalDefinition::import_toml(&text)
                             .map(|definition| {
                                 self.macros.controller.status =
                                     format!("Loaded {} — {}", definition.name, definition.program);
                                 self.macros.external = Some(definition);
+                                self.macros.dirty = true;
+                            }),
+                        Ok(FileResult::Library(entries, external)) => external
+                            .as_deref()
+                            .map(ExternalDefinition::import_toml)
+                            .transpose()
+                            .and_then(|external| {
+                                self.macros
+                                    .controller
+                                    .restore_library(entries, &self.app.commands)?;
+                                self.macros.external = external;
+                                self.macros.storage_ready = true;
+                                Ok(())
                             }),
                         Ok(FileResult::Saved) => {
                             self.macros.controller.status = "Saved".into();
                             Ok(())
+                        }
+                        Ok(FileResult::Prepared(request)) => {
+                            if self
+                                .macros
+                                .prepare_cancel
+                                .load(std::sync::atomic::Ordering::Relaxed)
+                            {
+                                Err("Command preparation cancelled".into())
+                            } else {
+                                self.macros_confirm_run(request)
+                            }
                         }
                         Err(error) => Err(error),
                     };
@@ -406,6 +967,13 @@ impl Shell {
                 Err(mpsc::TryRecvError::Empty) => {}
             }
         }
+        if self.macros.dirty && self.macros.pending.is_none() {
+            if let Err(error) = self.macros.save_library(self.notify.clone()) {
+                self.macros.dirty = false;
+                self.macros.controller.status =
+                    format!("Changes not saved: {error}. Use Save Macros to retry.");
+            }
+        }
         let context = self.command_context();
         if let Some(workspace) = &mut self.workspace
             && let Some(state) = self.macros.controller.tick(
@@ -414,6 +982,7 @@ impl Shell {
                 workspace,
                 self.app.active,
                 context,
+                self.notify.clone(),
             )
         {
             if matches!(state, PlaybackState::Running | PlaybackState::Waiting(_)) {
@@ -447,11 +1016,185 @@ impl Shell {
             ));
         }
     }
-    pub(super) fn macros_event(&mut self, _el: &ActiveEventLoop, event: &WindowEvent) -> bool {
+    pub(super) fn macros_event(&mut self, el: &ActiveEventLoop, event: &WindowEvent) -> bool {
+        if self.macros.controller.manager.open && !self.palette.open {
+            let mut effect = None;
+            match event {
+                WindowEvent::MouseInput {
+                    state,
+                    button: MouseButton::Left,
+                    ..
+                } => {
+                    effect = self.macros.controller.manager.event(
+                        if *state == ElementState::Pressed {
+                            UiEvent::PointerDown(self.pointer)
+                        } else {
+                            UiEvent::PointerUp(self.pointer)
+                        },
+                        self.modifiers.shift_key(),
+                    );
+                    if *state == ElementState::Pressed {
+                        if let Some(renderer) = &self.renderer {
+                            self.macros.controller.manager.click_field(
+                                renderer,
+                                self.pointer,
+                                self.modifiers.shift_key(),
+                            );
+                        }
+                    }
+                }
+                WindowEvent::Ime(Ime::Preedit(value, cursor)) => {
+                    if let Some(field) = self.macros.controller.manager.active_field() {
+                        field.preedit(value.clone(), *cursor);
+                    }
+                }
+                WindowEvent::Ime(Ime::Commit(value)) => {
+                    if let Some(field) = self.macros.controller.manager.active_field() {
+                        field.commit(value);
+                    }
+                }
+                WindowEvent::KeyboardInput { event, .. }
+                    if event.state == ElementState::Pressed =>
+                {
+                    let ctrl = self.modifiers.control_key();
+                    let shift = self.modifiers.shift_key();
+                    let mut handled_field = false;
+                    if let Some(field) = self.macros.controller.manager.active_field() {
+                        if !field.composing() {
+                            match &event.logical_key {
+                                Key::Named(NamedKey::Backspace) => {
+                                    field.delete(false);
+                                    handled_field = true;
+                                }
+                                Key::Named(NamedKey::Space) => {
+                                    field.insert(" ");
+                                    handled_field = true;
+                                }
+                                Key::Named(NamedKey::Delete) => {
+                                    field.delete(true);
+                                    handled_field = true;
+                                }
+                                Key::Named(NamedKey::ArrowLeft) => {
+                                    field.horizontal(false, shift);
+                                    handled_field = true;
+                                }
+                                Key::Named(NamedKey::ArrowRight) => {
+                                    field.horizontal(true, shift);
+                                    handled_field = true;
+                                }
+                                Key::Named(NamedKey::Home) => {
+                                    field.edge(false, shift);
+                                    handled_field = true;
+                                }
+                                Key::Named(NamedKey::End) => {
+                                    field.edge(true, shift);
+                                    handled_field = true;
+                                }
+                                Key::Character(value) if ctrl && !self.modifiers.alt_key() => {
+                                    match value.to_ascii_lowercase().as_str() {
+                                        "a" => {
+                                            field.select_all();
+                                            handled_field = true;
+                                        }
+                                        "z" => {
+                                            field.undo(shift);
+                                            handled_field = true;
+                                        }
+                                        "y" => {
+                                            field.undo(true);
+                                            handled_field = true;
+                                        }
+                                        "c" | "x" => {
+                                            if let Some(platform) = &self.platform {
+                                                if platform
+                                                    .set_clipboard_text(field.selected())
+                                                    .is_ok()
+                                                    && value.eq_ignore_ascii_case("x")
+                                                {
+                                                    field.insert("");
+                                                }
+                                            }
+                                            handled_field = true;
+                                        }
+                                        "v" => {
+                                            if let Some(platform) = &self.platform {
+                                                if let Ok(value) = platform.clipboard_text() {
+                                                    field.commit(&value);
+                                                }
+                                            }
+                                            handled_field = true;
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                                Key::Character(value) if !ctrl || self.modifiers.alt_key() => {
+                                    field.insert(value);
+                                    handled_field = true;
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    if !handled_field {
+                        let key = match event.logical_key {
+                            Key::Named(NamedKey::Escape) => Some(UiKey::Escape),
+                            Key::Named(NamedKey::Tab) => Some(UiKey::Tab),
+                            Key::Named(NamedKey::Enter) => Some(UiKey::Enter),
+                            Key::Named(NamedKey::Space) => Some(UiKey::Space),
+                            Key::Named(NamedKey::ArrowUp) => Some(UiKey::Up),
+                            Key::Named(NamedKey::ArrowDown) => Some(UiKey::Down),
+                            Key::Named(NamedKey::Home) => Some(UiKey::Home),
+                            Key::Named(NamedKey::End) => Some(UiKey::End),
+                            _ => None,
+                        };
+                        if let Some(key) = key {
+                            effect = self
+                                .macros
+                                .controller
+                                .manager
+                                .event(UiEvent::Key(key), shift);
+                        } else if ctrl || self.modifiers.alt_key() {
+                            return false;
+                        }
+                    }
+                }
+                WindowEvent::RedrawRequested
+                | WindowEvent::Resized(_)
+                | WindowEvent::ScaleFactorChanged { .. }
+                | WindowEvent::CloseRequested
+                | WindowEvent::ModifiersChanged(_)
+                | WindowEvent::CursorMoved { .. } => return false,
+                WindowEvent::Focused(false) => {
+                    if let Some(field) = self.macros.controller.manager.active_field() {
+                        field.cancel();
+                    }
+                    return false;
+                }
+                _ => {}
+            }
+            self.macros_manager_effect(el, effect);
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+            return true;
+        }
         if !self.macros.controller.output_open || self.palette.open {
             return false;
         }
         let ui = match event {
+            WindowEvent::MouseWheel { delta, .. } if self.macros.bounds.contains(self.pointer) => {
+                let dy = match delta {
+                    MouseScrollDelta::LineDelta(_, y) => -*y as f64 * 28.,
+                    MouseScrollDelta::PixelDelta(point) => {
+                        -point.y / self.window.as_ref().map(|w| w.scale_factor()).unwrap_or(1.)
+                    }
+                };
+                self.macros.controller.scroll_output(dy);
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+                return true;
+            }
             WindowEvent::MouseInput {
                 state,
                 button: MouseButton::Left,
@@ -484,12 +1227,8 @@ impl Shell {
             _ => None,
         };
         if let Some(ui) = ui {
-            if let Some(link) = self.macros.controller.output_event(ui)
-                && let Some(workspace) = &mut self.workspace
-            {
-                workspace.open(link.path);
-                self.macros.controller.status =
-                    format!("Opening output location {}:{}", link.line, link.column);
+            if let Some(link) = self.macros.controller.output_event(ui) {
+                self.macros_open_link(link);
             }
             if let Some(window) = &self.window {
                 window.request_redraw();

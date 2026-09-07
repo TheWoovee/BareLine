@@ -2,6 +2,7 @@
 //! Distribution contracts. No network, registry, shell execution or document I/O.
 pub mod cli;
 pub mod update;
+pub mod trust;
 
 use std::path::{Path, PathBuf};
 

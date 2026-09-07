@@ -8,3 +8,4 @@ entry_component = "extension.wasm"
 commands = ["ext.json.format", "ext.json.minify", "ext.json.validate", "ext.json.tree"]
 panels = ["ext.json.tree"]
 capabilities = ["DocumentRead", "DocumentEdit", "UiPanel"]
+background_commands = ["ext.json.validate"]

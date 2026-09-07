@@ -3,7 +3,7 @@
 //! navigation anchors, not an AST or claims about complete semantic scope.
 use bareline_document::{DocumentSnapshot, TextOffset};
 use bareline_renderer::{DrawOp, Point, Rect};
-use bareline_syntax::{Cancellation, Language, MAX_REQUEST_BYTES, StyleKind, lex};
+use bareline_syntax::{Cancellation, Language, MAX_REQUEST_BYTES, lex};
 use bareline_ui::{
     controls::{Key, visible_rows},
     widgets::Theme,
@@ -15,12 +15,8 @@ use std::{
         mpsc::{self, Receiver},
     },
 };
-#[derive(Clone, Debug)]
-pub struct Symbol {
-    pub name: String,
-    pub kind: &'static str,
-    pub offset: TextOffset,
-}
+pub use bareline_syntax::outline::LexicalSymbol as Symbol;
+use bareline_syntax::outline::{rust_symbols, toml_symbols};
 struct Batch {
     symbols: Vec<Symbol>,
     finished: bool,
@@ -39,6 +35,10 @@ pub struct OutlinePanel {
     bounds: Rect,
     pub status: String,
     pub title: String,
+    definition: Option<Arc<bareline_syntax::outline::Definition>>,
+    definition_extension: String,
+    active_extension: String,
+    search_cancel: bareline_search::SearchJob,
 }
 impl Default for OutlinePanel {
     fn default() -> Self {
@@ -55,17 +55,29 @@ impl Default for OutlinePanel {
             bounds: Rect::default(),
             status: String::new(),
             title: String::new(),
+            definition: None,
+            definition_extension: String::new(),
+            active_extension: String::new(),
+            search_cancel: Default::default(),
         }
     }
 }
 impl Drop for OutlinePanel {
     fn drop(&mut self) {
         self.cancel.cancel();
+        self.search_cancel.cancel();
     }
 }
 impl OutlinePanel {
+    pub fn set_definition(&mut self, definition: bareline_syntax::outline::Definition, extension: String) {
+        self.clear();
+        self.definition = Some(Arc::new(definition));
+        self.definition_extension = extension.to_ascii_lowercase();
+    }
+    pub fn definition(&self) -> Option<&bareline_syntax::outline::Definition> { self.definition.as_deref() }
     pub fn clear(&mut self) {
         self.cancel.cancel();
+        self.search_cancel.cancel();
         self.pending = None;
         self.source = None;
         self.symbols.clear();
@@ -82,11 +94,13 @@ impl OutlinePanel {
     ) {
         if !self.open {
             self.cancel.cancel();
+            self.search_cancel.cancel();
             self.pending = None;
             self.source = None;
             return;
         }
-        if self.source.as_ref().is_some_and(|old| {
+        let ext = path.and_then(Path::extension).and_then(|s| s.to_str()).unwrap_or("").to_ascii_lowercase();
+        if self.active_extension == ext && self.title == title && self.source.as_ref().is_some_and(|old| {
             old.same_document(source)
                 && old.revision == source.revision
                 && old.len() == source.len()
@@ -95,6 +109,7 @@ impl OutlinePanel {
             return;
         }
         self.cancel.cancel();
+        self.search_cancel.cancel();
         self.pending = None;
         self.symbols.clear();
         self.filtered.clear();
@@ -102,18 +117,17 @@ impl OutlinePanel {
         self.offset = 0.0;
         self.source = Some(source.clone());
         self.title = title.into();
-        let ext = path
-            .and_then(Path::extension)
-            .and_then(|s| s.to_str())
-            .unwrap_or("")
-            .to_ascii_lowercase();
-        if ext != "rs" && ext != "toml" {
+        self.active_extension = ext.clone();
+        let definition = self.definition.clone().filter(|_| ext == self.definition_extension);
+        if ext != "rs" && ext != "toml" && definition.is_none() {
             self.status = "No outline provider for this language".into();
             return;
         }
         let source = source.clone();
         self.cancel = Cancellation::default();
         let cancel = self.cancel.clone();
+        self.search_cancel = Default::default();
+        let search_cancel = self.search_cancel.clone();
         let (tx, rx) = mpsc::sync_channel(1);
         self.status = "Indexing…".into();
         match std::thread::Builder::new()
@@ -152,7 +166,24 @@ impl OutlinePanel {
                         text.truncate(newline + 1);
                         end = start + text.len();
                     }
-                    let symbols = if ext == "rs" {
+                    let symbols = if let Some(definition) = &definition {
+                        let result = bareline_document::Document::from_utf8(&text, bareline_document::Budget::new(MAX_REQUEST_BYTES * 4), bareline_document::Budget::new(4096))
+                            .map_err(|e| format!("{e:?}"))
+                            .and_then(|doc| definition.extract(&doc.snapshot(), &search_cancel));
+                        match result {
+                            Ok(projection) => projection.symbols.into_iter().map(|s| Symbol {
+                                name: s.name,
+                                kind: if s.kind == "class" { "class" } else { "fn" },
+                                offset: TextOffset(start + s.name_range.start.0),
+                                end: TextOffset(start + s.range.end.0),
+                                depth: s.depth,
+                            }).collect(),
+                            Err(error) => {
+                                let _ = tx.send(Batch { symbols: vec![], finished: true, status: format!("Partial outline: {error}") });
+                                notify(); return;
+                            }
+                        }
+                    } else if ext == "rs" {
                         let Ok(result) = lex(
                             source.clone(),
                             Language::Rust,
@@ -177,6 +208,8 @@ impl OutlinePanel {
                     let finished = start == source.len() || total >= 8192;
                     let status = if total >= 8192 {
                         "Partial outline: symbol budget reached"
+                    } else if finished && definition.is_some() {
+                        "Imported outline · bounded expression ranges"
                     } else if finished && source.is_complete() {
                         ""
                     } else if finished {
@@ -347,7 +380,7 @@ impl OutlinePanel {
             }
             ops.push(DrawOp::Text {
                 origin: Point {
-                    x: bounds.x + 16.0,
+                    x: bounds.x + 16.0 + symbol.depth.min(12) as f32 * 12.0,
                     y: y + 6.0,
                 },
                 text: format!("{} {}", symbol.kind, symbol.name),
@@ -367,125 +400,6 @@ impl OutlinePanel {
         ops.push(DrawOp::PopClip);
     }
 }
-fn rust_symbols(text: &str, base: usize, spans: &[bareline_syntax::StyleSpan]) -> Vec<Symbol> {
-    let mut result = Vec::new();
-    for span in spans.iter().filter(|s| s.kind == StyleKind::Keyword) {
-        let start = span.range.start.0 - base;
-        let end = span.range.end.0 - base;
-        let Some(kind) = text.get(start..end) else {
-            continue;
-        };
-        let kind = match kind {
-            "fn" => "fn",
-            "struct" => "struct",
-            "enum" => "enum",
-            "trait" => "trait",
-            "mod" => "mod",
-            "const" => "const",
-            "type" => "type",
-            _ => continue,
-        };
-        let rest = &text[end..];
-        let skip = rest.len() - rest.trim_start().len();
-        let name_start = end + skip;
-        let len = text[name_start..]
-            .chars()
-            .take_while(|c| c.is_alphanumeric() || *c == '_')
-            .map(char::len_utf8)
-            .sum::<usize>();
-        if len == 0 || len > 4096 {
-            continue;
-        }
-        if spans[spans.partition_point(|s| s.range.end.0 <= base + name_start)..]
-            .iter()
-            .take_while(|s| s.range.start.0 < base + name_start + len)
-            .any(|s| {
-                s.range.start.0 < base + name_start + len
-                    && s.range.end.0 > base + name_start
-                    && matches!(s.kind, StyleKind::Comment | StyleKind::String)
-            })
-        {
-            continue;
-        }
-        result.push(Symbol {
-            name: text[name_start..name_start + len].into(),
-            kind,
-            offset: TextOffset(base + name_start),
-        });
-    }
-    result
-}
-fn toml_symbols(text: &str, base: usize, multiline: &mut Option<u8>) -> Vec<Symbol> {
-    let mut offset = base;
-    let mut out = Vec::new();
-    for line in text.split_inclusive('\n') {
-        let trimmed = line.trim_start();
-        if multiline.is_none()
-            && trimmed.starts_with('[')
-            && let Some(end) = trimmed.find(']')
-        {
-            let skip = if trimmed.starts_with("[[") { 2 } else { 1 };
-            if end > skip {
-                let name = &trimmed[skip..end];
-                if name.len() <= 4096 {
-                    out.push(Symbol {
-                        name: name.into(),
-                        kind: "table",
-                        offset: TextOffset(offset + line.len() - trimmed.len() + skip),
-                    });
-                }
-            }
-        }
-        // Track multiline strings across worker chunks. Quotes/comments in ordinary
-        // strings do not start or finish a multiline literal.
-        let bytes = line.as_bytes();
-        let mut i = 0;
-        while i < bytes.len() {
-            if let Some(quote) = *multiline {
-                if bytes
-                    .get(i..i + 3)
-                    .is_some_and(|s| s.iter().all(|b| *b == quote))
-                {
-                    *multiline = None;
-                    i += 3;
-                } else if quote == b'"' && bytes[i] == b'\\' {
-                    i += 2;
-                } else {
-                    i += 1;
-                }
-            } else if bytes[i] == b'#' {
-                break;
-            } else if bytes[i] == b'"' || bytes[i] == b'\'' {
-                let quote = bytes[i];
-                if bytes
-                    .get(i..i + 3)
-                    .is_some_and(|s| s.iter().all(|b| *b == quote))
-                {
-                    *multiline = Some(quote);
-                    i += 3;
-                } else {
-                    i += 1;
-                    while i < bytes.len() {
-                        if bytes[i] == quote {
-                            i += 1;
-                            break;
-                        }
-                        if quote == b'"' && bytes[i] == b'\\' {
-                            i += 2;
-                        } else {
-                            i += 1;
-                        }
-                    }
-                }
-            } else {
-                i += 1;
-            }
-        }
-        offset += line.len();
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

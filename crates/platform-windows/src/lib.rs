@@ -46,3 +46,12 @@ pub use process::confirm_external_command;
 
 #[cfg(windows)]
 pub use accessibility::high_contrast_enabled;
+
+#[cfg(windows)]
+pub mod printing;
+
+#[cfg(windows)]
+pub use workspace_files::{WorkspaceDeleteUndo, retain_deleted_entry, restore_deleted_entry};
+
+#[cfg(windows)]
+mod rename;

@@ -4,7 +4,8 @@ use super::*;
 use bareline_document::Budget;
 use bareline_file_io::{
     lifecycle::{
-        FileInput, Fingerprint, Opened, open_utf8_streaming_handle, save_utf8_cancellable,
+        DecodeOptions, Fingerprint, Opened, open_encoded_streaming, save_encoded_cancellable,
+        save_utf8_cancellable,
     },
     session::publish_json,
 };
@@ -49,6 +50,8 @@ pub enum ReceiptState {
     Uncertain(String),
     Committed,
     ReconciledCommitted,
+    RollbackStaged,
+    RolledBack,
     Skipped(String),
     Failed(String),
     Conflict,
@@ -78,6 +81,8 @@ pub struct DiskPreviewFile {
     pub path: PathBuf,
     pub fingerprint: Fingerprint,
     pub bom: bool,
+    pub encoding: bareline_file_io::codecs::Encoding,
+    pub eol: bareline_file_io::codecs::state::EolState,
     pub included: bool,
     pub changes: Vec<DiskChange>,
 }
@@ -145,19 +150,23 @@ fn open(
     job: &SearchJob,
 ) -> io::Result<(Opened, Vec<File>)> {
     let ancestors = guard.ancestors;
-    let opened = open_utf8_streaming_handle(
-        FileInput {
-            path: guard.trust.canonical,
-            file: guard.file,
-        },
+    let expected = platform.identity(&guard.file)?;
+    let opened = open_encoded_streaming(
+        &guard.trust.canonical,
         platform,
-        Budget::new(regex::SUBJECT_LIMIT * 2),
+        Budget::new(regex::SUBJECT_LIMIT * 8),
         Budget::new(MAX_RESULT_BYTES),
         &job.io_cancel,
-        regex::SUBJECT_LIMIT as u64,
+        DecodeOptions {
+            resident_max_bytes: regex::SUBJECT_LIMIT as u64,
+            interpret: None,
+        },
         |_| {},
     )
     .map_err(|error| io::Error::other(format!("{error:?}")))?;
+    if opened.fingerprint.identity != expected || platform.identity(&guard.file)? != expected {
+        return Err(io::Error::other("Source changed during trusted open"));
+    }
     Ok((opened, ancestors))
 }
 /// Phase one is read-only and returns no whole-file storage. Unsupported codecs,
@@ -252,6 +261,16 @@ pub fn preview_disk_files(
             path: opened.path,
             fingerprint: opened.fingerprint,
             bom: opened.bom,
+            encoding: opened
+                .encoding
+                .as_ref()
+                .map(|encoding| encoding.original_encoding())
+                .unwrap_or(bareline_file_io::codecs::Encoding::Utf8),
+            eol: opened
+                .encoding
+                .as_ref()
+                .map(|encoding| encoding.eol)
+                .unwrap_or_default(),
             included: true,
             changes,
         });
@@ -529,7 +548,25 @@ pub fn apply_disk_files(
                 })
                 .map_err(|e| io::Error::other(format!("{e:?}")))?;
             let after = opened.document.snapshot();
-            receipt.files[index].after_hash = Some(snapshot_hash(&after, file.bom));
+            receipt.files[index].after_hash = Some(if let Some(encoding) = &opened.encoding {
+                struct HashOutput(Sha256);
+                impl Write for HashOutput {
+                    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+                        self.0.update(bytes);
+                        Ok(bytes.len())
+                    }
+                    fn flush(&mut self) -> io::Result<()> {
+                        Ok(())
+                    }
+                }
+                let mut output = HashOutput(Sha256::new());
+                encoding
+                    .write_snapshot(&after, encoding.original_encoding(), file.bom, &mut output)
+                    .map_err(|error| io::Error::other(format!("{error:?}")))?;
+                output.0.finalize().into()
+            } else {
+                snapshot_hash(&after, file.bom)
+            });
             if matches!(options.backup, BackupPolicy::Required) {
                 let target = directory.join(format!("original-{index}.bak"));
                 backup(&file.path, &target, &file.fingerprint, trust, platform, job)?;
@@ -538,14 +575,26 @@ pub fn apply_disk_files(
             receipt.files[index].state = ReceiptState::Staged;
             persist(&receipt_path, &receipt, platform)?;
             attempted_commit = true;
-            save_utf8_cancellable(
-                after,
-                &file.path,
-                Some(&file.fingerprint),
-                file.bom,
-                platform,
-                &job.io_cancel,
-            )
+            if let Some(encoding) = &opened.encoding {
+                save_encoded_cancellable(
+                    after,
+                    &file.path,
+                    Some(&file.fingerprint),
+                    file.bom,
+                    platform,
+                    &job.io_cancel,
+                    encoding,
+                )
+            } else {
+                save_utf8_cancellable(
+                    after,
+                    &file.path,
+                    Some(&file.fingerprint),
+                    file.bom,
+                    platform,
+                    &job.io_cancel,
+                )
+            }
             .map_err(|error| io::Error::other(format!("{error:?}")))?;
             Ok(())
         })();
@@ -570,6 +619,98 @@ pub fn apply_disk_files(
         receipt,
     })
 }
+/// Restore only committed targets whose current full hash still equals this job's output.
+/// A modified target or backup is a conflict, never an overwrite. Each rollback is atomic.
+pub fn rollback_receipt(
+    path: &Path,
+    open_files: &OpenFileRegistry,
+    job: &SearchJob,
+    trust: &dyn PathTrustProvider,
+    platform: &dyn LocalFileSystem,
+) -> io::Result<ReplaceReceipt> {
+    let mut receipt = reconcile_receipt(path, job, trust, platform)?;
+    for index in 0..receipt.files.len() {
+        if job.is_cancelled() {
+            break;
+        }
+        if !matches!(
+            receipt.files[index].state,
+            ReceiptState::Committed | ReceiptState::ReconciledCommitted
+        ) {
+            continue;
+        }
+        let record = receipt.files[index].clone();
+        let Some(backup_path) = &record.backup else {
+            continue;
+        };
+        let target = record
+            .path
+            .to_native()
+            .map_err(|error| io::Error::other(format!("{error:?}")))?;
+        let backup_path = backup_path
+            .to_native()
+            .map_err(|error| io::Error::other(format!("{error:?}")))?;
+        let admission = open_files
+            .0
+            .lock()
+            .map_err(|_| io::Error::other("open-file registry unavailable"))?;
+        let outcome = (|| -> io::Result<()> {
+            let (current, _target_ancestors) =
+                open(approved(&target, trust, true)?, platform, job)?;
+            if admission.iter().any(|entry| {
+                entry.path == target
+                    || (entry.volume == current.fingerprint.identity.volume
+                        && entry.file == current.fingerprint.identity.file)
+            }) {
+                return Err(io::Error::other("Target is open; close it before rollback"));
+            }
+            if record.after_hash != Some(current.fingerprint.sha256) {
+                return Err(io::Error::other("Target changed since replacement"));
+            }
+            let (original, _backup_ancestors) =
+                open(approved(&backup_path, trust, false)?, platform, job)?;
+            if original.fingerprint.sha256 != record.original.sha256 {
+                return Err(io::Error::other("Backup fingerprint changed"));
+            }
+            receipt.files[index].state = ReceiptState::RollbackStaged;
+            persist(path, &receipt, platform)?;
+            if let Some(encoding) = &original.encoding {
+                save_encoded_cancellable(
+                    original.document.snapshot(),
+                    &target,
+                    Some(&current.fingerprint),
+                    original.bom,
+                    platform,
+                    &job.io_cancel,
+                    encoding,
+                )
+            } else {
+                save_utf8_cancellable(
+                    original.document.snapshot(),
+                    &target,
+                    Some(&current.fingerprint),
+                    original.bom,
+                    platform,
+                    &job.io_cancel,
+                )
+            }
+            .map_err(|error| io::Error::other(format!("{error:?}")))?;
+            Ok(())
+        })();
+        drop(admission);
+        match outcome {
+            Ok(()) => receipt.files[index].state = ReceiptState::RolledBack,
+            Err(error) if receipt.files[index].state == ReceiptState::RollbackStaged => {
+                // Keep the durable intent: a restart compares original/output fingerprints.
+                persist(path, &receipt, platform)?;
+                return Err(error);
+            }
+            Err(_) => receipt.files[index].state = ReceiptState::Conflict,
+        }
+        persist(path, &receipt, platform)?;
+    }
+    Ok(receipt)
+}
 /// Recovery only classifies uncertain Planned/Staged records. It never reapplies edits.
 pub fn reconcile_receipt(
     path: &Path,
@@ -593,7 +734,10 @@ pub fn reconcile_receipt(
     for record in &mut receipt.files {
         if !matches!(
             record.state,
-            ReceiptState::Planned | ReceiptState::Staged | ReceiptState::Uncertain(_)
+            ReceiptState::Planned
+                | ReceiptState::Staged
+                | ReceiptState::Uncertain(_)
+                | ReceiptState::RollbackStaged
         ) {
             continue;
         }
@@ -604,7 +748,13 @@ pub fn reconcile_receipt(
             .path
             .to_native()
             .map_err(|e| io::Error::other(format!("{e:?}")))?;
+        let rolling_back = record.state == ReceiptState::RollbackStaged;
         match approved(&target, trust, false).and_then(|guard| open(guard, platform, job)) {
+            Ok((opened, _guards))
+                if rolling_back && record.original.sha256 == opened.fingerprint.sha256 =>
+            {
+                record.state = ReceiptState::RolledBack
+            }
             Ok((opened, _guards)) if record.after_hash == Some(opened.fingerprint.sha256) => {
                 record.state = ReceiptState::ReconciledCommitted
             }
@@ -695,6 +845,63 @@ mod tests {
         let receipt: ReplaceReceipt =
             serde_json::from_slice(&fs::read(summary.receipt_path).unwrap()).unwrap();
         assert_eq!(receipt.files[0].state, ReceiptState::Committed);
+    }
+    #[test]
+    fn encoded_replace_and_backup_rollback_preserve_utf16_bytes() {
+        let fixture = Fixture::new();
+        let original = b"\xff\xfex\0\r\0\n\0";
+        let path = fixture.file("utf16.txt", original);
+        let job = SearchJob::default();
+        let registry = OpenFileRegistry::default();
+        let summary = apply_disk_files(
+            preview(vec![path.clone()], &job),
+            &fixture.options(),
+            &registry,
+            &job,
+            &WindowsPathTrustProvider,
+            &WindowsFileSystem,
+        )
+        .unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"\xff\xfeY\0\r\0\n\0");
+        let rolled = rollback_receipt(
+            &summary.receipt_path,
+            &registry,
+            &job,
+            &WindowsPathTrustProvider,
+            &WindowsFileSystem,
+        )
+        .unwrap();
+        assert_eq!(rolled.files[0].state, ReceiptState::RolledBack);
+        assert_eq!(fs::read(&path).unwrap(), original);
+        let again = rollback_receipt(
+            &summary.receipt_path,
+            &registry,
+            &job,
+            &WindowsPathTrustProvider,
+            &WindowsFileSystem,
+        )
+        .unwrap();
+        assert_eq!(again.files[0].state, ReceiptState::RolledBack);
+        let summary = apply_disk_files(
+            preview(vec![path.clone()], &job),
+            &fixture.options(),
+            &registry,
+            &job,
+            &WindowsPathTrustProvider,
+            &WindowsFileSystem,
+        )
+        .unwrap();
+        fs::write(&path, b"external").unwrap();
+        let conflict = rollback_receipt(
+            &summary.receipt_path,
+            &registry,
+            &job,
+            &WindowsPathTrustProvider,
+            &WindowsFileSystem,
+        )
+        .unwrap();
+        assert_eq!(conflict.files[0].state, ReceiptState::Conflict);
+        assert_eq!(fs::read(&path).unwrap(), b"external");
     }
     #[test]
     fn changed_file_and_new_open_document_are_skipped_for_review() {

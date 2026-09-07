@@ -20,7 +20,15 @@ struct Request {
     job: SearchJob,
     notify: Notify,
 }
+type PageResolver =
+    Box<dyn FnMut(bareline_document::source::PageTicket) -> Result<bool, String> + Send>;
 enum Work {
+    Paged {
+        snapshot: bareline_document::paged::PagedSnapshot,
+        query: SearchQuery,
+        resolve: PageResolver,
+        reply: SyncSender<Result<super::paged::PagedResults, SearchError>>,
+    },
     OpenDocuments {
         snapshots: Vec<DocumentSnapshot>,
         query: SearchQuery,
@@ -48,6 +56,9 @@ impl Request {
     fn reject(self, error: SearchError) {
         self.job.cancel();
         match self.work {
+            Work::Paged { reply, .. } => {
+                let _ = reply.try_send(Err(error));
+            }
             Work::OpenDocuments { reply, .. } => {
                 let _ = reply.try_send(Err(error));
             }
@@ -62,6 +73,20 @@ impl Request {
     }
     fn execute(self) {
         match self.work {
+            Work::Paged {
+                snapshot,
+                query,
+                resolve,
+                reply,
+            } => {
+                let _ = reply.try_send(Ok(super::paged::scan_paged(
+                    &snapshot,
+                    &query,
+                    &self.job,
+                    resolve,
+                    |_| {},
+                )));
+            }
             Work::OpenDocuments {
                 snapshots,
                 query,
@@ -113,6 +138,22 @@ struct Shared {
 pub struct SearchWorker {
     shared: Arc<Shared>,
 }
+pub struct PagedSearchTicket {
+    pub job: SearchJob,
+    receiver: Receiver<Result<super::paged::PagedResults, SearchError>>,
+}
+impl PagedSearchTicket {
+    pub fn try_recv(
+        &self,
+    ) -> Result<Result<super::paged::PagedResults, SearchError>, TryRecvError> {
+        self.receiver.try_recv()
+    }
+}
+impl Drop for PagedSearchTicket {
+    fn drop(&mut self) {
+        self.job.cancel();
+    }
+}
 pub struct SearchTicket {
     pub job: SearchJob,
     receiver: Receiver<ResultMessage>,
@@ -156,6 +197,30 @@ impl Drop for SearchTicket {
     }
 }
 impl SearchWorker {
+    pub fn submit_paged(
+        &self,
+        snapshot: bareline_document::paged::PagedSnapshot,
+        query: SearchQuery,
+        resolve: impl FnMut(bareline_document::source::PageTicket) -> Result<bool, String>
+        + Send
+        + 'static,
+        notify: Notify,
+    ) -> PagedSearchTicket {
+        let job = SearchJob::default();
+        let (reply, receiver) = mpsc::sync_channel(1);
+        self.enqueue(Request {
+            work: Work::Paged {
+                snapshot,
+                query,
+                resolve: Box::new(resolve),
+                reply,
+            },
+            job: job.clone(),
+            notify,
+        });
+        PagedSearchTicket { job, receiver }
+    }
+
     pub fn submit_open_documents(
         &self,
         snapshots: Vec<DocumentSnapshot>,

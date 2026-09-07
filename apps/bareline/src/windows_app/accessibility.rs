@@ -4,6 +4,9 @@ use bareline_platform::accessibility::{
     AccessibilityNode, AccessibilityRole, AccessibilitySnapshot,
 };
 impl Shell {
+    pub(super) fn accessibility_text_source(&self) -> Option<std::sync::Arc<dyn bareline_platform::accessibility::AccessibilityTextSource>> {
+        self.workspace.as_ref().and_then(|w| w.editors.get(self.app.active)).map(|editor| bareline_app::accessibility::text_source(editor, self.notify.clone()))
+    }
     pub(super) fn accessibility_snapshot(
         &self,
         width: f64,
@@ -121,6 +124,15 @@ impl Shell {
             chrome,
             if self.palette.open { 11000 } else { focus },
         );
+        if let Some(bareline_app::workspace::WorkspaceEditor::Paged(editor)) = editor {
+            let base = editor.viewport_start().0;
+            if let Some(text) = &mut snapshot.text { text.start_byte += base; }
+            if let Some(context) = &mut snapshot.text_context {
+                context.source_identity = editor.snapshot().identity_token();
+                context.selection.0 += base;
+                context.selection.1 += base;
+            }
+        }
         // AccessKit Windows adds native client-to-screen origin; bounds must be
         // physical client pixels, while renderer/control layout uses logical px.
         for node in &mut snapshot.nodes {
@@ -211,15 +223,37 @@ impl Shell {
                 continue;
             }
             match action {
-                AccessibilityAction::SetSelection { anchor, caret } => {
+                AccessibilityAction::ScrollToText { source_identity, offset } => {
+                    if let Some(editor) = self.workspace.as_mut().and_then(|w| w.editors.get_mut(self.app.active)) {
+                        if bareline_app::accessibility::source_identity(editor) != source_identity || editor.busy() { continue; }
+                        match editor {
+                            bareline_app::workspace::WorkspaceEditor::Paged(editor) => {
+                                if let Err(error) = editor.request_viewport(bareline_document::TextOffset(offset)) { editor.error = Some(error); }
+                            }
+                            bareline_app::workspace::WorkspaceEditor::Resident(editor) => {
+                                if bareline_app::accessibility::selection_valid(editor, offset, offset) { editor.enqueue(Input::SetCaret(offset, false)); }
+                            }
+                        }
+                    }
+                }
+                AccessibilityAction::SetSelection { source_identity, anchor, caret } => {
                     if let Some(editor) = self
                         .workspace
                         .as_mut()
                         .and_then(|w| w.editors.get_mut(self.app.active))
-                        && bareline_app::accessibility::selection_valid(editor, anchor, caret)
                     {
-                        editor.enqueue(Input::SetCaret(anchor, false));
-                        editor.enqueue(Input::SetCaret(caret, true));
+                        if bareline_app::accessibility::source_identity(editor) != source_identity || editor.busy() { continue; }
+                        match editor {
+                            bareline_app::workspace::WorkspaceEditor::Paged(editor) => {
+                                if let Err(error) = editor.restore_selection(bareline_document::TextOffset(anchor), bareline_document::TextOffset(caret)) { editor.error = Some(error); }
+                            }
+                            bareline_app::workspace::WorkspaceEditor::Resident(editor) => {
+                                if bareline_app::accessibility::selection_valid(editor, anchor, caret) {
+                                    editor.enqueue(Input::SetCaret(anchor, false));
+                                    editor.enqueue(Input::SetCaret(caret, true));
+                                }
+                            }
+                        }
                     }
                 }
                 AccessibilityAction::SetValue { id, value } => {

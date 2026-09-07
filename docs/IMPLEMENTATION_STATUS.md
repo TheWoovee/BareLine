@@ -1,6 +1,8 @@
 # Implementation status
 
-Updated 2026-09-06. The original blueprint is preserved under `blueprint/`; its NOT_STARTED tables describe the supplied specification. This file tracks the implementation.
+Updated 2026-09-08. The original blueprint is preserved under `blueprint/`; its NOT_STARTED tables describe the supplied specification. This file tracks the implementation.
+
+Latest [integrated development checkpoint](implementation/INTEGRATION-20260908.md): selected 265 tests and Windows backend 35 tests pass; native build passes. Ordinary development gaps and manual/foreign-host acceptance remain open.
 
 | Package | State | Evidence |
 |---|---|---|

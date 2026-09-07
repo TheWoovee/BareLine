@@ -10,6 +10,47 @@ use std::{
     ops::Range,
 };
 use unicode_segmentation::UnicodeSegmentation;
+/// Worker-side full text reader for paged buffers, including unsaved piece-tree edits.
+/// Owns only one 64 KiB window and never substitutes unavailable bytes.
+pub struct PagedTextReader {
+    source: bareline_editor_surface::paged_view::PagedReadHandle,
+    range: Range<TextOffset>,
+    position: usize,
+    buffer: Vec<u8>,
+    consumed: usize,
+    budget: bareline_document::Budget,
+    cancel: CancelToken,
+}
+impl PagedTextReader {
+    pub fn new(source:bareline_editor_surface::paged_view::PagedReadHandle,range:Range<TextOffset>,cancel:CancelToken)->Result<Self,UtilityError> {
+        if range.start>range.end || range.end.0>source.snapshot().len(){return Err(UtilityError::InvalidRange);}
+        Ok(Self{position:range.start.0,source,range,buffer:Vec::new(),consumed:0,budget:bareline_document::Budget::new(256*1024),cancel})
+    }
+}
+impl Read for PagedTextReader {
+    fn read(&mut self,output:&mut[u8])->std::io::Result<usize> {
+        if output.is_empty(){return Ok(0);}
+        if self.cancel.is_cancelled(){return Err(std::io::Error::new(std::io::ErrorKind::Interrupted,"Cancelled"));}
+        if self.consumed==self.buffer.len() {
+            if self.position==self.range.end.0{return Ok(0);}
+            let mut end=(self.position+64*1024).min(self.range.end.0);
+            let mut retries=0;
+            'retry:loop {
+                let mut request=self.source.snapshot().begin_read(TextOffset(self.position)..TextOffset(end),64*1024,&self.budget).map_err(|e|std::io::Error::other(format!("{e:?}")))?;
+                loop {
+                    if self.cancel.is_cancelled(){return Err(std::io::Error::new(std::io::ErrorKind::Interrupted,"Cancelled"));}
+                    match request.poll() {
+                        bareline_document::paged::WindowPoll::Ready(window)=>{self.buffer=window.text().as_bytes().to_vec();self.position=end;self.consumed=0;break 'retry;},
+                        bareline_document::paged::WindowPoll::Pending(ticket)=>{if !self.source.resolve_page(ticket).map_err(std::io::Error::other)?{std::thread::sleep(std::time::Duration::from_millis(1));}},
+                        bareline_document::paged::WindowPoll::InvalidUtf8 if retries<3 && end<self.range.end.0=>{end-=1;retries+=1;continue 'retry;},
+                        _=>return Err(std::io::Error::other("Paged text is unavailable or changed; retry")),
+                    }
+                }
+            }
+        }
+        let count=output.len().min(self.buffer.len()-self.consumed);output[..count].copy_from_slice(&self.buffer[self.consumed..self.consumed+count]);self.consumed+=count;Ok(count)
+    }
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UtilityError {
     Cancelled,
@@ -388,6 +429,90 @@ pub fn export(
         .map_err(|_| UtilityError::Io)?;
     Ok(())
 }
+/// Lexes and exports consecutive bounded windows; syntax spans never accumulate for
+/// the whole document. The writer must be a caller-owned atomic publication stage.
+pub fn export_language(
+    snapshot: &DocumentSnapshot,
+    language: bareline_syntax::Language,
+    foreground: Rgb,
+    colors: [Rgb; 5],
+    format: ExportFormat,
+    mut writer: impl Write,
+    cancel: &CancelToken,
+) -> Result<(), UtilityError> {
+    if !snapshot.is_complete() { return Err(UtilityError::IncompleteSource); }
+    match format {
+        ExportFormat::Html => writer.write_all(b"<!doctype html><meta charset=\"utf-8\"><pre>").map_err(|_|UtilityError::Io)?,
+        ExportFormat::Rtf => {
+            writer.write_all(b"{\\rtf1\\ansi\\uc1{\\colortbl;").map_err(|_|UtilityError::Io)?;
+            for Rgb(r,g,b) in std::iter::once(foreground).chain(colors) { write!(writer,"\\red{r}\\green{g}\\blue{b};").map_err(|_|UtilityError::Io)?; }
+            writer.write_all(b"}").map_err(|_|UtilityError::Io)?;
+        }
+    }
+    let mut lexer=bareline_syntax::ForwardLexer::new(snapshot.clone(),language);
+    let syntax_cancel=bareline_syntax::Cancellation::default();
+    let mut start=0;
+    let mut previous_cr=false;
+    while start<snapshot.len() {
+        check(cancel)?;
+        let mut end=start.saturating_add(128*1024).min(snapshot.len());
+        while snapshot.chunks(TextOffset(start)..TextOffset(end)).is_err() && end>start { end-=1; }
+        if end==start { return Err(UtilityError::InvalidUtf8); }
+        let result=lexer.advance(TextOffset(end),&syntax_cancel).map_err(|_|UtilityError::IncompleteSource)?;
+        let styles=ExportStyles{revision:snapshot.revision,spans:&result.spans,foreground,colors};
+        let mut at=TextOffset(start);
+        for span in &result.spans {
+            if span.range.start<at || span.range.end.0>end { return Err(UtilityError::StaleStyles); }
+            if at<span.range.start { export_range(snapshot,at..span.range.start,0,&styles,(format,&mut previous_cr),&mut writer,cancel)?; }
+            export_range(snapshot,span.range.clone(),color_index(span.kind),&styles,(format,&mut previous_cr),&mut writer,cancel)?;
+            at=span.range.end;
+        }
+        if at.0<end { export_range(snapshot,at..TextOffset(end),0,&styles,(format,&mut previous_cr),&mut writer,cancel)?; }
+        start=end;
+    }
+    check(cancel)?;
+    writer.write_all(match format {ExportFormat::Html=>b"</pre>" as &[u8],ExportFormat::Rtf=>b"}"}).map_err(|_|UtilityError::Io)
+}
+
+/// Prints a captured resident range without changing its selection or document.
+/// Syntax is advanced from the start so multiline states remain valid in selections.
+pub fn print_snapshot(
+    snapshot: &DocumentSnapshot,
+    range: Range<TextOffset>,
+    language: bareline_syntax::Language,
+    colors: [Rgb; 5],
+    mut target: Box<dyn bareline_platform::printing::PrintTarget>,
+    cancel: &std::sync::atomic::AtomicBool,
+) -> Result<bareline_platform::printing::PrintSummary,bareline_platform::printing::PrintError> {
+    use bareline_platform::printing::{PrintError,PrintLine,PrintSpan};
+    use std::sync::atomic::Ordering;
+    if !snapshot.is_complete() || range.start>range.end || snapshot.chunks(range.clone()).is_err() { return Err(PrintError::InvalidLine); }
+    let mut lexer=bareline_syntax::ForwardLexer::new(snapshot.clone(),language);
+    let syntax_cancel=bareline_syntax::Cancellation::default();
+    for line in 0..snapshot.line_count() {
+        if cancel.load(Ordering::Acquire) { return Err(PrintError::Cancelled); }
+        let line_range=snapshot.line_range(line).map_err(|_|PrintError::InvalidLine)?;
+        if line_range.start>=range.end && range.start!=range.end {break;}
+        // Refuse an unsupported logical line before allocating it. The native caller
+        // retains the source and options for retry with another range/export format.
+        if line_range.end.0-line_range.start.0>128*1024 {return Err(PrintError::Unavailable("Printing requires logical lines below 128 KiB; select a smaller range or export this document".into()));}
+        let syntax=lexer.advance(line_range.end,&syntax_cancel).map_err(|_|PrintError::Unavailable("Syntax could not be prepared; retry with plain text".into()))?;
+        let start=line_range.start.max(range.start);
+        let end=line_range.end.min(range.end);
+        if start>end || end<range.start || (start==end && range.start!=range.end) {continue;}
+        let text:String=snapshot.chunks(start..end).map_err(|_|PrintError::InvalidLine)?.collect();
+        let spans:Vec<PrintSpan>=syntax.spans.iter().filter_map(|span| {
+            let a=span.range.start.max(start); let b=span.range.end.min(end);
+            if a>=b {return None;}
+            let Rgb(r,g,bcolor)=colors[color_index(span.kind)-1];
+            Some(PrintSpan{bytes:(a.0-start.0)..(b.0-start.0),rgb:((r as u32)<<16)|((g as u32)<<8)|bcolor as u32})
+        }).collect();
+        target.write_line(PrintLine{number:line+1,text:&text,spans:&spans},cancel)?;
+        if end>=range.end {break;}
+    }
+    target.finish(cancel)
+}
+
 fn export_range(
     snapshot: &DocumentSnapshot,
     range: Range<TextOffset>,

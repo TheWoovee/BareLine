@@ -51,6 +51,22 @@ impl Definition {
                 return Err(Error::InvalidRange);
             }
         }
+        let mut delimiters = std::collections::BTreeSet::new();
+        for &(open, close) in &self.fold_pairs {
+            if open == close
+                || open.is_control()
+                || close.is_control()
+                || !delimiters.insert(open)
+                || !delimiters.insert(close)
+            {
+                return Err(Error::InvalidRange);
+            }
+        }
+        if self.strings.iter().any(|c| c.is_control())
+            || self.operators.contains(['\r', '\n', '\0'])
+        {
+            return Err(Error::InvalidRange);
+        }
         Ok(())
     }
     pub fn from_json(text: &str) -> Result<Self, Error> {

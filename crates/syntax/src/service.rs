@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: MPL-2.0
 //! A lazy worker with one pending request. Dropping tickets cancels their work.
-use crate::{Cancellation, Checkpoint, Error, Language, SyntaxResult, lex_with_session};
+use crate::{
+    Cancellation, Checkpoint, Error, ForwardLexer, Language, LexerPreference, MAX_REQUEST_BYTES,
+    SyntaxResult,
+};
 use bareline_document::{DocumentSnapshot, TextOffset};
 use std::{
     ops::Range,
@@ -11,6 +14,7 @@ use std::{
 };
 type Notify = Arc<dyn Fn() + Send + Sync>;
 struct Request {
+    preference: LexerPreference,
     definition: Option<Arc<crate::udl::Definition>>,
     source: DocumentSnapshot,
     language: Language,
@@ -63,12 +67,7 @@ impl SyntaxWorker {
             .name("syntax".into())
             .spawn(move || {
                 // Construct and release the !Send native handle on this worker.
-                let mut native: Option<(
-                    DocumentSnapshot,
-                    Language,
-                    TextOffset,
-                    bareline_lexilla_bridge::LexerSession,
-                )> = None;
+                let mut pass: Option<ForwardLexer> = None;
                 loop {
                     let request = {
                         let Ok(mut state) = worker.state.lock() else {
@@ -87,67 +86,94 @@ impl SyntaxWorker {
                         state.running = Some(request.cancel.clone());
                         request
                     };
-                    if native.as_ref().is_some_and(|(source, language, next, _)| {
-                        !source.same_document(&request.source)
-                            || source.revision != request.source.revision
-                            || *language != request.language
-                            || *next != request.range.start
-                    }) {
-                        native = None;
-                    }
-                    if native.is_none()
-                        && request.range.start.0 == 0
-                        && request.language != Language::PlainText
-                    {
-                        use bareline_lexilla_bridge::CppMode;
-                        let mode = match request.language {
-                            Language::JavaScript | Language::TypeScript => CppMode::JavaScript,
-                            Language::Go => CppMode::Go,
-                            Language::Java => CppMode::Java,
-                            Language::CSharp => CppMode::CSharp,
-                            _ => CppMode::Default,
-                        };
-                        if let Ok(session) = bareline_lexilla_bridge::LexerSession::new(
-                            request.language.metadata().lexilla,
-                            request.language.metadata().keywords,
-                            mode,
-                        ) {
-                            native = Some((
-                                request.source.clone(),
-                                request.language,
-                                request.range.start,
-                                session,
-                            ));
-                        }
-                    }
-                    let next = request.range.end;
-                    let result = if let Some(definition) = request.definition {
-                        crate::lex_udl(
-                            request.source,
-                            definition,
-                            request.range,
-                            request.checkpoint.as_ref(),
-                            &request.cancel,
-                        )
-                    } else {
-                        lex_with_session(
-                            request.source,
-                            request.language,
-                            request.range,
-                            request.checkpoint.as_ref(),
-                            &request.cancel,
-                            native.as_mut().map(|(_, _, _, session)| session),
-                        )
+                    let matches_definition = |old: &Option<Arc<crate::udl::Definition>>| match (
+                        old,
+                        &request.definition,
+                    ) {
+                        (None, None) => true,
+                        (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                        _ => false,
                     };
-                    if result
-                        .as_ref()
-                        .is_ok_and(|result| result.fold_levels.is_some())
-                    {
-                        if let Some((_, _, offset, _)) = &mut native {
-                            *offset = next;
+                    let anchor = request
+                        .source
+                        .line_at(request.range.start)
+                        .and_then(|line| request.source.line_range(line))
+                        .map_or(TextOffset(0), |range| range.start);
+                    if !pass.as_ref().is_some_and(|old| {
+                        old.source.same_document(&request.source)
+                            && old.source.revision == request.source.revision
+                            && old.language == request.language
+                            && old.options.preference == request.preference
+                            && matches_definition(&old.options.definition)
+                            && old.next <= anchor
+                            && (old.next.0 == 0 || old.checkpoint.is_some())
+                    }) {
+                        pass = Some(ForwardLexer::configured(
+                            request.source.clone(),
+                            request.language,
+                            request.preference,
+                            request.definition.clone(),
+                        ));
+                    }
+                    let result = (|| {
+                        if request.range.start > request.range.end
+                            || request.range.end.0 > request.source.len()
+                            || request.range.end.0 - request.range.start.0 > MAX_REQUEST_BYTES
+                        {
+                            return Err(Error::InvalidRange);
                         }
-                    } else {
-                        native = None;
+                        let pass = pass.as_mut().unwrap();
+                        // Native checkpoints are safe restarts only for the native grammar.
+                        if request.preference == LexerPreference::Native
+                            && let Some(checkpoint) = &request.checkpoint
+                        {
+                            if checkpoint.source.same_document(&request.source)
+                                && checkpoint.source.revision == request.source.revision
+                                && checkpoint.language == request.language
+                                && checkpoint.offset == request.range.start
+                                && matches_definition(&checkpoint.definition)
+                            {
+                                pass.next = checkpoint.offset;
+                                pass.checkpoint = Some(checkpoint.clone());
+                            }
+                        }
+                        loop {
+                            request.cancel.check()?;
+                            let target = if pass.next < anchor {
+                                anchor.0
+                            } else {
+                                request.range.end.0
+                            };
+                            let mut end = target.min(pass.next.0.saturating_add(MAX_REQUEST_BYTES));
+                            if end < request.range.end.0 {
+                                let line = request
+                                    .source
+                                    .line_at(TextOffset(end))
+                                    .map_err(|_| Error::InvalidRange)?;
+                                let boundary = request
+                                    .source
+                                    .line_range(line)
+                                    .map_err(|_| Error::InvalidRange)?
+                                    .start
+                                    .0;
+                                if boundary > pass.next.0 {
+                                    end = boundary;
+                                }
+                            }
+                            while !request.source.is_boundary(TextOffset(end)) {
+                                end -= 1;
+                            }
+                            let result = pass.advance(TextOffset(end), &request.cancel)?;
+                            if end == request.range.end.0 {
+                                return Ok(result);
+                            }
+                            if result.checkpoint.is_none() {
+                                return Err(Error::BudgetExceeded);
+                            }
+                        }
+                    })();
+                    if result.is_err() {
+                        pass = None;
                     }
                     let _ = request.reply.try_send(result);
                     (request.notify)();
@@ -169,7 +195,35 @@ impl SyntaxWorker {
         checkpoint: Option<Checkpoint>,
         notify: Notify,
     ) -> Result<SyntaxTicket, SubmitError> {
-        self.submit_configured(source, language, range, checkpoint, notify, None)
+        self.submit_configured(
+            source,
+            language,
+            range,
+            checkpoint,
+            notify,
+            crate::LexOptions::default(),
+        )
+    }
+    pub fn submit_preferred(
+        &self,
+        source: DocumentSnapshot,
+        language: Language,
+        range: Range<TextOffset>,
+        checkpoint: Option<Checkpoint>,
+        notify: Notify,
+        preference: LexerPreference,
+    ) -> Result<SyntaxTicket, SubmitError> {
+        self.submit_configured(
+            source,
+            language,
+            range,
+            checkpoint,
+            notify,
+            crate::LexOptions {
+                preference,
+                definition: None,
+            },
+        )
     }
     pub fn submit_udl(
         &self,
@@ -185,7 +239,10 @@ impl SyntaxWorker {
             range,
             checkpoint,
             notify,
-            Some(definition),
+            crate::LexOptions {
+                definition: Some(definition),
+                preference: LexerPreference::Native,
+            },
         )
     }
     fn submit_configured(
@@ -195,7 +252,7 @@ impl SyntaxWorker {
         range: Range<TextOffset>,
         checkpoint: Option<Checkpoint>,
         notify: Notify,
-        definition: Option<Arc<crate::udl::Definition>>,
+        options: crate::LexOptions,
     ) -> Result<SyntaxTicket, SubmitError> {
         let (reply, receiver) = mpsc::sync_channel(1);
         let cancel = Cancellation::default();
@@ -208,7 +265,8 @@ impl SyntaxWorker {
                 running.cancel();
             }
             state.pending.replace(Request {
-                definition,
+                preference: options.preference,
+                definition: options.definition,
                 source,
                 language,
                 range,

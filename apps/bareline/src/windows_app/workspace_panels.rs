@@ -31,9 +31,13 @@ pub struct WorkspacePanelsRuntime {
     right: Rect,
     map_bounds: Rect,
     root: Option<Receiver<Result<PathBuf, String>>>,
-    operation: Option<Receiver<Result<(), String>>>,
+    operation: Option<Receiver<Result<Option<bareline_platform_windows::WorkspaceDeleteUndo>, String>>>,
+    deleted: Vec<bareline_platform_windows::WorkspaceDeleteUndo>,
+    restoring: bool,
+    outline_import: Option<Receiver<Result<(bareline_syntax::outline::Definition, String, String), String>>>,
     document_filter: String,
     outline_filter: String,
+    excludes: Vec<String>,
 }
 impl Default for WorkspacePanelsRuntime {
     fn default() -> Self {
@@ -49,8 +53,12 @@ impl Default for WorkspacePanelsRuntime {
             map_bounds: Rect::default(),
             root: None,
             operation: None,
+            deleted: Vec::new(),
+            restoring: false,
+            outline_import: None,
             document_filter: String::new(),
             outline_filter: String::new(),
+            excludes: Vec::new(),
         }
     }
 }
@@ -167,13 +175,15 @@ fn translate_y(ops: &mut [DrawOp], dy: f32) {
             | DrawOp::Stroke(r, _, _)
             | DrawOp::FillRounded(r, _, _)
             | DrawOp::StrokeRounded(r, _, _, _)
-            | DrawOp::PushClip(r) => r.y += dy,
+            | DrawOp::PushClip(r)
+            | DrawOp::Image { destination: r, .. }
+            | DrawOp::PushLayer { bounds: r, .. } => r.y += dy,
             DrawOp::Text { origin, .. } | DrawOp::Layout { origin, .. } => origin.y += dy,
             DrawOp::Line { from, to, .. } => {
                 from.y += dy;
                 to.y += dy
             }
-            DrawOp::PopClip => {}
+            DrawOp::PopClip | DrawOp::PopLayer => {}
         }
     }
 }
@@ -285,6 +295,70 @@ impl Shell {
                 };
             }
             "view.documentMap" => self.panels.map.open = !self.panels.map.open,
+            "workspace.loadMore" => self.panels.explorer().load_more(),
+            "workspace.refresh" => self.panels.explorer().refresh_tree(),
+            "outline.importFunctionList" | "outline.loadDefinition" => {
+                if self.panels.outline_import.is_some() { return true; }
+                let path = self.platform.as_ref().and_then(|p| p.open_file().ok().flatten());
+                let Some(path) = path else { return true; };
+                let extension = self.workspace.as_ref().and_then(|w| w.path(self.app.active))
+                    .and_then(|p| p.extension()).and_then(|e| e.to_str()).unwrap_or("").to_owned();
+                let xml = id == "outline.importFunctionList";
+                let (tx, rx) = mpsc::sync_channel(1);
+                let notify = self.notify.clone();
+                match std::thread::Builder::new().name("outline-definition-import".into()).spawn(move || {
+                    use std::io::Read;
+                    let result = (|| -> Result<_, String> {
+                        let file = bareline_platform_windows::WindowsFileSystem.open_sealed_read(&path).map_err(|e| e.to_string())?;
+                        let mut bytes = Vec::new();
+                        file.take(256 * 1024 + 1).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+                        if bytes.len() > 256 * 1024 { return Err("Outline definition exceeds 256 KiB".into()); }
+                        let text = std::str::from_utf8(&bytes).map_err(|e| e.to_string())?;
+                        let (definition, report) = if xml {
+                            let (definition, report) = bareline_syntax::outline::import_function_list(text)?;
+                            let report = report.iter().map(|m| format!("{:?}: {} — {}", m.kind, m.field, m.reason)).collect::<Vec<_>>().join("\n");
+                            (definition, report)
+                        } else {
+                            (bareline_syntax::outline::Definition::from_toml(text)?, "Outline definition loaded".into())
+                        };
+                        Ok((definition, extension, report))
+                    })();
+                    let _ = tx.send(result); notify();
+                }) {
+                    Ok(_) => { self.panels.outline_import = Some(rx); self.panels.outline.status = "Importing outline definition…".into(); }
+                    Err(error) => self.panels.outline.status = error.to_string(),
+                }
+            }
+            "outline.exportDefinition" => {
+                if self.panels.operation.is_some() { return true; }
+                let Some(definition) = self.panels.outline.definition() else { return true; };
+                let definition = definition.clone();
+                let Some(path) = self.platform.as_ref().and_then(|p| p.save_file().ok().flatten()) else { return true; };
+                let (tx, rx) = mpsc::sync_channel(1);
+                let notify = self.notify.clone();
+                match std::thread::Builder::new().name("outline-definition-export".into()).spawn(move || {
+                    use std::io::Write;
+                    let result = (|| -> Result<_, String> {
+                        let text = definition.to_toml()?;
+                        let fs = bareline_platform_windows::WindowsFileSystem;
+                        let parent = path.parent().ok_or("Missing destination parent")?;
+                        let _guard = fs.guard_directory(parent).map_err(|e| e.to_string())?;
+                        fs.validate_target(&path).map_err(|e| e.to_string())?;
+                        let stage = parent.join(format!(".bareline-outline-{}-{}.tmp", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos()));
+                        let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&stage).map_err(|e| e.to_string())?;
+                        let result = file.write_all(text.as_bytes()).and_then(|()| file.sync_all());
+                        drop(file);
+                        let result = result.and_then(|()| fs.commit(&stage, &path, path.exists()));
+                        if result.is_err() { let _ = std::fs::remove_file(&stage); }
+                        result.map_err(|e| e.to_string())?;
+                        Ok(None)
+                    })();
+                    let _ = tx.send(result); notify();
+                }) {
+                    Ok(_) => { self.panels.operation = Some(rx); self.panels.restoring = false; }
+                    Err(error) => self.panels.outline.status = error.to_string(),
+                }
+            }
             "documents.sortName" => self.panels.documents.set_sort(Sort::Name),
             "documents.sortPath" => self.panels.documents.set_sort(Sort::Path),
             "documents.sortTabOrder" => self.panels.documents.set_sort(Sort::TabOrder),
@@ -333,7 +407,8 @@ impl Shell {
             "workspace.createFile"
             | "workspace.createFolder"
             | "workspace.rename"
-            | "workspace.delete" => {
+            | "workspace.delete"
+            | "workspace.undoDelete" => {
                 if self.panels.operation.is_some() {
                     return true;
                 }
@@ -343,14 +418,20 @@ impl Shell {
                     .as_ref()
                     .and_then(|p| p.selected_path())
                     .map(PathBuf::from);
-                let destination = if id == "workspace.delete" {
+                let undo = if id == "workspace.undoDelete" { self.panels.deleted.last().cloned() } else { None };
+                if id == "workspace.undoDelete" && undo.is_none() { return true; }
+                if id == "workspace.delete" && self.panels.deleted.len() >= 32 {
+                    self.panels.explorer().message = Some("Restore a retained deletion before deleting more entries".into());
+                    return true;
+                }
+                let destination = if id == "workspace.delete" || id == "workspace.undoDelete" {
                     None
                 } else {
                     self.platform
                         .as_ref()
                         .and_then(|p| p.save_file().ok().flatten())
                 };
-                if id != "workspace.delete" && destination.is_none() {
+                if id != "workspace.delete" && id != "workspace.undoDelete" && destination.is_none() {
                     return true;
                 }
                 if (id == "workspace.rename" || id == "workspace.delete") && selected.is_none() {
@@ -358,12 +439,13 @@ impl Shell {
                 }
                 // Existing open tabs retain their immutable document; prevent path metadata
                 // divergence until close/reopen can reflect the user's file operation.
-                if let Some(path) = &selected
+                if matches!(id, "workspace.rename" | "workspace.delete")
+                    && let Some(path) = &selected
                     && self.workspace.as_ref().is_some_and(|w| {
                         w.editors
                             .iter()
                             .enumerate()
-                            .any(|(i, _)| w.path(i).is_some_and(|p| p == path))
+                            .any(|(i, _)| w.path(i).is_some_and(|p| p.starts_with(path)))
                     })
                 {
                     if let Some(w) = &mut self.workspace {
@@ -379,7 +461,11 @@ impl Shell {
                     .name("workspace-file-action".into())
                     .spawn(move || {
                         let fs = bareline_platform_windows::WindowsFileSystem;
-                        let result = match kind.as_str() {
+                        let result = if kind == "workspace.delete" {
+                            bareline_platform_windows::retain_deleted_entry(&fs, selected.as_ref().unwrap()).map(Some)
+                        } else if let Some(undo) = undo {
+                            bareline_platform_windows::restore_deleted_entry(&fs, &undo).map(|()| None)
+                        } else { match kind.as_str() {
                             "workspace.createFile" => {
                                 fs.create_entry(destination.as_ref().unwrap(), false)
                             }
@@ -391,7 +477,7 @@ impl Shell {
                                 destination.as_ref().unwrap(),
                             ),
                             _ => fs.delete_entry(selected.as_ref().unwrap()),
-                        }
+                        }.map(|()| None) }
                         .map_err(|e| e.to_string());
                         let _ = tx.send(result);
                         notify();
@@ -399,6 +485,7 @@ impl Shell {
                     .is_ok()
                 {
                     self.panels.operation = Some(rx);
+                    self.panels.restoring = id == "workspace.undoDelete";
                 }
             }
             _ => return false,
@@ -422,7 +509,30 @@ impl Shell {
     }
     pub(super) fn panels_pump(&mut self, el: &ActiveEventLoop) {
         self.panels.notify = self.notify.clone();
+        let excludes = self.settings.effective().search_excludes;
+        if self.panels.excludes != excludes {
+            self.panels.excludes = excludes.clone();
+            self.panels.explorer().set_excludes(excludes);
+        }
         let mut changed = self.panels.outline.pump() | self.panels.map.pump();
+        if let Some(result) = self.panels.outline_import.as_ref().and_then(|rx| rx.try_recv().ok()) {
+            self.panels.outline_import = None;
+            changed = true;
+            match result {
+                Ok((definition, extension, report)) => {
+                    self.panels.outline.set_definition(definition, extension);
+                    self.panels.outline.open = true;
+                    if let Some(workspace) = &mut self.workspace {
+                        if workspace.new_document().is_ok() {
+                            let index = workspace.editors.len() - 1;
+                            workspace.editors[index].enqueue(Input::Insert(report));
+                            self.app.tabs = workspace.titles();
+                        }
+                    }
+                }
+                Err(error) => self.panels.outline.status = error,
+            }
+        }
         if let Some(p) = &mut self.panels.explorer {
             changed |= p.pump();
         }
@@ -433,6 +543,7 @@ impl Shell {
             match result {
                 Ok(path) => {
                     self.ensure_workspace(el);
+                    self.settings.set_workspace_root(path.clone());
                     self.panels.explorer().add_root(path);
                     self.panels.documents.open = false;
                 }
@@ -453,9 +564,14 @@ impl Shell {
             changed = true;
             if let Some(p) = &mut self.panels.explorer {
                 p.message = Some(match result {
-                    Ok(()) => {
+                    Ok(undo) => {
+                        if self.panels.restoring { self.panels.deleted.pop(); }
                         p.refresh_tree();
-                        "File operation completed".into()
+                        if let Some(undo) = undo {
+                            let message = format!("Deleted · Undo Delete available · retained at {}", undo.retained.display());
+                            self.panels.deleted.push(undo);
+                            message
+                        } else { "File operation completed".into() }
                     }
                     Err(error) => format!("File operation failed: {error}"),
                 });
@@ -463,6 +579,14 @@ impl Shell {
         }
         if changed && let Some(w) = &self.window {
             w.request_redraw();
+        }
+    }
+    pub(super) fn workspace_watch_roots(&self) -> Vec<PathBuf> {
+        self.panels.explorer.as_ref().map(|p| p.watch_roots()).unwrap_or_default()
+    }
+    pub(super) fn workspace_watch_event(&mut self, event: &bareline_platform::WatchEvent) {
+        if let Some(panel) = &mut self.panels.explorer {
+            panel.directory_changed(&event.directory);
         }
     }
     pub(super) fn panels_event(&mut self, el: &ActiveEventLoop, event: &WindowEvent) -> bool {

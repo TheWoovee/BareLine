@@ -13,6 +13,28 @@ pub const MAX_CHUNK_BYTES: usize = 1024 * 1024;
 pub const MAX_PENDING: usize = 32;
 pub const MEMORY_LIMIT: usize = 128 * 1024 * 1024;
 pub const INTERACTIVE_TIMEOUT_MS: u64 = 5000;
+pub const BACKGROUND_TIMEOUT_MS: u64 = 120_000;
+/// Chosen by the editor after an explicit user action for a signed manifest's
+/// declared background command. This is launch policy, never a guest RPC grant.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExecutionBudget {
+    Interactive,
+    Background,
+}
+impl ExecutionBudget {
+    pub fn timeout_ms(self) -> u64 {
+        match self {
+            Self::Interactive => INTERACTIVE_TIMEOUT_MS,
+            Self::Background => BACKGROUND_TIMEOUT_MS,
+        }
+    }
+    pub fn fuel(self) -> u64 {
+        match self {
+            Self::Interactive => 50_000_000,
+            Self::Background => 200_000_000_000,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Capability {

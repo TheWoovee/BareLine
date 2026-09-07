@@ -40,8 +40,6 @@ dependencies = [
 [[package]]
 name = "accesskit_windows"
 version = "0.35.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a59e8d7160cbac991c1345c99153783ab96423644ccb1f20617cf80c97596aa1"
 dependencies = [
  "accesskit",
  "accesskit_consumer",
@@ -248,6 +246,7 @@ dependencies = [
 name = "bareline-distribution"
 version = "0.1.0"
 dependencies = [
+ "bareline-platform",
  "lexopt",
  "minisign-verify",
  "serde",
@@ -405,7 +404,9 @@ dependencies = [
  "bareline-platform",
  "bareline-renderer",
  "sha2",
+ "unicode-segmentation",
  "windows",
+ "windows-core",
  "windows-numerics",
 ]
 
@@ -450,8 +451,10 @@ version = "0.1.0"
 dependencies = [
  "bareline-document",
  "bareline-lexilla-bridge",
+ "bareline-search",
  "serde",
  "serde_json",
+ "toml_edit 0.22.27",
 ]
 
 [[package]]

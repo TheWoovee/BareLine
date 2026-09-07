@@ -10,6 +10,8 @@ use bareline_document::{
     source::{Generation, MemorySource, SourceKind},
 };
 use serde_json::json;
+use sha2::{Digest, Sha256};
+use std::io::Read;
 use std::time::Instant;
 
 pub fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
@@ -94,7 +96,13 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             "fixture_buffers_bytes": 131072, "process_private_bytes_after": bareline_platform_windows::private_bytes().ok(),
             "process_lifetime_peak_commit_bytes": bareline_platform_windows::peak_private_bytes().ok()}));
     }
-    let output = json!({"schema_version": 1, "scenario": "bounded_diff_full_input", "os": std::env::consts::OS,
+    let mut binary = std::fs::File::open(std::env::current_exe()?)?;
+    let mut hash = Sha256::new();
+    let mut bytes = [0u8; 65536];
+    loop { let count = binary.read(&mut bytes)?; if count == 0 { break; } hash.update(&bytes[..count]); }
+    let output = json!({"schema_version": 2, "scenario": "bounded_diff_full_input", "os": std::env::consts::OS,
+        "binary_sha256": format!("{:x}", hash.finalize()), "machine": std::env::var("COMPUTERNAME").ok(),
+        "logical_cpus": std::thread::available_parallelism().ok().map(|n| n.get()), "cache_state": "generated memory pages",
         "arch": std::env::consts::ARCH, "profile": if cfg!(debug_assertions) { "debug" } else { "release" },
         "fixture": "generated ASCII divergent pages; all bytes consumed; no disk throughput claim",
         "memory_scope": "source allocations measured; job cap conservative; OS lifetime process peak includes harness and prior workloads",
@@ -104,7 +112,8 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         .unwrap();
     let target = root.join("target/perf");
     std::fs::create_dir_all(&target)?;
-    let path = target.join("diff.json");
+    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_nanos();
+    let path = target.join(format!("diff-{stamp}.json"));
     std::fs::write(&path, serde_json::to_vec_pretty(&output)?)?;
     println!("{}", serde_json::to_string_pretty(&output)?);
     println!("Evidence: {}", path.display());

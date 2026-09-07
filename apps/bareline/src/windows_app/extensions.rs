@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Lazy native host lifecycle. One bounded invocation worker, no idle host/thread.
+use bareline_app::extensions::manager::{InstalledState, ManagerIndex};
 use bareline_app::extensions::{InvocationBroker, InvocationOutput};
 use bareline_document::DocumentSnapshot;
 use bareline_extensions_protocol::{Invocation, RawRange, broker::ExtensionSession};
@@ -25,6 +26,7 @@ pub struct InvocationJob {
     pub component: PathBuf,
     pub component_sha256: [u8; 32],
     pub invocation: Invocation,
+    pub budget: bareline_extensions_protocol::ExecutionBudget,
     pub source: DocumentSnapshot,
     pub session: ExtensionSession,
     pub panels: Vec<String>,
@@ -51,9 +53,13 @@ pub struct ExtensionsRuntime {
     manager_pending: Option<mpsc::Receiver<Result<ManagerResult, String>>>,
     manager_cancel: Arc<AtomicBool>,
     installed: Vec<InstalledRow>,
-    runtime_package: Option<bareline_extensions_protocol::InstalledPackage>,
+    runtime_package: Option<bareline_platform_windows::update::InstalledRuntime>,
     selected: usize,
+    index: ManagerIndex,
+    restore_pending: bool,
     permission_review: Option<usize>,
+    command_selection: usize,
+    arguments: String,
 }
 impl Default for ExtensionsRuntime {
     fn default() -> Self {
@@ -73,7 +79,11 @@ impl Default for ExtensionsRuntime {
             installed: vec![],
             runtime_package: None,
             selected: 0,
+            index: ManagerIndex::default(),
+            restore_pending: false,
             permission_review: None,
+            command_selection: 0,
+            arguments: String::new(),
         }
     }
 }
@@ -81,6 +91,7 @@ impl ExtensionsRuntime {
     pub fn configure(&mut self, root: Option<PathBuf>, enabled: bool) {
         self.root = root;
         self.trust = compiled_trust();
+        self.restore_pending = enabled;
         self.enabled = enabled;
         if !enabled {
             self.cancel();
@@ -114,7 +125,7 @@ impl ExtensionsRuntime {
         let cancel = Arc::new(AtomicBool::new(false));
         let worker_cancel = cancel.clone();
         std::thread::spawn(move || {
-            let outcome = run_verified_host(HostLaunch { executable: &job.runtime.executable, executable_sha256: job.runtime.executable_sha256, publisher_certificate_sha256: job.runtime.publisher_certificate_sha256, component: &job.component, component_sha256: job.component_sha256, invocation: &job.invocation }, worker_cancel.clone(), |message| {
+            let outcome = run_verified_host(HostLaunch { executable: &job.runtime.executable, executable_sha256: job.runtime.executable_sha256, publisher_certificate_sha256: job.runtime.publisher_certificate_sha256, component: &job.component, component_sha256: job.component_sha256, invocation: &job.invocation, budget:job.budget }, worker_cancel.clone(), |message| {
                 if !job.edits_preserve_original && matches!(message.request, bareline_extensions_protocol::Request::ApplyEdits { .. } | bareline_extensions_protocol::Request::BeginEdits { .. }) {
                     return bareline_extensions_protocol::BrokerResponse { request_id: message.request_id, result: Err("Formatting is unavailable while original undecodable bytes require preservation".into()) };
                 }
@@ -175,9 +186,15 @@ pub fn register(registry: &mut bareline_commands::CommandRegistry) {
         ),
         (
             "extensions.runtime_catalog",
-            "Open Signed Offline Runtime Catalog",
+            "Install Signed Offline Runtime",
         ),
         ("extensions.install", "Install Selected Package"),
+        ("extensions.run_selected", "Run Selected Extension Command"),
+        (
+            "extensions.run_background",
+            "Run Declared Background Command (120 seconds)",
+        ),
+        ("extensions.next_command", "Select Next Extension Command"),
         (
             "extensions.permissions",
             "Review Selected Extension Permissions",
@@ -327,7 +344,7 @@ impl ExtensionsRuntime {
             self.installed
                 .iter()
                 .enumerate()
-                .filter(|(_, row)| self.tab != 3 || !row.enabled)
+                .filter(|(_, row)| self.tab != 3 || !row.state.enabled)
                 .map(|(i, row)| {
                     (
                         i,
@@ -335,7 +352,11 @@ impl ExtensionsRuntime {
                             "{} {} — {} — {}",
                             row.package.id,
                             row.package.version,
-                            if row.enabled { "Enabled" } else { "Disabled" },
+                            if row.state.enabled {
+                                "Enabled"
+                            } else {
+                                "Disabled"
+                            },
                             row.package
                                 .manifest
                                 .capabilities
@@ -416,11 +437,12 @@ impl super::Shell {
                     .ok_or("Window unavailable")?
                     .open_file()?;
                 if let Some(path) = path {
-                    self.extensions.open_catalog(
-                        path,
-                        id == "extensions.runtime_catalog",
-                        self.notify.clone(),
-                    )?;
+                    if id == "extensions.runtime_catalog" {
+                        self.extensions.install_runtime(path, self.notify.clone())?;
+                    } else {
+                        self.extensions
+                            .open_catalog(path, false, self.notify.clone())?;
+                    }
                 }
                 Ok(())
             })(),
@@ -446,48 +468,46 @@ impl super::Shell {
             }
             "extensions.approve" => {
                 if self.extensions.permission_review.take() == Some(self.extensions.selected) {
-                    if let Some(row) = self.extensions.installed.get_mut(self.extensions.selected) {
-                        row.enabled = true;
-                        self.extensions.message =
-                            Some("Extension enabled with reviewed permissions".into());
-                        Ok(())
-                    } else {
-                        Err("Select an installed extension".into())
-                    }
+                    self.extensions.save_permission(true, self.notify.clone())
                 } else {
                     Err("Review the selected extension permissions first".into())
                 }
             }
-            "extensions.disable" => {
-                self.extensions.cancel();
-                if let Some(row) = self.extensions.installed.get_mut(self.extensions.selected) {
-                    row.enabled = false;
+            "extensions.disable" => self.extensions.save_permission(false, self.notify.clone()),
+            "extensions.remove" => self.extensions.remove_selected(self.notify.clone()),
+            "extensions.remove_runtime" => self.extensions.remove_runtime(self.notify.clone()),
+            "extensions.next_command" => {
+                if let Some(row) = self.extensions.installed.get(self.extensions.selected) {
+                    if !row.package.manifest.commands.is_empty() {
+                        self.extensions.command_selection = (self.extensions.command_selection + 1)
+                            % row.package.manifest.commands.len();
+                    }
                 }
                 Ok(())
             }
-            "extensions.remove" | "extensions.remove_runtime" => (|| {
-                if self.extensions.running() || self.extensions.manager_pending.is_some() {
-                    return Err("Cancel or finish current operation before removal".into());
-                }
-                let package = if id == "extensions.remove_runtime" {
-                    self.extensions
-                        .runtime_package
-                        .clone()
-                        .ok_or("Runtime not installed")?
-                } else {
-                    if self.extensions.selected >= self.extensions.installed.len() {
-                        return Err("Select an installed extension".into());
-                    }
-                    self.extensions.installed[self.extensions.selected]
-                        .package
-                        .clone()
-                };
-                self.extensions
-                    .manager_work(self.notify.clone(), move |_cancel| {
-                        let id = package.id.clone();
-                        package.remove().map_err(|e| format!("Removal: {e:?}"))?;
-                        Ok(ManagerResult::Removed(id))
-                    })
+            "extensions.run_selected" | "extensions.run_background" => (|| {
+                let row = self
+                    .extensions
+                    .installed
+                    .get(self.extensions.selected)
+                    .ok_or("Select an installed extension")?;
+                let command = row
+                    .package
+                    .manifest
+                    .commands
+                    .get(self.extensions.command_selection)
+                    .ok_or("Select a command")?
+                    .clone();
+                let owner = row.package.id.clone();
+                self.start_owned_extension(
+                    Some(&owner),
+                    &command,
+                    if id == "extensions.run_background" {
+                        bareline_extensions_protocol::ExecutionBudget::Background
+                    } else {
+                        bareline_extensions_protocol::ExecutionBudget::Interactive
+                    },
+                )
             })(),
             command if command.starts_with("ext.") => self.start_selected_extension(command),
             _ => return false,
@@ -502,6 +522,7 @@ impl super::Shell {
         true
     }
     pub(super) fn extensions_pump(&mut self, _el: &super::ActiveEventLoop) {
+        self.extensions.start_restore(self.notify.clone());
         if self.extensions.pump_manager()
             && let Some(window) = &self.window
         {
@@ -641,6 +662,7 @@ mod tests {
 #[derive(Clone)]
 pub struct OwnerTrust {
     pub catalog_public_key: String,
+    pub release_public_key: String,
     pub publisher: String,
     pub channel: String,
     pub publisher_certificate_sha256: [u8; 32],
@@ -651,12 +673,24 @@ struct CatalogSelection {
 }
 enum ManagerResult {
     Catalog(CatalogSelection),
-    Installed(bareline_extensions_protocol::InstalledPackage, String),
-    Removed(String),
+    Installed(bareline_extensions_protocol::InstalledPackage, ManagerIndex),
+    Restored(
+        ManagerIndex,
+        Vec<InstalledRow>,
+        Option<bareline_platform_windows::update::InstalledRuntime>,
+        Vec<String>,
+    ),
+    Permissions(ManagerIndex),
+    Removed(String, ManagerIndex),
+    RuntimeInstalled(
+        bareline_platform_windows::update::InstalledRuntime,
+        ManagerIndex,
+    ),
+    RuntimeRemoved(ManagerIndex),
 }
 struct InstalledRow {
     package: bareline_extensions_protocol::InstalledPackage,
-    enabled: bool,
+    state: InstalledState,
 }
 
 impl ExtensionsRuntime {
@@ -805,6 +839,10 @@ impl ExtensionsRuntime {
             .get(self.selected)
             .cloned()
             .ok_or("Select an available package")?;
+        if entry.artifact_type != "extension" {
+            return Err("Use the verified native runtime provider for runtime installation".into());
+        }
+        let index = self.index.clone();
         self.manager_work(notify, move |cancel| {
             let package = catalog
                 .source
@@ -814,10 +852,9 @@ impl ExtensionsRuntime {
                 })
                 .map_err(|e| format!("Package verification: {e:?}"))?;
             std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
-            let installed = package
-                .install(&root, &cancel)
-                .map_err(|e| format!("Installation: {e:?}"))?;
-            Ok(ManagerResult::Installed(installed, entry.artifact_type))
+            let (index, installed) =
+                bareline_app::extensions::manager::install(&root, &package, &index, &cancel)?;
+            Ok(ManagerResult::Installed(installed, index))
         })
     }
     fn pump_manager(&mut self) -> bool {
@@ -841,29 +878,57 @@ impl ExtensionsRuntime {
                         .into(),
                 );
             }
-            Ok(ManagerResult::Installed(package, kind)) => {
-                if kind == "runtime" {
-                    self.runtime_package = Some(package);
-                } else {
-                    self.installed.push(InstalledRow {
-                        package,
-                        enabled: false,
-                    });
-                }
+            Ok(ManagerResult::Installed(package, index)) => {
+                let state = index
+                    .entries
+                    .iter()
+                    .find(|entry| entry.id == package.id)
+                    .expect("published installation record")
+                    .clone();
+                self.installed.retain(|row| row.package.id != package.id);
+                self.installed.push(InstalledRow { package, state });
+                self.index = index;
                 self.tab = 0;
                 self.selected = 0;
                 self.message = Some("Installed. Review permissions before enabling.".into());
             }
-            Ok(ManagerResult::Removed(id)) => {
-                self.installed.retain(|row| row.package.id != id);
-                if self
-                    .runtime_package
-                    .as_ref()
-                    .is_some_and(|package| package.id == id)
-                {
-                    self.runtime_package = None;
+            Ok(ManagerResult::Restored(index, rows, runtime, errors)) => {
+                self.runtime_package = runtime;
+                self.index = index;
+                self.installed = rows;
+                self.message = Some(if errors.is_empty() {
+                    "Installed extensions restored and verified; host stopped".into()
+                } else {
+                    errors.join("; ")
+                });
+            }
+            Ok(ManagerResult::Permissions(index)) => {
+                for row in &mut self.installed {
+                    if let Some(state) = index
+                        .entries
+                        .iter()
+                        .find(|entry| entry.id == row.package.id)
+                    {
+                        row.state = state.clone();
+                    }
                 }
+                self.index = index;
+                self.message = Some("Permissions saved".into());
+            }
+            Ok(ManagerResult::Removed(id, index)) => {
+                self.index = index;
+                self.installed.retain(|row| row.package.id != id);
                 self.message = Some("Removed installed package".into())
+            }
+            Ok(ManagerResult::RuntimeInstalled(runtime, index)) => {
+                self.runtime_package = Some(runtime);
+                self.index = index;
+                self.message = Some("Verified runtime installed; host stopped".into());
+            }
+            Ok(ManagerResult::RuntimeRemoved(index)) => {
+                self.runtime_package = None;
+                self.index = index;
+                self.message = Some("Runtime removed".into());
             }
             Err(error) => self.message = Some(error),
         }
@@ -873,6 +938,18 @@ impl ExtensionsRuntime {
 
 impl super::Shell {
     fn start_selected_extension(&mut self, command: &str) -> Result<(), String> {
+        self.start_owned_extension(
+            None,
+            command,
+            bareline_extensions_protocol::ExecutionBudget::Interactive,
+        )
+    }
+    fn start_owned_extension(
+        &mut self,
+        owner: Option<&str>,
+        command: &str,
+        budget: bareline_extensions_protocol::ExecutionBudget,
+    ) -> Result<(), String> {
         use bareline_extensions_protocol::{Capability, Scope, broker::Grant};
         let runtime = self
             .extensions
@@ -888,8 +965,22 @@ impl super::Shell {
             .extensions
             .installed
             .iter()
-            .find(|row| row.enabled && row.package.manifest.commands.iter().any(|id| id == command))
+            .find(|row| {
+                owner.is_none_or(|owner| row.package.id == owner)
+                    && row.state.enabled
+                    && row.package.manifest.commands.iter().any(|id| id == command)
+            })
             .ok_or("Install and enable an extension contributing this command")?;
+        if budget == bareline_extensions_protocol::ExecutionBudget::Background
+            && !row
+                .package
+                .manifest
+                .background_commands
+                .iter()
+                .any(|id| id == command)
+        {
+            return Err("This signed command does not declare background execution".into());
+        }
         let workspace = self.workspace.as_ref().ok_or("Open a document first")?;
         let editor = workspace
             .editors
@@ -928,7 +1019,7 @@ impl super::Shell {
         let invocation = Invocation {
             extension_id: row.package.id.clone(),
             command: command.into(),
-            arguments: String::new(),
+            arguments: self.extensions.arguments.clone(),
             document: 1,
             revision: source.revision.0,
             source_generation: 0,
@@ -938,8 +1029,8 @@ impl super::Shell {
         };
         let job = InvocationJob {
             runtime: VerifiedRuntime {
-                executable: runtime.directory().join(&runtime.manifest.entry_component),
-                executable_sha256: runtime.component_sha256,
+                executable: runtime.executable.clone(),
+                executable_sha256: runtime.executable_sha256,
                 publisher_certificate_sha256: trust.publisher_certificate_sha256,
             },
             component: row
@@ -948,6 +1039,7 @@ impl super::Shell {
                 .join(&row.package.manifest.entry_component),
             component_sha256: row.package.component_sha256,
             invocation,
+            budget,
             source,
             session,
             panels: row.package.manifest.panels.clone(),
@@ -980,7 +1072,7 @@ impl ExtensionsRuntime {
             self.installed
                 .iter()
                 .enumerate()
-                .filter(|(_, row)| self.tab != 3 || !row.enabled)
+                .filter(|(_, row)| self.tab != 3 || !row.state.enabled)
                 .map(|(i, _)| i)
                 .collect()
         };
@@ -1017,5 +1109,278 @@ mod manager_tests {
         runtime.permission_review = Some(0);
         runtime.move_selection(1);
         assert!(runtime.permission_review.is_none());
+    }
+}
+
+impl ExtensionsRuntime {
+    fn start_restore(&mut self, notify: Arc<dyn Fn() + Send + Sync>) {
+        if !self.restore_pending {
+            return;
+        }
+        self.restore_pending = false;
+        let Some(trust) = self.trust.clone() else {
+            self.message = Some(
+                "Owner trust policy unavailable; installed packages cannot be verified".into(),
+            );
+            return;
+        };
+        let Some(root) = self.root.clone() else {
+            return;
+        };
+        if let Err(error) = self.manager_work(notify, move |cancel| {
+            let index = ManagerIndex::load(&root)?;
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_err(|e| e.to_string())?
+                .as_secs();
+            let policy = bareline_extensions_protocol::CatalogPolicy {
+                public_key: &trust.catalog_public_key,
+                publisher: &trust.publisher,
+                channel: &trust.channel,
+                platform: "windows-x64",
+                artifact_type: "extension",
+                highest_metadata_version: 0,
+                now_unix: now,
+            };
+            let mut rows = Vec::new();
+            let mut errors = Vec::new();
+            for entry in &index.entries {
+                if cancel.load(Ordering::Acquire) {
+                    return Err("Restore cancelled".into());
+                }
+                match bareline_extensions_protocol::restore_cached(
+                    &root,
+                    &entry.digest,
+                    &policy,
+                    &cancel,
+                ) {
+                    Ok(package) if package.id == entry.id && package.version == entry.version => {
+                        let mut state = entry.clone();
+                        if package
+                            .manifest
+                            .capabilities
+                            .iter()
+                            .any(|cap| !state.approved.contains(cap))
+                        {
+                            state.enabled = false;
+                        }
+                        rows.push(InstalledRow { package, state });
+                    }
+                    Ok(_) => errors.push(format!("{}: installed identity mismatch", entry.id)),
+                    Err(error) => errors.push(format!("{}: verification {error:?}", entry.id)),
+                }
+            }
+            let runtime = if let Some(digest) = &index.runtime_digest {
+                match bareline_platform_windows::update::restore_verified_runtime(
+                    &root,
+                    digest,
+                    &trust.runtime_policy(index.runtime_metadata_version),
+                    now,
+                    &trust.publisher_certificate_sha256,
+                ) {
+                    Ok(runtime) => Some(runtime),
+                    Err(error) => {
+                        errors.push(format!("Runtime verification: {error}"));
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+            Ok(ManagerResult::Restored(index, rows, runtime, errors))
+        }) {
+            self.message = Some(error);
+        }
+    }
+    fn save_permission(
+        &mut self,
+        approve: bool,
+        notify: Arc<dyn Fn() + Send + Sync>,
+    ) -> Result<(), String> {
+        let row = self
+            .installed
+            .get(self.selected)
+            .ok_or("Select an installed extension")?;
+        let id = row.package.id.clone();
+        let requested = row.package.manifest.capabilities.clone();
+        let root = self.root.clone().ok_or("Extension storage unavailable")?;
+        let mut index = self.index.clone();
+        index.set_permission(&id, &requested, approve)?;
+        if !approve {
+            self.cancel();
+            if let Some(row) = self.installed.get_mut(self.selected) {
+                row.state.enabled = false;
+                row.state.generation = index.generation;
+            }
+        }
+        self.manager_work(notify, move |_cancel| {
+            index.save(&root)?;
+            Ok(ManagerResult::Permissions(index))
+        })
+    }
+    pub fn contributions(&self) -> Vec<bareline_commands::DynamicCommandRecord> {
+        self.installed
+            .iter()
+            .flat_map(|row| {
+                row.package.manifest.commands.iter().map(move |id| {
+                    let reason = if !self.enabled {
+                        Some("Extensions disabled for this session")
+                    } else if !row.state.enabled {
+                        Some("Extension permission not enabled")
+                    } else if self.runtime_package.is_none() {
+                        Some("Runtime not installed")
+                    } else {
+                        None
+                    };
+                    bareline_commands::DynamicCommandRecord {
+                        identity: bareline_commands::DynamicCommandIdentity {
+                            owner: row.package.id.clone(),
+                            id: id.clone(),
+                            generation: row.state.generation,
+                        },
+                        title: id.clone(),
+                        enabled: reason.is_none(),
+                        disabled_reason: reason.map(str::to_owned),
+                    }
+                })
+            })
+            .collect()
+    }
+}
+impl super::Shell {
+    pub(super) fn extensions_invoke_contribution(
+        &mut self,
+        identity: bareline_commands::DynamicCommandIdentity,
+    ) -> Result<(), String> {
+        if !self.extensions.enabled
+            || !self.extensions.installed.iter().any(|row| {
+                row.package.id == identity.owner
+                    && row.state.enabled
+                    && row.state.generation == identity.generation
+                    && row.package.manifest.commands.contains(&identity.id)
+            })
+        {
+            return Err("Extension contribution was revoked or changed".into());
+        }
+        self.start_owned_extension(
+            Some(&identity.owner),
+            &identity.id,
+            bareline_extensions_protocol::ExecutionBudget::Interactive,
+        )
+    }
+}
+
+impl OwnerTrust {
+    fn runtime_policy(&self, highest: u64) -> bareline_distribution::update::TrustPolicy<'_> {
+        bareline_distribution::update::TrustPolicy {
+            release_public_key: &self.release_public_key,
+            channel: &self.channel,
+            artifact_type: "bareline-exthost-x64",
+            platform: "windows-x64",
+            publisher: &self.publisher,
+            protocol: 1,
+            highest_metadata_version: highest,
+            maximum_package_bytes: 256 * 1024 * 1024,
+        }
+    }
+}
+impl ExtensionsRuntime {
+    fn install_runtime(
+        &mut self,
+        executable: PathBuf,
+        notify: Arc<dyn Fn() + Send + Sync>,
+    ) -> Result<(), String> {
+        let trust = self
+            .trust
+            .clone()
+            .ok_or("Owner runtime trust policy unavailable")?;
+        let root = self.root.clone().ok_or("Extension storage unavailable")?;
+        let mut index = self.index.clone();
+        self.manager_work(notify, move |cancel| {
+            use std::io::Read;
+            let directory = executable.parent().ok_or("Runtime package directory")?;
+            let mut metadata = Vec::new();
+            std::fs::File::open(directory.join("runtime.json"))
+                .map_err(|e| e.to_string())?
+                .take(65537)
+                .read_to_end(&mut metadata)
+                .map_err(|e| e.to_string())?;
+            let mut signature = String::new();
+            std::fs::File::open(directory.join("runtime.minisig"))
+                .map_err(|e| e.to_string())?
+                .take(8193)
+                .read_to_string(&mut signature)
+                .map_err(|e| e.to_string())?;
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_err(|e| e.to_string())?
+                .as_secs();
+            std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
+            let runtime = bareline_platform_windows::update::install_verified_runtime(
+                &executable,
+                &metadata,
+                &signature,
+                &trust.runtime_policy(index.runtime_metadata_version),
+                now,
+                &trust.publisher_certificate_sha256,
+                &root,
+                &cancel,
+            )
+            .map_err(|e| e.to_string())?;
+            if cancel.load(Ordering::Acquire) {
+                return Err("Runtime installation cancelled".into());
+            }
+            index.runtime_digest = Some(
+                runtime
+                    .executable_sha256
+                    .iter()
+                    .map(|b| format!("{b:02x}"))
+                    .collect(),
+            );
+            index.runtime_metadata_version =
+                index.runtime_metadata_version.max(runtime.metadata_version);
+            index.save(&root)?;
+            Ok(ManagerResult::RuntimeInstalled(runtime, index))
+        })
+    }
+    fn remove_runtime(&mut self, notify: Arc<dyn Fn() + Send + Sync>) -> Result<(), String> {
+        if self.running() {
+            self.cancel();
+            return Err("Runtime cancellation requested; remove again after the host stops".into());
+        }
+        let runtime = self
+            .runtime_package
+            .clone()
+            .ok_or("Runtime not installed")?;
+        let root = self.root.clone().ok_or("Extension storage unavailable")?;
+        let mut index = self.index.clone();
+        self.manager_work(notify, move |_cancel| {
+            bareline_platform_windows::update::remove_verified_runtime(&runtime)
+                .map_err(|e| e.to_string())?;
+            index.runtime_digest = None;
+            index.save(&root)?;
+            Ok(ManagerResult::RuntimeRemoved(index))
+        })
+    }
+    fn remove_selected(&mut self, notify: Arc<dyn Fn() + Send + Sync>) -> Result<(), String> {
+        if self.running() {
+            self.cancel();
+            return Err("Cancellation requested; remove again after the host stops".into());
+        }
+        let row = self
+            .installed
+            .get_mut(self.selected)
+            .ok_or("Select an installed extension")?;
+        row.state.enabled = false;
+        let package = row.package.clone();
+        let id = package.id.clone();
+        let root = self.root.clone().ok_or("Extension storage unavailable")?;
+        let mut index = self.index.clone();
+        self.manager_work(notify, move |_cancel| {
+            package.remove().map_err(|e| format!("Removal: {e:?}"))?;
+            index.remove(&id)?;
+            index.save(&root)?;
+            Ok(ManagerResult::Removed(id, index))
+        })
     }
 }

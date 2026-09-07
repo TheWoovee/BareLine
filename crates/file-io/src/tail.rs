@@ -13,6 +13,116 @@ use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
+use crate::{codecs::disk::{DiskDecoded, DiskOptions, DiskTranscoder}, lifecycle::{FileInput, PagedOpened}, source::{FileSource, SourceOptions}};
+use bareline_document::{Budget, TextOffset, source::PageTicket};
+use std::io::{Seek, SeekFrom, Write};
+
+/// Follow owns immutable suffix stores. Existing snapshots keep their original source
+/// generations; only the decoder's final opaque unit is copied into the next suffix.
+/// Continuity verification is conservative full-prefix I/O, performed in bounded steps.
+pub struct TailSession {
+    platform: Arc<dyn LocalFileSystem>,
+    budget: Budget,
+    cancellation: Cancellation,
+    cache: PathBuf,
+    encoding: crate::codecs::Encoding,
+    fingerprint: Fingerprint,
+    raw_start: u64,
+    text_start: u64,
+    segments: Vec<(FileSource, DiskDecoded)>,
+    phase: Option<TailPhase>,
+    pub source_changed: bool,
+}
+enum TailPhase {
+    Verify(TailVerifier),
+    Copy { file: File, output: File, scratch: Scratch, remaining: u64, verified: Fingerprint },
+    Decode { job: DiskTranscoder, scratch: Scratch, verified: Fingerprint },
+}
+struct Scratch(PathBuf);
+impl Drop for Scratch { fn drop(&mut self) { let _ = std::fs::remove_file(&self.0); } }
+impl TailSession {
+    pub fn new(opened: &PagedOpened, platform: Arc<dyn LocalFileSystem>, budget: Budget, cancellation: Cancellation) -> Result<Self, FileError> {
+        let (raw_start, text_start) = opened.transcoded.store.tail_boundary().map_err(FileError::Transcode)?;
+        let cache = opened.transcoded.store.text_path().parent().and_then(Path::parent).ok_or(FileError::IncompleteSource)?.to_owned();
+        Ok(Self { platform, budget, cancellation, cache, encoding: opened.transcoded.store.state.interpreted(), fingerprint: opened.fingerprint.clone(), raw_start, text_start, segments: Vec::new(), phase: None, source_changed: false })
+    }
+    pub fn pending(&self) -> bool { self.phase.is_some() }
+    /// Unlock captures a sealed, provenance-complete fixed generation before editing.
+    /// If the path no longer matches the followed generation, preserve the viewer.
+    pub fn freeze(&self, opened: &PagedOpened) -> Result<Box<PagedOpened>, FileError> {
+        if self.source_changed || self.pending() { return Err(FileError::Changed); }
+        let outcome = crate::lifecycle::open_paged_encoded(crate::lifecycle::PagedOpenRequest {
+            path: opened.path.clone(), bytes: self.budget.clone(), history: Budget::new(128 * 1024 * 1024), cache: self.cache.clone(),
+            options: DiskOptions { temp_quota_bytes: 20 * 1024 * 1024 * 1024, interpret: Some(self.encoding) }, source_options: SourceOptions { resident_max_bytes: 0, ..SourceOptions::default() }
+        }, self.platform.clone(), self.cancellation.clone(), |_| {});
+        match outcome {
+            crate::lifecycle::TranscodeOutcome::Complete(fixed) if fixed.fingerprint == self.fingerprint => Ok(fixed),
+            crate::lifecycle::TranscodeOutcome::Failed(error) => Err(error),
+            _ => Err(FileError::Changed),
+        }
+    }
+    pub fn request(&mut self, path: &Path) -> Result<(), FileError> {
+        if self.phase.is_none() && !self.source_changed {
+            self.phase = Some(TailPhase::Verify(TailVerifier::begin(path, self.fingerprint.clone(), self.platform.clone(), self.cancellation.clone())?));
+        }
+        Ok(())
+    }
+    /// One bounded read/copy/decode step. A true result publishes a logical revision.
+    pub fn step(&mut self, opened: &mut PagedOpened) -> Result<bool, FileError> {
+        self.cancellation.check()?;
+        let Some(phase) = self.phase.take() else { return Ok(false); };
+        match phase {
+            TailPhase::Verify(mut verifier) => match verifier.step()? {
+                TailProgress::Pending { .. } => self.phase = Some(TailPhase::Verify(verifier)),
+                TailProgress::SourceChanged => self.source_changed = true,
+                TailProgress::Verified(verified) => {
+                    if verified.identity.length == self.fingerprint.identity.length { return Ok(false); }
+                    self.platform.validate_source(&opened.path)?;
+                    let mut file = File::open(&opened.path)?;
+                    if self.platform.identity(&file)? != verified.identity { self.source_changed = true; return Ok(false); }
+                    file.seek(SeekFrom::Start(self.raw_start))?;
+                    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+                    let path = self.cache.join(format!("bareline-tail-{}-{}.raw", std::process::id(), NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
+                    let output = std::fs::OpenOptions::new().write(true).create_new(true).open(&path)?;
+                    self.phase = Some(TailPhase::Copy { file, output, scratch: Scratch(path), remaining: verified.identity.length - self.raw_start, verified });
+                }
+            },
+            TailPhase::Copy { mut file, mut output, scratch, mut remaining, verified } => {
+                if self.platform.identity(&file)? != verified.identity { self.source_changed = true; return Ok(false); }
+                let mut bytes = [0; 65536];
+                let count = remaining.min(bytes.len() as u64) as usize;
+                file.read_exact(&mut bytes[..count])?;
+                output.write_all(&bytes[..count])?;
+                remaining -= count as u64;
+                if remaining != 0 { self.phase = Some(TailPhase::Copy { file, output, scratch, remaining, verified }); }
+                else {
+                    output.sync_all()?; drop(output);
+                    if self.platform.identity(&file)? != verified.identity || self.platform.identity(&File::open(&opened.path)?)? != verified.identity { self.source_changed = true; return Ok(false); }
+                    let job = DiskTranscoder::continuation(FileInput { file: File::open(&scratch.0)?, path: scratch.0.clone() }, self.platform.clone(), &self.cache, DiskOptions { temp_quota_bytes: 20 * 1024 * 1024 * 1024, interpret: Some(self.encoding) }, self.budget.clone(), self.cancellation.clone()).map_err(FileError::Transcode)?;
+                    self.phase = Some(TailPhase::Decode { job, scratch, verified });
+                }
+            }
+            TailPhase::Decode { mut job, scratch, verified } => {
+                if !job.step().map_err(FileError::Transcode)?.complete { self.phase = Some(TailPhase::Decode { job, scratch, verified }); }
+                else {
+                    let store = job.finish().map_err(FileError::Transcode)?;
+                    let (raw_next, text_next) = store.tail_boundary().map_err(FileError::Transcode)?;
+                    let source = FileSource::open(&store.text_path(), self.platform.clone(), SourceOptions { resident_max_bytes: 0, ..SourceOptions::default() }, self.budget.clone(), self.cancellation.clone())?;
+                    opened.transcoded.document.replace_tail_source(TextOffset(usize::try_from(self.text_start).map_err(|_| FileError::Budget)?), source.source()).map_err(|_| FileError::Budget)?;
+                    self.raw_start += raw_next; self.text_start += text_next;
+                    self.fingerprint = verified.clone(); opened.fingerprint = verified;
+                    self.segments.push((source, store));
+                    return Ok(true);
+                }
+            }
+        }
+        Ok(false)
+    }
+    /// Returns false for the original source, which remains owned by PagedOpened.
+    pub fn read_page(&mut self, ticket: PageTicket) -> Result<bool, FileError> {
+        if let Some((source, _)) = self.segments.iter_mut().find(|(source, _)| source.source().generation() == ticket.generation) { source.read_page(ticket)?; Ok(true) } else { Ok(false) }
+    }
+}
 pub enum TailProgress {
     Pending { verified: u64, total: u64 },
     Verified(Fingerprint),
@@ -149,6 +259,9 @@ mod tests {
     };
     struct Platform;
     impl LocalFileSystem for Platform {
+        fn available_space(&self, _: &Path) -> std::io::Result<u64> { Ok(u64::MAX) }
+        fn guard_directory(&self, _: &Path) -> std::io::Result<Arc<dyn Send + Sync>> { Ok(Arc::new(())) }
+        fn open_sealed_read(&self, path: &Path) -> std::io::Result<File> { File::open(path) }
         fn validate_target(&self, _: &Path) -> std::io::Result<()> {
             Ok(())
         }
@@ -201,6 +314,35 @@ mod tests {
             }
         }
         panic!("did not complete")
+    }
+    #[test]
+    fn segmented_follow_completes_split_scalar_and_unlocks_fixed_generation() {
+        use crate::lifecycle::{PagedOpenRequest, TranscodeOutcome, open_paged_encoded};
+        use bareline_document::paged::WindowPoll;
+        let fixture = Fixture::new();
+        std::fs::write(&fixture.0, b"prefix \xe2").unwrap();
+        let cache = fixture.0.with_extension("cache");
+        std::fs::create_dir(&cache).unwrap();
+        let budget = Budget::new(16 * 1024 * 1024);
+        let TranscodeOutcome::Complete(mut opened) = open_paged_encoded(PagedOpenRequest { path: fixture.0.clone(), bytes: budget.clone(), history: Budget::new(1024), cache: cache.clone(), options: DiskOptions { temp_quota_bytes: 1024 * 1024, interpret: Some(crate::codecs::Encoding::Utf8) }, source_options: SourceOptions { resident_max_bytes: 0, ..SourceOptions::default() } }, Arc::new(Platform), Cancellation::default(), |_| {}) else { panic!("open failed") };
+        let mut tail = TailSession::new(&opened, Arc::new(Platform), budget.clone(), Cancellation::default()).unwrap();
+        let before = opened.transcoded.document.snapshot();
+        std::fs::OpenOptions::new().append(true).open(&fixture.0).unwrap().write_all(b"\x82\xac\n").unwrap();
+        tail.request(&fixture.0).unwrap();
+        for _ in 0..100 { tail.step(&mut opened).unwrap(); if !tail.pending() { break; } }
+        assert!(!tail.source_changed); assert!(!tail.pending());
+        let snapshot = opened.transcoded.document.snapshot();
+        assert!(snapshot.same_document(&before)); assert!(snapshot.revision.0 > before.revision.0);
+        let mut read = snapshot.begin_read(TextOffset(0)..TextOffset(snapshot.len()), 100, &budget).unwrap();
+        loop { match read.poll() {
+            WindowPoll::Pending(ticket) => { if !tail.read_page(ticket).unwrap() { opened.transcoded.source.read_page(ticket).unwrap(); } },
+            WindowPoll::Ready(window) => { assert_eq!(window.text(), "prefix €\n"); break; },
+            _ => panic!("unavailable tail"),
+        } }
+        let fixed = tail.freeze(&opened).unwrap();
+        assert_eq!(fixed.fingerprint, opened.fingerprint);
+        drop(fixed); drop(tail); drop(opened); drop(before); drop(snapshot); drop(read);
+        std::fs::remove_dir_all(cache).unwrap();
     }
     #[test]
     fn partial_page_append_verified_and_new_generation_created() {

@@ -284,3 +284,5 @@ mod tests {
         );
     }
 }
+
+pub mod manager;

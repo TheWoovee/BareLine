@@ -2,8 +2,8 @@
 //! Logical document actors on a fixed worker pool. UI submits without blocking.
 use crate::{Document, DocumentSnapshot, EditTransaction, Error, Revision};
 use std::sync::{
-    Arc, Mutex,
-    mpsc::{self, Receiver, SyncSender, TrySendError},
+    Arc, Condvar, Mutex,
+    mpsc::{self, Receiver, SyncSender},
 };
 use std::thread::{self, JoinHandle};
 
@@ -21,9 +21,11 @@ pub enum Mutation {
 pub struct Completion {
     pub result: Result<Revision, Error>,
     pub snapshot: DocumentSnapshot,
+    pub metadata: Option<crate::history::EditMetadata>,
 }
 struct Request {
     mutation: Mutation,
+    metadata: Option<crate::history::EditMetadata>,
     reply: SyncSender<Completion>,
     notify: Option<Arc<dyn Fn() + Send + Sync>>,
 }
@@ -31,6 +33,8 @@ struct Actor {
     document: Document,
     queue: std::collections::VecDeque<Request>,
     scheduled: bool,
+    retired: bool,
+    published: Arc<Publication>,
 }
 type Job = Arc<Mutex<Actor>>;
 enum Work {
@@ -65,15 +69,99 @@ struct GroupRequest {
     reply: SyncSender<GroupCompletion>,
     notify: Option<Arc<dyn Fn() + Send + Sync>>,
 }
+const ACTOR_QUANTUM: usize = 8;
+struct ReadyState {
+    queue: std::collections::VecDeque<Work>,
+    // Includes running jobs: their reserved slot makes yielding infallible.
+    admitted: usize,
+    closed: bool,
+}
+struct ReadyQueue {
+    state: Mutex<ReadyState>,
+    wake: Condvar,
+    capacity: usize,
+}
+impl ReadyQueue {
+    fn close(&self) {
+        self.state.lock().unwrap_or_else(|p| p.into_inner()).closed = true;
+        self.wake.notify_all();
+    }
+    fn submit(&self, work: Work) -> Result<(), (SubmitError, Work)> {
+        let mut state = match self.state.try_lock() {
+            Ok(state) => state,
+            Err(_) => return Err((SubmitError::Saturated, work)),
+        };
+        if state.closed {
+            return Err((SubmitError::Closed, work));
+        }
+        if state.admitted >= self.capacity {
+            return Err((SubmitError::Saturated, work));
+        }
+        state.admitted += 1;
+        state.queue.push_back(work);
+        self.wake.notify_one();
+        Ok(())
+    }
+    fn next(&self) -> Option<Work> {
+        let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        loop {
+            if let Some(work) = state.queue.pop_front() {
+                return Some(work);
+            }
+            if state.closed && state.admitted == 0 {
+                return None;
+            }
+            state = self.wake.wait(state).unwrap_or_else(|p| p.into_inner());
+        }
+    }
+    fn complete(&self, again: Option<Work>) {
+        let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(work) = again {
+            state.queue.push_back(work);
+        } else {
+            state.admitted -= 1;
+        }
+        self.wake.notify_all();
+    }
+}
+struct Publication {
+    snapshot: Mutex<DocumentSnapshot>,
+}
+impl Publication {
+    fn update(&self, snapshot: DocumentSnapshot) {
+        *self.snapshot.lock().unwrap_or_else(|p| p.into_inner()) = snapshot;
+    }
+}
+/// Coalesced revisions: a slow reader retains only the latest immutable snapshot.
+/// Completion notifications wake the UI; this receiver never polls in the background.
+pub struct RevisionReceiver {
+    publication: Arc<Publication>,
+    seen: Revision,
+}
+impl RevisionReceiver {
+    pub fn latest(&mut self) -> Option<DocumentSnapshot> {
+        let snapshot = self
+            .publication
+            .snapshot
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        if snapshot.revision == self.seen {
+            return None;
+        }
+        self.seen = snapshot.revision;
+        Some(snapshot.clone())
+    }
+}
 pub struct Scheduler {
-    sender: Option<SyncSender<Work>>,
+    ready: Arc<ReadyQueue>,
     workers: Vec<JoinHandle<()>>,
     id: u64,
 }
 #[derive(Clone)]
 pub struct DocumentService {
     actor: Job,
-    sender: SyncSender<Work>,
+    ready: Arc<ReadyQueue>,
+    published: Arc<Publication>,
     mailbox_capacity: usize,
     scheduler_id: u64,
     document_id: u64,
@@ -81,55 +169,75 @@ pub struct DocumentService {
 impl Scheduler {
     pub fn new(workers: usize, ready_capacity: usize) -> std::io::Result<Self> {
         let count = workers.clamp(1, thread::available_parallelism().map_or(1, |n| n.get()));
-        let (sender, receiver) = mpsc::sync_channel::<Work>(ready_capacity.max(1));
-        let receiver = Arc::new(Mutex::new(receiver));
+        let ready = Arc::new(ReadyQueue {
+            state: Mutex::new(ReadyState {
+                queue: std::collections::VecDeque::new(),
+                admitted: 0,
+                closed: false,
+            }),
+            wake: Condvar::new(),
+            capacity: ready_capacity.max(1),
+        });
         let mut handles = Vec::new();
         for number in 0..count {
-            let incoming = receiver.clone();
+            let incoming = ready.clone();
             let result = thread::Builder::new()
                 .name(format!("document-{number}"))
                 .spawn(move || {
-                    loop {
-                        // Only waiting for the next actor is serialized; work runs in parallel.
-                        let job = {
-                            let rx = incoming.lock().unwrap_or_else(|p| p.into_inner());
-                            rx.recv()
-                        };
-                        let Ok(job) = job else {
-                            break;
-                        };
-                        let job = match job {
+                    while let Some(work) = incoming.next() {
+                        let job = match work {
                             Work::Actor(job) => job,
                             Work::Group(request) => {
                                 run_group(request);
+                                incoming.complete(None);
                                 continue;
                             }
                         };
-                        loop {
+                        for _ in 0..ACTOR_QUANTUM {
                             let mut actor = job.lock().unwrap_or_else(|p| p.into_inner());
                             let Some(request) = actor.queue.pop_front() else {
-                                actor.scheduled = false;
                                 break;
                             };
+                            let metadata = match &request.mutation {
+                                Mutation::Apply(_) => request.metadata.clone(),
+                                Mutation::Undo => actor.document.history_metadata(true).cloned(),
+                                Mutation::Redo => actor.document.history_metadata(false).cloned(),
+                            };
                             let result = match request.mutation {
-                                Mutation::Apply(edit) => actor.document.apply(edit),
+                                Mutation::Apply(edit) => match request.metadata {
+                                    Some(metadata) => {
+                                        actor.document.apply_with_metadata(edit, metadata)
+                                    }
+                                    None => actor.document.apply(edit),
+                                },
                                 Mutation::Undo => actor.document.undo(),
                                 Mutation::Redo => actor.document.redo(),
                             };
                             let snapshot = actor.document.snapshot();
-                            // Receiver may be dropped after cancellation; never wait on the UI.
-                            let _ = request.reply.try_send(Completion { result, snapshot });
+                            actor.published.update(snapshot.clone());
+                            let _ = request.reply.try_send(Completion {
+                                result,
+                                snapshot,
+                                metadata,
+                            });
                             drop(actor);
                             if let Some(notify) = request.notify {
                                 notify();
                             }
+                        }
+                        let mut actor = job.lock().unwrap_or_else(|p| p.into_inner());
+                        if actor.queue.is_empty() {
+                            actor.scheduled = false;
+                            incoming.complete(None);
+                        } else {
+                            incoming.complete(Some(Work::Actor(job.clone())));
                         }
                     }
                 });
             match result {
                 Ok(handle) => handles.push(handle),
                 Err(error) => {
-                    drop(sender);
+                    ready.close();
                     for handle in handles {
                         let _ = handle.join();
                     }
@@ -138,23 +246,40 @@ impl Scheduler {
             }
         }
         Ok(Self {
-            sender: Some(sender),
+            ready,
             workers: handles,
             id: crate::unique(),
         })
+    }
+    /// Reject new work and drain all already accepted mutations without blocking.
+    pub fn close(&self) {
+        self.ready.close();
+    }
+    /// Wait for accepted work to finish. Call on a shutdown worker, never the UI thread.
+    pub fn shutdown(mut self) {
+        self.close();
+        for worker in self.workers.drain(..) {
+            let _ = worker.join();
+        }
     }
     pub fn worker_count(&self) -> usize {
         self.workers.len()
     }
     pub fn document(&self, document: Document, mailbox_capacity: usize) -> DocumentService {
         let document_id = document.current.document_id;
+        let published = Arc::new(Publication {
+            snapshot: Mutex::new(document.snapshot()),
+        });
         DocumentService {
             actor: Arc::new(Mutex::new(Actor {
                 document,
                 queue: std::collections::VecDeque::new(),
                 scheduled: false,
+                retired: false,
+                published: published.clone(),
             })),
-            sender: self.sender.as_ref().unwrap().clone(),
+            ready: self.ready.clone(),
+            published,
             mailbox_capacity: mailbox_capacity.max(1),
             scheduler_id: self.id,
             document_id,
@@ -192,19 +317,14 @@ impl Scheduler {
             reply,
             notify,
         };
-        let Some(sender) = &self.sender else {
-            return Err((SubmitError::Closed, request.mutation));
-        };
-        sender.try_send(Work::Group(request)).map_err(|error| {
-            let (kind, work) = match error {
-                TrySendError::Full(work) => (SubmitError::Saturated, work),
-                TrySendError::Disconnected(work) => (SubmitError::Closed, work),
-            };
-            let Work::Group(request) = work else {
-                unreachable!()
-            };
-            (kind, request.mutation)
-        })?;
+        self.ready
+            .submit(Work::Group(request))
+            .map_err(|(kind, work)| {
+                let Work::Group(request) = work else {
+                    unreachable!()
+                };
+                (kind, request.mutation)
+            })?;
         Ok(receiver)
     }
 }
@@ -249,7 +369,7 @@ fn run_group(request: GroupRequest) {
         .collect();
     let result = (|| {
         for (actor, (participant, _)) in actors.iter().zip(&targets) {
-            if !actor.queue.is_empty() {
+            if actor.retired || !actor.queue.is_empty() {
                 return Err(Error::ActorBusy);
             }
             if !participant.snapshot.complete {
@@ -289,7 +409,11 @@ fn run_group(request: GroupRequest) {
     })();
     let snapshots = actors
         .iter()
-        .map(|actor| actor.document.snapshot())
+        .map(|actor| {
+            let snapshot = actor.document.snapshot();
+            actor.published.update(snapshot.clone());
+            snapshot
+        })
         .collect();
     drop(actors);
     let _ = request
@@ -301,8 +425,8 @@ fn run_group(request: GroupRequest) {
 }
 impl Drop for Scheduler {
     fn drop(&mut self) {
-        // Services must be dropped first to close the shared channel. Do not block a UI drop.
-        self.sender.take();
+        // Explicit close wakes workers even when document services outlive the scheduler.
+        self.close();
         for worker in self.workers.drain(..) {
             if worker.is_finished() {
                 let _ = worker.join();
@@ -311,7 +435,39 @@ impl Drop for Scheduler {
     }
 }
 impl DocumentService {
-    pub fn same_document(&self, snapshot: &DocumentSnapshot) -> bool { self.document_id == snapshot.document_id }
+    pub fn same_document(&self, snapshot: &DocumentSnapshot) -> bool {
+        self.document_id == snapshot.document_id
+    }
+    /// Attach an independently sealed copy to a clean, history-free actor. Retires this
+    /// service atomically; drop it after installing the returned Paged actor to release RAM.
+    pub fn migrate_clean_spill(&self, captured: &DocumentSnapshot, source: crate::source::MemorySource) -> Result<crate::paged::PagedDocument, Error> {
+        let mut actor = self.actor.try_lock().map_err(|_| Error::ActorBusy)?;
+        if actor.retired || actor.scheduled || !actor.queue.is_empty() { return Err(Error::ActorBusy); }
+        let paged = crate::paged::PagedDocument::from_clean_spill(&actor.document, captured, source)?;
+        actor.retired = true;
+        Ok(paged)
+    }
+    /// Roll back a failed controller installation; the retired actor never changed content.
+    pub fn cancel_clean_spill(&self, captured: &DocumentSnapshot) -> Result<(), Error> {
+        let mut actor = self.actor.try_lock().map_err(|_| Error::ActorBusy)?;
+        if !actor.document.current.same_document(captured) || actor.document.current.revision != captured.revision { return Err(Error::StaleRevision); }
+        actor.retired = false;
+        Ok(())
+    }
+    /// Reads only the publication slot, never the live actor or file storage.
+    pub fn snapshot(&self) -> DocumentSnapshot {
+        self.published
+            .snapshot
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
+    }
+    pub fn subscribe(&self) -> RevisionReceiver {
+        RevisionReceiver {
+            publication: self.published.clone(),
+            seen: self.snapshot().revision,
+        }
+    }
     /// Saturation returns the mutation so non-droppable edits can be retried unchanged.
     pub fn submit(
         &self,
@@ -325,31 +481,60 @@ impl DocumentService {
         mutation: Mutation,
         notify: Option<Arc<dyn Fn() + Send + Sync>>,
     ) -> Result<Receiver<Completion>, (SubmitError, Mutation)> {
+        self.submit_context(mutation, None, notify)
+    }
+    /// Metadata remains owned by the caller when admission fails, just like the edit.
+    pub fn submit_with_metadata(
+        &self,
+        transaction: EditTransaction,
+        metadata: crate::history::EditMetadata,
+        notify: Option<Arc<dyn Fn() + Send + Sync>>,
+    ) -> Result<Receiver<Completion>, (SubmitError, EditTransaction, crate::history::EditMetadata)>
+    {
+        self.submit_context(Mutation::Apply(transaction), Some(metadata.clone()), notify)
+            .map_err(|(error, mutation)| {
+                let Mutation::Apply(transaction) = mutation else {
+                    unreachable!()
+                };
+                (error, transaction, metadata)
+            })
+    }
+    fn submit_context(
+        &self,
+        mutation: Mutation,
+        metadata: Option<crate::history::EditMetadata>,
+        notify: Option<Arc<dyn Fn() + Send + Sync>>,
+    ) -> Result<Receiver<Completion>, (SubmitError, Mutation)> {
         let mut actor = match self.actor.try_lock() {
             Ok(actor) => actor,
             Err(_) => return Err((SubmitError::Saturated, mutation)),
         };
+        if actor.retired { return Err((SubmitError::Closed, mutation)); }
+        let mut state = match self.ready.state.try_lock() {
+            Ok(state) => state,
+            Err(_) => return Err((SubmitError::Saturated, mutation)),
+        };
+        if state.closed {
+            return Err((SubmitError::Closed, mutation));
+        }
+        if !actor.scheduled && state.admitted >= self.ready.capacity {
+            return Err((SubmitError::Saturated, mutation));
+        }
         if actor.queue.len() >= self.mailbox_capacity {
             return Err((SubmitError::Saturated, mutation));
         }
         let (reply, receiver) = mpsc::sync_channel(1);
         actor.queue.push_back(Request {
             mutation,
+            metadata,
             reply,
             notify,
         });
         if !actor.scheduled {
-            match self.sender.try_send(Work::Actor(self.actor.clone())) {
-                Ok(()) => actor.scheduled = true,
-                Err(error) => {
-                    let mutation = actor.queue.pop_back().unwrap().mutation;
-                    let error = match error {
-                        TrySendError::Full(_) => SubmitError::Saturated,
-                        TrySendError::Disconnected(_) => SubmitError::Closed,
-                    };
-                    return Err((error, mutation));
-                }
-            }
+            state.admitted += 1;
+            state.queue.push_back(Work::Actor(self.actor.clone()));
+            actor.scheduled = true;
+            self.ready.wake.notify_one();
         }
         Ok(receiver)
     }

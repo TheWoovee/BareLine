@@ -13,6 +13,107 @@ pub const PAGE_NEXT_ID: u64 = u64::MAX - 2;
 pub const COMPOSITION_ID: u64 = u64::MAX - 3;
 pub const EDITOR_ERROR_ID: u64 = u64::MAX - 4;
 pub const TAB_ID_BASE: u64 = 1_000_000;
+/// The full source identity, including for a paged editor whose rendered surface
+/// is only a local window. Recheck this immediately before applying queued UIA.
+pub fn source_identity(editor: &crate::workspace::WorkspaceEditor) -> (u64, u64) {
+    match editor {
+        crate::workspace::WorkspaceEditor::Resident(editor) => {
+            let snapshot = editor.snapshot();
+            snapshot.identity_token()
+        }
+        crate::workspace::WorkspaceEditor::Paged(editor) => {
+            let snapshot = editor.snapshot();
+            snapshot.identity_token()
+        }
+    }
+}
+/// Immutable read bridge. Paged reads use one bounded shared worker, never UIA
+/// or the UI thread. The single cached result is at most one text window.
+pub fn text_source(editor: &crate::workspace::WorkspaceEditor, notify: std::sync::Arc<dyn Fn() + Send + Sync>) -> std::sync::Arc<dyn AccessibilityTextSource> {
+    use crate::workspace::WorkspaceEditor;
+    match editor {
+        WorkspaceEditor::Resident(editor) => std::sync::Arc::new(ResidentText(editor.snapshot().clone())),
+        WorkspaceEditor::Paged(editor) => std::sync::Arc::new(PagedText {
+            handle: editor.read_handle(), state: Default::default(), notify,
+        }),
+    }
+}
+struct ResidentText(bareline_document::DocumentSnapshot);
+impl AccessibilityTextSource for ResidentText {
+    fn identity(&self) -> (u64, u64) { self.0.identity_token() }
+    fn len(&self) -> usize { self.0.len() }
+    fn read(&self, mut start: usize, limit: usize) -> AccessibleRead {
+        use bareline_document::TextOffset;
+        if start > self.len() || limit > MAX_ACCESSIBLE_TEXT_BYTES { return AccessibleRead::Unavailable; }
+        let mut end = start.saturating_add(limit).min(self.len());
+        while start < end && !self.0.is_boundary(TextOffset(start)) { start += 1; }
+        while end > start && !self.0.is_boundary(TextOffset(end)) { end -= 1; }
+        match self.0.read(TextOffset(start)..TextOffset(end), limit) {
+            Ok(text) => AccessibleRead::Ready { start, text }, _ => AccessibleRead::Unavailable,
+        }
+    }
+}
+#[derive(Default)]
+struct ReadState { pending: bool, cached: Option<(usize, usize, AccessibleRead)> }
+struct PagedText {
+    handle: bareline_editor_surface::paged_view::PagedReadHandle,
+    state: std::sync::Arc<std::sync::Mutex<ReadState>>,
+    notify: std::sync::Arc<dyn Fn() + Send + Sync>,
+}
+type ReadJob = Box<dyn FnOnce() + Send>;
+fn text_worker() -> Option<&'static std::sync::mpsc::SyncSender<ReadJob>> {
+    static WORKER: std::sync::OnceLock<Option<std::sync::mpsc::SyncSender<ReadJob>>> = std::sync::OnceLock::new();
+    WORKER.get_or_init(|| {
+        let (tx, rx) = std::sync::mpsc::sync_channel::<ReadJob>(8);
+        std::thread::Builder::new().name("accessibility-read".into()).spawn(move || {
+            while let Ok(job) = rx.recv() { job(); }
+        }).ok().map(|_| tx)
+    }).as_ref()
+}
+impl AccessibilityTextSource for PagedText {
+    fn identity(&self) -> (u64,u64) { let s = self.handle.snapshot(); s.identity_token() }
+    fn len(&self) -> usize { self.handle.snapshot().len() }
+    fn read(&self, start: usize, limit: usize) -> AccessibleRead {
+        if start > self.len() || limit > MAX_ACCESSIBLE_TEXT_BYTES { return AccessibleRead::Unavailable; }
+        let Ok(mut state) = self.state.try_lock() else { return AccessibleRead::Pending; };
+        if let Some((at, count, value)) = &state.cached {
+            if *at == start && *count == limit { return value.clone(); }
+        }
+        if state.pending { return AccessibleRead::Pending; }
+        let Some(worker) = text_worker() else { return AccessibleRead::Unavailable; };
+        let weak = std::sync::Arc::downgrade(&self.state);
+        let handle = self.handle.clone();
+        let notify = self.notify.clone();
+        state.pending = true;
+        if worker.try_send(Box::new(move || {
+            use bareline_document::{Budget, TextOffset, paged::WindowPoll};
+            if weak.strong_count() == 0 { return; }
+            let result = (|| {
+                let mut request = handle.snapshot().begin_viewport(TextOffset(start), limit, &Budget::new(MAX_ACCESSIBLE_TEXT_BYTES)).ok()?;
+                // One text window and a fixed page-resolution cap per job.
+                for _ in 0..256 {
+                    if weak.strong_count() == 0 { return None; }
+                    match request.poll() {
+                        WindowPoll::Ready(window) => return Some(AccessibleRead::Ready { start: window.range().start.0, text: window.text().to_owned() }),
+                        WindowPoll::Pending(ticket) => match handle.resolve_page(ticket) {
+                            Ok(true) => (), Ok(false) => return Some(AccessibleRead::Pending), Err(_) => return None,
+                        },
+                        _ => return None,
+                    }
+                }
+                None
+            })().unwrap_or(AccessibleRead::Unavailable);
+            if let Some(state) = weak.upgrade() {
+                let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
+                state.pending = false;
+                if result != AccessibleRead::Pending { state.cached = Some((start, limit, result)); }
+                drop(state);
+                notify();
+            }
+        })).is_err() { state.pending = false; }
+        AccessibleRead::Pending
+    }
+}
 pub fn selection_valid(editor: &EditorSurface, anchor: usize, caret: usize) -> bool {
     editor
         .snapshot()
@@ -265,6 +366,11 @@ pub fn snapshot(
         focus,
         nodes,
         text,
+        text_context: editor.map(|e| AccessibilityTextContext {
+            source_identity: e.snapshot().identity_token(),
+            selection: (e.selection.anchor, e.selection.caret),
+            composition: e.composition_text().filter(|s| s.len() <= MAX_ACCESSIBLE_TEXT_BYTES).map(str::to_owned),
+        }),
     }
 }
 #[cfg(test)]

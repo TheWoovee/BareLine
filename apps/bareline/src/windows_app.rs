@@ -5,13 +5,17 @@ mod extensions;
 mod instance;
 mod language;
 mod launch;
+mod lifecycle;
 mod macros;
+mod performance;
+mod power;
 mod recovery;
 mod session;
 mod settings;
 mod shortcuts;
 mod toolbar;
 mod update;
+mod utilities;
 mod views;
 mod watch;
 mod workspace_panels;
@@ -82,6 +86,10 @@ struct Shell {
     recovery_root: Option<PathBuf>,
     shortcuts: shortcuts::ShortcutsRuntime,
     recovery: recovery::RecoveryRuntime,
+    lifecycle: lifecycle::LifecycleRuntime,
+    performance: performance::PerformanceRuntime,
+    power: power::PowerRuntime,
+    utilities: utilities::UtilitiesRuntime,
 }
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut ledger = StartupLedger::default();
@@ -176,10 +184,23 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         recovery_root: launch.recovery_path.clone(),
         shortcuts: Default::default(),
         recovery: Default::default(),
+        lifecycle: Default::default(),
+        performance: Default::default(),
+        power: Default::default(),
+        utilities: Default::default(),
     };
+    shell.performance.configure(launch.performance.clone());
     shell.recovery.configure(launch.recovery_path.clone());
+    shell.macros.configure(
+        launch
+            .settings_path
+            .as_ref()
+            .and_then(|path| path.parent())
+            .map(|root| root.join("macros")),
+    );
     for (id, title) in [
-        ("recovery.open", "Open Recovery Folder"),
+        ("recovery.open", "Recovery Center"),
+        ("recovery.open_folder", "Open Recovery Folder"),
         ("recovery.restore_latest", "Restore Latest Recovery"),
         ("recovery.retry", "Retry Recovery"),
         ("recovery.save_as", "Save Recovered Document As"),
@@ -239,6 +260,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     extensions::register(&mut shell.app.commands);
     toolbar::register(&mut shell.app.commands);
     shortcuts::register(&mut shell.app.commands);
+    lifecycle::register(&mut shell.app.commands);
+    power::register(&mut shell.app.commands);
+    utilities::register(&mut shell.app.commands);
     compare::register(&mut shell.app.commands);
     views::register(&mut shell.app.commands);
     bareline_app::macros::register_commands(&mut shell.app.commands);
@@ -283,11 +307,16 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             self.shell.launch_pump();
             self.shell.session_pump(el);
             self.shell.recovery_pump(el);
+            self.shell.lifecycle_pump(el);
+            self.shell.performance_pump(el);
+            self.shell.power_pump();
+            self.shell.utilities_pump(el);
             self.shell.macros_pump(el);
             self.shell.panels_pump(el);
             self.shell.watch_pump(el);
             self.shell.language_pump(el);
             self.shell.extensions_pump(el);
+            self.shell.sync_contributions();
             self.shell.compare_pump(el);
             let update_status = self.shell.update.status.clone();
             self.shell.update.poll();
@@ -641,6 +670,8 @@ impl Shell {
             .annotate_context(&mut context, self.workspace.as_ref());
         self.panels.annotate_context(&mut context);
         self.toolbar.annotate_context(&mut context);
+        self.lifecycle
+            .annotate_context(&mut context, self.workspace.as_ref(), self.app.active);
         self.macros.annotate_context(&mut context);
         context
     }
@@ -692,8 +723,12 @@ impl Shell {
         if self.session.closing() {
             return;
         }
+        self.sync_contributions();
         self.record_acknowledged_inputs();
-        if self.settings_text_action(action) || self.shortcuts_action(action) {
+        if self.settings_text_action(action)
+            || self.shortcuts_action(action)
+            || (!self.palette.open && self.power_action(action))
+        {
             return;
         }
         if self.views_action(el, action) {
@@ -782,6 +817,15 @@ impl Shell {
         }
         match action {
             Action::Contributed(id) => {
+                if id.0 == "internal.dynamic.invoke" {
+                    if let Some(identity) = self.palette.take_dynamic_activation()
+                        && let Err(error) = self.extensions_invoke_contribution(identity)
+                        && let Some(workspace) = &mut self.workspace
+                    {
+                        workspace.message = Some(error);
+                    }
+                    return;
+                }
                 if id.0 == "file.transcode.resume" || id.0 == "file.transcode.cancel" {
                     if let Some(workspace) = &mut self.workspace {
                         if id.0.ends_with("cancel") {
@@ -817,7 +861,10 @@ impl Shell {
                     }
                     return;
                 }
-                if self.recovery_dispatch(el, id.0)
+                if self.lifecycle_dispatch(el, id.0)
+                    || self.recovery_dispatch(el, id.0)
+                    || self.utilities_dispatch(el, id.0)
+                    || self.power_dispatch(el, id.0)
                     || self.shortcuts_dispatch(el, id.0)
                     || self.toolbar_dispatch(el, id.0)
                     || self.compare_dispatch(el, id.0)
@@ -1047,8 +1094,8 @@ impl Shell {
                     } else {
                         match editor.selected_text() {
                             Ok(text) if !text.is_empty() => match platform.set_clipboard_text(&text) {
-                                Ok(()) if action == Action::Cut => editor.enqueue(Input::Insert(String::new())),
-                                Ok(()) => {}, Err(_) => editor.error = Some("Could not write text to the clipboard. Selection was preserved.".into()),
+                                Ok(()) if action == Action::Cut => { self.power.copied(&text); editor.enqueue(Input::Insert(String::new())); },
+                                Ok(()) => { self.power.copied(&text); }, Err(_) => editor.error = Some("Could not write text to the clipboard. Selection was preserved.".into()),
                             },
                             Ok(_) => {}, Err(message) => editor.error = Some(message.into()),
                         }
@@ -1166,7 +1213,10 @@ impl ApplicationHandler for Shell {
                 self.notify.clone(),
             )
         } {
-            Ok(provider) => self.accessibility = Some(provider),
+            Ok(mut provider) => {
+                provider.set_text_source(self.accessibility_text_source());
+                self.accessibility = Some(provider);
+            }
             Err(error) => {
                 self.fail(el, error);
                 return;
@@ -1198,11 +1248,18 @@ impl ApplicationHandler for Shell {
         {
             return;
         }
+        if matches!(
+            &event,
+            WindowEvent::ThemeChanged(_) | WindowEvent::Focused(true)
+        ) {
+            self.applied_settings = None;
+        }
         self.toolbar_refresh();
         let editor_bounds = self.editor_bounds();
         let editor_pointer = self.editor_pointer();
         if self.recovery_event(el, &event)
             || self.settings_keymap_event(el, &event)
+            || self.power_event(el, &event)
             || self.shortcuts_event(el, &event)
             || self.toolbar_event(el, &event)
             || self.settings_event(el, &event)
@@ -1878,8 +1935,23 @@ impl ApplicationHandler for Shell {
                 if self.renderer.is_none() {
                     self.ledger.record(StartupAction::CreateRenderer);
                     match self.platform.as_ref().unwrap().renderer(self.software) {
-                        Ok(r) => self.renderer = Some(r),
+                        Ok(r) => {
+                            bareline_diagnostics::set_renderer_state(if r.software {
+                                bareline_diagnostics::RendererState::Software
+                            } else {
+                                bareline_diagnostics::RendererState::Hardware
+                            });
+                            self.renderer = Some(r);
+                        }
                         Err(e) => {
+                            bareline_diagnostics::set_renderer_state(
+                                bareline_diagnostics::RendererState::Failed,
+                            );
+                            eprintln!(
+                                "event=backend_init_failed code={} software={}",
+                                e.code().0,
+                                self.software
+                            );
                             self.fail(el, e);
                             return;
                         }
@@ -1903,6 +1975,33 @@ impl ApplicationHandler for Shell {
                 if let Some(workspace) = &mut self.workspace {
                     workspace.theme = self.settings.ui_theme();
                     let effective = self.settings.effective();
+                    let detected: Vec<_> = (0..workspace.editors.len())
+                        .map(|index| {
+                            workspace
+                                .path(index)
+                                .map(bareline_syntax::Language::detect)
+                                .unwrap_or(bareline_syntax::Language::PlainText)
+                        })
+                        .collect();
+                    for (index, editor) in workspace.editors.iter_mut().enumerate() {
+                        let language = editor
+                            .language_override
+                            .or(editor.detected_language)
+                            .unwrap_or(detected[index]);
+                        let stable_id = bareline_syntax::catalog::CATALOG
+                            .iter()
+                            .find(|entry| entry.language == language)
+                            .map_or("text", |entry| entry.id);
+                        editor.syntax_preference = match effective.language_policy(stable_id).lexer
+                        {
+                            bareline_settings::LexerPreference::Primary => {
+                                bareline_syntax::LexerPreference::Lexilla
+                            }
+                            bareline_settings::LexerPreference::Native => {
+                                bareline_syntax::LexerPreference::Native
+                            }
+                        };
+                    }
                     if self
                         .applied_settings
                         .as_ref()
@@ -1966,6 +2065,12 @@ impl ApplicationHandler for Shell {
                         self.fail(el, format!("compare layout: {error:?}"));
                         return;
                     }
+                    self.recovery.draw(
+                        self.settings.ui_theme(),
+                        editor_bounds.width,
+                        editor_bounds.height,
+                        &mut operations,
+                    );
                     translate_operations(
                         &mut operations[editor_start + 1..],
                         editor_bounds.x,
@@ -2028,6 +2133,15 @@ impl ApplicationHandler for Shell {
                         }
                     }
                 }
+                if let Err(error) = self.power.draw(
+                    renderer,
+                    size.width as f32 / scale,
+                    size.height as f32 / scale,
+                    &mut operations,
+                ) {
+                    self.fail(el, format!("power editor layout: {error:?}"));
+                    return;
+                }
                 if let Err(error) = self.toolbar.draw(
                     renderer,
                     size.width as f32 / scale,
@@ -2078,9 +2192,19 @@ impl ApplicationHandler for Shell {
                 }
                 let result = renderer
                     .resize(size.width, size.height, scale)
-                    .and_then(|_| renderer.render(&operations));
+                    .and_then(|_| {
+                        let mut frame = renderer.begin_frame();
+                        frame.extend(&operations);
+                        frame.finish()
+                    });
+                let presented = matches!(&result, Ok(FrameStatus::Presented));
                 match result {
                     Ok(FrameStatus::Presented) => {
+                        bareline_diagnostics::set_renderer_state(if renderer.software {
+                            bareline_diagnostics::RendererState::Software
+                        } else {
+                            bareline_diagnostics::RendererState::Hardware
+                        });
                         self.frames += 1;
                         if !self.first_frame {
                             let micros = self.ledger.presented();
@@ -2097,6 +2221,15 @@ impl ApplicationHandler for Shell {
                                             micros,
                                             software: renderer.software,
                                         });
+                                        if let Some((code, software)) = renderer.take_init_failure()
+                                        {
+                                            let _ = log.event(
+                                                bareline_diagnostics::Event::BackendInitFailed {
+                                                    code,
+                                                    software,
+                                                },
+                                            );
+                                        }
                                         let _ = log.ledger(&self.ledger);
                                         self.log = Some(log);
                                     }
@@ -2114,15 +2247,30 @@ impl ApplicationHandler for Shell {
                             el.exit();
                         }
                     }
-                    Ok(FrameStatus::Recreate) => window.request_redraw(),
-                    Err(error) => self.fail(el, error),
+                    Ok(FrameStatus::Recreate) => {
+                        bareline_diagnostics::set_renderer_state(
+                            bareline_diagnostics::RendererState::Recreating,
+                        );
+                        window.request_redraw();
+                    }
+                    Err(error) => {
+                        bareline_diagnostics::set_renderer_state(
+                            bareline_diagnostics::RendererState::Failed,
+                        );
+                        self.fail(el, error);
+                    }
+                }
+                if presented {
+                    self.performance_frame();
                 }
                 let accessible = self.accessibility_snapshot(
                     (size.width as f32 / scale) as f64,
                     (size.height as f32 / scale) as f64,
                     scale as f64,
                 );
+                let text_source = self.accessibility_text_source();
                 if let Some(provider) = &mut self.accessibility {
+                    provider.set_text_source(text_source);
                     provider.update(accessible);
                 }
                 if let Some(platform) = &self.platform
@@ -2137,6 +2285,7 @@ impl ApplicationHandler for Shell {
                 if self.first_frame
                     && !self.smoke
                     && !self.perf
+                    && !self.performance.enabled()
                     && !self.session.startup_pending()
                     && self.startup_paths.is_empty()
                     && self.workspace.as_ref().is_some_and(|w| !w.io_busy())
@@ -2147,10 +2296,12 @@ impl ApplicationHandler for Shell {
                 self.session_first_frame(el);
                 self.recovery_pump(el);
                 self.instance_pump(el);
+                self.performance_pump(el);
                 if self.first_frame
                     && !self.session.startup_pending()
                     && !self.smoke
                     && self.prototype.is_none()
+                    && !self.performance.enabled()
                     && self.workspace.is_none()
                 {
                     if self.startup_paths.is_empty() {
@@ -2190,7 +2341,9 @@ fn translate_operations(ops: &mut [bareline_renderer::DrawOp], dx: f32, dy: f32)
             | DrawOp::Stroke(r, _, _)
             | DrawOp::FillRounded(r, _, _)
             | DrawOp::StrokeRounded(r, _, _, _)
-            | DrawOp::PushClip(r) => {
+            | DrawOp::PushClip(r)
+            | DrawOp::PushLayer { bounds: r, .. }
+            | DrawOp::Image { destination: r, .. } => {
                 r.x += dx;
                 r.y += dy;
             }
@@ -2204,7 +2357,37 @@ fn translate_operations(ops: &mut [bareline_renderer::DrawOp], dx: f32, dy: f32)
                 from.y += dy;
                 to.y += dy;
             }
-            DrawOp::PopClip => {}
+            DrawOp::PopClip | DrawOp::PopLayer => {}
         }
+    }
+}
+
+impl Shell {
+    fn sync_contributions(&mut self) {
+        let records = self.extensions.contributions();
+        if self.app.commands.contributions.entries().eq(records.iter()) {
+            return;
+        }
+        let mut owners = std::collections::BTreeMap::<
+            String,
+            Vec<bareline_commands::DynamicCommandRecord>,
+        >::new();
+        for record in records {
+            owners
+                .entry(record.identity.owner.clone())
+                .or_default()
+                .push(record);
+        }
+        let mut next = bareline_commands::DynamicContributions::default();
+        for (owner, records) in owners {
+            if let Err(error) = next.replace_owner(&owner, records) {
+                self.app.commands.contributions = Default::default();
+                if let Some(workspace) = &mut self.workspace {
+                    workspace.message = Some(error.into());
+                }
+                return;
+            }
+        }
+        self.app.commands.contributions = next;
     }
 }

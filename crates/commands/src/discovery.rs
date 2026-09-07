@@ -48,6 +48,7 @@ pub enum DispatchError {
 }
 #[derive(Clone, Debug)]
 pub struct PaletteEntry {
+    pub dynamic: Option<crate::DynamicCommandIdentity>,
     pub id: CommandId,
     pub title: String,
     pub menu_path: String,
@@ -139,6 +140,7 @@ impl CommandRegistry {
             }
             if found {
                 matches.push(PaletteEntry {
+                    dynamic: None,
                     id: spec.id,
                     accessible_name: metadata.accessible_name.unwrap_or_else(|| title.clone()),
                     title,
@@ -148,6 +150,46 @@ impl CommandRegistry {
                     score,
                 });
             }
+        }
+        for record in self.contributions.entries() {
+            let haystack = format!(
+                "{} {} {}",
+                record.title, record.identity.owner, record.identity.id
+            )
+            .to_lowercase();
+            if !terms
+                .iter()
+                .all(|term| haystack.contains(term) || is_subsequence(term, &haystack))
+            {
+                continue;
+            }
+            let score = terms
+                .iter()
+                .map(|term| {
+                    haystack
+                        .find(term)
+                        .map_or(1, |position| 1000usize.saturating_sub(position))
+                })
+                .sum();
+            matches.push(PaletteEntry {
+                dynamic: Some(record.identity.clone()),
+                id: CommandId("internal.dynamic.invoke"),
+                title: record.title.clone(),
+                accessible_name: record.title.clone(),
+                menu_path: format!("Extensions > {}", record.identity.owner),
+                shortcut: String::new(),
+                score,
+                state: CommandState {
+                    enabled: record.enabled,
+                    disabled_reason: (!record.enabled).then(|| {
+                        record
+                            .disabled_reason
+                            .clone()
+                            .unwrap_or_else(|| "Extension command unavailable".into())
+                    }),
+                    ..Default::default()
+                },
+            });
         }
         matches.sort_by(|a, b| {
             b.score

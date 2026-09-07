@@ -47,7 +47,11 @@ pub struct PaneGeometry {
     pub splitter: Option<Rect>,
 }
 
+#[derive(Clone)]
 pub struct ViewController {
+    pub tab_colors: std::collections::BTreeMap<u64, u32>,
+    pub vertical_tabs: bool,
+    pub tab_sort: String,
     tabs: Vec<SessionTab>,
     pub orientation: Orientation,
     pub ratio: f64,
@@ -75,6 +79,17 @@ impl ViewController {
         controller.active_pane = manifest.layout.active_pane;
         controller.active = manifest.layout.active_tabs;
         controller.sync_horizontal = manifest.layout.sync_horizontal;
+        controller.tab_colors = manifest
+            .layout
+            .tab_colors
+            .iter()
+            .filter(|(id, color)| {
+                manifest.tabs.iter().any(|tab| tab.id == **id) && **color <= 0xffffff
+            })
+            .map(|(id, color)| (*id, *color))
+            .collect();
+        controller.vertical_tabs = manifest.layout.vertical_tabs;
+        controller.tab_sort = manifest.layout.tab_sort.clone();
         controller.sync_vertical = manifest.layout.sync_vertical;
         controller.repair_active();
         controller.mru.clear();
@@ -122,6 +137,9 @@ impl ViewController {
             .ok_or(ViewError::IdentityExhausted)?;
         let split = tabs.iter().any(|t| t.view.split == 1);
         let mut controller = Self {
+            tab_colors: Default::default(),
+            vertical_tabs: false,
+            tab_sort: "manual".into(),
             tabs,
             orientation: Orientation::Vertical,
             ratio: 0.5,
@@ -145,6 +163,81 @@ impl ViewController {
     pub fn tabs(&self) -> &[SessionTab] {
         &self.tabs
     }
+    pub fn retain_documents(&mut self, live: &[u64]) {
+        self.tabs.retain(|tab| live.contains(&tab.document_id));
+        self.mru
+            .retain(|id| self.tabs.iter().any(|tab| tab.id == *id));
+        self.tab_colors
+            .retain(|id, _| self.tabs.iter().any(|tab| tab.id == *id));
+        self.repair_active();
+    }
+    pub fn pin(&mut self, id: u64, pinned: bool) -> Result<(), ViewError> {
+        self.tabs
+            .iter_mut()
+            .find(|tab| tab.id == id)
+            .ok_or(ViewError::Missing)?
+            .pinned = pinned;
+        self.tabs.sort_by_key(|tab| !tab.pinned);
+        Ok(())
+    }
+    pub fn color(&mut self, id: u64, color: Option<u32>) -> Result<(), ViewError> {
+        if self.tab(id).is_none() || color.is_some_and(|color| color > 0xffffff) {
+            return Err(ViewError::InvalidState);
+        }
+        if let Some(color) = color {
+            self.tab_colors.insert(id, color);
+        } else {
+            self.tab_colors.remove(&id);
+        }
+        Ok(())
+    }
+    pub fn sort_by_label(&mut self, labels: &[(u64, String)], descending: bool) {
+        let labels: std::collections::HashMap<_,_> = labels.iter().map(|(id,label)|(*id,label.to_lowercase())).collect();
+        self.tabs.sort_by(|a,b|(!a.pinned).cmp(&(!b.pinned)).then_with(||{
+            let a=labels.get(&a.document_id).map(String::as_str).unwrap_or("");
+            let b=labels.get(&b.document_id).map(String::as_str).unwrap_or("");
+            if descending {b.cmp(a)} else {a.cmp(b)}
+        }));
+        self.tab_sort=if descending {"name_descending"} else {"name"}.into();
+    }
+    pub fn move_to_pane(
+        &mut self,
+        id: u64,
+        pane: u32,
+        before: Option<u64>,
+    ) -> Result<(), ViewError> {
+        if pane > 1 {
+            return Err(ViewError::InvalidPane);
+        }
+        let source = self.tab(id).ok_or(ViewError::Missing)?;
+        if let Some(target) = before.and_then(|id| self.tab(id)) {
+            if source.pinned != target.pinned {
+                return Err(ViewError::PinnedBoundary);
+            }
+            if target.view.split != pane {
+                return Err(ViewError::InvalidPane);
+            }
+        }
+        let old = source.view.split;
+        self.tabs
+            .iter_mut()
+            .find(|tab| tab.id == id)
+            .unwrap()
+            .view
+            .split = pane;
+        if let Err(error) = self.reorder(id, before) {
+            self.tabs
+                .iter_mut()
+                .find(|tab| tab.id == id)
+                .unwrap()
+                .view
+                .split = old;
+            return Err(error);
+        }
+        self.split = self.tabs.iter().any(|tab| tab.view.split == 1);
+        self.repair_active();
+        self.activate(id)
+    }
     /// Attach a newly opened document identity to the active pane. The owner has
     /// already created the document service; this allocates view metadata only.
     pub fn add_document(&mut self, document_id: u64) -> Result<u64, ViewError> {
@@ -167,6 +260,14 @@ impl ViewController {
     }
     pub fn tab(&self, id: u64) -> Option<&SessionTab> {
         self.tabs.iter().find(|t| t.id == id)
+    }
+    pub fn assign_document(&mut self, id: u64, document_id: u64) -> Result<(), ViewError> {
+        self.tabs
+            .iter_mut()
+            .find(|tab| tab.id == id)
+            .ok_or(ViewError::Missing)?
+            .document_id = document_id;
+        Ok(())
     }
     pub fn active_pane(&self) -> u32 {
         self.active_pane
@@ -229,6 +330,9 @@ impl ViewController {
             self.tabs.len()
         };
         self.tabs.insert(insertion, tab);
+        if let Some(color) = self.tab_colors.get(&id).copied() {
+            self.tab_colors.insert(new_id, color);
+        }
         self.split = true;
         self.activate(new_id)?;
         Ok(new_id)
@@ -262,6 +366,7 @@ impl ViewController {
             return Err(ViewError::LastDirtyReference);
         }
         self.tabs.retain(|t| t.id != id);
+        self.tab_colors.remove(&id);
         self.mru.retain(|seen| *seen != id);
         self.repair_active();
         if self.active[0].is_none() || self.active[1].is_none() {
@@ -490,6 +595,9 @@ impl ViewController {
     pub fn write_session(&self, manifest: &mut SessionManifest) {
         self.write_tabs(manifest);
         manifest.layout = SessionLayout {
+            tab_colors: self.tab_colors.clone(),
+            vertical_tabs: self.vertical_tabs,
+            tab_sort: self.tab_sort.clone(),
             split: self.split,
             orientation: match self.orientation {
                 Orientation::Vertical => SplitOrientation::Vertical,
@@ -687,6 +795,21 @@ pub struct AlignmentMap {
     blocks: Vec<IndexedBlock>,
 }
 impl AlignmentMap {
+    /// Insert view-only rows before each logical line; document offsets are unchanged.
+    pub fn spacers(&self, side: usize) -> Vec<(u64, u64)> {
+        self.blocks
+            .iter()
+            .filter_map(|entry| {
+                let range = if side == 0 {
+                    &entry.block.left
+                } else {
+                    &entry.block.right
+                };
+                let count = entry.height - (range.end - range.start);
+                (count > 0).then_some((range.end, count))
+            })
+            .collect()
+    }
     pub fn new(blocks: Vec<AlignmentBlock>) -> Result<Self, ViewError> {
         if blocks.len() > 100_000 {
             return Err(ViewError::InvalidState);

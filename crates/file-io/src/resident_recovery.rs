@@ -41,6 +41,7 @@ pub struct ResidentRecovery {
     root: PathBuf,
     platform: Arc<dyn LocalFileSystem>,
     encoding: Option<ResidentEncoding>,
+    original_path: Option<PathBuf>,
     bytes: Budget,
     notify: Arc<dyn Fn() + Send + Sync>,
     previous: Vec<PagedRecovery>,
@@ -58,6 +59,7 @@ impl ResidentRecovery {
         root: PathBuf,
         platform: Arc<dyn LocalFileSystem>,
         encoding: Option<ResidentEncoding>,
+        original_path: Option<PathBuf>,
         bytes: Budget,
         notify: Arc<dyn Fn() + Send + Sync>,
     ) -> Self {
@@ -65,6 +67,7 @@ impl ResidentRecovery {
             root,
             platform,
             encoding,
+            original_path,
             bytes,
             notify,
             previous: Vec::new(),
@@ -83,6 +86,9 @@ impl ResidentRecovery {
             .lock()
             .map(|state| state.clone())
             .unwrap_or_default()
+    }
+    pub fn set_original_path(&mut self, path: Option<PathBuf>) {
+        self.original_path = path;
     }
     pub fn retry(&mut self) {
         self.captured = None;
@@ -210,6 +216,7 @@ impl ResidentRecovery {
         let root = self.root.clone();
         let platform = self.platform.clone();
         let encoding = self.encoding.clone();
+        let original_path = self.original_path.clone();
         let bytes = self.bytes.clone();
         let notify = self.notify.clone();
         let status = self.status.clone();
@@ -297,6 +304,7 @@ impl ResidentRecovery {
                     let mut recovery = PagedRecovery::create(
                         &root,
                         store,
+                        original_path,
                         snapshot.clone(),
                         platform,
                         status,

@@ -18,6 +18,36 @@ struct MillionTree {
     loaded: Cell<bool>,
 }
 #[test]
+fn focus_loss_cancels_capture_even_when_popup_handles_and_target_was_disabled() {
+    let mut router = EventRouter {
+        popup_capture: Some(ViewId(1)),
+        pointer_capture: Some(ViewId(3)),
+    };
+    let targets = [1, 2, 3].map(|id| RouteTarget {
+        id: ViewId(id),
+        parent: None,
+        bounds: rect(0.0, 0.0, 20.0, 20.0),
+        enabled: id != 3,
+    });
+    let mut visited = Vec::new();
+    let result = router.route(
+        UiEvent::Focus(false),
+        Some(ViewId(2)),
+        &targets,
+        |id, event| {
+            assert!(matches!(event, UiEvent::Focus(false)));
+            visited.push(id);
+            DispatchResult {
+                handled: true,
+                invalidated: None,
+            }
+        },
+    );
+    assert_eq!(visited, [ViewId(1), ViewId(2), ViewId(3)]);
+    assert!(result.handled);
+    assert_eq!(router.pointer_capture, None);
+}
+#[test]
 fn discovered_tree_children_refresh_expansion_and_prune_removed_descendants() {
     let source = MillionTree {
         reads: Cell::new(0),

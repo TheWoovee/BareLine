@@ -25,6 +25,7 @@ impl ManifestBuilder {
                 maximum_protocol: PROTOCOL_VERSION,
                 entry_component: entry.into(),
                 commands: vec![],
+                background_commands: vec![],
                 panels: vec![],
                 capabilities: vec![],
             },

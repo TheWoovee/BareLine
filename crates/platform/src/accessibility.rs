@@ -52,13 +52,44 @@ pub struct AccessibilitySnapshot {
     pub focus: u64,
     pub nodes: Vec<AccessibilityNode>,
     pub text: Option<AccessibilityText>,
+    pub text_context: Option<AccessibilityTextContext>,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AccessibilityTextContext {
+    /// Identifies the immutable source used for this selection and viewport.
+    pub source_identity: (u64, u64),
+    pub selection: (usize, usize),
+    /// Preedit is inserted at the selection in the provider's virtual text view;
+    /// it never changes the committed document or its canonical offsets.
+    pub composition: Option<String>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AccessibilityAction {
     Focus(u64),
     Invoke(u64),
     SetValue { id: u64, value: String },
-    SetSelection { anchor: usize, caret: usize },
+    SetSelection { source_identity: (u64, u64), anchor: usize, caret: usize },
+    /// Absolute UTF-8 text position; the UI owner requests a bounded viewport.
+    ScrollToText { source_identity: (u64, u64), offset: usize },
+}
+
+/// A read never waits for source I/O. Pending work is bounded by the source owner
+/// and wakes the UI when ready. Positions address valid UTF-8 text, not raw bytes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AccessibleRead {
+    Ready { start: usize, text: String },
+    Pending,
+    Unavailable,
+}
+pub trait AccessibilityTextSource: Send + Sync {
+    /// Globally unique content state; ranges become unavailable on any revision
+    /// or document switch. Undo restores content but still changes revision.
+    fn identity(&self) -> (u64, u64);
+    fn len(&self) -> usize;
+    fn is_empty(&self) -> bool { self.len() == 0 }
+    /// Return at most `limit` bytes, aligned inward to complete UTF-8 code points.
+    /// `limit` is never greater than 64 KiB. No full line/index scan is permitted.
+    fn read(&self, start: usize, limit: usize) -> AccessibleRead;
 }
 impl AccessibilitySnapshot {
     /// Validate before passing an external tree to the native provider.

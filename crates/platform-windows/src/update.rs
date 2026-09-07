@@ -278,35 +278,25 @@ fn rename_update_handle_inner(
     replace: bool,
 ) -> std::io::Result<()> {
     use std::os::windows::ffi::OsStrExt;
+    use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
     use windows::Win32::Storage::FileSystem::*;
     if !destination.is_absolute() {
         return Err(std::io::Error::other("absolute destination required"));
     }
-    let name: Vec<u16> = destination.as_os_str().encode_wide().collect();
+    let parent = destination.parent().ok_or_else(|| std::io::Error::other("destination parent required"))?;
+    let directory = std::fs::OpenOptions::new()
+        .access_mode(FILE_READ_ATTRIBUTES.0)
+        .share_mode(FILE_SHARE_READ.0 | FILE_SHARE_WRITE.0)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS.0 | FILE_FLAG_OPEN_REPARSE_POINT.0)
+        .open(parent)?;
+    if directory.metadata()?.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0 {
+        return Err(std::io::Error::other("reparse destination parent refused"));
+    }
+    let name: Vec<u16> = destination.file_name().ok_or_else(|| std::io::Error::other("destination filename required"))?.encode_wide().collect();
     if name.is_empty() || name.contains(&0) || name.len() > 32767 {
         return Err(std::io::Error::other("invalid destination"));
     }
-    let offset = std::mem::offset_of!(FILE_RENAME_INFO, FileName);
-    let bytes = offset + name.len() * 2;
-    // u64 allocation provides the Windows structure's required alignment.
-    let mut storage = vec![0_u64; bytes.div_ceil(8)];
-    unsafe {
-        let info = storage.as_mut_ptr().cast::<FILE_RENAME_INFO>();
-        (*info).Anonymous.ReplaceIfExists = replace;
-        (*info).FileNameLength = (name.len() * 2) as u32;
-        std::ptr::copy_nonoverlapping(
-            name.as_ptr(),
-            storage.as_mut_ptr().cast::<u8>().add(offset).cast::<u16>(),
-            name.len(),
-        );
-        SetFileInformationByHandle(
-            HANDLE(file.as_raw_handle()),
-            FileRenameInfo,
-            info.cast(),
-            bytes as u32,
-        )
-        .map_err(std::io::Error::other)
-    }
+    crate::rename::rename(file, &directory, &name, replace)
 }
 
 /// Preserve exact old bytes in an unused flushed backup, then atomically rename
@@ -485,6 +475,56 @@ pub struct PreparedUpdate {
     pub directory: std::path::PathBuf,
     pub metadata_bytes: Vec<u8>,
     pub signature_text: String,
+}
+mod runtime;
+pub use runtime::*;
+pub struct ResolvedReleaseAuthority {
+    pub release_public_key: String,
+    pub publisher: String,
+    pub certificate: [u8;32],
+    pub minimum_metadata_version: u64,
+    pub catalog_public_key: Option<String>,
+}
+/// Optional offline root policy. A deployment opting in must supply a signed,
+/// nonexpired authority file; missing or revoked authority never falls back.
+pub fn resolve_release_authority(root: &std::path::Path, embedded_key: &str, embedded_publisher: &str, embedded_floor: u64, now: u64) -> std::io::Result<ResolvedReleaseAuthority> {
+    use std::io::{Read, Write};
+    let mut key = embedded_key.to_owned(); let mut publisher = embedded_publisher.to_owned(); let mut floor = embedded_floor; let mut catalog_public_key=None;
+    if let Some(root_key) = option_env!("BARELINE_OFFLINE_ROOT_PUBLIC_KEY") {
+        let _lock = lock_update_installation(root)?;
+        let read = |name: &str, limit: u64| -> std::io::Result<Vec<u8>> { let mut b=Vec::new(); open_update_read_file(&root.join(name))?.take(limit+1).read_to_end(&mut b)?; if b.len() as u64 > limit {return Err(std::io::Error::other("authority limit"));} Ok(b) };
+        let mut root_floor = option_env!("BARELINE_ROOT_VERSION_FLOOR").ok_or_else(|| std::io::Error::other("root version floor missing"))?.parse::<u64>().map_err(std::io::Error::other)?;
+        let mut active_root=root_key.to_owned();
+        let mut lineage=vec![active_root.clone()];
+        if root.join("bareline.root-transitions.json").try_exists()? {
+            let (next,version,keys)=bareline_distribution::trust::verify_root_chain(&read("bareline.root-transitions.json",262144)?,root_key,now).map_err(|e|std::io::Error::other(format!("root transition: {e:?}")))?;
+            active_root=next; lineage=keys; root_floor=root_floor.max(version);
+        }
+        let key_ledger=root.join("bareline.root-keys");
+        let mut accepted_key=None;
+        if key_ledger.try_exists()? { let bytes=read("bareline.root-keys",65536)?; for old in std::str::from_utf8(&bytes).map_err(std::io::Error::other)?.lines() { if !lineage.iter().any(|k|k==old) {return Err(std::io::Error::other("root lineage rollback"));} accepted_key=Some(old.to_owned()); } }
+        let ledger = root.join("bareline.root-versions");
+        if ledger.try_exists()? { let bytes=read("bareline.root-versions",65536)?; for line in std::str::from_utf8(&bytes).map_err(std::io::Error::other)?.lines() { root_floor=root_floor.max(line.parse::<u64>().map_err(std::io::Error::other)?); } }
+        let bytes=read("bareline.release-authority.json",16384)?; let signature=read("bareline.release-authority.minisig",8192)?;
+        let authority=bareline_distribution::trust::verify_authority(&bytes,std::str::from_utf8(&signature).map_err(std::io::Error::other)?,&active_root,root_floor,now).map_err(|e|std::io::Error::other(format!("release authority: {e:?}")))?;
+        if accepted_key.as_deref()!=Some(active_root.as_str()) {
+            use std::os::windows::fs::{OpenOptionsExt,MetadataExt};
+            let mut out=std::fs::OpenOptions::new().create(true).append(true).share_mode(0).custom_flags(0x00200000).open(&key_ledger)?;
+            if out.metadata()?.file_attributes() & 0x400 != 0 {return Err(std::io::Error::other("reparse root key ledger"));}
+            writeln!(out,"{active_root}")?; out.sync_all()?;
+        }
+        if authority.root_version > root_floor || !ledger.exists() {
+            use std::os::windows::fs::OpenOptionsExt;
+            let mut out=std::fs::OpenOptions::new().create(true).append(true).share_mode(0).custom_flags(0x00200000).open(&ledger)?;
+            use std::os::windows::fs::MetadataExt;
+            if out.metadata()?.file_attributes() & 0x400 != 0 {return Err(std::io::Error::other("reparse root ledger"));}
+            writeln!(out,"{}",authority.root_version)?; out.sync_all()?;
+        }
+        key=authority.release_public_key; publisher=authority.publisher_certificate_sha256; floor=floor.max(authority.minimum_metadata_version); catalog_public_key=Some(authority.catalog_public_key);
+    }
+    if publisher.len()!=64 || !publisher.is_ascii() { return Err(std::io::Error::other("publisher fingerprint")); }
+    let mut certificate=[0;32]; for (i,b) in certificate.iter_mut().enumerate() { *b=u8::from_str_radix(&publisher[i*2..i*2+2],16).map_err(std::io::Error::other)?; }
+    Ok(ResolvedReleaseAuthority { release_public_key:key,publisher,certificate,minimum_metadata_version:floor,catalog_public_key })
 }
 
 /// Transfer authenticated bytes to fixed helper inputs, never trusting metadata paths.

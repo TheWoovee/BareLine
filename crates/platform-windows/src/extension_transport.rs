@@ -341,6 +341,7 @@ pub struct HostLaunch<'a> {
     pub component: &'a std::path::Path,
     pub component_sha256: [u8; 32],
     pub invocation: &'a bareline_extensions_protocol::Invocation,
+    pub budget: bareline_extensions_protocol::ExecutionBudget,
 }
 /// Synchronous worker entry. A separate watchdog owns the Job Object and kills the
 /// entire tree on cancellation/deadline, including compilation or blocked WASI.
@@ -417,12 +418,16 @@ fn run_host_process(
                 .map(|b| format!("{b:02x}"))
                 .collect::<String>(),
         )
+        .arg(match launch.budget {
+            ExecutionBudget::Interactive => "interactive",
+            ExecutionBudget::Background => "background",
+        })
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     let (mut child, mut guard) = crate::WindowsProcessLauncher.spawn(&mut command)?;
     let (stop_tx, stop_rx) = mpsc::channel();
-    let deadline = Instant::now() + Duration::from_millis(INTERACTIVE_TIMEOUT_MS);
+    let deadline = Instant::now() + Duration::from_millis(launch.budget.timeout_ms());
     let watchdog = std::thread::spawn(move || {
         loop {
             if cancelled.load(Ordering::Acquire) || Instant::now() >= deadline {
@@ -437,6 +442,7 @@ fn run_host_process(
     });
     let outcome = (|| {
         let mut pipe = server.accept(child.id(), Duration::from_millis(INTERACTIVE_TIMEOUT_MS))?;
+        pipe.set_timeout(Duration::from_millis(launch.budget.timeout_ms()));
         let context =
             encode(launch.invocation).map_err(|_| io::Error::other("invocation encoding"))?;
         pipe.write_all(&(context.len() as u32).to_le_bytes())?;

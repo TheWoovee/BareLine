@@ -187,6 +187,13 @@ pub struct DiskTranscoder {
     preview_published: bool,
 }
 impl DiskTranscoder {
+    /// A continuation segment has no encoding signature, even when its first scalar is U+FEFF.
+    pub fn continuation(input: FileInput, platform: Arc<dyn LocalFileSystem>, cache: &Path, options: DiskOptions, budget: Budget, cancellation: Cancellation) -> Result<Self, DiskError> {
+        let mut job = Self::new(input, platform, cache, options, budget, cancellation)?;
+        job.decoder.start = false;
+        job.state.bom = false;
+        Ok(job)
+    }
     pub fn new(
         input: FileInput,
         platform: Arc<dyn LocalFileSystem>,
@@ -448,6 +455,20 @@ struct RetainedStore {
     sealed_hashes: [[u8; 32]; 3],
 }
 impl DiskDecoded {
+    /// Restart at a final opaque decoder unit so a split scalar can complete on append.
+    /// Coordinates are relative to this immutable segment's raw and UTF-8 domains.
+    pub fn tail_boundary(&self) -> Result<(u64, u64), DiskError> {
+        let mut map = File::open(self.provenance_path())?;
+        let length = map.metadata()?.len();
+        if length < 8 || (length - 8) % RECORD_BYTES != 0 { return Err(DiskError::Failed); }
+        if length == 8 { return Ok((self.raw_len, self.text_len)); }
+        map.seek(SeekFrom::End(-(RECORD_BYTES as i64)))?;
+        let mut bytes = [0; 49]; map.read_exact(&mut bytes)?;
+        let number = |at| u64::from_le_bytes(bytes[at..at + 8].try_into().unwrap());
+        if bytes[48] == 1 && number(24) == self.raw_len {
+            Ok((number(16), number(0)))
+        } else { Ok((self.raw_len, self.text_len)) }
+    }
     pub fn sealed_text_reader(&self, cancel: &Cancellation) -> Result<SealedStoreRead, DiskError> {
         let guards = self.lock_sealed()?;
         self.validate_sealed(cancel)?;

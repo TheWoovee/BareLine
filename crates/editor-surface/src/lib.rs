@@ -104,6 +104,11 @@ pub struct EditorSurface {
     pending: Option<Pending>,
     queue: VecDeque<Input>,
     acknowledged: VecDeque<Input>,
+    acknowledged_commands: VecDeque<(String, BTreeMap<String, String>)>,
+    pending_command: Option<(String, BTreeMap<String, String>)>,
+    manual_hidden: Vec<std::ops::RangeInclusive<usize>>,
+    scroll_x: f64,
+    power_rectangle: Option<power::Rectangle>,
     notify: Arc<dyn Fn() + Send + Sync>,
     layouts: BTreeMap<usize, LineLayout>,
     layout_revision: Option<u64>,
@@ -114,8 +119,12 @@ pub struct EditorSurface {
     pub bookmarks: power::Bookmarks,
     pub language: bareline_syntax::Language,
     pub language_override: Option<bareline_syntax::Language>,
+    pub detected_language: Option<bareline_syntax::Language>,
+    pub syntax_preference: bareline_syntax::LexerPreference,
     pub udl: Option<Arc<bareline_syntax::udl::Definition>>,
     pub smart_typing: bool,
+    pub smart_pairs: bool,
+    pub smart_indent: bool,
     typing_syntax: Option<bareline_syntax::SyntaxResult>,
     known_folds: Vec<bareline_syntax::folding::Fold>,
     fold_state: bareline_syntax::folding::FoldState,
@@ -170,6 +179,11 @@ impl EditorSurface {
             pending: None,
             queue: VecDeque::new(),
             acknowledged: VecDeque::new(),
+            acknowledged_commands: VecDeque::new(),
+            pending_command: None,
+            manual_hidden: Vec::new(),
+            scroll_x: 0.0,
+            power_rectangle: None,
             notify,
             layouts: BTreeMap::new(),
             layout_revision: None,
@@ -180,8 +194,12 @@ impl EditorSurface {
             bookmarks: power::Bookmarks::default(),
             language: bareline_syntax::Language::PlainText,
             language_override: None,
+            detected_language: None,
+            syntax_preference: bareline_syntax::LexerPreference::Lexilla,
             udl: None,
             smart_typing: true,
+            smart_pairs: true,
+            smart_indent: true,
             typing_syntax: None,
             known_folds: Vec::new(),
             fold_state: Default::default(),
@@ -271,7 +289,7 @@ impl EditorSurface {
             Some(first as u64..last as u64 + 1)
         }).collect();
         self.restore_folds(&lines);
-        self.known_folds.clear(); self.hidden_lines.clear(); self.fold_revision = None;
+        self.known_folds.clear(); self.refresh_hidden_lines(); self.fold_revision = None;
     }
     pub fn sync_fold_metadata_from(&mut self, other: &Self) {
         if !self.snapshot.same_document(&other.snapshot) || self.snapshot.revision != other.snapshot.revision || other.fold_revision.is_none() { return; }
@@ -306,6 +324,19 @@ impl EditorSurface {
                 self.hidden_lines.push(fold.header + 1..=fold.end);
             }
         }
+        self.hidden_lines.extend(self.manual_hidden.iter().cloned());
+        self.hidden_lines.sort_by_key(|range| *range.start());
+        let mut merged: Vec<std::ops::RangeInclusive<usize>> = Vec::new();
+        for range in self.hidden_lines.drain(..) {
+            if let Some(last) = merged.last_mut() {
+                if *range.start() <= last.end().saturating_add(1) {
+                    *last = *last.start()..=(*last.end()).max(*range.end());
+                    continue;
+                }
+            }
+            merged.push(range);
+        }
+        self.hidden_lines = merged;
         self.reveal_caret = false;
     }
     fn visual_line(&self, line: usize) -> usize {
@@ -356,8 +387,14 @@ impl EditorSurface {
         view.theme = self.theme;
         view.language = self.language;
         view.language_override = self.language_override;
+        view.detected_language = self.detected_language;
+        view.syntax_preference = self.syntax_preference;
         view.udl = self.udl.clone();
         view.smart_typing = self.smart_typing;
+        view.smart_pairs = self.smart_pairs;
+        view.smart_indent = self.smart_indent;
+        view.manual_hidden = self.manual_hidden.clone();
+        view.scroll_x = self.scroll_x;
         view.known_folds = self.known_folds.clone();
         view.fold_state = self.fold_state.clone();
         view.hidden_lines = self.hidden_lines.clone();
@@ -410,6 +447,7 @@ impl EditorSurface {
             .map_err(|error| format!("Selection unavailable: {error:?}"))?;
         self.selection = selections.primary();
         self.selections = selections;
+        self.power_rectangle = None;
         self.reveal_caret = true;
         Ok(())
     }
@@ -562,8 +600,8 @@ impl EditorSurface {
         self.service = Some(service);
         self.error = None;
     }
-    pub fn enable_recovery(&mut self, root: std::path::PathBuf, platform: Arc<dyn bareline_platform::LocalFileSystem>, encoding: Option<bareline_file_io::codecs::resident::ResidentEncoding>, bytes: bareline_document::Budget) {
-        if self.recovery.is_none() && self.snapshot.is_complete() { self.recovery = Some(bareline_file_io::resident_recovery::ResidentRecovery::new(root, platform, encoding, bytes, self.notify.clone())); }
+    pub fn enable_recovery(&mut self, root: std::path::PathBuf, platform: Arc<dyn bareline_platform::LocalFileSystem>, encoding: Option<bareline_file_io::codecs::resident::ResidentEncoding>, original_path: Option<std::path::PathBuf>, bytes: bareline_document::Budget) {
+        if let Some(recovery) = &mut self.recovery { recovery.set_original_path(original_path); } else if self.snapshot.is_complete() { self.recovery = Some(bareline_file_io::resident_recovery::ResidentRecovery::new(root, platform, encoding, original_path, bytes, self.notify.clone())); }
     }
     pub fn recovery_status(&self) -> bareline_file_io::paged_recovery::PagedRecoveryStatus { self.recovery.as_ref().map(|recovery|recovery.status()).unwrap_or_default() }
     pub fn retry_recovery(&mut self) { if let Some(recovery)=&mut self.recovery { recovery.retry(); } }
@@ -708,8 +746,10 @@ impl EditorSurface {
                     self.snapshot = completion.snapshot;
                     match completion.result {
                         Ok(_) => {
+                            if let Some(command) = self.pending_command.take() { self.acknowledge_command(command); }
                             self.restore_fold_anchors(&pending.folds_after);
                             if let Some(input) = pending.input.clone() { self.acknowledge(input); }
+                            self.power_rectangle = None;
                             self.selection = pending.after.primary();
                             self.selections = pending.after.clone();
                             self.bookmarks = pending.bookmarks_after.clone();
@@ -740,6 +780,7 @@ impl EditorSurface {
                             self.error = None;
                         }
                         Err(error) => {
+                            self.pending_command = None;
                             self.error = Some(format!("Edit was not applied: {error:?}"));
                             self.queue.clear();
                         }
@@ -749,6 +790,7 @@ impl EditorSurface {
                 Err(TryRecvError::Empty) => return false,
                 Err(TryRecvError::Disconnected) => {
                     self.pending = None;
+                    self.pending_command = None;
                     self.queue.clear();
                     self.error = Some("Document worker stopped.".into());
                     return true;
@@ -759,22 +801,26 @@ impl EditorSurface {
             let Some(input) = self.queue.pop_front() else {
                 break;
             };
+            if matches!(input, Input::SetCaret(..)) { self.power_rectangle = None; }
             let before = self.selection_set();
             let smart = self.smart_typing && self.language != bareline_syntax::Language::PlainText;
-            if smart && let Input::Insert(value) = &input && value.chars().count() == 1 {
+            if smart && self.smart_pairs && let Input::Insert(value) = &input && value.chars().count() == 1 {
                 if let Ok(Some(next)) = completion::overtype_closer(&self.snapshot, &before, value.chars().next().unwrap(), self.power_limits()) {
                     self.selection = next.primary(); self.selections = next;
                     self.acknowledge(input); changed = true; continue;
                 }
             }
             let mut history = HistoryMove::Edit;
+            let rectangle = self.power_rectangle;
             let operation = match &input {
-                Input::Insert(value) if smart && matches!(value.as_str(), "\n" | "\r\n" | "\r") => {
+                Input::Insert(value) if rectangle.is_some() => Some(power::rectangle_paste(&self.snapshot, rectangle.unwrap(), value, self.power_limits())),
+                Input::Backspace | Input::Delete if rectangle.is_some() => Some(power::rectangle_paste(&self.snapshot, rectangle.unwrap(), "", self.power_limits())),
+                Input::Insert(value) if smart && self.smart_indent && matches!(value.as_str(), "\n" | "\r\n" | "\r") => {
                     let inside_literal = self.typing_syntax.as_ref().filter(|s| s.is_current(&self.snapshot)).is_some_and(|s| s.spans.iter().any(|span| span.range.start.0 < self.selection.caret && self.selection.caret <= span.range.end.0 && matches!(span.kind, bareline_syntax::StyleKind::Comment | bareline_syntax::StyleKind::String)));
                     Some(completion::smart_newline(&self.snapshot, &before, if inside_literal { bareline_syntax::Language::PlainText } else { self.language }, self.power_limits()))
                 }
-                Input::Insert(value) if smart && value.chars().count() == 1 => Some(completion::smart_pair(&self.snapshot, &before, value.chars().next().unwrap(), self.language, self.typing_syntax.as_ref(), self.power_limits())),
-                Input::Backspace if smart => Some(completion::pair_backspace(&self.snapshot, &before, self.power_limits())),
+                Input::Insert(value) if smart && self.smart_pairs && value.chars().count() == 1 => Some(completion::smart_pair(&self.snapshot, &before, value.chars().next().unwrap(), self.language, self.typing_syntax.as_ref(), self.power_limits())),
+                Input::Backspace if smart && self.smart_pairs => Some(completion::pair_backspace(&self.snapshot, &before, self.power_limits())),
                 Input::Insert(value) => Some(power::replace(
                     &self.snapshot,
                     &before,
@@ -1035,7 +1081,7 @@ impl EditorSurface {
             let hit = backend.hit_test(
                 layout.id,
                 Point {
-                    x: p.x - LEFT,
+                    x: p.x - LEFT + self.scroll_x as f32,
                     y: (line.fract() * self.line_height() as f64) as f32,
                 },
             )?;
@@ -1096,7 +1142,7 @@ impl EditorSurface {
             }
         }
         if self.fold_revision.is_some_and(|r| r != self.snapshot.revision.0) {
-            self.known_folds.clear(); self.hidden_lines.clear(); self.fold_revision = None;
+            self.known_folds.clear(); self.refresh_hidden_lines(); self.fold_revision = None;
             self.folds_incomplete = true;
         }
         let body_height = (height - self.top() - STATUS_HEIGHT - self.bottom_inset).max(0.0);
@@ -1108,6 +1154,7 @@ impl EditorSurface {
         if self.reveal_caret {
             // Keyboard navigation into a collapsed body reveals its containing fold.
             if self.hidden_lines.iter().any(|range| range.contains(&caret_line)) {
+                self.manual_hidden.retain(|range| !range.contains(&caret_line));
                 for fold in &self.known_folds {
                     if fold.header < caret_line && caret_line <= fold.end { self.fold_state.collapsed.remove(&fold.header); }
                 }
@@ -1226,7 +1273,7 @@ impl EditorSurface {
                 if a < b {
                     for r in backend.range_rects(layout.id, a - start..b - start)? {
                         ops.push(DrawOp::Fill(
-                            rect(LEFT + r.x, y + r.y, r.width, r.height),
+                            rect(LEFT - self.scroll_x as f32 + r.x, y + r.y, r.width, r.height),
                             self.theme.ui.selection,
                         ));
                     }
@@ -1259,11 +1306,11 @@ impl EditorSurface {
                     {
                         ops.push(DrawOp::Line {
                             from: Point {
-                                x: LEFT + r.x,
+                                x: LEFT - self.scroll_x as f32 + r.x,
                                 y: y + r.y + r.height,
                             },
                             to: Point {
-                                x: LEFT + r.x + r.width,
+                                x: LEFT - self.scroll_x as f32 + r.x + r.width,
                                 y: y + r.y + r.height,
                             },
                             color: self.theme.ui.caret,
@@ -1311,13 +1358,13 @@ impl EditorSurface {
             };
             backend.set_styles(draw_id, &styles)?;
             ops.push(DrawOp::Layout {
-                origin: Point { x: LEFT, y },
+                origin: Point { x: LEFT - self.scroll_x as f32, y },
                 layout: draw_id,
                 color: self.theme.ui.text,
             });
             if number == caret_line && (start..=end).contains(&self.selection.caret) {
                 let r = backend.caret(draw_id, caret_offset)?;
-                let caret = rect(LEFT + r.x, y + r.y, r.width, r.height);
+                let caret = rect(LEFT - self.scroll_x as f32 + r.x, y + r.y, r.width, r.height);
                 ops.push(DrawOp::Fill(caret, self.theme.ui.caret));
                 caret_rect = Some(caret);
             }
@@ -1328,7 +1375,7 @@ impl EditorSurface {
                     }
                     let r = backend.caret(draw_id, selection.caret - start)?;
                     ops.push(DrawOp::Fill(
-                        rect(LEFT + r.x, y + r.y, r.width, r.height),
+                        rect(LEFT - self.scroll_x as f32 + r.x, y + r.y, r.width, r.height),
                         self.theme.ui.caret,
                     ));
                 }

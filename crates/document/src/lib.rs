@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Resident UTF-8 document core. All published bytes are owned and immutable.
 pub mod group;
+pub mod history;
+pub mod line_lookup;
 pub mod paged;
 pub mod service;
 pub mod source;
@@ -100,6 +102,8 @@ pub struct DocumentSnapshot {
     complete: bool,
 }
 impl DocumentSnapshot {
+    /// Opaque source token for validating queued external actions; forks have distinct identities.
+    pub fn identity_token(&self) -> (u64, u64) { (self.document_id, self.revision.0) }
     pub fn is_complete(&self) -> bool {
         self.complete
     }
@@ -183,6 +187,8 @@ struct History {
     after_state: ContentStateId,
     _undo_reservation: Reservation,
     group: Option<group::GroupTag>,
+    metadata: history::EditMetadata,
+    typing_insert: bool,
 }
 /// Validated, budget-reserved roots; dropping this token leaves the document unchanged.
 pub struct PreparedEdit {
@@ -194,6 +200,7 @@ pub struct PreparedEdit {
 pub struct Document {
     current: DocumentSnapshot,
     saved_state: ContentStateId,
+    history_policy: history::HistoryPolicy,
     undo: Vec<History>,
     redo: Vec<History>,
     bytes: Budget,
@@ -232,13 +239,29 @@ impl DocumentBuilder {
 impl Document {
     /// Share immutable text storage with a complete snapshot while assigning a fresh
     /// document and content identity. Future edits and undo histories are independent.
-    pub fn fork_from_snapshot(snapshot: &DocumentSnapshot, bytes: Budget, history: Budget) -> Result<Self, Error> {
-        if !snapshot.is_complete() { return Err(Error::IncompleteSource); }
+    pub fn fork_from_snapshot(
+        snapshot: &DocumentSnapshot,
+        bytes: Budget,
+        history: Budget,
+    ) -> Result<Self, Error> {
+        if !snapshot.is_complete() {
+            return Err(Error::IncompleteSource);
+        }
         let state = ContentStateId(unique());
         Ok(Self {
-            current: DocumentSnapshot { root: snapshot.root.clone(), revision: Revision(0),
-                content_state: state, document_id: unique(), complete: true },
-            saved_state: state, undo: Vec::new(), redo: Vec::new(), bytes, history,
+            current: DocumentSnapshot {
+                root: snapshot.root.clone(),
+                revision: Revision(0),
+                content_state: state,
+                document_id: unique(),
+                complete: true,
+            },
+            saved_state: state,
+            history_policy: history::HistoryPolicy::default(),
+            undo: Vec::new(),
+            redo: Vec::new(),
+            bytes,
+            history,
         })
     }
     /// Budgets are shared across all documents created by the application.
@@ -254,6 +277,7 @@ impl Document {
                 complete: true,
             },
             saved_state: state,
+            history_policy: history::HistoryPolicy::default(),
             undo: Vec::new(),
             redo: Vec::new(),
             bytes,
@@ -294,6 +318,92 @@ impl Document {
         }
         let prepared = self.prepare(transaction)?;
         self.commit_prepared(prepared)
+    }
+    pub fn apply_with_metadata(
+        &mut self,
+        transaction: EditTransaction,
+        metadata: history::EditMetadata,
+    ) -> Result<Revision, Error> {
+        let typing_insert = transaction.edits.len() == 1
+            && transaction.edits[0].range.is_empty()
+            && !transaction.edits[0].insert.is_empty()
+            && metadata.before.len() == 1
+            && metadata.after.len() == 1
+            && metadata.before[0].anchor == metadata.before[0].caret
+            && metadata.before[0].caret == transaction.edits[0].range.start
+            && metadata.after[0].anchor == metadata.after[0].caret
+            && metadata.after[0].caret.0
+                == transaction.edits[0]
+                    .range
+                    .start
+                    .0
+                    .saturating_add(transaction.edits[0].insert.len());
+        let mut prepared = self.prepare(transaction)?;
+        metadata.validate(
+            self.current.len(),
+            tree::summary(&prepared.entry.after).bytes,
+        )?;
+        for selection in &metadata.before {
+            if !self.current.is_boundary(selection.anchor)
+                || !self.current.is_boundary(selection.caret)
+            {
+                return Err(Error::InvalidBoundary);
+            }
+        }
+        for selection in &metadata.after {
+            if !tree::boundary(&prepared.entry.after, selection.anchor.0)
+                || !tree::boundary(&prepared.entry.after, selection.caret.0)
+            {
+                return Err(Error::InvalidBoundary);
+            }
+        }
+        let mut metadata_charge = self.history.reserve(
+            (metadata.before.len() + metadata.after.len())
+                * std::mem::size_of::<history::Selection>(),
+        )?;
+        prepared.entry._undo_reservation.bytes += metadata_charge.bytes;
+        metadata_charge.bytes = 0;
+        prepared.entry.metadata = metadata;
+        prepared.entry.typing_insert = typing_insert;
+        self.commit_prepared(prepared)
+    }
+    pub fn set_history_policy(&mut self, policy: history::HistoryPolicy) {
+        self.history_policy = policy;
+        self.trim_history();
+    }
+    fn trim_history(&mut self) {
+        let excess = self
+            .undo
+            .len()
+            .saturating_sub(self.history_policy.max_changes);
+        self.undo.drain(..excess);
+        let excess = self.redo.len().saturating_sub(
+            self.history_policy
+                .max_changes
+                .saturating_sub(self.undo.len()),
+        );
+        // The end is the next redo; discard the furthest future first.
+        self.redo.drain(..excess);
+    }
+    pub fn history_metadata(&self, undo: bool) -> Option<&history::EditMetadata> {
+        (if undo {
+            self.undo.last()
+        } else {
+            self.redo.last()
+        })
+        .map(|entry| &entry.metadata)
+    }
+    pub fn history_stats(&self) -> history::HistoryStats {
+        history::HistoryStats {
+            undo_changes: self.undo.len(),
+            redo_changes: self.redo.len(),
+            charged_payload_bytes: self
+                .undo
+                .iter()
+                .chain(&self.redo)
+                .map(|entry| entry._undo_reservation.bytes)
+                .sum(),
+        }
     }
     pub fn prepare(&self, mut transaction: EditTransaction) -> Result<PreparedEdit, Error> {
         if transaction.base_revision != self.current.revision {
@@ -345,6 +455,8 @@ impl Document {
                 after_state: state,
                 _undo_reservation: reservation,
                 group: None,
+                metadata: history::EditMetadata::default(),
+                typing_insert: false,
             },
         })
     }
@@ -364,12 +476,35 @@ impl Document {
             .map_err(|_| Error::BudgetExceeded)?;
         Ok(self.commit_prepared_unchecked(prepared))
     }
-    fn commit_prepared_unchecked(&mut self, prepared: PreparedEdit) -> Revision {
+    fn commit_prepared_unchecked(&mut self, mut prepared: PreparedEdit) -> Revision {
         self.redo.clear();
         self.current.root = prepared.entry.after.clone();
         self.current.content_state = prepared.entry.after_state;
         self.current.revision = prepared.revision;
-        self.undo.push(prepared.entry);
+        let merge = self.undo.last().is_some_and(|last| {
+            last.group.is_none()
+                && prepared.entry.group.is_none()
+                && last.typing_insert
+                && prepared.entry.typing_insert
+                && last.after_state == prepared.entry.before_state
+                && last.after_state != self.saved_state
+                && prepared
+                    .entry
+                    .metadata
+                    .follows(&last.metadata, self.history_policy.typing_interval_ms)
+        });
+        if merge {
+            let last = self.undo.last_mut().expect("checked history");
+            last.after = prepared.entry.after;
+            last.after_state = prepared.entry.after_state;
+            last.metadata.after = prepared.entry.metadata.after;
+            last.metadata.monotonic_ms = prepared.entry.metadata.monotonic_ms;
+            last._undo_reservation.bytes += prepared.entry._undo_reservation.bytes;
+            prepared.entry._undo_reservation.bytes = 0;
+        } else {
+            self.undo.push(prepared.entry);
+        }
+        self.trim_history();
         self.current.revision
     }
     pub fn undo(&mut self) -> Result<Revision, Error> {
@@ -377,7 +512,11 @@ impl Document {
             return Err(Error::LinkedUndoRequired);
         }
         let revision = self.next_revision()?;
-        let entry = self.undo.pop().ok_or(Error::EmptyHistory)?;
+        let mut entry = self.undo.pop().ok_or(Error::EmptyHistory)?;
+        entry.typing_insert = false;
+        if let Some(previous) = self.undo.last_mut() {
+            previous.typing_insert = false;
+        }
         self.current.root = entry.before.clone();
         self.current.content_state = entry.before_state;
         self.current.revision = revision;
@@ -389,7 +528,8 @@ impl Document {
             return Err(Error::LinkedUndoRequired);
         }
         let revision = self.next_revision()?;
-        let entry = self.redo.pop().ok_or(Error::EmptyHistory)?;
+        let mut entry = self.redo.pop().ok_or(Error::EmptyHistory)?;
+        entry.typing_insert = false;
         self.current.root = entry.after.clone();
         self.current.content_state = entry.after_state;
         self.current.revision = revision;

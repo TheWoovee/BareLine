@@ -231,6 +231,10 @@ extern "C" int bareline_lexilla_session_next(void *handle, const uint8_t *data, 
     if (!s.valid || start != static_cast<size_t>(s.next) || start > static_cast<size_t>(PTRDIFF_MAX) - size) return 1;
     // A failed/cancelled call may have changed opaque state, so it cannot resume.
     s.valid = false;
+    // Some upstream lexers retain private per-line structures. Bound their
+    // lifetime as well as IDocument windows; the owner uses verified fallback
+    // when this opaque-state budget is exhausted.
+    if (start + size > 8 * 1024 * 1024) return 5;
     try {
         std::vector<uint8_t> combined = s.previous; combined.insert(combined.end(), data, data + size);
         AbsoluteDocument doc(combined.data(), combined.size(), s.origin, s.firstLine, cancel, context);

@@ -14,6 +14,9 @@ pub struct Fold {
 #[derive(Default)]
 pub struct FoldAccumulator {
     open: Vec<(usize, i32)>,
+    native_open: Vec<(char, usize)>,
+    indent_open: Vec<(usize, usize)>,
+    indent_candidate: Option<(usize, usize)>,
     known: Vec<Fold>,
     next: usize,
 }
@@ -35,6 +38,7 @@ impl FoldAccumulator {
         }
         let eof = syntax.range.end.0 == snapshot.len();
         if let Some(levels) = &syntax.fold_levels {
+            self.native_open.clear();
             let first = snapshot
                 .line_at(syntax.range.start)
                 .map_err(|_| Error::InvalidRange)?;
@@ -82,14 +86,19 @@ impl FoldAccumulator {
                     )?;
                 }
             }
+        } else if syntax.indent_folding {
+            self.open.clear();
+            append_indent(snapshot, syntax, &mut self.indent_open, &mut self.indent_candidate, &mut self.known, limit)?;
         } else {
             // A fallback grammar cannot finish opaque primary-lexer headers.
             self.open.clear();
-            self.known.extend(folds(
+            append_native(
                 snapshot,
                 syntax,
-                limit.saturating_sub(self.known.len()),
-            )?);
+                &mut self.native_open,
+                &mut self.known,
+                limit,
+            )?;
         }
         self.known.sort_by_key(|fold| (fold.header, fold.level));
         self.next = syntax.range.end.0;
@@ -103,6 +112,11 @@ pub fn folds(
 ) -> Result<Vec<Fold>, Error> {
     if !syntax.is_current(snapshot) || syntax.status != Status::Complete {
         return Err(Error::StaleCheckpoint);
+    }
+    if syntax.fold_levels.is_none() && syntax.indent_folding {
+        let mut result = Vec::new();
+        append_indent(snapshot, syntax, &mut Vec::new(), &mut None, &mut result, max_folds)?;
+        return Ok(result);
     }
     if let Some(levels) = &syntax.fold_levels {
         let first_line = snapshot
@@ -123,11 +137,21 @@ pub fn folds(
             max_folds,
         );
     }
+    let mut stack = Vec::new();
+    let mut folds = Vec::new();
+    append_native(snapshot, syntax, &mut stack, &mut folds, max_folds)?;
+    Ok(folds)
+}
+fn append_native(
+    snapshot: &DocumentSnapshot,
+    syntax: &SyntaxResult,
+    stack: &mut Vec<(char, usize)>,
+    folds: &mut Vec<Fold>,
+    max_folds: usize,
+) -> Result<(), Error> {
     let text = snapshot
         .read(syntax.range.clone(), crate::MAX_REQUEST_BYTES)
         .map_err(|_| Error::InvalidRange)?;
-    let mut stack = Vec::new();
-    let mut folds = Vec::new();
     let mut span_index = 0;
     for (i, c) in text.char_indices() {
         let offset = syntax.range.start.0 + i;
@@ -139,20 +163,20 @@ pub fn folds(
         }) {
             continue;
         }
-        if c == '{' || c == '[' {
+        if let Some((_, close)) = syntax.fold_pairs.iter().find(|(open, _)| *open == c) {
             if stack.len() >= 1024 {
                 return Err(Error::BudgetExceeded);
             }
             stack.push((
-                c,
+                *close,
                 snapshot
                     .line_at(TextOffset(offset))
                     .map_err(|_| Error::InvalidRange)?,
             ));
-        } else if (c == '}' || c == ']')
-            && let Some((open, header)) = stack.pop()
+        } else if syntax.fold_pairs.iter().any(|(_, close)| *close == c)
+            && let Some((close, header)) = stack.pop()
         {
-            if (open == '{' && c != '}') || (open == '[' && c != ']') {
+            if close != c {
                 stack.clear();
                 continue;
             }
@@ -172,7 +196,40 @@ pub fn folds(
         }
     }
     folds.sort_by_key(|f| (f.header, f.level));
-    Ok(folds)
+    Ok(())
+}
+fn append_indent(snapshot: &DocumentSnapshot, syntax: &SyntaxResult, stack: &mut Vec<(usize, usize)>, candidate: &mut Option<(usize, usize)>, result: &mut Vec<Fold>, limit: usize) -> Result<(), Error> {
+    let text = snapshot.read(syntax.range.clone(), crate::MAX_REQUEST_BYTES).map_err(|_| Error::InvalidRange)?;
+    let mut start = 0;
+    let mut line = snapshot.line_at(syntax.range.start).map_err(|_| Error::InvalidRange)?;
+    let literal = |offset: usize| syntax.spans.get(syntax.spans.partition_point(|span| span.range.end.0 <= offset)).is_some_and(|span| span.range.start.0 <= offset && matches!(span.kind, StyleKind::String | StyleKind::Comment));
+    while start < text.len() {
+        let end = text[start..].find(['\r','\n']).map_or(text.len(), |offset| start+offset);
+        let content = &text[start..end];
+        let trim = content.trim_start_matches([' ','\t']);
+        if !trim.is_empty() && !literal(syntax.range.start.0 + end - trim.len()) {
+            let indentation = content[..content.len()-trim.len()].bytes().fold(0, |column,b| if b == b'\t' { (column/8+1)*8 } else { column+1 });
+            while stack.last().is_some_and(|(_,indent)| indentation <= *indent) {
+                let (header,_) = stack.pop().unwrap();
+                push_level_fold(result, header, line.saturating_sub(1), 0x400+stack.len() as i32,limit)?;
+            }
+            if let Some((header,indent)) = candidate.take() && indentation > indent {
+                if stack.len() >= 1024 { return Err(Error::BudgetExceeded); }
+                stack.push((header,indent));
+            }
+            let trimmed = content.trim_end();
+            if trimmed.ends_with(':') && !literal(syntax.range.start.0+start+trimmed.len()-1) { *candidate=Some((line,indentation)); }
+        }
+        start=end;
+        if text.as_bytes().get(start)==Some(&b'\r') { start+=1; }
+        if text.as_bytes().get(start)==Some(&b'\n') { start+=1; }
+        line+=1;
+    }
+    if syntax.range.end.0==snapshot.len() {
+        while let Some((header,_))=stack.pop() { push_level_fold(result,header,line.saturating_sub(1),0x400+stack.len() as i32,limit)?; }
+    }
+    result.sort_by_key(|fold|(fold.header,fold.level));
+    Ok(())
 }
 // Scintilla levels carry the current numeric nesting in the low 12 bits and
 // a header flag. Never infer a closed fold at a truncated window boundary.

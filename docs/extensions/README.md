@@ -63,3 +63,71 @@ A clean author walkthrough, signed first-party catalog publication and productio
 runtime distribution remain release acceptance tasks; no production keys or online
 activation are supplied by these scripts. Submit catalog additions through the
 owner-reviewed catalog repository only after release authorization.
+
+## PR-027 bounded command navigation
+
+The extension manager passes its multiline argument field verbatim as
+`Invocation.arguments`. Arguments are limited to 4096 bytes. Running a command
+uses the current document revision and permission generation; copying a tree
+cursor does not grant access to another document.
+
+`ext.json.tree` now scans a real structural page, with at most 64 KiB of input,
+256 node starts, and nesting depth 128 per invocation. It shows container and
+scalar start offsets. String tokens are labelled `string/key` because this view
+is a structural preview, not a full semantic validation result. Run
+`ext.json.validate` to validate the entire JSON grammar. A page supplies an exact
+multiline continuation block; paste it into the argument field and run the tree
+command again. To explore a displayed container, use `start=<TextOffset>`.
+Optional `end` bounds the selected range. Continuation uses `cursor`, `depth`,
+`mode`, and `escaped`; copy these together. Unknown, duplicate, and out-of-range
+numeric arguments are rejected. The view never materializes the whole source.
+
+For `ext.xml.xpath`, the first line is the expression; subsequent lines bind
+prefixes, for example:
+
+```text
+/r/a:item[2]/text()
+a=urn:example
+```
+
+Empty arguments select `/*`. At most 64 unique namespace prefixes are accepted.
+Duplicate prefixes and malformed bindings are errors. Descendant positional
+predicates are evaluated among matching siblings, and `text()` returns separate
+direct text nodes across child elements. DTD, external entities and XInclude
+remain disabled. XPath input is limited to 16 MiB, with bounded depth, work,
+result count and output size; unsupported syntax returns an error.
+
+For `ext.hex.open` and `ext.hex.goto`, use:
+
+```text
+offset=0x1000
+rows=32
+```
+
+Offsets accept unsigned decimal or `0x` hexadecimal. Rows range from 1 to 256;
+the default is 32. A legacy bare offset also works. Hex aligns the viewport to
+16-byte rows and reads only that range plus two rows of overscan on each side.
+Missing original bytes appear as `??` with the provider's failure message.
+Decoded text and unsaved edits are never substituted for unavailable originals.
+
+A failed or abandoned formatter upload now sends a best-effort Cancel for its
+staged transaction. The host still owns timeout/revocation cleanup and the final
+revision check, including when the pipe is already unavailable.
+
+## Large validation status
+
+The JSON parser streams input and retains only a bounded index. This alone does
+not establish that a 1 GiB document completes through the host: its default
+interactive 5-second deadline and instruction quota are separate constraints.
+An explicitly selected, cancellable background execution budget is being
+coordinated with PR-016. Until that path and its actual generated-component test
+pass, 1 GiB validation remains an open acceptance item. No command silently
+extends its own permissions or execution deadline.
+
+The JSON manifest now declares `background_commands = ["ext.json.validate"]`.
+This signed declaration only makes the command eligible for the manager's
+explicit **Run Background** action. It does not grant permissions or let guest
+arguments select a budget. PR-016 supplies the host-owned bounded background
+budget (120 seconds, separate instruction quota) and cancellable Job Object;
+ordinary Run keeps the interactive default. This source change is unverified
+until the combined component/manager gate, including the generated 1 GiB case.

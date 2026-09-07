@@ -13,11 +13,14 @@ fn snapshot_fork_has_independent_identity_and_edits_without_copying_text() {
     let mut fork = Document::fork_from_snapshot(&source.snapshot(),bytes.clone(),Budget::new(4096)).unwrap();
     assert_eq!(before,bytes.used());
     assert!(!fork.snapshot().same_document(&source.snapshot()));
+    let initial_token = fork.snapshot().identity_token();
+    assert_ne!(initial_token, source.snapshot().identity_token());
     edit(&mut fork,0,5,"changed").unwrap();
     assert_eq!(read(&source.snapshot()),"saved");
     assert_eq!(read(&fork.snapshot()),"changed");
     fork.undo().unwrap();
     assert_eq!(read(&fork.snapshot()),"saved");
+    assert_ne!(initial_token, fork.snapshot().identity_token());
 }
 fn edit(document: &mut Document, start: usize, end: usize, text: &str) -> Result<Revision, Error> {
     document.apply(EditTransaction {

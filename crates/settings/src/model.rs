@@ -54,6 +54,7 @@ macro_rules! setting {
     };
 }
 pub static DEFINITIONS: &[SettingDefinition] = &[
+    setting!("language.policies", "Language behavior", "Per-language overrides: language ID and field, for example rust.lexer = native or rust.min_chars = 2. Values are strings.", "Language", SettingKind::Map, false, false),
     setting!(
         "document.resident_max_bytes",
         "Resident document limit",
@@ -473,6 +474,109 @@ fn number(item: &Item) -> Option<f64> {
     item.as_float()
         .or_else(|| item.as_integer().map(|n| n as f64))
 }
+/// Parse the single-line value editor using the same schema as persisted TOML.
+/// Text and choices are plain text; arrays/maps use TOML value syntax.
+pub fn parse_setting_input(key: &str, input: &str) -> Result<SettingValue, String> {
+    if input.len() > 16 * 1024 { return Err("Value exceeds the inline editor limit; edit the TOML file".into()); }
+    let definition = DEFINITIONS.iter().find(|d| d.key == key).ok_or("Unknown setting")?;
+    let value = match definition.kind {
+        SettingKind::Text | SettingKind::Choice(_) => SettingValue::Text(input.to_owned()),
+        _ => {
+            let document = format!("value = {input}").parse::<DocumentMut>().map_err(|_| "Enter a valid TOML value")?;
+            if document.len() != 1 { return Err("Enter one value only".into()); }
+            parse_value(definition, document.get("value").ok_or("Missing value")?)?
+        }
+    };
+    validate_value(definition, &value)?;
+    Ok(value)
+}
+pub fn format_setting_input(value: &SettingValue) -> String {
+    match value {
+        SettingValue::Text(value) => value.clone(),
+        SettingValue::Bool(value) => value.to_string(),
+        SettingValue::Integer(value) => value.to_string(),
+        SettingValue::Number(value) => value.to_string(),
+        SettingValue::Strings(values) => {
+            let mut array = toml_edit::Array::new();
+            for value in values { array.push(value.as_str()); }
+            array.to_string()
+        }
+        SettingValue::Map(values) => {
+            let mut table = toml_edit::InlineTable::new();
+            for (key, value) in values { table.insert(key, Value::from(value.as_str())); }
+            table.to_string()
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LexerPreference { Primary, Native }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LanguagePolicy {
+    pub lexer: LexerPreference,
+    pub completion: bool,
+    pub min_chars: u8,
+    pub include_open_documents: bool,
+    pub smart_pairs: bool,
+    pub smart_indent: bool,
+    pub parameter_hints: bool,
+}
+impl Default for LanguagePolicy {
+    fn default() -> Self { Self { lexer: LexerPreference::Primary, completion: true, min_chars: 0,
+        include_open_documents: true, smart_pairs: true, smart_indent: true, parameter_hints: true } }
+}
+fn validate_language_policy(key: &str, value: &str) -> Result<(), String> {
+    let (language, field) = key.rsplit_once('.').ok_or("Use language-id.field for a policy key")?;
+    if language.is_empty() || language.len() > 64 || !language.bytes().all(|b| b.is_ascii_alphanumeric() || b"_-".contains(&b)) {
+        return Err("Invalid stable language ID".into());
+    }
+    let valid = match field {
+        "lexer" => matches!(value, "primary" | "native"),
+        "min_chars" => value.parse::<u8>().is_ok_and(|n| n <= 16),
+        "completion" | "include_open_documents" | "smart_pairs" | "smart_indent" | "parameter_hints" => matches!(value, "true" | "false"),
+        _ => false,
+    };
+    if valid { Ok(()) } else { Err(format!("Invalid language policy {key}")) }
+}
+impl EffectiveSettings {
+    pub fn setting_value(&self, key: &str) -> Option<SettingValue> {
+        Some(match key {
+            "session.restore" => SettingValue::Bool(self.restore_session),
+            "workspace.preferences_enabled" => SettingValue::Bool(self.workspace_preferences_enabled),
+            "document.resident_max_bytes" => SettingValue::Integer(self.resident_max_bytes as i64),
+            "transcode.temp_quota_bytes" => SettingValue::Integer(self.transcode_quota_bytes as i64),
+            "editor.font.family" => SettingValue::Text(self.editor_font_family.clone()),
+            "editor.font.size" => SettingValue::Number(self.editor_font_size_pt),
+            "editor.tab.width" => SettingValue::Integer(self.tab_width as i64),
+            "editor.insert_spaces" => SettingValue::Bool(self.insert_spaces),
+            "editor.wrap.mode" => SettingValue::Text(if self.word_wrap { "viewport" } else { "off" }.into()),
+            "editor.line_numbers" => SettingValue::Bool(self.line_numbers),
+            "editor.render.whitespace" => SettingValue::Text(self.whitespace.clone()),
+            "editor.currentLine.highlight" => SettingValue::Bool(self.highlight_current_line),
+            "theme.mode" => SettingValue::Text(match self.theme { ThemeMode::System => "system", ThemeMode::Light => "light", ThemeMode::Dark => "dark" }.into()),
+            "theme.overrides" => SettingValue::Map(self.theme_overrides.clone()),
+            "toolbar.visible" => SettingValue::Bool(self.toolbar_visible),
+            "toolbar.commands" => SettingValue::Strings(self.toolbar_commands.clone()),
+            "tabs.pinned_first" => SettingValue::Bool(self.tabs_pinned_first),
+            "language.locale" => SettingValue::Text(self.locale.clone()),
+            "language.associations" => SettingValue::Map(self.language_associations.clone()),
+            "language.policies" => SettingValue::Map(self.language_policies.clone()),
+            "search.excludes" => SettingValue::Strings(self.search_excludes.clone()),
+            "renderer.mode" => SettingValue::Text(match self.renderer { RendererMode::Hardware => "hardware", RendererMode::Software => "software" }.into()),
+            _ => return None,
+        })
+    }
+    pub fn language_policy(&self, stable_id: &str) -> LanguagePolicy {
+        let mut policy = LanguagePolicy::default();
+        let get = |field: &str| self.language_policies.get(&format!("{stable_id}.{field}")).map(String::as_str);
+        if get("lexer") == Some("native") { policy.lexer = LexerPreference::Native; }
+        policy.min_chars = get("min_chars").and_then(|n| n.parse().ok()).filter(|n| *n <= 16).unwrap_or(0);
+        for (field, target) in [("completion", &mut policy.completion), ("include_open_documents", &mut policy.include_open_documents),
+            ("smart_pairs", &mut policy.smart_pairs), ("smart_indent", &mut policy.smart_indent), ("parameter_hints", &mut policy.parameter_hints)] {
+            if let Some(value) = get(field) { *target = value == "true"; }
+        }
+        policy
+    }
+}
 fn parse_value(definition: &SettingDefinition, item: &Item) -> Result<SettingValue, String> {
     if definition.key == "editor.wrap.mode"
         && let Some(value) = item.as_bool()
@@ -511,6 +615,19 @@ fn parse_value(definition: &SettingDefinition, item: &Item) -> Result<SettingVal
     })
 }
 fn validate_value(definition: &SettingDefinition, value: &SettingValue) -> Result<(), String> {
+    if definition.key == "language.locale" {
+        if let SettingValue::Text(locale) = value {
+            if locale.is_empty() || locale.len() > 64 || !locale.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
+                return Err("Locale must be a language ID containing letters, digits or hyphens".into());
+            }
+        }
+    }
+    if definition.key == "language.policies" {
+        if let SettingValue::Map(values) = value {
+            if values.len() > 512 { return Err("At most 512 language policy entries are allowed".into()); }
+            for (key, value) in values { validate_language_policy(key, value)?; }
+        }
+    }
     let valid = match (definition.kind, value) {
         (SettingKind::Boolean, SettingValue::Bool(_)) => true,
         (SettingKind::Integer(min, max), SettingValue::Integer(n)) => (min..=max).contains(n),
@@ -605,6 +722,7 @@ fn put(document: &mut DocumentMut, key: &str, value: SettingValue) -> Result<(),
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct EffectiveSettings {
+    pub language_policies: BTreeMap<String, String>,
     pub resident_max_bytes: u64,
     pub transcode_quota_bytes: u64,
     pub restore_session: bool,
@@ -630,6 +748,7 @@ pub struct EffectiveSettings {
 impl Default for EffectiveSettings {
     fn default() -> Self {
         Self {
+            language_policies: BTreeMap::new(),
             resident_max_bytes: 268_435_456,
             transcode_quota_bytes: 21_474_836_480,
             restore_session: true,
@@ -698,6 +817,7 @@ pub fn resolve(
 }
 fn apply(settings: &mut EffectiveSettings, key: &str, value: SettingValue) {
     match (key, value) {
+        ("language.policies", SettingValue::Map(v)) => settings.language_policies.extend(v),
         ("document.resident_max_bytes", SettingValue::Integer(v)) => {
             settings.resident_max_bytes = v as u64
         }

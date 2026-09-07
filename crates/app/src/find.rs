@@ -36,8 +36,12 @@ pub struct FindController {
     pub case_sensitive: bool,
     pub whole_word: bool,
     pub status: String,
+    selection_scope: Option<std::ops::Range<TextOffset>>,
     worker: Option<SearchWorker>,
     pending: Option<SearchTicket>,
+    paged_pending: Option<bareline_search::service::PagedSearchTicket>,
+    paged_results: Option<bareline_search::paged::PagedResults>,
+    paged_requested: Option<(bareline_document::paged::PagedSnapshot, SearchQuery)>,
     results: Option<Arc<SearchResults>>,
     requested: Option<(DocumentSnapshot, String, bool, bool, SearchMode)>,
     pressed: Option<FindAction>,
@@ -56,8 +60,12 @@ impl Default for FindController {
             case_sensitive: false,
             whole_word: false,
             status: "Type to find".into(),
+            selection_scope: None,
             worker: None,
             pending: None,
+            paged_pending: None,
+            paged_results: None,
+            paged_requested: None,
             results: None,
             requested: None,
             pressed: None,
@@ -66,6 +74,130 @@ impl Default for FindController {
     }
 }
 impl FindController {
+    /// Captures the selection once; later result navigation does not move its bounds.
+    pub fn set_selection_scope(&mut self, selection: Option<std::ops::Range<TextOffset>>) {
+        if self.selection_scope != selection {
+            self.cancel_search();
+            self.requested = None;
+            self.results = None;
+            self.selection_scope = selection;
+        }
+    }
+    pub fn set_query(&mut self, query: &SearchQuery) -> Result<(), &'static str> {
+        let mut field = TextField::default();
+        if !query.pattern.is_empty() && !field.insert(&query.pattern) {
+            return Err("Query exceeds the find field limit or contains control characters");
+        }
+        self.cancel_search();
+        self.field = field;
+        self.mode = query.mode;
+        self.case_sensitive = query.case == Case::Sensitive;
+        self.whole_word = query.whole_word;
+        self.set_selection_scope(query.selection.clone());
+        self.requested = None;
+        self.results = None;
+        self.paged_results = None;
+        Ok(())
+    }
+    pub fn completed_paged_results(&self) -> Option<&bareline_search::paged::PagedResults> {
+        self.paged_results
+            .as_ref()
+            .filter(|results| results.completeness == Completeness::Complete)
+    }
+    pub fn query(&self) -> SearchQuery {
+        let mut query = SearchQuery::literal(self.field.value());
+        query.mode = self.mode;
+        query.case = if self.case_sensitive {
+            Case::Sensitive
+        } else {
+            Case::Folded
+        };
+        query.whole_word = self.whole_word;
+        query.selection = self.selection_scope.clone();
+        query
+    }
+    pub fn completed_results(&self) -> Option<&SearchResults> {
+        self.results
+            .as_deref()
+            .filter(|results| results.completeness() == Completeness::Complete)
+    }
+    pub fn searching(&self) -> bool {
+        self.pending.is_some() || self.paged_pending.is_some()
+    }
+    pub fn refresh_paged(
+        &mut self,
+        handle: bareline_editor_surface::paged_view::PagedReadHandle,
+        notify: Arc<dyn Fn() + Send + Sync>,
+    ) {
+        if !self.open || self.field.composing() {
+            return;
+        }
+        let query = self.query();
+        let snapshot = handle.snapshot().clone();
+        if self
+            .paged_requested
+            .as_ref()
+            .is_some_and(|(source, previous)| {
+                source.same_document(&snapshot)
+                    && source.content_state == snapshot.content_state
+                    && previous == &query
+            })
+        {
+            return;
+        }
+        self.paged_pending = None;
+        self.paged_results = None;
+        self.paged_requested = Some((snapshot.clone(), query.clone()));
+        if query.pattern.is_empty() && query.mode != SearchMode::Regex {
+            self.status = "Type to find".into();
+            return;
+        }
+        if self.worker.is_none() {
+            match SearchWorker::new() {
+                Ok(worker) => self.worker = Some(worker),
+                Err(error) => {
+                    self.status = error.to_string();
+                    return;
+                }
+            }
+        }
+        self.paged_pending = Some(self.worker.as_ref().unwrap().submit_paged(
+            snapshot,
+            query,
+            move |ticket| handle.resolve_page(ticket),
+            notify,
+        ));
+        self.status = "Searching full document…".into();
+    }
+    pub fn next_paged(
+        &self,
+        snapshot: &bareline_document::paged::PagedSnapshot,
+        at: usize,
+        backwards: bool,
+    ) -> Option<std::ops::Range<TextOffset>> {
+        let results = self.paged_results.as_ref()?;
+        if !results.source.same_document(snapshot)
+            || results.source.content_state != snapshot.content_state
+        {
+            return None;
+        }
+        let index = results
+            .matches
+            .partition_point(|matched| matched.range.start.0 < at);
+        let matched = if backwards {
+            index
+                .checked_sub(1)
+                .and_then(|i| results.matches.get(i))
+                .or_else(|| results.matches.last())
+        } else {
+            results
+                .matches
+                .get(index)
+                .or_else(|| results.matches.first())
+        };
+        matched.map(|matched| matched.range.clone())
+    }
+
     pub fn show(&mut self) {
         if self.results.is_none() {
             self.requested = None;
@@ -109,6 +241,8 @@ impl FindController {
         })
     }
     pub fn cancel_search(&mut self) {
+        self.paged_pending = None;
+        self.paged_requested = None;
         self.pending = None;
         self.results = None;
         self.status = "Cancelled".into();
@@ -172,6 +306,9 @@ impl FindController {
         true
     }
     pub fn hide(&mut self) {
+        if self.paged_pending.take().is_some() {
+            self.paged_requested = None;
+        }
         self.open = false;
         self.focused = false;
         self.keyboard_focus = None;
@@ -184,6 +321,10 @@ impl FindController {
         }
     }
     pub fn clear_source(&mut self) {
+        self.paged_pending = None;
+        self.paged_results = None;
+        self.paged_requested = None;
+        self.selection_scope = None;
         self.pending = None;
         self.results = None;
         self.requested = None;
@@ -284,14 +425,7 @@ impl FindController {
                 }
             }
         }
-        let mut query = SearchQuery::literal(self.field.value());
-        query.case = if self.case_sensitive {
-            Case::Sensitive
-        } else {
-            Case::Folded
-        };
-        query.whole_word = self.whole_word;
-        query.mode = self.mode;
+        let query = self.query();
         self.pending = Some(
             self.worker
                 .as_ref()
@@ -301,6 +435,31 @@ impl FindController {
         self.status = "Searching…".into();
     }
     pub fn pump(&mut self) -> bool {
+        if let Some(ticket) = &self.paged_pending {
+            match ticket.try_recv() {
+                Ok(Ok(results)) => {
+                    self.status = if results.count_complete {
+                        format!("{} matches", results.count)
+                    } else {
+                        format!("{} matches; {:?}", results.count, results.completeness)
+                    };
+                    self.paged_results = Some(results);
+                    self.paged_pending = None;
+                    return true;
+                }
+                Ok(Err(error)) => {
+                    self.status = format!("Search stopped: {error:?}");
+                    self.paged_pending = None;
+                    return true;
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.status = "Search worker stopped".into();
+                    self.paged_pending = None;
+                    return true;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            }
+        }
         let Some(pending) = &self.pending else {
             return false;
         };

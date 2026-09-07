@@ -2,7 +2,7 @@
 //! Bounded, read-only UTF-8 folder scanning. Call on a worker with real platform trust.
 use super::*;
 use bareline_document::Budget;
-use bareline_file_io::lifecycle::{FileError, FileInput, Fingerprint, open_utf8_streaming_handle};
+use bareline_file_io::lifecycle::{DecodeOptions, FileError, Fingerprint, open_encoded_streaming};
 use bareline_platform::{
     LocalFileSystem, PathOperation, PathOrigin, PathTrustProvider, TrustedRead,
 };
@@ -232,16 +232,23 @@ pub fn scan_folder(
         }
         // Keep approved ancestry alive through the complete read and result scan.
         let _ancestors = guard.ancestors;
-        let opened = match open_utf8_streaming_handle(
-            FileInput {
-                path: path.clone(),
-                file: guard.file,
-            },
+        let expected_identity = match platform.identity(&guard.file) {
+            Ok(identity) => identity,
+            Err(_) => {
+                skip(&mut summary, &path, FolderSkip::Io, &mut emit);
+                continue;
+            }
+        };
+        let opened = match open_encoded_streaming(
+            &path,
             platform,
-            Budget::new(regex::SUBJECT_LIMIT),
+            Budget::new(regex::SUBJECT_LIMIT * 8),
             Budget::new(0),
             &job.io_cancel,
-            regex::SUBJECT_LIMIT as u64,
+            DecodeOptions {
+                resident_max_bytes: regex::SUBJECT_LIMIT as u64,
+                interpret: None,
+            },
             |_| {},
         ) {
             Ok(opened) => opened,
@@ -261,6 +268,12 @@ pub fn scan_folder(
                 continue;
             }
         };
+        if opened.fingerprint.identity != expected_identity
+            || platform.identity(&guard.file).ok().as_ref() != Some(&expected_identity)
+        {
+            skip(&mut summary, &path, FolderSkip::Changed, &mut emit);
+            continue;
+        }
         let snapshot = opened.document.snapshot();
         if !scope.include_binary
             && snapshot
@@ -444,14 +457,16 @@ mod tests {
             },
         );
         assert_eq!(summary.count, 2);
-        assert_eq!(summary.searched_files, 1);
+        // The PR-007 encoded lifecycle now searches the decoded legacy/opaque
+        // text view too; it has no "x" hit and retains the original byte provenance.
+        assert_eq!(summary.searched_files, 2);
         assert_eq!(
             ranges,
             [TextOffset(0)..TextOffset(1), TextOffset(2)..TextOffset(3)]
         );
         assert!(skips.contains(&FolderSkip::Binary));
-        assert!(skips.contains(&FolderSkip::UnsupportedEncoding));
-        assert_eq!(summary.completeness, Completeness::Unsupported);
+        assert!(!skips.contains(&FolderSkip::UnsupportedEncoding));
+        assert_eq!(summary.completeness, Completeness::Complete);
     }
     #[test]
     fn folder_trust_io_limit_and_cancellation_fail_closed() {

@@ -23,8 +23,58 @@ pub struct VerifiedPackage {
     digest: [u8; 32],
     bytes: Vec<u8>,
     entry: CatalogEntry,
+    evidence: CatalogEvidence,
+}
+
+/// Retained signed bytes are the authority for an installed package, never the
+/// editable manager index or extracted manifest file.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CatalogEvidence {
+    pub metadata: String,
+    pub signature: String,
+    pub accepted_unix: u64,
 }
 impl VerifiedPackage {
+    pub fn cache(&self, root: &Path) -> Result<(), PackageError> {
+        if fs::symlink_metadata(root)
+            .map_err(|_| PackageError::Io)?
+            .file_type()
+            .is_symlink()
+        {
+            return Err(PackageError::UnsafeArchive);
+        }
+        let archive = root.join(format!("{}.blex", self.entry.sha256));
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&archive)
+        {
+            Ok(mut file) => {
+                file.write_all(&self.bytes)
+                    .and_then(|_| file.sync_all())
+                    .map_err(|_| PackageError::Io)?;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                let mut bytes = Vec::new();
+                fs::File::open(&archive)
+                    .map_err(|_| PackageError::Io)?
+                    .take(MAX_PACKAGE + 1)
+                    .read_to_end(&mut bytes)
+                    .map_err(|_| PackageError::Io)?;
+                if bytes != self.bytes {
+                    return Err(PackageError::HashMismatch);
+                }
+            }
+            Err(_) => return Err(PackageError::Io),
+        }
+        let receipt = serde_json::to_vec(&self.evidence).map_err(|_| PackageError::Metadata)?;
+        atomic_record(
+            &root.join(format!("{}.receipt.json", self.entry.sha256)),
+            &receipt,
+        )
+    }
+
     pub fn path(&self) -> &Path {
         &self.path
     }
@@ -99,6 +149,7 @@ pub struct OfflinePackageSource {
     channel: String,
     platform: String,
     artifact_type: String,
+    evidence: CatalogEvidence,
 }
 impl OfflinePackageSource {
     pub fn open(
@@ -112,6 +163,7 @@ impl OfflinePackageSource {
         }
         let key = PublicKey::from_base64(policy.public_key)
             .map_err(|_| PackageError::InvalidSignature)?;
+        let signature_text = signature;
         let signature = Signature::decode(signature).map_err(|_| PackageError::InvalidSignature)?;
         key.verify(bytes, &signature, false)
             .map_err(|_| PackageError::InvalidSignature)?;
@@ -138,6 +190,13 @@ impl OfflinePackageSource {
             channel: policy.channel.into(),
             platform: policy.platform.into(),
             artifact_type: policy.artifact_type.into(),
+            evidence: CatalogEvidence {
+                metadata: std::str::from_utf8(bytes)
+                    .map_err(|_| PackageError::Metadata)?
+                    .to_owned(),
+                signature: signature_text.to_owned(),
+                accepted_unix: policy.now_unix,
+            },
         })
     }
     pub fn entries(&self) -> &[CatalogEntry] {
@@ -194,6 +253,7 @@ impl VerifiedPackageSource for OfflinePackageSource {
             digest,
             bytes,
             entry: entry.clone(),
+            evidence: self.evidence.clone(),
         })
     }
 }
@@ -208,6 +268,8 @@ pub struct ExtensionManifest {
     pub maximum_protocol: u16,
     pub entry_component: String,
     pub commands: Vec<String>,
+    #[serde(default)]
+    pub background_commands: Vec<String>,
     pub panels: Vec<String>,
     pub capabilities: Vec<Capability>,
 }
@@ -269,6 +331,97 @@ fn safe_flat_name(name: &str) -> bool {
                 .as_str(),
         )
 }
+
+/// Versioned owner state is published only after its replacement is durable.
+pub fn atomic_record(path: &Path, bytes: &[u8]) -> Result<(), PackageError> {
+    if bytes.len() > 8 * MAX_METADATA {
+        return Err(PackageError::Size);
+    }
+    let parent = path.parent().ok_or(PackageError::Io)?;
+    let metadata = fs::symlink_metadata(parent).map_err(|_| PackageError::Io)?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err(PackageError::UnsafeArchive);
+    }
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| PackageError::Io)?
+        .as_nanos();
+    let temporary = parent.join(format!("record-{}-{nonce}.tmp", std::process::id()));
+    let result = (|| {
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+            .map_err(|_| PackageError::Io)?;
+        file.write_all(bytes)
+            .and_then(|_| file.sync_all())
+            .map_err(|_| PackageError::Io)?;
+        drop(file);
+        fs::rename(&temporary, path).map_err(|_| PackageError::Io)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(temporary);
+    }
+    result
+}
+
+/// Restore an already installed digest from retained signed evidence. Current
+/// metadata freshness gates new installs/updates, not use of a prior installation
+/// (FC-07/08 offline usability). Rechecking the signature and every extracted byte
+/// prevents the editable index or manifest from becoming package authority.
+pub fn restore_cached(
+    root: &Path,
+    digest: &str,
+    policy: &CatalogPolicy<'_>,
+    cancelled: &std::sync::atomic::AtomicBool,
+) -> Result<InstalledPackage, PackageError> {
+    if digest.len() != 64
+        || !digest
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
+        return Err(PackageError::WrongIdentity);
+    }
+    let mut bytes = Vec::new();
+    fs::File::open(root.join(format!("{digest}.receipt.json")))
+        .map_err(|_| PackageError::Io)?
+        .take((8 * MAX_METADATA + 1) as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|_| PackageError::Io)?;
+    if bytes.len() > 8 * MAX_METADATA {
+        return Err(PackageError::Size);
+    }
+    let evidence: CatalogEvidence =
+        serde_json::from_slice(&bytes).map_err(|_| PackageError::Metadata)?;
+    if evidence.accepted_unix == 0 || evidence.accepted_unix > policy.now_unix {
+        return Err(PackageError::Metadata);
+    }
+    let historical = CatalogPolicy {
+        public_key: policy.public_key,
+        publisher: policy.publisher,
+        channel: policy.channel,
+        platform: policy.platform,
+        artifact_type: policy.artifact_type,
+        highest_metadata_version: 0,
+        now_unix: evidence.accepted_unix,
+    };
+    let source = OfflinePackageSource::open(
+        root.to_owned(),
+        evidence.metadata.as_bytes(),
+        &evidence.signature,
+        &historical,
+    )?;
+    let entry = source
+        .entries()
+        .iter()
+        .find(|entry| entry.sha256 == digest)
+        .ok_or(PackageError::WrongIdentity)?;
+    let package = source.fetch(&PackageRequest {
+        id: entry.id.clone(),
+        version: entry.version.clone(),
+    })?;
+    package.restore(root, cancelled)
+}
 impl VerifiedPackage {
     /// v1 uses a deliberately flat archive namespace. No links, directories, devices,
     /// duplicate case-insensitive paths, or decompression beyond the signed limits.
@@ -276,6 +429,23 @@ impl VerifiedPackage {
         &self,
         root: &Path,
         cancelled: &std::sync::atomic::AtomicBool,
+    ) -> Result<InstalledPackage, PackageError> {
+        self.materialize(root, cancelled, false)
+    }
+
+    pub fn restore(
+        &self,
+        root: &Path,
+        cancelled: &std::sync::atomic::AtomicBool,
+    ) -> Result<InstalledPackage, PackageError> {
+        self.materialize(root, cancelled, true)
+    }
+
+    fn materialize(
+        &self,
+        root: &Path,
+        cancelled: &std::sync::atomic::AtomicBool,
+        restoring: bool,
     ) -> Result<InstalledPackage, PackageError> {
         validate_zip_directory(&self.bytes)?;
         let mut archive = zip::ZipArchive::new(Cursor::new(&self.bytes))
@@ -328,6 +498,12 @@ impl VerifiedPackage {
             || !files.contains(&manifest.entry_component)
             || manifest.commands.iter().any(|c| !valid_id(c))
             || manifest.panels.iter().any(|p| !valid_id(p))
+            || manifest.commands.len() > 256
+            || manifest
+                .background_commands
+                .iter()
+                .any(|command| !manifest.commands.contains(command))
+            || manifest.panels.len() > 32
         {
             return Err(PackageError::WrongIdentity);
         }
@@ -349,6 +525,58 @@ impl VerifiedPackage {
             return Err(PackageError::UnsafeArchive);
         }
         let directory = root.join(&self.entry.sha256);
+        if restoring {
+            let metadata = fs::symlink_metadata(&directory).map_err(|_| PackageError::Io)?;
+            if !metadata.is_dir() || metadata.file_type().is_symlink() {
+                return Err(PackageError::UnsafeArchive);
+            }
+            for name in &files {
+                if cancelled.load(std::sync::atomic::Ordering::Acquire) {
+                    return Err(PackageError::Cancelled);
+                }
+                let path = directory.join(name);
+                let metadata = fs::symlink_metadata(&path).map_err(|_| PackageError::Io)?;
+                if !metadata.is_file() || metadata.file_type().is_symlink() {
+                    return Err(PackageError::UnsafeArchive);
+                }
+                let mut expected = archive
+                    .by_name(name)
+                    .map_err(|_| PackageError::UnsafeArchive)?;
+                if metadata.len() != expected.size() {
+                    return Err(PackageError::HashMismatch);
+                }
+                let mut actual = fs::File::open(path).map_err(|_| PackageError::Io)?;
+                let mut left = [0; 65536];
+                let mut right = [0; 65536];
+                loop {
+                    if cancelled.load(std::sync::atomic::Ordering::Acquire) {
+                        return Err(PackageError::Cancelled);
+                    }
+                    let count = expected.read(&mut left).map_err(|_| PackageError::Io)?;
+                    if count == 0 {
+                        let mut extra = [0];
+                        if actual.read(&mut extra).map_err(|_| PackageError::Io)? != 0 {
+                            return Err(PackageError::HashMismatch);
+                        }
+                        break;
+                    }
+                    actual
+                        .read_exact(&mut right[..count])
+                        .map_err(|_| PackageError::HashMismatch)?;
+                    if left[..count] != right[..count] {
+                        return Err(PackageError::HashMismatch);
+                    }
+                }
+            }
+            return Ok(InstalledPackage {
+                directory,
+                files,
+                id: manifest.id.clone(),
+                version: manifest.version.clone(),
+                manifest,
+                component_sha256: component_hash.finalize().into(),
+            });
+        }
         fs::create_dir(&directory).map_err(|e| {
             if e.kind() == std::io::ErrorKind::AlreadyExists {
                 PackageError::AlreadyInstalled
@@ -487,6 +715,7 @@ mod signed_tests {
             maximum_protocol: 1,
             entry_component: "entry.wasm".into(),
             commands: vec![],
+            background_commands: vec![],
             panels: vec![],
             capabilities: vec![],
         };

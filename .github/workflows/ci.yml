@@ -1,5 +1,7 @@
 name: Correctness
 on: [push, pull_request]
+permissions:
+  contents: read
 jobs:
   native:
     runs-on: windows-latest
@@ -36,8 +38,10 @@ jobs:
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev libxi-dev libxrandr-dev
       - run: python .github/workflows/check_portability.py
-      # Includes shared UI/layout/hit-test tests using RecordingBackend and all
-      # document/search/session/syntax/settings tests as these crates arrive.
+      # Use the actual host compiler (including native C++ build scripts), not
+      # --cfg simulation. Covers helpers/host and every neutral workspace target.
+      - run: cargo check --workspace --all-targets --locked
+      # Includes shared RecordingBackend UI and portable state/path tests.
       - run: cargo test --workspace --locked
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo check -p bareline-platform-linux -p bareline-platform-macos --examples --locked

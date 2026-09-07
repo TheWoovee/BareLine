@@ -5,6 +5,8 @@ use std::{ffi::OsString, path::PathBuf};
 
 pub(super) struct LaunchRuntime {
     pending: Vec<PendingPath>,
+    navigation: Option<(PathBuf, std::sync::mpsc::Receiver<Result<usize,String>>)>,
+    cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 struct PendingPath {
     path: PathBuf,
@@ -17,6 +19,8 @@ impl LaunchRuntime {
     pub(super) fn new(config: &LaunchConfig) -> Self {
         let mut runtime = Self {
             pending: Vec::new(),
+            navigation: None,
+            cancel: Default::default(),
         };
         runtime.queue(&bareline_platform_windows::instance::OpenRequest {
             paths: config.paths.clone(),
@@ -51,6 +55,7 @@ impl super::Shell {
             return;
         };
         let mut remaining = Vec::new();
+        let mut monitors = Vec::new();
         for pending in self.launch.pending.drain(..) {
             let Some(index) = (0..workspace.editors.len())
                 .find(|&index| workspace.path(index) == Some(pending.path.as_path()))
@@ -68,7 +73,27 @@ impl super::Shell {
             }
             if let Some(line) = pending.line {
                 if editor.paged() {
-                    workspace.message = Some("Line navigation is unavailable until the paged document line index is ready.".into());
+                    if self.launch.navigation.as_ref().is_some_and(|(path,_)|path==&pending.path) {
+                        let result=self.launch.navigation.as_ref().and_then(|(_,rx)|rx.try_recv().ok());
+                        if let Some(result)=result {
+                            self.launch.navigation=None;
+                            match result {
+                                Ok(offset)=>if let bareline_app::workspace::WorkspaceEditor::Paged(paged)=editor {
+                                    if let Err(e)=paged.restore_selection(bareline_document::TextOffset(offset),bareline_document::TextOffset(offset)) {workspace.message=Some(e);}
+                                },
+                                Err(e)=>workspace.message=Some(e),
+                            }
+                        } else { remaining.push(pending); continue; }
+                    } else {
+                        if self.launch.navigation.is_none() && let bareline_app::workspace::WorkspaceEditor::Paged(paged)=editor {
+                            let handle=paged.read_handle(); let column=pending.column; let cancel=self.launch.cancel.clone(); let notify=self.notify.clone();
+                            let (tx,rx)=std::sync::mpsc::sync_channel(1);
+                            match std::thread::Builder::new().name("bareline-launch-position".into()).spawn(move || {let result=paged_position(handle,line,column,&cancel); let _=tx.send(result); notify();}) {
+                                Ok(_)=>self.launch.navigation=Some((pending.path.clone(),rx)), Err(e)=>workspace.message=Some(e.to_string()),
+                            }
+                        }
+                        remaining.push(pending); continue;
+                    }
                 } else {
                     match launch_position(editor.snapshot(), line, pending.column) {
                         Ok(offset) => {
@@ -86,11 +111,46 @@ impl super::Shell {
                 }
             }
             if pending.monitor {
-                workspace.message = Some("Opened read-only. Live monitor ingestion is unavailable in this build; Check for External Changes and Reload remain available.".into());
+                monitors.push((index,pending));
             }
         }
         self.launch.pending = remaining;
+        for (index,pending) in monitors {
+            if let Err(error)=self.watch_start_follow(index) {
+                if let Some(workspace)=&mut self.workspace{workspace.message=Some(error);}
+                self.launch.pending.push(pending);
+            }
+        }
     }
+}
+impl Drop for LaunchRuntime { fn drop(&mut self) { self.cancel.store(true,std::sync::atomic::Ordering::Release); } }
+fn paged_position(handle: bareline_editor_surface::paged_view::PagedReadHandle, line:u64, column:u64, cancel:&std::sync::atomic::AtomicBool)->Result<usize,String> {
+    use bareline_document::{Budget,TextOffset,line_lookup::{LineTarget,LineLookupPoll},paged::{SparseLineIndex,WindowPoll}};
+    let snapshot=handle.snapshot(); let budget=Budget::new(256*1024);
+    let index=SparseLineIndex::new(snapshot.clone(),16,65536,&budget).map_err(|e|format!("Line index: {e:?}"))?;
+    let mut lookup=index.lookup(LineTarget::Line(usize::try_from(line.saturating_sub(1)).map_err(|_|"Line number too large")?),budget.clone()).map_err(|e|format!("Line lookup: {e:?}"))?;
+    let range=loop {
+        if cancel.load(std::sync::atomic::Ordering::Acquire) {return Err("Navigation cancelled".into());}
+        match lookup.poll() {
+            LineLookupPoll::Range(range)=>break range,
+            LineLookupPoll::Pending(ticket)=>{if !handle.resolve_page(ticket)? {std::thread::sleep(std::time::Duration::from_millis(1));}},
+            LineLookupPoll::Progress(_)=>(),
+            LineLookupPoll::Failed(bareline_document::Error::OutOfBounds)=>return Ok(snapshot.len()),
+            other=>return Err(format!("Line lookup: {other:?}")),
+        }
+    };
+    let mut offset=range.start.0; let mut columns=column.saturating_sub(1);
+    while offset<range.end.0 && columns>0 {
+        if cancel.load(std::sync::atomic::Ordering::Acquire) {return Err("Navigation cancelled".into());}
+        let mut request=snapshot.begin_viewport(TextOffset(offset),65536,&budget).map_err(|e|format!("Column window: {e:?}"))?;
+        let window=loop {match request.poll() {WindowPoll::Ready(w)=>break w,WindowPoll::Pending(ticket)=>{if !handle.resolve_page(ticket)? {std::thread::sleep(std::time::Duration::from_millis(1));}},_=>return Err("Column lookup unavailable".into()),}};
+        let start=offset.saturating_sub(window.range().start.0);
+        let text=&window.text()[start..];
+        let mut moved=0;
+        for ch in text.chars() {if columns==0 || ch=='\r' || ch=='\n' {return Ok(offset+moved);} moved+=ch.len_utf8(); columns-=1;}
+        if moved==0 {break;} offset+=moved;
+    }
+    Ok(offset)
 }
 
 fn launch_position(
@@ -122,6 +182,8 @@ fn launch_position(
 }
 
 pub struct LaunchConfig {
+    pub performance: Option<super::performance::PerformanceConfig>,
+    pub portable: bool,
     pub settings_path: Option<PathBuf>,
     pub session_path: Option<PathBuf>,
     pub recovery_path: Option<PathBuf>,
@@ -149,6 +211,8 @@ pub fn parse(
     ledger: &mut StartupLedger,
 ) -> Result<LaunchConfig, Box<dyn std::error::Error>> {
     ledger.record(StartupAction::ParseCli);
+    let (filtered, performance) = super::performance::parse_args(args)?;
+    let args = &filtered;
     let mut product = Vec::new();
     let (mut software, mut hardware, mut smoke, mut prototype, mut perf) =
         (false, false, false, false, false);
@@ -184,6 +248,7 @@ pub fn parse(
         product.push(arg.clone());
     }
     let options = bareline_distribution::cli::parse(product)?;
+    if performance.is_some() && !options.paths.is_empty() { return Err("Performance workloads reject ordinary document paths".into()); }
     if options.paths.len() > 16 || (!options.paths.is_empty() && (smoke || perf || prototype)) {
         return Err("Open up to 16 paths; diagnostic modes do not accept document paths.".into());
     }
@@ -200,18 +265,19 @@ pub fn parse(
         )?
         .is_some();
     let installed = std::env::var_os("APPDATA").map(|root| PathBuf::from(root).join("Bareline"));
-    let root = if portable {
+    let root = if let Some(config) = &performance { Some(config.root.clone()) } else if portable {
         bareline_distribution::data_root(&executable, true, directory)
     } else {
         installed
     };
     let cwd = std::env::current_dir()?;
     Ok(LaunchConfig {
+        portable,
         settings_path: root.as_ref().map(|p| p.join("settings.toml")),
         session_path: root.as_ref().map(|p| p.join("session.json")),
         recovery_path: root.as_ref().map(|p| p.join("recovery")),
         extensions_path: root.as_ref().map(|p| p.join("extensions")),
-        diagnostics_path: if smoke {
+        diagnostics_path: if performance.is_some() { root.as_ref().map(|p|p.join("diagnostics")) } else if smoke {
             None
         } else if portable {
             root.as_ref().map(|p| p.join("diagnostics"))
@@ -227,9 +293,9 @@ pub fn parse(
         column: options.column,
         read_only: options.read_only,
         monitor: options.monitor,
-        no_session: options.no_session,
-        no_extensions: options.no_extensions,
-        new_instance: options.new_instance,
+        no_session: options.no_session || performance.is_some(),
+        no_extensions: options.no_extensions || performance.is_some(),
+        new_instance: options.new_instance || performance.is_some(),
         help: options.help,
         version: options.version,
         software,
@@ -237,6 +303,7 @@ pub fn parse(
         smoke,
         prototype,
         perf,
+        performance,
     })
 }
 

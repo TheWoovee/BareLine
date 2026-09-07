@@ -12,9 +12,14 @@ fn run() -> Result<(), String> {
         time::Duration,
     };
     let args: Vec<_> = std::env::args().skip(1).collect();
-    if args.len() != 5 {
+    if !matches!(args.len(), 5 | 6) {
         return Err("expected pipe, nonce, parent PID, component path, component SHA256".into());
     }
+    let budget = match args.get(5).map(String::as_str).unwrap_or("interactive") {
+        "interactive" => bareline_extensions_protocol::ExecutionBudget::Interactive,
+        "background" => bareline_extensions_protocol::ExecutionBudget::Background,
+        _ => return Err("unknown execution budget".into()),
+    };
     let mut nonce = [0u8; 32];
     if args[1].len() != 64 {
         return Err("nonce length".into());
@@ -26,6 +31,7 @@ fn run() -> Result<(), String> {
     let parent = args[2].parse().map_err(|_| "parent PID")?;
     let mut pipe = AuthenticatedPipe::connect(&args[0], nonce, parent, Duration::from_secs(5))
         .map_err(|e| e.to_string())?;
+    pipe.set_timeout(Duration::from_millis(budget.timeout_ms()));
     let mut prefix = [0; 4];
     pipe.read_exact(&mut prefix).map_err(|e| e.to_string())?;
     let size = u32::from_le_bytes(prefix) as usize;
@@ -50,7 +56,7 @@ fn run() -> Result<(), String> {
     }
     let runtime = bareline_extension_host::Runtime::new().map_err(|e| e.to_string())?;
     runtime
-        .invoke_with_broker(
+        .invoke_with_policy(
             &component,
             invocation,
             Box::new(move |request| {
@@ -69,6 +75,7 @@ fn run() -> Result<(), String> {
                 Ok(response)
             }),
             Arc::new(AtomicBool::new(false)),
+            budget,
         )
         .map_err(|e| e.to_string())
 }

@@ -36,6 +36,8 @@ fn worker() -> &'static SyncSender<Job> {
     })
 }
 enum Action {
+    Tail { platform: Arc<dyn LocalFileSystem>, request: bool, follow: bool },
+    UnlockTail,
     RetryRecovery,
     Read(usize),
     Edit {
@@ -45,12 +47,17 @@ enum Action {
     Undo,
     Redo,
     Save {
+        copy_only: bool,
         target: PathBuf,
         expected: Option<Fingerprint>,
         platform: Arc<dyn LocalFileSystem>,
     },
 }
 struct Completed {
+    following: bool,
+    tail_pending: bool,
+    source_changed: bool,
+    fingerprint: Fingerprint,
     can_undo: bool,
     can_redo: bool,
     snapshot: PagedSnapshot,
@@ -59,7 +66,38 @@ struct Completed {
     caret: usize,
     saved: Option<Fingerprint>,
 }
+/// Immutable snapshot plus generation-checked page resolver for background consumers.
+/// Never resolve pages on the UI thread. Busy returns without waiting for the actor.
+#[derive(Clone)]
+pub struct PagedReadHandle {
+    tail: Arc<Mutex<Option<bareline_file_io::tail::TailSession>>>,
+    actor: Arc<Mutex<Box<PagedOpened>>>,
+    snapshot: PagedSnapshot,
+}
+impl PagedReadHandle {
+    pub fn snapshot(&self) -> &PagedSnapshot { &self.snapshot }
+    pub fn resolve_page(&self, ticket: bareline_document::source::PageTicket) -> Result<bool, String> {
+        let mut opened = match self.actor.try_lock() {
+            Ok(opened) => opened,
+            Err(std::sync::TryLockError::WouldBlock) => return Ok(false),
+            Err(std::sync::TryLockError::Poisoned(_)) => return Err("Paged source worker failed".into()),
+        };
+        let current = opened.transcoded.document.snapshot();
+        if !current.same_document(&self.snapshot) || current.content_state != self.snapshot.content_state {
+            return Err("Paged source changed; recompare or search again".into());
+        }
+        let mut tail = match self.tail.try_lock() { Ok(tail) => tail, Err(std::sync::TryLockError::WouldBlock) => return Ok(false), Err(_) => return Err("Tail worker failed".into()) };
+        let handled = match tail.as_mut() { Some(tail) => tail.read_page(ticket).map_err(|e| format!("{e:?}"))?, None => false };
+        if !handled { opened.transcoded.source.read_page(ticket).map_err(|error| format!("Paged source unavailable: {error:?}"))?; }
+        Ok(true)
+    }
+}
 pub struct PagedEditorSurface {
+    tail: Arc<Mutex<Option<bareline_file_io::tail::TailSession>>>,
+    following: bool,
+    follow_paused: bool,
+    tail_pending: bool,
+    tail_changed: bool,
     pub surface: EditorSurface,
     actor: Arc<Mutex<Box<PagedOpened>>>,
     snapshot: PagedSnapshot,
@@ -84,6 +122,9 @@ pub struct PagedEditorSurface {
     pub error: Option<String>,
 }
 impl PagedEditorSurface {
+    pub fn read_handle(&self) -> PagedReadHandle {
+        PagedReadHandle { actor: self.actor.clone(), tail: self.tail.clone(), snapshot: self.snapshot.clone() }
+    }
     pub fn new(
         opened: Box<PagedOpened>,
         budget: Budget,
@@ -96,6 +137,8 @@ impl PagedEditorSurface {
         let mut surface = EditorSurface::loading(prefix, notify.clone());
         surface.encoding_label = format!("{:?}", opened.transcoded.store.state.save_target);
         let mut view = Self {
+            tail: Arc::new(Mutex::new(None)),
+            following: false, follow_paused: false, tail_pending: false, tail_changed: false,
             saved_state: opened
                 .recovery_origin
                 .is_none()
@@ -152,6 +195,25 @@ impl PagedEditorSurface {
     pub fn busy(&self) -> bool {
         self.pending.is_some()
     }
+    pub fn viewport_ready(&self) -> bool { self.viewport_valid && !self.busy() }
+    pub fn follow_status(&self) -> Option<(bool, bool)> { self.following.then_some((self.follow_paused, self.tail_changed)) }
+    pub fn start_follow(&mut self, platform: Arc<dyn LocalFileSystem>) -> Result<(), String> {
+        if self.dirty() { return Err("Save or discard edits before monitoring.".into()); }
+        self.submit(Action::Tail { platform, request: true, follow: true })?;
+        self.following = true; self.surface.user_read_only = true; self.follow_paused = false;
+        Ok(())
+    }
+    pub fn set_follow_paused(&mut self, paused: bool) { self.follow_paused = paused; }
+    pub fn follow_tick(&mut self, platform: Arc<dyn LocalFileSystem>, request: bool) -> Result<(), String> {
+        if self.following && !self.busy() && (request || self.tail_pending) && !self.tail_changed {
+            self.submit(Action::Tail { platform, request, follow: !self.follow_paused })?;
+        }
+        Ok(())
+    }
+    pub fn unlock_follow(&mut self, confirmed: bool) -> Result<(), String> {
+        if !confirmed { return Ok(()); }
+        self.submit(Action::UnlockTail)
+    }
     pub fn dirty(&self) -> bool {
         Some(self.snapshot.content_state) != self.saved_state
     }
@@ -185,10 +247,15 @@ impl PagedEditorSurface {
             return Err("Document is read only.".into());
         }
         self.submit(Action::Save {
+            copy_only: false,
             target,
             expected,
             platform,
         })
+    }
+    /// Export the captured document without changing its save identity or recovery.
+    pub fn save_copy(&mut self, target: PathBuf, platform: Arc<dyn LocalFileSystem>) -> Result<(), String> {
+        self.submit(Action::Save { copy_only: true, target, expected: None, platform })
     }
     pub fn enqueue(&mut self, input: Input) {
         if self.surface.user_read_only
@@ -258,6 +325,7 @@ impl PagedEditorSurface {
             return Err("A paged operation is already pending.".into());
         }
         let actor = self.actor.clone();
+        let tail = self.tail.clone();
         let recovery = self.recovery.clone();
         let recovery_config = self.recovery_config.clone();
         let recovery_status = self.recovery_status.clone();
@@ -275,6 +343,7 @@ impl PagedEditorSurface {
                 let result = (|| {
                     cancellation.check().map_err(|error| format!("{error:?}"))?;
                     let mut opened = actor.lock().map_err(|_| "Paged actor stopped.")?;
+                    let mut tail = tail.lock().map_err(|_| "Tail actor stopped.")?;
                     if opened.transcoded.document.snapshot().revision != revision {
                         return Err("Document changed; retry the operation.".into());
                     }
@@ -285,6 +354,20 @@ impl PagedEditorSurface {
                     let mut retry_recovery = false;
                     let mut recovery_edits = Vec::new();
                     match action {
+                        Action::Tail { platform, request, follow } => {
+                            if tail.is_none() { *tail = Some(bareline_file_io::tail::TailSession::new(&opened, platform, budget.clone(), cancellation.clone()).map_err(|e| format!("{e:?}"))?); }
+                            let session = tail.as_mut().unwrap();
+                            if request { session.request(&opened.path).map_err(|e| format!("{e:?}"))?; }
+                            if session.step(&mut opened).map_err(|e| format!("{e:?}"))? && follow {
+                                caret = opened.transcoded.document.snapshot().len(); start = caret.saturating_sub(WINDOW / 2);
+                            }
+                        }
+                        Action::UnlockTail => {
+                            let session = tail.as_ref().ok_or("Monitoring is not active")?;
+                            let fixed = session.freeze(&opened).map_err(|e| format!("Cannot capture fixed generation: {e:?}"))?;
+                            *opened = fixed; *tail = None;
+                            saved = Some(opened.fingerprint.clone());
+                        }
                         Action::RetryRecovery => {
                             if let Some((_, platform)) = &recovery_config {
                                 let paths = std::mem::take(
@@ -337,6 +420,7 @@ impl PagedEditorSurface {
                             let snapshot = opened.transcoded.document.snapshot();
                             let window = read_window(
                                 &mut opened,
+                                &mut tail,
                                 &snapshot,
                                 range.start.0.saturating_sub(4),
                                 (range.end.0 - range.start.0 + 8).min(WINDOW + 8),
@@ -403,11 +487,13 @@ impl PagedEditorSurface {
                                 .map_err(|error| format!("{error:?}"))?;
                         }
                         Action::Save {
+                            copy_only,
                             target,
                             expected,
                             platform,
                         } => {
                             let snapshot = opened.transcoded.document.snapshot();
+                            let _copy_source = if copy_only && opened.recovery_origin.is_none() { bareline_file_io::lifecycle::guard_copy_source(&opened.path,&target,platform.as_ref()).map_err(|e|format!("{e:?}"))? } else { None };
                             let policy = PagedSavePolicy {
                                 store: opened.transcoded.store.clone(),
                                 generation: opened.transcoded.source.source().generation(),
@@ -423,9 +509,11 @@ impl PagedEditorSurface {
                                 &cancellation,
                             )
                             .map_err(|error| format!("{error:?}"))?;
-                            opened.fingerprint = result.fingerprint.clone();
-                            opened.path = target;
-                            saved = Some(result.fingerprint);
+                            if !copy_only {
+                                opened.fingerprint = result.fingerprint.clone();
+                                opened.path = target;
+                                saved = Some(result.fingerprint);
+                            }
                         }
                     }
                     let snapshot = opened.transcoded.document.snapshot();
@@ -467,6 +555,7 @@ impl PagedEditorSurface {
                                         bareline_file_io::paged_recovery::PagedRecovery::create(
                                             &root,
                                             opened.transcoded.store.clone(),
+                                            opened.recovery_origin.is_none().then(||opened.path.clone()),
                                             baseline,
                                             platform,
                                             recovery_status.clone(),
@@ -487,6 +576,7 @@ impl PagedEditorSurface {
                     caret = caret.min(snapshot.len());
                     let window = read_window(
                         &mut opened,
+                        &mut tail,
                         &snapshot,
                         start,
                         WINDOW,
@@ -494,6 +584,10 @@ impl PagedEditorSurface {
                         &cancellation,
                     );
                     Ok(Completed {
+                        following: tail.is_some(),
+                        tail_pending: tail.as_ref().is_some_and(|s| s.pending()),
+                        source_changed: tail.as_ref().is_some_and(|s| s.source_changed),
+                        fingerprint: opened.fingerprint.clone(),
                         can_undo: opened.transcoded.document.can_undo(),
                         can_redo: opened.transcoded.document.can_redo(),
                         snapshot,
@@ -522,6 +616,12 @@ impl PagedEditorSurface {
         self.pending = None;
         match result {
             Ok(completed) => {
+                let was_following = self.following;
+                self.following = completed.following;
+                self.tail_pending = completed.tail_pending;
+                self.tail_changed = completed.source_changed;
+                if was_following && !self.following { self.surface.user_read_only = false; }
+                if self.following { self.saved_state = Some(completed.snapshot.content_state); self.fingerprint = completed.fingerprint; }
                 self.can_undo = completed.can_undo;
                 self.can_redo = completed.can_redo;
                 if let Some(input) = self.pending_input.take() {
@@ -605,6 +705,7 @@ impl Drop for PagedEditorSurface {
 }
 fn read_window(
     opened: &mut PagedOpened,
+    tail: &mut Option<bareline_file_io::tail::TailSession>,
     snapshot: &PagedSnapshot,
     start: usize,
     count: usize,
@@ -618,11 +719,10 @@ fn read_window(
         cancellation.check().map_err(|error| format!("{error:?}"))?;
         match request.poll() {
             WindowPoll::Ready(window) => return Ok(window),
-            WindowPoll::Pending(ticket) => opened
-                .transcoded
-                .source
-                .read_page(ticket)
-                .map_err(|error| format!("{error:?}"))?,
+            WindowPoll::Pending(ticket) => {
+                let handled = match tail.as_mut() { Some(tail) => tail.read_page(ticket).map_err(|e| format!("{e:?}"))?, None => false };
+                if !handled { opened.transcoded.source.read_page(ticket).map_err(|error| format!("{error:?}"))?; }
+            }
             WindowPoll::Unavailable(reason) => {
                 return Err(format!("Source unavailable: {reason:?}"));
             }

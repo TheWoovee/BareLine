@@ -56,6 +56,7 @@ pub fn run(directory: &Path, stamp: u128) -> super::Result<Value> {
     let mut writer = RecoveryWriter::create(
         &recovery_path,
         RecoveryMetadata {
+            original_path: None,
             source_generation: "synthetic-owned-v1".into(),
             codec_catalog_version: "utf8-fixture-v1".into(),
             original_len: text.len() as u64,

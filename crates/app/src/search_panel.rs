@@ -66,7 +66,9 @@ pub struct SearchPanel {
     visible_names: Vec<(usize, String)>,
 }
 impl SearchPanel {
-    pub fn owns_accessibility_id(&self, id: u64) -> bool { self.semantics().iter().any(|node| node.id.0 == id) }
+    pub fn owns_accessibility_id(&self, id: u64) -> bool {
+        self.semantics().iter().any(|node| node.id.0 == id)
+    }
     pub fn status(&self) -> &str {
         &self.status
     }
@@ -309,7 +311,7 @@ impl SearchPanel {
                         "Invalid query · Check pattern and options".into()
                     }
                     Completeness::UnsupportedStreaming => {
-                        "Results incomplete · Regex subject exceeds 16 MiB".into()
+                        "Results incomplete · Regex context exceeds 64 MiB".into()
                     }
                     Completeness::RegexLimit => "Results incomplete · Regex resource limit".into(),
                     Completeness::Unsupported => "Results incomplete · Source unavailable".into(),
@@ -332,7 +334,7 @@ impl SearchPanel {
                     1 + if self.collapsed[index] {
                         0
                     } else {
-                        document.count()
+                        document.matches().len()
                     }
                 };
                 self.offsets

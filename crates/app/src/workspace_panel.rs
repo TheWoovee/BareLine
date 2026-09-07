@@ -7,7 +7,7 @@ use bareline_ui::{
     widgets::Theme,
 };
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     path::PathBuf,
     sync::{
         Arc,
@@ -98,6 +98,7 @@ pub struct WorkspacePanel {
     selected: Option<NodeId>,
     directory_guard: Option<DirectoryGuard>,
     excludes: Arc<Vec<String>>,
+    dirty: BTreeSet<u64>,
 }
 impl WorkspacePanel {
     pub fn new(notify: Arc<dyn Fn() + Send + Sync>) -> Self {
@@ -111,6 +112,7 @@ impl WorkspacePanel {
             selected: None,
             directory_guard: None,
             excludes: Arc::new(Vec::new()),
+            dirty: BTreeSet::new(),
         }
     }
     pub fn set_directory_guard(
@@ -119,7 +121,7 @@ impl WorkspacePanel {
     ) {
         self.directory_guard = Some(Arc::new(guard));
     }
-    /// Exact directory/file basenames; opt-in and evaluated by the listing worker.
+    /// Bounded basename glob patterns (`*` and `?`), evaluated off the UI thread.
     pub fn set_excludes(&mut self, names: Vec<String>) {
         self.excludes = Arc::new(
             names
@@ -135,11 +137,35 @@ impl WorkspacePanel {
             self.request(id);
         }
     }
+    pub fn watch_roots(&self) -> Vec<PathBuf> {
+        self.model.nodes.values().filter(|n| n.directory && n.children.is_some())
+            .take(256).map(|n| n.path.clone()).collect()
+    }
+    /// Invalidate only the changed directory; unaffected path/node IDs survive.
+    pub fn directory_changed(&mut self, directory: &std::path::Path) {
+        for (&id, node) in &self.model.nodes {
+            if node.path == directory && node.children.is_some() {
+                self.dirty.insert(id);
+            }
+        }
+    }
+    fn release_children(&mut self, id: NodeId) {
+        let mut pending = self.model.nodes.get_mut(&id.0)
+            .and_then(|n| n.children.take()).unwrap_or_default();
+        while let Some(child) = pending.pop() {
+            if let Some(node) = self.model.nodes.remove(&child.0) {
+                pending.extend(node.children.unwrap_or_default());
+            }
+            self.dirty.remove(&child.0);
+        }
+        self.tree.update_child_count(id, 0);
+    }
     pub fn selected_path(&self) -> Option<&std::path::Path> {
         Some(&self.model.nodes.get(&self.selected?.0)?.path)
     }
     pub fn refresh_tree(&mut self) {
         self.pending = None;
+        self.dirty.clear();
         let roots: Vec<_> = self
             .model
             .roots
@@ -184,6 +210,11 @@ impl WorkspacePanel {
         if self.pending.is_some() {
             self.message = Some("Folder discovery busy; try again when ready".into());
             return;
+        }
+        // Continuation replaces the previous page at the resident-node ceiling.
+        // The live ReadDir cursor advances, so every entry remains reachable.
+        if NODE_LIMIT.saturating_sub(self.model.nodes.len()) < ENTRY_LIMIT {
+            self.release_children(id);
         }
         let capacity = ENTRY_LIMIT.min(NODE_LIMIT.saturating_sub(self.model.nodes.len()));
         if capacity == 0 {
@@ -239,6 +270,15 @@ impl WorkspacePanel {
         }
     }
     pub fn pump(&mut self) -> bool {
+        if self.pending.is_none() {
+            if let Some(id) = self.dirty.pop_first() {
+                let id = NodeId(id);
+                self.release_children(id);
+                if let Some(node) = self.model.nodes.get_mut(&id.0) { node.cursor = None; }
+                self.request(id);
+                return true;
+            }
+        }
         let Some(rx) = &self.pending else {
             return false;
         };
@@ -406,7 +446,7 @@ fn enumerate_page(
             Ok((path, kind)) => {
                 if !excludes
                     .iter()
-                    .any(|s| path.file_name().is_some_and(|n| n == s.as_str()))
+                    .any(|s| path.file_name().is_some_and(|n| glob_matches(s, &n.to_string_lossy())))
                 {
                     result
                         .entries
@@ -424,6 +464,22 @@ fn enumerate_page(
         .entries
         .sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
     result
+}
+fn glob_matches(pattern: &str, name: &str) -> bool {
+    let pattern: Vec<_> = pattern.chars().collect();
+    let name: Vec<_> = name.chars().collect();
+    let (mut p, mut n, mut star, mut retry) = (0, 0, None, 0);
+    while n < name.len() {
+        if p < pattern.len() && (pattern[p] == '?' || pattern[p] == name[n]) {
+            p += 1; n += 1;
+        } else if p < pattern.len() && pattern[p] == '*' {
+            star = Some(p); p += 1; retry = n;
+        } else if let Some(s) = star {
+            retry += 1; n = retry; p = s + 1;
+        } else { return false; }
+    }
+    while p < pattern.len() && pattern[p] == '*' { p += 1; }
+    p == pattern.len()
 }
 #[cfg(test)]
 fn enumerate(parent: NodeId, path: PathBuf, capacity: usize) -> Listing {
@@ -481,6 +537,12 @@ pub fn register_commands(registry: &mut bareline_commands::CommandRegistry) {
     for (id, title) in [
         (TOGGLE, "Toggle Workspace"),
         (OPEN_FOLDER, "Open Workspace Folder…"),
+        (bareline_commands::CommandId("workspace.loadMore"), "Load More Entries"),
+        (bareline_commands::CommandId("workspace.refresh"), "Refresh Workspace"),
+        (bareline_commands::CommandId("workspace.undoDelete"), "Undo Workspace Delete"),
+        (bareline_commands::CommandId("outline.importFunctionList"), "Import Notepad++ Function List…"),
+        (bareline_commands::CommandId("outline.loadDefinition"), "Load Outline Definition…"),
+        (bareline_commands::CommandId("outline.exportDefinition"), "Export Outline Definition…"),
         (
             bareline_commands::CommandId("view.documents"),
             "Toggle Document List",
@@ -527,7 +589,7 @@ pub fn register_commands(registry: &mut bareline_commands::CommandRegistry) {
         ),
         (
             bareline_commands::CommandId("workspace.delete"),
-            "Delete Selected Entry (Empty Folders Only)",
+            "Delete Selected Entry (Retain for Undo)",
         ),
     ] {
         let _ = registry.register(bareline_commands::CommandSpec {

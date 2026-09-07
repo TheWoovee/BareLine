@@ -9,6 +9,8 @@ use std::{
 };
 
 pub const SUBJECT_LIMIT: usize = 16 * 1024 * 1024;
+/// Complete context budget; no source prefix is discarded and all subject anchors stay exact.
+pub const CONTEXT_LIMIT: usize = 64 * 1024 * 1024;
 type Captures = Vec<Option<Range<TextOffset>>>;
 
 // pcre2-sys omits callout bindings. The block is opaque: the callback never dereferences it.
@@ -94,10 +96,14 @@ impl Engine {
             pcre2_set_parens_nest_limit_8(compile, 250);
             let mut error = 0;
             let mut offset = 0;
+            // Keep PCRE2's literal-prefix/start optimizations: disabling them invokes
+            // a callout at every candidate byte and exhausts the deadline on an
+            // ordinary 20 MiB search. Optimized subject scans are bounded by the
+            // 64 MiB context cap; matching still has automatic callouts and limits,
+            // and cancellation is checked before/after each engine invocation.
             let options = PCRE2_UTF
                 | PCRE2_UCP
                 | PCRE2_AUTO_CALLOUT
-                | PCRE2_NO_START_OPTIMIZE
                 | PCRE2_NEVER_BACKSLASH_C
                 | if query.case == Case::Folded {
                     PCRE2_CASELESS
@@ -196,6 +202,8 @@ pub(super) fn scan(
         completeness: Completeness::Complete,
         captures: Some(Vec::new()),
         capture_names: Vec::new(),
+        total_count: 0,
+        count_complete: false,
     };
     let mut emitted = 0;
     let status = (|| {
@@ -216,7 +224,7 @@ pub(super) fn scan(
         {
             return Err(Completeness::InvalidQuery);
         }
-        if snapshot.len() > SUBJECT_LIMIT {
+        if snapshot.len() > CONTEXT_LIMIT {
             return Err(Completeness::UnsupportedStreaming);
         }
         let mut engine = Engine::new(query)?;
@@ -309,6 +317,8 @@ pub(super) fn scan(
     } else {
         status.err().unwrap_or(Completeness::Complete)
     };
+    result.total_count = result.matches.len();
+    result.count_complete = result.completeness == Completeness::Complete;
     result
 }
 
@@ -509,7 +519,7 @@ mod tests {
     }
     #[test]
     fn unsupported_subject_limits_and_invalid_patterns_never_replace() {
-        let snapshot = document(&"x".repeat(SUBJECT_LIMIT + 1)).snapshot();
+        let snapshot = document(&"x".repeat(CONTEXT_LIMIT + 1)).snapshot();
         let result = super::scan(&snapshot, &query("x"), &SearchJob::default(), |_| {});
         assert_eq!(result.completeness(), Completeness::UnsupportedStreaming);
         assert!(matches!(
@@ -532,6 +542,19 @@ mod tests {
         assert_eq!(
             super::scan(&snapshot, &query("a"), &job, |_| {}).completeness(),
             Completeness::Cancelled
+        );
+    }
+    #[test]
+    fn multiline_regex_crosses_sixteen_mib_with_full_anchor_context() {
+        let mut text = "x".repeat(SUBJECT_LIMIT - 2);
+        text.push_str("AB\nCD");
+        text.push_str(&"x".repeat(4 * 1024 * 1024));
+        let snapshot = document(&text).snapshot();
+        let result = super::scan(&snapshot, &query("AB\nCD"), &SearchJob::default(), |_| {});
+        assert_eq!(result.completeness(), Completeness::Complete);
+        assert_eq!(
+            result.matches()[0].range,
+            TextOffset(SUBJECT_LIMIT - 2)..TextOffset(SUBJECT_LIMIT + 3)
         );
     }
     #[test]

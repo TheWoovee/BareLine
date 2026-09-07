@@ -52,6 +52,9 @@ pub enum SplitOrientation {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct SessionLayout {
+    pub tab_colors: std::collections::BTreeMap<u64, u32>,
+    pub vertical_tabs: bool,
+    pub tab_sort: String,
     pub split: bool,
     pub orientation: SplitOrientation,
     pub ratio_bits: u64,
@@ -63,6 +66,9 @@ pub struct SessionLayout {
 impl Default for SessionLayout {
     fn default() -> Self {
         Self {
+            tab_colors: Default::default(),
+            vertical_tabs: false,
+            tab_sort: "manual".into(),
             split: false,
             orientation: SplitOrientation::Vertical,
             ratio_bits: 0.5f64.to_bits(),
@@ -148,9 +154,12 @@ impl SessionManifest {
         }
         let mut tabs = HashSet::new();
         if let Some(compare) = &self.compare {
-            if compare.version != 1 || compare.options_json.len() > 65536
-                || !docs.contains(&compare.left_document) || !docs.contains(&compare.right_document)
-                || compare.left_document == compare.right_document {
+            if compare.version != 1
+                || compare.options_json.len() > 65536
+                || !docs.contains(&compare.left_document)
+                || !docs.contains(&compare.right_document)
+                || compare.left_document == compare.right_document
+            {
                 return Err(invalid("invalid comparison session"));
             }
         }

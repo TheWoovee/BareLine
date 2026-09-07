@@ -59,6 +59,7 @@ struct Pages {
     resident_bytes: usize,
 }
 struct Inner {
+    owner: Mutex<Option<Arc<dyn Send + Sync>>>,
     generation: Generation,
     length: u64,
     page_size: usize,
@@ -110,6 +111,7 @@ impl MemorySource {
             return Err(Error::BudgetExceeded);
         }
         let inner = Arc::new(Inner {
+            owner: Mutex::new(None),
             generation,
             length,
             page_size,
@@ -126,6 +128,14 @@ impl MemorySource {
             cancelled: AtomicBool::new(false),
         });
         Ok((Self(inner.clone()), SourcePublisher(inner)))
+    }
+    /// Retains private backing-store ownership for every snapshot containing this source.
+    /// Attach before publishing the source; a second owner is refused.
+    pub fn retain_owner(&self, owner: Arc<dyn Send + Sync>) -> Result<(), Error> {
+        let mut slot = self.0.owner.lock().unwrap_or_else(|p| p.into_inner());
+        if slot.is_some() { return Err(Error::WrongDocument); }
+        *slot = Some(owner);
+        Ok(())
     }
     pub fn len(&self) -> u64 {
         self.0.length

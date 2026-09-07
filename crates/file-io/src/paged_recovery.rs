@@ -52,6 +52,7 @@ impl PagedRecovery {
     pub fn create(
         root: &Path,
         store: DiskDecoded,
+        original_path: Option<PathBuf>,
         baseline: bareline_document::paged::PagedSnapshot,
         platform: Arc<dyn LocalFileSystem>,
         status: Arc<Mutex<PagedRecoveryStatus>>,
@@ -71,6 +72,7 @@ impl PagedRecovery {
         let writer = RecoveryWriter::create(
             &directory,
             RecoveryMetadata {
+                original_path,
                 source_generation: format!("{:x?}", store.fingerprint.sha256),
                 codec_catalog_version: "bareline-codecs-v1".into(),
                 original_len: baseline.len() as u64,
@@ -286,6 +288,11 @@ fn write_root(
         sha256: hash.finalize().into(),
     };
     crate::session::publish_json(
+        &directory.join(format!("root-{}.receipt.json", receipt.revision)),
+        &serde_json::to_vec(&receipt).map_err(std::io::Error::other)?,
+        platform,
+    )?;
+    crate::session::publish_json(
         &directory.join("paged-root.json"),
         &serde_json::to_vec(&receipt).map_err(std::io::Error::other)?,
         platform,
@@ -330,7 +337,7 @@ pub fn restore(
     {
         return Err("Invalid recovery source".into());
     }
-    let root: RootReceipt =
+    let mut root: RootReceipt =
         serde_json::from_slice(&read_small("paged-root.json")?).map_err(|e| e.to_string())?;
     if root.version != 1 || root.file != format!("root-{}.json", root.revision) {
         return Err("Invalid recovery root".into());
@@ -338,6 +345,22 @@ pub fn restore(
     let inspection = crate::recovery::inspect(directory, cancel).map_err(|e| e.to_string())?;
     if inspection.status == crate::recovery::RecoveryStatus::Discarded {
         return Err("Recovery checkpoint was discarded".into());
+    }
+    if inspection.status == crate::recovery::RecoveryStatus::CorruptTail
+        && let Some(validated) = inspection.last_durable
+        && validated.revision < root.revision
+    {
+        root = serde_json::from_slice(&read_small(&format!(
+            "root-{}.receipt.json",
+            validated.revision
+        ))?)
+        .map_err(|e| e.to_string())?;
+        if root.version != 1
+            || root.revision != validated.revision
+            || root.file != format!("root-{}.json", validated.revision)
+        {
+            return Err("Invalid validated-prefix recovery root".into());
+        }
     }
     if !inspection.complete_baseline
         || inspection
