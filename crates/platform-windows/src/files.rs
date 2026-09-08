@@ -78,27 +78,17 @@ impl LocalFileSystem for WindowsFileSystem {
     fn commit(&self, staged: &Path, target: &Path, existed: bool) -> io::Result<()> {
         let stage = wide(staged);
         let target = wide(target);
+        #[cfg(test)] replacement_faults::hit(existed, false)?;
         // SAFETY: both owned names are same-directory paths; no truncate/in-place fallback.
-        unsafe {
+        let result = unsafe {
             if existed {
-                ReplaceFileW(
-                    PCWSTR(target.as_ptr()),
-                    PCWSTR(stage.as_ptr()),
-                    None,
-                    REPLACE_FILE_FLAGS(0),
-                    None,
-                    None,
-                )
-                .map_err(io_error)
+                ReplaceFileW(PCWSTR(target.as_ptr()), PCWSTR(stage.as_ptr()), None, REPLACE_FILE_FLAGS(0), None, None).map_err(io_error)
             } else {
-                MoveFileExW(
-                    PCWSTR(stage.as_ptr()),
-                    PCWSTR(target.as_ptr()),
-                    MOVEFILE_WRITE_THROUGH,
-                )
-                .map_err(io_error)
+                MoveFileExW(PCWSTR(stage.as_ptr()), PCWSTR(target.as_ptr()), MOVEFILE_WRITE_THROUGH).map_err(io_error)
             }
-        }
+        };
+        #[cfg(test)] replacement_faults::hit(existed, true)?;
+        result
     }
 }
 
@@ -419,3 +409,7 @@ mod tests {
         std::fs::remove_dir(directory).unwrap();
     }
 }
+
+#[cfg(test)]
+#[path = "replacement_faults.rs"]
+mod replacement_faults;

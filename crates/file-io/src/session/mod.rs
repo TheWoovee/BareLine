@@ -11,6 +11,8 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
+mod salvage;
+pub use salvage::{decode_report,DecodedSession,SessionDiagnostic,SessionDiagnostics,SessionIssue};
 pub const SESSION_VERSION: u32 = 1;
 pub const MAX_SESSION_BYTES: usize = 8 * 1024 * 1024;
 const MAX_ENTRIES: usize = 10_000;
@@ -197,6 +199,7 @@ impl SessionManifest {
         for path in &self.recent {
             validate_path(path)?;
         }
+        if self.layout.tab_colors.len()>MAX_ENTRIES || self.layout.tab_colors.iter().any(|(id,color)|!tabs.contains(id)||*color>0xff_ffff) {return Err(invalid("invalid session tab color"));}
         if !self.valid_layout() {
             return Err(invalid("invalid session layout"));
         }
@@ -224,7 +227,8 @@ impl SessionManifest {
                     })
                 })
     }
-    /// Active document first, then MRU, then remaining tab documents; cloned tabs deduplicate.
+    /// Active document first, then MRU, tab documents and surviving orphan documents.
+    /// Stable IDs/order are retained even when a corrupt tab entry was discarded.
     /// This is scheduling data only. The app limits concurrent opens to two.
     pub fn restore_order(&self) -> Vec<u64> {
         let active = self
@@ -237,6 +241,7 @@ impl SessionManifest {
             .into_iter()
             .chain(self.mru.iter().copied())
             .chain(self.tabs.iter().map(|tab| tab.document_id))
+            .chain(self.documents.iter().map(|document|document.id))
             .filter(|id| seen.insert(*id))
             .collect()
     }
@@ -250,24 +255,7 @@ fn validate_path(path: &SerializedPath) -> io::Result<()> {
 }
 /// Import untrusted machine-written JSON without filesystem access. Version zero used
 /// the same layout without MRU/recent; those default empty during migration.
-pub fn decode(bytes: &[u8]) -> io::Result<SessionManifest> {
-    if bytes.len() > MAX_SESSION_BYTES {
-        return Err(invalid("session byte limit"));
-    }
-    let mut manifest: SessionManifest = serde_json::from_slice(bytes).map_err(invalid)?;
-    if manifest.version == 0 {
-        manifest.version = SESSION_VERSION;
-    }
-    if !manifest.valid_layout() {
-        manifest.layout = SessionLayout::default();
-        manifest.layout.active_tabs[0] = manifest.active_tab;
-        for tab in &mut manifest.tabs {
-            tab.view.split = 0;
-        }
-    }
-    manifest.validate()?;
-    Ok(manifest)
-}
+pub fn decode(bytes: &[u8]) -> io::Result<SessionManifest> {decode_report(bytes).map(|decoded|decoded.manifest)}
 pub fn encode(manifest: &SessionManifest) -> io::Result<Vec<u8>> {
     manifest.validate()?;
     struct Bounded(Vec<u8>);
@@ -292,6 +280,7 @@ pub struct LoadedSession {
     pub manifest: SessionManifest,
     /// True means the primary could not be read/validated; show a recovery warning.
     pub recovered_previous: bool,
+    pub diagnostics: SessionDiagnostics,
 }
 pub struct SessionStore {
     path: PathBuf,
@@ -303,13 +292,21 @@ impl SessionStore {
     }
     pub fn load(&self) -> io::Result<LoadedSession> {
         match read_manifest(&self.path) {
-            Ok(manifest) => Ok(LoadedSession {
-                manifest,
+            Ok(mut decoded) if decoded.manifest.documents.is_empty() && decoded.diagnostics.skipped_documents>0 => {
+                if let Ok(previous)=read_manifest(&self.previous()) && !previous.manifest.documents.is_empty() {
+                    decoded.diagnostics.merge(previous.diagnostics);
+                    Ok(LoadedSession {manifest:previous.manifest,recovered_previous:true,diagnostics:decoded.diagnostics})
+                } else {Ok(LoadedSession {manifest:decoded.manifest,recovered_previous:false,diagnostics:decoded.diagnostics})}
+            }
+            Ok(decoded) => Ok(LoadedSession {
+                manifest:decoded.manifest,
+                diagnostics:decoded.diagnostics,
                 recovered_previous: false,
             }),
             Err(primary) => match read_manifest(&self.previous()) {
-                Ok(manifest) => Ok(LoadedSession {
-                    manifest,
+                Ok(decoded) => Ok(LoadedSession {
+                    manifest:decoded.manifest,
+                    diagnostics:decoded.diagnostics,
                     recovered_previous: true,
                 }),
                 Err(_) => Err(primary),
@@ -325,8 +322,8 @@ impl SessionStore {
     ) -> io::Result<()> {
         let bytes = encode(manifest)?;
         platform.validate_target(&self.path)?;
-        if let Ok(previous) = read_manifest(&self.path) {
-            atomic_write(&self.previous(), &encode(&previous)?, platform)?;
+        if let Ok(previous) = read_manifest(&self.path) && previous.diagnostics.is_empty() {
+            atomic_write(&self.previous(), &encode(&previous.manifest)?, platform)?;
         }
         atomic_write(&self.path, &bytes, platform)
     }
@@ -336,12 +333,12 @@ impl SessionStore {
         PathBuf::from(name)
     }
 }
-fn read_manifest(path: &Path) -> io::Result<SessionManifest> {
+fn read_manifest(path: &Path) -> io::Result<DecodedSession> {
     let mut bytes = Vec::new();
     File::open(path)?
         .take((MAX_SESSION_BYTES + 1) as u64)
         .read_to_end(&mut bytes)?;
-    decode(&bytes)
+    decode_report(&bytes)
 }
 fn atomic_write(path: &Path, bytes: &[u8], platform: &dyn LocalFileSystem) -> io::Result<()> {
     static NEXT: AtomicU64 = AtomicU64::new(0);
@@ -429,6 +426,33 @@ mod tests {
             },
             ..Default::default()
         }
+    }
+    #[test]
+    fn mixed_corrupt_entries_preserve_ids_order_views_and_safe_references() {
+        let original=fixture();let mut value=serde_json::to_value(&original).unwrap();
+        let mut bad_path=serde_json::to_value(SerializedPath::from_native(Path::new("must-not-be-opened"))).unwrap();bad_path["data"]=serde_json::json!("!!!!");
+        value["documents"]=serde_json::json!([value["documents"][0].clone(),{"id":9,"title":"secret-invalid-title","path":bad_path.clone()},value["documents"][1].clone(),{"id":7,"title":"duplicate","path":null}]);
+        value["tabs"][1]["view"]["folds"]=serde_json::json!([{"start":9,"end":2}]);
+        let tabs=value["tabs"].as_array_mut().unwrap();tabs.push(serde_json::json!({"id":3,"document_id":9,"pinned":false,"view":{}}));tabs.push(serde_json::json!({"id":1,"document_id":8,"pinned":false,"view":{}}));tabs.push(serde_json::json!({"id":4,"document_id":8,"pinned":true,"view":{}}));
+        value["active_tab"]=serde_json::json!(3);value["mru"]=serde_json::json!([9,8,8,7]);value["recent"]=serde_json::json!([original.documents[0].path.clone().unwrap(),bad_path]);
+        value["compare"]=serde_json::json!({"version":1,"left_document":7,"right_document":9,"options_json":[]});
+        let decoded=decode_report(&serde_json::to_vec(&value).unwrap()).unwrap();let manifest=decoded.manifest;
+        assert_eq!(manifest.documents.iter().map(|doc|doc.id).collect::<Vec<_>>(),vec![7,8]);assert_eq!(manifest.documents[0],original.documents[0]);
+        assert_eq!(manifest.tabs.iter().map(|tab|tab.id).collect::<Vec<_>>(),vec![1,2,4]);assert_eq!(manifest.tabs[0].view,original.tabs[0].view);assert_eq!(manifest.tabs[1].view,ViewState::default());assert!(!manifest.tabs[2].pinned);
+        assert_eq!(manifest.active_tab,Some(1));assert_eq!(manifest.mru,vec![8,7]);assert_eq!(manifest.recent.len(),1);assert!(manifest.compare.is_none());manifest.validate().unwrap();
+        assert!(decoded.diagnostics.entries.iter().any(|entry|entry.issue==SessionIssue::InvalidPath));assert!(decoded.diagnostics.entries.iter().any(|entry|entry.issue==SessionIssue::InvalidView));assert!(!decoded.diagnostics.summary().contains("secret-invalid-title"));assert!(!decoded.diagnostics.summary().contains("must-not-be-opened"));
+    }
+    #[test]
+    fn bounded_entry_failure_does_not_consume_following_valid_document() {
+        let value=serde_json::json!({"version":1,"documents":[{"id":1,"path":null,"title":"x".repeat(2*1024*1024+1)},{"id":2,"path":null,"title":"kept"}],"tabs":[],"active_tab":null});
+        let decoded=decode_report(&serde_json::to_vec(&value).unwrap()).unwrap();assert_eq!(decoded.manifest.restore_order(),vec![2]);assert_eq!(decoded.diagnostics.skipped,1);assert_eq!(decoded.diagnostics.entries[0].issue,SessionIssue::ResourceLimit);
+        let mut entries=vec![serde_json::json!({"id":2,"path":null,"title":"kept"})];entries.extend((0..MAX_ENTRIES+20).map(|_|serde_json::Value::Null));
+        let value=serde_json::json!({"version":1,"documents":entries,"tabs":[],"active_tab":null});let decoded=decode_report(&serde_json::to_vec(&value).unwrap()).unwrap();assert_eq!(decoded.manifest.documents.len(),1);assert_eq!(decoded.diagnostics.entries.len(),128);assert!(decoded.diagnostics.omitted>0);
+    }
+    #[test]
+    fn ambiguous_entry_fields_are_skipped_but_global_corruption_stays_fatal() {
+        let decoded=decode_report(br#"{"version":1,"documents":[{"id":1,"id":2,"path":null,"title":"bad"},{"id":3,"path":null,"title":"good"}],"tabs":[],"active_tab":null}"#).unwrap();assert_eq!(decoded.manifest.restore_order(),vec![3]);assert_eq!(decoded.diagnostics.entries[0].issue,SessionIssue::DuplicateField);
+        for bytes in [br#"{"version":1,"version":1,"documents":[],"tabs":[]}"#.as_slice(),br#"{"version":999,"documents":[],"tabs":[]}"#,br#"{"version":1,"documents":["#]{assert!(decode_report(bytes).is_err());}
     }
     #[test]
     fn round_trip_and_migration_preserve_views_and_paths() {
@@ -544,8 +568,16 @@ mod tests {
             path.encoding = bareline_platform::PathEncoding::WindowsUtf16Le;
             path.data = data.into();
             fs::write(&store.path, serde_json::to_vec(&corrupt).unwrap()).unwrap();
-            assert!(store.load().unwrap().recovered_previous);
+            let salvaged=store.load().unwrap();
+            assert!(!salvaged.recovered_previous);
+            assert_eq!(salvaged.manifest.documents.iter().map(|doc|doc.id).collect::<Vec<_>>(),vec![8]);
+            assert!(!salvaged.diagnostics.is_empty());
         }
+        let backup_before=fs::read(store.previous()).unwrap();
+        store.save(&SessionManifest::default(),&platform).unwrap();
+        assert_eq!(fs::read(store.previous()).unwrap(),backup_before,"salvaged primary must not overwrite healthy backup");
+        let mut all_bad=serde_json::to_value(&original).unwrap();all_bad["documents"]=serde_json::json!([null,null]);fs::write(&store.path,serde_json::to_vec(&all_bad).unwrap()).unwrap();
+        let previous=store.load().unwrap();assert!(previous.recovered_previous);assert_eq!(previous.manifest,original);assert_eq!(previous.diagnostics.skipped_documents,2);
         fs::remove_dir_all(dir).unwrap();
     }
     #[test]
