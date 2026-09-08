@@ -19,6 +19,8 @@ use std::{
     },
 };
 const WINDOW: usize = 64 * 1024;
+#[path="paged_transfer.rs"]
+pub mod transfer;
 #[path = "paged_spill.rs"]
 mod paged_spill;
 #[path = "mapped_viewport.rs"]
@@ -449,6 +451,7 @@ impl PagedEditorSurface {
         self.power_preparing||!self.power_inputs.is_empty()||self.power_actor_busy()
     }
     pub fn power_actor_busy(&self)->bool {
+        if transfer::history_busy(self){return true;}
         self.pending.is_some() || self.selection_validation.is_some() || self.mapping_job.is_some()
     }
     pub fn take_power_input(&mut self)->Option<Input>{if self.power_actor_busy()||self.power_preparing{return None;}self.sync_global_selection();let input=self.power_inputs.pop_front()?;self.power_preparing=true;Some(input)}
@@ -814,7 +817,14 @@ impl PagedEditorSurface {
     }
     /// Canonical endpoints are independent of the displayed, possibly clipped range.
     pub fn capture_power(&self)->crate::paged_power::Capture {
-        crate::paged_power::Capture{source:self.read_handle(),selections:self.global_selection_set(),state:self.power_state.clone(),language:self.surface.language,definition:self.surface.udl.clone(),tab_width:self.surface.configured_tab_width(),column_maps:None,typing:crate::paged_typing::TypingConfig{language:self.surface.language,definition:self.surface.udl.clone(),smart_pairs:self.surface.smart_typing&&self.surface.smart_pairs,smart_indent:self.surface.smart_typing&&self.surface.smart_indent,tab_width:self.surface.configured_tab_width(),literal_context:None}}
+        let selections=self.global_selection_set();
+        let literal_contexts=selections.selections.iter().map(|selection|{
+            let local=self.local_offset(TextOffset(selection.caret))?;
+            if self.source_offset(local,SourceAffinity::After)!=Some(TextOffset(selection.caret)){return None;}
+            let syntax=self.surface.typing_syntax.as_ref().filter(|syntax|syntax.is_current(&self.surface.snapshot)&&matches!(syntax.status,bareline_syntax::Status::Complete)&&(local.0==0||syntax.range.start<local)&&local<=syntax.range.end)?;
+            Some(syntax.spans.iter().any(|span|span.range.start.0<local.0&&local.0<=span.range.end.0&&matches!(span.kind,bareline_syntax::StyleKind::Comment|bareline_syntax::StyleKind::String)))
+        }).collect();
+        crate::paged_power::Capture{source:self.read_handle(),selections,literal_contexts,state:self.power_state.clone(),language:self.surface.language,definition:self.surface.udl.clone(),tab_width:self.surface.configured_tab_width(),column_maps:None,typing:crate::paged_typing::TypingConfig{language:self.surface.language,definition:self.surface.udl.clone(),smart_pairs:self.surface.smart_typing&&self.surface.smart_pairs,smart_indent:self.surface.smart_typing&&self.surface.smart_indent,tab_width:self.surface.configured_tab_width(),literal_context:None}}
     }
     pub fn install_power_state(&mut self,source:&PagedSnapshot,revision:bareline_document::Revision,selections:crate::power::SelectionSet,state:crate::paged_power::PowerViewState,hidden:&[std::ops::Range<u64>])->Result<(),String>{
         if source.identity_token().0!=self.snapshot.identity_token().0||revision!=self.snapshot.revision{return Err("Power result source changed".into());}
@@ -1199,6 +1209,7 @@ impl PagedEditorSurface {
         Ok(())
     }
     fn submit(&mut self, action: Action) -> Result<(), String> {
+        if matches!(action,Action::Undo|Action::Redo) && let Some(result)=transfer::try_history(self,matches!(action,Action::Undo)){return result;}
         if self.power_actor_busy() {
             return Err("A paged operation is already pending.".into());
         }
@@ -1563,6 +1574,7 @@ impl PagedEditorSurface {
         Ok(())
     }
     pub fn pump(&mut self) -> bool {
+        let _=transfer::pump_history(self);
         self.pump_owned_spill();
         self.sync_global_selection();
         let fold_changed = self.pump_fold_projection();
@@ -1744,10 +1756,13 @@ mod peer_tests {
     fn staged_multicaret_input_uses_global_ranges_and_one_history_entry(){
         use bareline_file_io::{codecs::disk::DiskOptions,lifecycle::{PagedOpenRequest,TranscodeOutcome,open_paged_encoded},source::SourceOptions};
         let root=std::env::temp_dir().join(format!("bareline-global-power-{}-{}",std::process::id(),crate::power::consumer::next_receipt_sequence()));std::fs::create_dir(&root).unwrap();
-        let path=root.join("source.txt");let original="abc\n".repeat(50000);std::fs::write(&path,&original).unwrap();
+        let path=root.join("source.txt");let original=format!("\"a\"\n{}","abc\n".repeat(49999));std::fs::write(&path,&original).unwrap();
         let budget=Budget::new(64<<20);
         let TranscodeOutcome::Complete(opened)=open_paged_encoded(PagedOpenRequest{path,bytes:budget.clone(),history:Budget::new(16<<20),cache:root.clone(),options:DiskOptions{temp_quota_bytes:16<<20,interpret:None},source_options:SourceOptions{resident_max_bytes:0,..Default::default()}},Arc::new(Platform),Cancellation::default(),|_|{})else{panic!("open failed")};
         let mut view=PagedEditorSurface::new(opened,budget.clone(),Arc::new(||{})).unwrap();drain(&mut view);
+        view.surface.typing_syntax=Some(bareline_syntax::lex(view.surface.snapshot.clone(),bareline_syntax::Language::Rust,TextOffset(0)..TextOffset(view.surface.snapshot.len()),None,&bareline_syntax::Cancellation::default()).unwrap());
+        view.global_selections=crate::power::SelectionSet{selections:vec![Selection{anchor:1,caret:1},Selection{anchor:5,caret:5},Selection{anchor:180001,caret:180001}],primary:0};view.project_global_selection();
+        assert_eq!(view.capture_power().literal_contexts,vec![Some(true),Some(false),None]);
         let set=crate::power::SelectionSet{selections:vec![Selection{anchor:1,caret:1},Selection{anchor:180001,caret:180001}],primary:1};
         view.global_selections=set.clone();view.project_global_selection();assert!(!view.selection_fully_in_viewport());
         let before=view.snapshot().clone();let options=crate::power::captured::StagingOptions{cache:root.clone(),quota:16<<20,platform:Arc::new(Platform),source_options:Default::default(),budget:budget.clone(),memory:8<<20,cancellation:Cancellation::default()};

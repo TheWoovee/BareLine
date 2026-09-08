@@ -157,6 +157,7 @@ pub struct EditorSurface {
     search_marks: search_marks::SearchMarks,
     pub language: bareline_syntax::Language,
     pub language_override: Option<bareline_syntax::Language>,
+    pub pending_session_language: Option<bareline_file_io::session::LanguageSelection>,
     pub detected_language: Option<bareline_syntax::Language>,
     pub syntax_preference: bareline_syntax::LexerPreference,
     pub udl: Option<Arc<bareline_syntax::udl::Definition>>,
@@ -256,6 +257,7 @@ impl EditorSurface {
             search_marks: search_marks::SearchMarks::default(),
             language: bareline_syntax::Language::PlainText,
             language_override: None,
+            pending_session_language: None,
             detected_language: None,
             syntax_preference: bareline_syntax::LexerPreference::Lexilla,
             udl: None,
@@ -474,6 +476,7 @@ impl EditorSurface {
         view.theme = self.theme;
         view.language = self.language;
         view.language_override = self.language_override;
+        view.pending_session_language = self.pending_session_language.clone();
         view.detected_language = self.detected_language;
         view.syntax_preference = self.syntax_preference;
         view.udl = self.udl.clone();
@@ -2124,5 +2127,38 @@ mod tests {
         view.enqueue(Input::Undo);
         drain(&mut view, &mut backend, &mut ops);
         assert_eq!(view.snapshot.read(TextOffset(0)..TextOffset(3), 3).unwrap(), "abc");
+    }
+}
+
+impl EditorSurface {
+    pub fn session_language_selection(&self)->Option<bareline_file_io::session::LanguageSelection>{
+        use bareline_file_io::session::LanguageSelection;
+        self.udl.as_ref().map(|definition|LanguageSelection::Udl(definition.id.clone()))
+            .or_else(||self.language_override.map(|language|LanguageSelection::Builtin(language.metadata().id.into())))
+            .or_else(||self.pending_session_language.clone())
+    }
+    pub fn restore_session_language(&mut self,selection:Option<&bareline_file_io::session::LanguageSelection>){
+        use bareline_file_io::session::LanguageSelection;
+        self.udl=None;self.language_override=None;self.pending_session_language=None;
+        match selection{
+            Some(LanguageSelection::Builtin(id))=>match bareline_syntax::Language::from_id(id){Some(language)=>{self.language=language;self.language_override=Some(language);},None=>{self.language=bareline_syntax::Language::PlainText;self.language_override=Some(bareline_syntax::Language::PlainText);self.error=Some(format!("Saved language {id} is unavailable; using plain text."));}},
+            Some(selection@LanguageSelection::Udl(_))=>{self.language=bareline_syntax::Language::PlainText;self.pending_session_language=Some(selection.clone());},
+            None=>{self.language=self.detected_language.unwrap_or(bareline_syntax::Language::PlainText);},
+        }
+    }
+}
+#[cfg(test)]mod session_language_tests{
+    use super::*;use bareline_file_io::session::LanguageSelection;
+    #[test]fn overrides_are_per_view_and_udl_is_only_a_deferred_identifier(){
+        let document=bareline_document::Document::from_utf8("data",bareline_document::Budget::new(1024),bareline_document::Budget::new(1024)).unwrap();
+        let mut first=EditorSurface::loading(document.snapshot(),Arc::new(||{}));
+        first.restore_session_language(Some(&LanguageSelection::Builtin("rust".into())));
+        let mut second=first.clone_view();second.restore_session_language(Some(&LanguageSelection::Builtin("json".into())));
+        assert_eq!(first.language_override,Some(bareline_syntax::Language::Rust));assert_eq!(second.language_override,Some(bareline_syntax::Language::Json));
+        second.restore_session_language(Some(&LanguageSelection::Udl("installed-only".into())));
+        assert!(second.udl.is_none());assert_eq!(second.session_language_selection(),Some(LanguageSelection::Udl("installed-only".into())));
+        second.restore_session_language(Some(&LanguageSelection::Builtin("unknown-language".into())));
+        assert_eq!(second.language_override,Some(bareline_syntax::Language::PlainText));assert!(second.error.is_some());
+        assert_eq!(first.snapshot().len(),4);
     }
 }

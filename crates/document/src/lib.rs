@@ -6,6 +6,7 @@ pub mod history;
 pub mod line_lookup;
 pub mod metadata;
 pub mod paged;
+pub mod paged_group;
 pub mod service;
 pub mod source;
 pub mod source_transaction;
@@ -69,15 +70,27 @@ impl Budget {
         self.0.used.load(Ordering::Relaxed)
     }
     pub fn limit(&self) -> usize {
-        *self.0.limit.lock().unwrap_or_else(|error| error.into_inner())
+        *self
+            .0
+            .limit
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
     }
     /// Retains every live claim. A lowered cap blocks new reservations until
     /// owners release enough bytes; all clones observe the same admission cap.
     pub fn set_limit(&self, limit: usize) {
-        *self.0.limit.lock().unwrap_or_else(|error| error.into_inner()) = limit;
+        *self
+            .0
+            .limit
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = limit;
     }
     fn reserve(&self, bytes: usize) -> Result<Reservation, Error> {
-        let limit = self.0.limit.lock().unwrap_or_else(|error| error.into_inner());
+        let limit = self
+            .0
+            .limit
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         self.0
             .used
             .fetch_update(Ordering::AcqRel, Ordering::Relaxed, |used| {

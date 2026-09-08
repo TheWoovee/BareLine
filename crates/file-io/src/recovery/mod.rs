@@ -256,6 +256,9 @@ impl RecoveryWriter {
             current_len,
         })
     }
+    /// A group root is committed but this ordinary journal did not continue.
+    /// Further writes require a fresh writer based on that authoritative root.
+    pub(crate) fn break_continuity(&mut self) { self.poisoned=true; }
     pub fn last_durable(&self) -> Option<DurableReceipt> {
         self.manifest.durable
     }

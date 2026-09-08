@@ -28,13 +28,24 @@ pub enum SourceTransactionPoll {
     Cancelled,
     Finished,
 }
+struct InsertedProvenance {
+    index: usize,
+    inserted_offset: usize,
+    snapshot: PagedSnapshot,
+    range: Range<TextOffset>,
+    _claim: BudgetClaim,
+}
 pub struct PreparedSourceTransaction {
+    provenance: Vec<InsertedProvenance>,
     snapshot: PagedSnapshot,
     edits: Vec<SourceEdit>,
     metadata: EditMetadata,
     _claim: BudgetClaim,
 }
 pub struct SourceTransactionRequest {
+    provenance: Vec<InsertedProvenance>,
+    proof_index: usize,
+    proof_cursor: usize,
     snapshot: PagedSnapshot,
     edits: Vec<SourceEdit>,
     metadata: EditMetadata,
@@ -108,6 +119,9 @@ impl PagedSnapshot {
         )?;
         let claim = budget.claim(sum(descriptors, selection_bytes(&metadata)?)?)?;
         Ok(SourceTransactionRequest {
+            provenance: Vec::new(),
+            proof_index: 0,
+            proof_cursor: 0,
             snapshot: self.clone(),
             edits,
             metadata,
@@ -126,12 +140,135 @@ impl PagedSnapshot {
     }
 }
 impl SourceTransactionRequest {
+    /// Index addresses the sorted edits. Retain raw provenance only after bounded
+    /// equality validation against this immutable captured range succeeds.
+    pub fn with_inserted_provenance(
+        self,
+        index: usize,
+        snapshot: PagedSnapshot,
+        range: Range<TextOffset>,
+    ) -> Result<Self, Error> {
+        self.with_inserted_provenance_parts(index, snapshot, vec![range])
+    }
+    /// Ordered ranges are concatenated without separators. At most4096 provenance
+    /// parts across the request; each part is compared to its staged insertion slice.
+    pub fn with_inserted_provenance_parts(
+        mut self,
+        index: usize,
+        snapshot: PagedSnapshot,
+        ranges: Vec<Range<TextOffset>>,
+    ) -> Result<Self, Error> {
+        let edit = self.edits.get(index).ok_or(Error::OutOfBounds)?;
+        if self.index != 0
+            || self.cursor != 0
+            || self.finished
+            || self.cancelled
+            || ranges.is_empty()
+            || ranges.len() > 4096usize.saturating_sub(self.provenance.len())
+            || self.provenance.iter().any(|value| value.index == index)
+        {
+            return Err(Error::OutOfBounds);
+        }
+        let mut total = 0usize;
+        for range in &ranges {
+            if range.start > range.end || range.end.0 > snapshot.len() {
+                return Err(Error::OutOfBounds);
+            }
+            total = total
+                .checked_add(range.end.0 - range.start.0)
+                .ok_or(Error::BudgetExceeded)?;
+        }
+        if total != (edit.inserted.range.end - edit.inserted.range.start) as usize {
+            return Err(Error::OutOfBounds);
+        }
+        // Reserve every descriptor before growing the container; each proof retains
+        // one share so consuming/cancelling the request releases its own descriptors.
+        let mut claims = Vec::new();
+        claims
+            .try_reserve_exact(ranges.len())
+            .map_err(|_| Error::BudgetExceeded)?;
+        for _ in &ranges {
+            claims.push(self.budget.claim(
+                std::mem::size_of::<InsertedProvenance>() + std::mem::size_of::<BudgetClaim>(),
+            )?);
+        }
+        self.provenance
+            .try_reserve_exact(ranges.len())
+            .map_err(|_| Error::BudgetExceeded)?;
+        let mut offset = 0;
+        for (range, claim) in ranges.into_iter().zip(claims) {
+            let length = range.end.0 - range.start.0;
+            self.provenance.push(InsertedProvenance {
+                index,
+                inserted_offset: offset,
+                snapshot: snapshot.clone(),
+                range,
+                _claim: claim,
+            });
+            offset += length;
+        }
+        Ok(self)
+    }
+    /// The I/O owner routes non-owned page tickets to this captured generation.
+    pub fn pending_snapshot(&self) -> Option<&PagedSnapshot> {
+        self.pending_source.as_ref()
+    }
+    fn proof_step(&mut self) -> SourceTransactionPoll {
+        let proof = &self.provenance[self.proof_index];
+        let length = proof.range.end.0 - proof.range.start.0;
+        if self.proof_cursor == length {
+            self.proof_index += 1;
+            self.proof_cursor = 0;
+            return SourceTransactionPoll::Progress;
+        }
+        let captured = proof.snapshot.clone();
+        let start = proof.range.start.0 + self.proof_cursor;
+        let inserted = self.edits[proof.index].inserted.clone();
+        let inserted_offset = proof.inserted_offset;
+        if self.old.is_none() {
+            match self.window(
+                captured,
+                start,
+                (length - self.proof_cursor).min(64 * 1024),
+                false,
+            ) {
+                Ok(Some(window)) => {
+                    if window.range().start.0 != start || window.text().is_empty() {
+                        return SourceTransactionPoll::Failed(Error::InvalidBoundary);
+                    }
+                    self.old = Some(window);
+                }
+                Ok(None) => {}
+                Err(result) => return result,
+            }
+            return SourceTransactionPoll::Progress;
+        }
+        let count = self.old.as_ref().expect("provenance window").text().len();
+        match self.window(
+            owned_snapshot(&self.snapshot, &inserted),
+            inserted_offset + self.proof_cursor,
+            count,
+            true,
+        ) {
+            Ok(Some(window)) => {
+                if window.text() != self.old.as_ref().expect("provenance window").text() {
+                    return SourceTransactionPoll::Failed(Error::StaleRevision);
+                }
+                self.proof_cursor += count;
+                self.old = None;
+            }
+            Ok(None) => {}
+            Err(result) => return result,
+        }
+        SourceTransactionPoll::Progress
+    }
     pub fn cancel(&mut self) {
         self.cancelled = true;
         self.window = None;
         self.old = None;
         self.pending_source = None;
         self.edits = Vec::new();
+        self.provenance = Vec::new();
         self.claim = None;
     }
     pub fn matches_snapshot(&self, snapshot: &PagedSnapshot) -> bool {
@@ -194,8 +331,12 @@ impl SourceTransactionRequest {
     }
     fn step(&mut self) -> SourceTransactionPoll {
         let Some(edit) = self.edits.get(self.index).cloned() else {
+            if self.proof_index < self.provenance.len() {
+                return self.proof_step();
+            }
             self.finished = true;
             return SourceTransactionPoll::Ready(PreparedSourceTransaction {
+                provenance: std::mem::take(&mut self.provenance),
                 snapshot: self.snapshot.clone(),
                 edits: std::mem::take(&mut self.edits),
                 metadata: self.metadata.clone(),
@@ -369,6 +510,9 @@ pub struct SourceCommitLease<'a> {
     prepared: PreparedSourceTransaction,
 }
 impl SourceCommitLease<'_> {
+    pub(crate) fn tag_group(&mut self, tag: crate::paged_group::PagedGroupTag) {
+        self.history.group = Some(tag);
+    }
     pub fn edits(&self) -> &[SourceEdit] {
         self.prepared.edits()
     }
@@ -435,7 +579,7 @@ impl PagedDocument {
             .map_err(|_| Error::BudgetExceeded)?;
         let mut before = 0usize;
         let mut after = 0usize;
-        for edit in &prepared.edits {
+        for (edit_index, edit) in prepared.edits.iter().enumerate() {
             let start = sum(after, edit.range.start.0 - before)?;
             let end = sum(
                 start,
@@ -448,12 +592,41 @@ impl PagedDocument {
                 before_range: edit.range.start.0..edit.range.end.0,
                 after_range: start..end,
                 inverse: inverse_root(&removed, &edit.inverse, &mut 0, &self.bytes)?,
-                inserted: tree::charged_owned(
-                    edit.inserted.source.clone(),
-                    edit.inserted.range.clone(),
-                    None,
-                    &self.bytes,
-                )?,
+                inserted: if prepared
+                    .provenance
+                    .iter()
+                    .any(|proof| proof.index == edit_index)
+                {
+                    let mut combined = None;
+                    for proof in prepared
+                        .provenance
+                        .iter()
+                        .filter(|proof| proof.index == edit_index)
+                    {
+                        let (prefix, _) = tree::charged_split(
+                            proof.snapshot.root.clone(),
+                            proof.range.end.0,
+                            &self.bytes,
+                        )?;
+                        let (_, selected) =
+                            tree::charged_split(prefix, proof.range.start.0, &self.bytes)?;
+                        let start = edit.inserted.range.start + proof.inserted_offset as u64;
+                        let owned = OwnedTextRange {
+                            source: edit.inserted.source.clone(),
+                            range: start..start + (proof.range.end.0 - proof.range.start.0) as u64,
+                        };
+                        let mapped = inverse_root(&selected, &owned, &mut 0, &self.bytes)?;
+                        combined = tree::charged_concat(combined, mapped, &self.bytes)?;
+                    }
+                    combined
+                } else {
+                    tree::charged_owned(
+                        edit.inserted.source.clone(),
+                        edit.inserted.range.clone(),
+                        None,
+                        &self.bytes,
+                    )?
+                },
             });
             before = edit.range.end.0;
             after = end;
@@ -473,6 +646,7 @@ impl PagedDocument {
             .map_err(|_| Error::BudgetExceeded)?;
         let state = ContentStateId(crate::unique());
         let history = PagedHistory {
+            group: None,
             before_metadata: self.current.metadata.clone(),
             after_metadata: self.current.metadata.clone(),
             typing_insert: false,
@@ -644,6 +818,13 @@ impl PagedDocument {
         &mut self,
         prepared: PreparedSourceHistory,
     ) -> Result<HistoryCommitLease<'_>, Error> {
+        self.lease_history_member(prepared, None)
+    }
+    pub(crate) fn lease_history_member(
+        &mut self,
+        prepared: PreparedSourceHistory,
+        expected: Option<crate::group::UndoGroup>,
+    ) -> Result<HistoryCommitLease<'_>, Error> {
         if !self.current.same_document(&prepared.snapshot) {
             return Err(Error::WrongDocument);
         }
@@ -658,6 +839,9 @@ impl PagedDocument {
             self.redo.last()
         })
         .ok_or(Error::EmptyHistory)?;
+        if entry.group.as_ref().map(|tag| tag.id) != expected {
+            return Err(Error::LinkedUndoRequired);
+        }
         if entry.before_state != prepared.before_state || entry.after_state != prepared.after_state
         {
             return Err(Error::StaleRevision);
@@ -769,6 +953,7 @@ mod lease_tests {
     // contract from page validation. The large test below drives the real validator.
     fn token(document: &PagedDocument, bytes: &Budget) -> PreparedSourceTransaction {
         PreparedSourceTransaction {
+            provenance: Vec::new(),
             snapshot: document.snapshot(),
             edits: vec![SourceEdit {
                 range: TextOffset(0)..TextOffset(document.snapshot().len()),
@@ -886,5 +1071,95 @@ mod lease_tests {
         assert_eq!(doc.snapshot().len(), 8);
         doc.redo().unwrap();
         assert_eq!(doc.snapshot().len(), 20 * 1024 * 1024);
+    }
+    #[test]
+    fn source_group_is_all_or_none_and_requires_complete_linked_history() {
+        let bytes = Budget::new(4 * 1024 * 1024);
+        let history = Budget::new(4 * 1024 * 1024);
+        let mut left = document(20, &bytes, &history);
+        let mut right = document(20, &bytes, &history);
+        let original_left = left.snapshot();
+        let original_right = right.snapshot();
+        let wrong = vec![token(&left, &bytes), token(&left, &bytes)];
+        assert!(matches!(
+            crate::paged_group::lease_source_group(&mut [&mut left, &mut right], wrong, &bytes),
+            Err(Error::WrongDocument)
+        ));
+        assert_eq!(left.snapshot().content_state, original_left.content_state);
+        assert_eq!(right.snapshot().content_state, original_right.content_state);
+        let prepared = vec![token(&left, &bytes), token(&right, &bytes)];
+        let mut members = [&mut left, &mut right];
+        let lease = crate::paged_group::lease_source_group(&mut members, prepared, &bytes).unwrap();
+        let id = lease.id();
+        assert_eq!(lease.members().len(), 2);
+        let full = bytes.claim(bytes.limit() - bytes.used()).unwrap();
+        assert_eq!(lease.publish(), id);
+        drop(full);
+        assert_eq!(left.undo(), Err(Error::LinkedUndoRequired));
+        assert_eq!(right.undo(), Err(Error::LinkedUndoRequired));
+        assert_eq!(left.snapshot().len(), 7);
+        assert_eq!(right.snapshot().len(), 7);
+        let mut members = [&mut left, &mut right];
+        let lease =
+            crate::paged_group::lease_history_group(&mut members, id, true, &bytes).unwrap();
+        let full = bytes.claim(bytes.limit() - bytes.used()).unwrap();
+        lease.publish();
+        drop(full);
+        assert_eq!(left.snapshot().content_state, original_left.content_state);
+        assert_eq!(right.snapshot().content_state, original_right.content_state);
+        crate::paged_group::lease_history_group(&mut [&mut left, &mut right], id, false, &bytes)
+            .unwrap()
+            .publish();
+        assert_eq!(left.snapshot().len(), 7);
+        assert_eq!(right.snapshot().len(), 7);
+    }
+    #[test]
+    fn inserted_provenance_is_validated_and_retained() {
+        let bytes = Budget::new(2 * 1024 * 1024);
+        let history = Budget::new(1024 * 1024);
+        let raw = source(8, b'a', &bytes);
+        let captured = PagedSnapshot::utf8(raw.clone(), 0).unwrap();
+        let mut destination = document(8, &bytes, &history);
+        let edit = SourceEdit {
+            range: TextOffset(0)..TextOffset(8),
+            inverse: OwnedTextRange {
+                source: source(8, b'a', &bytes),
+                range: 0..8,
+            },
+            inserted: OwnedTextRange {
+                source: source(4, b'a', &bytes),
+                range: 0..4,
+            },
+        };
+        let mut request = destination
+            .snapshot()
+            .prepare_source_transaction(vec![edit], EditMetadata::default(), bytes.clone())
+            .unwrap()
+            .with_inserted_provenance_parts(
+                0,
+                captured,
+                vec![TextOffset(0)..TextOffset(2), TextOffset(6)..TextOffset(8)],
+            )
+            .unwrap();
+        let prepared = loop {
+            match request.poll() {
+                SourceTransactionPoll::Ready(value) => break value,
+                SourceTransactionPoll::Pending(ticket) => {
+                    if !request.resolve_owned(ticket).unwrap() {
+                        assert_eq!(ticket.generation, raw.generation());
+                        assert!(raw.resolve_owned(ticket).unwrap());
+                    }
+                }
+                SourceTransactionPoll::Progress => {}
+                _ => panic!("provenance validation failed"),
+            }
+        };
+        destination
+            .lease_source_transaction(prepared)
+            .unwrap()
+            .publish();
+        assert!(destination.snapshot().pieces().any(|piece|matches!(piece,crate::paged::PagedPiece::OwnedSource {original:Some((source,range)),..} if source.generation()==raw.generation() && range==(0..2))));
+        assert_eq!(destination.snapshot().len(), 4);
+        assert!(destination.snapshot().pieces().any(|piece|matches!(piece,crate::paged::PagedPiece::OwnedSource {original:Some((source,range)),..} if source.generation()==raw.generation() && range==(6..8))));
     }
 }

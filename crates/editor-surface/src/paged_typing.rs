@@ -25,6 +25,7 @@ pub struct TypingConfig {
 pub enum TypingRequest {
     Input(Input),
     Comment { block: bool },
+    CommentWithTokens { block: bool, tokens: crate::power::CommentTokens },
 }
 pub struct TypingPlan {
     pub transaction: EditTransaction,
@@ -137,6 +138,7 @@ pub fn prepare(
             .map(str::to_owned)
             .ok_or_else(|| "Typing boundary unavailable".into())
     };
+    let captured_tokens=if let TypingRequest::CommentWithTokens{tokens,..}=&request{Some(tokens.clone())}else{None};
     match request {
         TypingRequest::Input(Input::Insert(value))
             if config.smart_indent && matches!(value.as_str(), "\n" | "\r\n" | "\r") =>
@@ -290,9 +292,9 @@ pub fn prepare(
             }
             Ok(None)
         }
-        TypingRequest::Comment { block } => {
+        TypingRequest::Comment { block } | TypingRequest::CommentWithTokens { block, .. } => {
             let document = temporary("", source)?;
-            let tokens = if let Some(definition) = &config.definition {
+            let tokens = if let Some(tokens)=captured_tokens {Some(tokens)} else if let Some(definition) = &config.definition {
                 completion::DefinitionComments(definition).tokens_for(&document.snapshot())
             } else {
                 completion::LanguageComments(config.language).tokens_for(&document.snapshot())
@@ -438,6 +440,12 @@ mod tests {
             tab_width: 4,
             literal_context: Some(false),
         }
+    }
+    #[test]
+    fn huge_block_comment_uses_captured_tokens_and_only_edge_reads(){
+        let source=source(1<<30);let mut requested=0usize;
+        let plan=prepare(&source,Selection{anchor:7,caret:source.len()-7},TypingRequest::CommentWithTokens{block:true,tokens:crate::power::CommentTokens{line:None,block:Some(("<*".into(),"*>".into()))}},&config(),&Cancellation::default(),|start,count|{requested+=count;Ok((start,"x".repeat(count.min(source.len()-start.0))))}).unwrap().unwrap();
+        assert!(requested<64);assert_eq!(plan.transaction.edits.len(),2);assert_eq!(plan.transaction.edits[0].insert,"<*");assert_eq!(plan.transaction.edits[1].insert,"*>");assert_eq!(plan.transaction.edits[1].range,TextOffset(source.len()-7)..TextOffset(source.len()-7));
     }
     #[test]
     fn huge_wrap_has_two_edge_inserts_without_reading_selection() {

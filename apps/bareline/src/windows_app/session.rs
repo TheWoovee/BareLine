@@ -421,6 +421,7 @@ impl Shell {
             }
         }
         self.session_finish_restore();
+        self.session_resolve_languages();
         let saved = self
             .session
             .save
@@ -672,6 +673,7 @@ impl Shell {
             {
                 tab.document_id = *id;
             }
+            tab.view.language = editor.session_language_selection();
             tab.view.caret = editor.selection.caret as u64;
             tab.view.anchor = editor.selection.anchor as u64;
             if let bareline_app::workspace::WorkspaceEditor::Paged(paged) = editor {
@@ -829,5 +831,23 @@ mod close_tests {
         assert!(exit_unchanged(&workspace, &captured));
         workspace.new_document().unwrap();
         assert!(!exit_unchanged(&workspace, &captured));
+    }
+}
+
+impl Shell {
+    fn session_resolve_languages(&mut self){
+        if !self.language.controller.catalog_ready(){return;}
+        let catalog=&self.language.controller;
+        let resolve=|editor:&mut bareline_editor_surface::EditorSurface|{
+            let Some(selection)=editor.pending_session_language.take()else{return;};
+            // An explicit selection made after restore supersedes its deferred catalog lookup.
+            if editor.udl.is_some()||editor.language_override.is_some(){return;}
+            if let bareline_file_io::session::LanguageSelection::Udl(id)=selection{
+                if let Some(definition)=catalog.definition_by_id(&id){editor.udl=Some(definition);}
+                else{editor.language=bareline_syntax::Language::PlainText;editor.language_override=Some(bareline_syntax::Language::PlainText);editor.error=Some(format!("Saved user language {id} is unavailable; using plain text. Import its definition explicitly to select it again."));}
+            }
+        };
+        if let Some(workspace)=&mut self.workspace{for editor in &mut workspace.editors{resolve(editor);}}
+        if let Some(editor)=&mut self.views.secondary{resolve(editor);}
     }
 }

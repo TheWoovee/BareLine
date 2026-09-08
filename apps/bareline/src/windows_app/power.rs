@@ -6,6 +6,8 @@ use bareline_renderer::{DrawOp, Rect, LayoutError};
 use bareline_ui::{rect, text, text_field::TextField};
 #[path="power_stream.rs"]
 mod stream;
+#[path="power_drag.rs"]
+mod drag;
 
 #[derive(Clone, Debug, Default)]
 struct PowerLayout {
@@ -38,6 +40,7 @@ fn accessible_bounds(bounds: Rect) -> [f64; 4] { [bounds.x as f64, bounds.y as f
 
 pub(super) struct PowerRuntime {
     stream: stream::StreamRuntime,
+    drag_runtime: drag::Runtime,
     pub open: bool,
     history_open: bool,
     pub history: ClipboardHistory,
@@ -60,7 +63,7 @@ pub(super) struct PowerRuntime {
 impl Default for PowerRuntime {
     fn default() -> Self {
         let fields = ["text","","0","1","0","10","1"].into_iter().map(|value| { let mut field = TextField::default(); field.insert(value); field }).collect();
-        Self { paged_rectangle_drag:None,global_target:None,stream:stream::StreamRuntime::default(),open:false,history_open:false,history:ClipboardHistory::default(),history_limits:(20,16<<20,4<<20),fields,focus:0,selected:0,accessibility_focus:None,layout:PowerLayout::default(),status:String::new(),rectangle:None,target:None,rectangle_drag:None,drag:None,group:None,metric_job:None }
+        Self { drag_runtime:drag::Runtime::default(),paged_rectangle_drag:None,global_target:None,stream:stream::StreamRuntime::default(),open:false,history_open:false,history:ClipboardHistory::default(),history_limits:(20,16<<20,4<<20),fields,focus:0,selected:0,accessibility_focus:None,layout:PowerLayout::default(),status:String::new(),rectangle:None,target:None,rectangle_drag:None,drag:None,group:None,metric_job:None }
     }
 }
 pub(super) fn register(registry: &mut bareline_commands::CommandRegistry) {
@@ -173,6 +176,8 @@ impl Shell {
         match action {Action::Paste=>{if let Ok(text)=self.platform.as_ref().unwrap().clipboard_text(){field.commit(&text);}},Action::Copy|Action::Cut=>{if self.platform.as_ref().unwrap().set_clipboard_text(field.selected()).is_ok()&&action==Action::Cut{field.insert("");}},Action::SelectAll=>field.select_all(),Action::Undo=>field.undo(false),Action::Redo=>field.undo(true),_=>return false} true
     }
     pub(super) fn power_event(&mut self,_el:&ActiveEventLoop,event:&WindowEvent)->bool {
+        if matches!(event,WindowEvent::Focused(false)) { self.power_drag_cancel(); }
+        if matches!(event,WindowEvent::KeyboardInput{event,..} if event.state==ElementState::Pressed&&event.logical_key==Key::Named(NamedKey::Escape))&&self.power_drag_cancel(){return true;}
         if matches!(event,WindowEvent::KeyboardInput{event,..} if event.state==ElementState::Pressed&&event.logical_key==Key::Named(NamedKey::Escape))&&self.power_stream_cancel(){return true;}
         if self.palette.open{return false;}
         if !self.power.open { return self.power_gesture(event); }
@@ -198,7 +203,7 @@ impl Shell {
         if let Some(window)=&self.window{window.request_redraw();}true
     }
     fn power_gesture(&mut self,event:&WindowEvent)->bool {
-        if self.power_pointer(event) { return true; }
+        if self.power_pointer(event) { if let Some(window)=&self.window {window.request_redraw();} return true; }
         let WindowEvent::KeyboardInput{event,..}=event else{return false;};if event.state!=ElementState::Pressed||!self.modifiers.alt_key()||!self.modifiers.shift_key(){return false;}
         let (dx,dy)=match &event.logical_key {Key::Named(NamedKey::ArrowLeft)=>(-1,0),Key::Named(NamedKey::ArrowRight)=>(1,0),Key::Named(NamedKey::ArrowUp)=>(0,-1),Key::Named(NamedKey::ArrowDown)=>(0,1),_=>return false};
         if self.power_paged_literal("editor.rectangle.extend",[("dx".into(),dx.to_string()),("dy".into(),dy.to_string())].into_iter().collect()){return true;}
@@ -211,7 +216,8 @@ impl Shell {
         }if let Some(window)=&self.window{window.request_redraw();}true
     }
     pub(super) fn power_pump(&mut self)->bool {
-        let streaming_changed=self.power_stream_pump();
+        let drag_changed=self.power_drag_pump();
+        let streaming_changed=self.power_stream_pump() | drag_changed;
         if streaming_changed&&!self.power.status.is_empty(){if let Some(workspace)=self.workspace.as_mut(){workspace.message=Some(self.power.status.clone());}}
         if let Some((snapshot,args,mut next,last,selection))=self.power.metric_job.take() {
             let Some(workspace)=self.workspace.as_mut()else{return true;};
@@ -241,11 +247,17 @@ impl Shell {
     fn power_pointer(&mut self,event:&WindowEvent)->bool {
         let relevant=matches!(event,WindowEvent::MouseInput{button:MouseButton::Left,..}|WindowEvent::CursorMoved{..});
         if !relevant{return false;}
-        let point=self.pointer;
-        let pane=self.views.bounds.iter().position(|bounds|bounds.is_some_and(|b|b.contains(point))).unwrap_or(self.views.pane() as usize);
-        let bounds=self.views.bounds[pane].unwrap_or(self.editor_bounds());
+        let frame=self.editor_bounds();
+        let point=Point{x:self.pointer.x-frame.x,y:self.pointer.y-frame.y};
+        let split=self.views.secondary.is_some();
+        let pane=if split {self.views.bounds.iter().position(|bounds|bounds.is_some_and(|b|b.contains(point)))} else {Some(0)};
+        let Some(pane)=pane else { return self.power_drag_outside(event); };
+        let bounds=if split {self.views.bounds[pane].unwrap()} else {Rect{x:0.0,y:0.0,width:frame.width,height:frame.height}};
         let local=Point{x:point.x-bounds.x,y:point.y-bounds.y};
+        // Ctrl at drop requests copy; it must not become a new Ctrl-click.
+        if self.power.drag_runtime.active() && self.power_drag_pointer(event,pane,local){return true;}
         if self.power_paged_pointer(event,pane,local){return true;}
+        if self.power_drag_pointer(event,pane,local){return true;}
         let Some(workspace)=self.workspace.as_mut()else{return false;};let Some(renderer)=self.renderer.as_ref()else{return false;};
         if workspace.editors.get(self.app.active).is_some_and(|e| e.paged()) || self.views.secondary.as_ref().is_some_and(|e| e.paged()) {
             let power_gesture = self.modifiers.alt_key() || self.modifiers.control_key() || self.power.drag.is_some() || self.power.rectangle_drag.is_some();

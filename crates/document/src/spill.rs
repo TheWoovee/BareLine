@@ -79,6 +79,7 @@ impl SpillPlan {
             _structure: None,
         };
         let convert = |entry: &crate::History| PagedHistory {
+            group: None,
             before_metadata: entry.before_metadata.clone(),
             after_metadata: entry.after_metadata.clone(),
             typing_insert: entry.typing_insert,

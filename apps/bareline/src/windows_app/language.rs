@@ -3,14 +3,28 @@ use super::*;
 use bareline_app::language::{LanguageConfiguration, LanguageController, LanguageEffect};
 use bareline_renderer::{DrawOp, LayoutError, Rect};
 use bareline_ui::controls::{Key as UiKey, UiEvent};
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct CompletionTarget {
+    pane: u32,
+    tab: Option<u64>,
+    source: (u64, u64),
+    projection: (u64, u64),
+    primary: usize,
+    selections: Vec<(usize, usize)>,
+}
+pub(super) fn completion_target(views: &super::views::ViewsRuntime, workspace: &bareline_app::workspace::Workspace, active: usize) -> Option<CompletionTarget> {
+    let editor = views.active_workspace_editor(workspace, active)?;
+    let selections = match editor { bareline_app::workspace::WorkspaceEditor::Paged(paged) => paged.global_selection_set(), _ => editor.selection_set() };
+    Some(CompletionTarget { pane: views.pane(), tab: views.pane_token(views.pane() as usize), source: bareline_app::accessibility::source_identity(editor), projection: editor.snapshot().identity_token(), primary: selections.primary, selections: selections.selections.iter().map(|selection| (selection.anchor, selection.caret)).collect() })
+}
 
 #[derive(Default)]
 pub(super) struct LanguageRuntime {
     pub controller: LanguageController,
     detection_seen: Option<((u64, u64), std::path::PathBuf)>,
     detection_associations: std::collections::BTreeMap<String, String>,
-    last_hint: Option<((u64, u64), usize)>,
-    completion_source: Option<((u64, u64), (u64, u64))>,
+    last_hint: Option<CompletionTarget>,
+    completion_source: Option<CompletionTarget>,
     restored: Option<bareline_document::DocumentSnapshot>,
     restored_language: Option<bareline_syntax::Language>,
     restored_definition: Option<std::sync::Arc<bareline_syntax::udl::Definition>>,
@@ -132,10 +146,10 @@ impl Shell {
             },
             "editor.completion.show" => {
                 if let Some(workspace) = &self.workspace
-                    && let Some(editor) = workspace.editors.get(self.app.active)
+                    && let Some(editor) = self.views.active_workspace_editor(workspace, self.app.active)
                 {
-                    let syntax = workspace
-                        .syntax_result()
+                    let syntax = self.views
+                        .active_syntax_result(workspace)
                         .filter(|syntax| syntax.is_current(editor.snapshot()))
                         .cloned();
                     if editor.paged()
@@ -148,10 +162,7 @@ impl Shell {
                         self.language.controller.status =
                             "Syntax for this source window is still being prepared".into();
                     } else {
-                        self.language.completion_source = Some((
-                            bareline_app::accessibility::source_identity(editor),
-                            editor.snapshot().identity_token(),
-                        ));
+                        self.language.completion_source = completion_target(&self.views, workspace, self.app.active);
                         let documents = workspace
                             .editors
                             .iter()
@@ -440,9 +451,9 @@ impl Shell {
         if !self.language.controller.open
             && !self.language.controller.busy()
             && let Some(workspace) = &self.workspace
-            && let Some(editor) = workspace.editors.get(self.app.active)
+            && let Some(editor) = self.views.active_workspace_editor(workspace, self.app.active)
         {
-            let identity = bareline_app::accessibility::source_identity(editor);
+            let target = completion_target(&self.views, workspace, self.app.active);
             let caret = editor.selection.caret;
             let id = editor
                 .udl
@@ -454,9 +465,9 @@ impl Shell {
             if policy.parameter_hints
                 && contiguous_hint_context(editor)
                 && self.language.controller.has_signatures(id)
-                && self.language.last_hint != Some((identity, caret))
-                && let Some(syntax) = workspace
-                    .syntax_result()
+                && self.language.last_hint != target
+                && let Some(syntax) = self.views
+                    .active_syntax_result(workspace)
                     .filter(|syntax| syntax.is_current(editor.snapshot()))
             {
                 let mut start = caret.saturating_sub(4);
@@ -474,9 +485,8 @@ impl Shell {
                     )
                     .is_ok_and(|text| text.ends_with(['(', ',']))
                 {
-                    self.language.last_hint = Some((identity, caret));
-                    self.language.completion_source =
-                        Some((identity, editor.snapshot().identity_token()));
+                    self.language.last_hint = target.clone();
+                    self.language.completion_source = target;
                     self.language.controller.request_parameter_hint(
                         editor.snapshot().clone(),
                         bareline_document::TextOffset(caret),
@@ -492,16 +502,9 @@ impl Shell {
                 self.language.controller.title.as_str(),
                 "Completion" | "Parameter Hint"
             )
-            && let Some(editor) = self
-                .workspace
-                .as_ref()
-                .and_then(|workspace| workspace.editors.get(self.app.active))
         {
-            let current = (
-                bareline_app::accessibility::source_identity(editor),
-                editor.snapshot().identity_token(),
-            );
-            if self.language.completion_source != Some(current) {
+            let current = self.workspace.as_ref().and_then(|workspace| completion_target(&self.views, workspace, self.app.active));
+            if self.language.completion_source != current {
                 self.language.controller.close();
             }
         }
@@ -620,10 +623,11 @@ impl Shell {
         accepted || !matches!(ui, UiEvent::Key(UiKey::Enter))
     }
     fn language_apply_effect(&mut self, effect: LanguageEffect) {
+        let current = self.workspace.as_ref().and_then(|workspace| completion_target(&self.views, workspace, self.app.active));
         let Some(editor) = self
             .workspace
             .as_mut()
-            .and_then(|workspace| workspace.editors.get_mut(self.app.active))
+            .and_then(|workspace| self.views.active_workspace_editor_mut(workspace, self.app.active))
         else {
             return;
         };
@@ -640,12 +644,7 @@ impl Shell {
                 editor.language = language;
             }
             LanguageEffect::Accept(index) => {
-                let projection = editor.snapshot().identity_token();
-                if self.language.completion_source
-                    != Some((
-                        bareline_app::accessibility::source_identity(editor),
-                        projection,
-                    ))
+                if self.language.completion_source != current
                 {
                     self.language.controller.close();
                     self.language.controller.status = "Completion source changed".into();

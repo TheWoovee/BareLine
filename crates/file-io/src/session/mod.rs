@@ -17,9 +17,22 @@ pub const SESSION_VERSION: u32 = 1;
 pub const MAX_SESSION_BYTES: usize = 8 * 1024 * 1024;
 const MAX_ENTRIES: usize = 10_000;
 
+/// Optional per-view selection. Identifiers only: never a path or embedded executable definition.
+#[derive(Clone,Debug,PartialEq,Eq,Serialize,Deserialize)]
+#[serde(tag="kind",content="id",rename_all="snake_case",deny_unknown_fields)]
+pub enum LanguageSelection {
+    Builtin(#[serde(deserialize_with="language_id")] String),
+    Udl(#[serde(deserialize_with="language_id")] String),
+}
+fn language_id<'de,D:serde::Deserializer<'de>>(d:D)->Result<String,D::Error>{
+    let id=String::deserialize(d)?;
+    if id.is_empty()||id.len()>64||!id.bytes().all(|b|b.is_ascii_alphanumeric()||matches!(b,b'-'|b'_')){return Err(serde::de::Error::custom("invalid language identifier"));}Ok(id)
+}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct ViewState {
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    pub language: Option<LanguageSelection>,
     pub caret: u64,
     pub anchor: u64,
     pub scroll_line: u64,
@@ -401,6 +414,7 @@ mod tests {
                     document_id: 7,
                     pinned: true,
                     view: ViewState {
+                        language: None,
                         caret: 42,
                         anchor: 20,
                         scroll_line: 12,
@@ -598,5 +612,15 @@ mod tests {
                 )
                 .is_err()
         );
+    }
+}
+
+#[cfg(test)]mod language_selection_tests{
+    use super::*;
+    #[test]fn per_view_language_roundtrip_and_legacy_default(){
+        let mut view=ViewState::default();assert_eq!(serde_json::from_str::<ViewState>("{}").unwrap().language,None);
+        for language in [LanguageSelection::Builtin("rust".into()),LanguageSelection::Udl("my_language-1".into())]{view.language=Some(language);let bytes=serde_json::to_vec(&view).unwrap();assert_eq!(serde_json::from_slice::<ViewState>(&bytes).unwrap(),view);}
+        assert!(serde_json::from_str::<ViewState>(r#"{"language":{"kind":"udl","id":"\\\\host\\share"}}"#).is_err());
+        assert!(serde_json::from_str::<ViewState>(r#"{"language":{"kind":"builtin","id":"rust","path":"x"}}"#).is_err());
     }
 }

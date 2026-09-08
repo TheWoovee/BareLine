@@ -40,6 +40,7 @@ pub struct Capture {
     pub definition:Option<Arc<bareline_syntax::udl::Definition>>,
     pub tab_width:usize,
     pub typing:crate::paged_typing::TypingConfig,
+    pub literal_contexts:Vec<Option<bool>>,
     pub column_maps:Option<std::collections::BTreeMap<usize,power::DisplayColumnMap>>,
 }
 pub struct PreparedPower {
@@ -132,6 +133,21 @@ pub fn prepare(mut capture:Capture,id:&str,args:&Arguments,options:&StagingOptio
     let mut selections=capture.selections.clone();let mut edits=Vec::new();let mut clipboard=None;let mut recorded=args.clone();
     let err=|e|format!("Power command: {e:?}");
     match id {
+        "editor.comment.toggleBlock"=>{
+            use power::CommentProvider;
+            let tokens=if args.contains_key("block_start")||args.contains_key("line_prefix"){power::CommentTokens{line:args.get("line_prefix").cloned(),block:args.get("block_start").zip(args.get("block_end")).map(|(start,end)|(start.clone(),end.clone()))}}else{
+                let document=Document::from_utf8("",Budget::new(1<<20),Budget::new(1<<20)).map_err(err)?;
+                if let Some(definition)=capture.definition.as_deref(){crate::completion::DefinitionComments(definition).tokens_for(&document.snapshot())}else{crate::completion::LanguageComments(capture.language).tokens_for(&document.snapshot())}.ok_or("No comment definition for this language")?
+            };
+            if let Some(prefix)=&tokens.line{recorded.insert("line_prefix".into(),prefix.clone());}if let Some((start,end))=&tokens.block{recorded.insert("block_start".into(),start.clone());recorded.insert("block_end".into(),end.clone());}
+            let mut ordered=capture.selections.selections.iter().copied().enumerate().collect::<Vec<_>>();ordered.sort_by_key(|(_,selection)|selection.range().start);let mut after=capture.selections.selections.clone();let mut delta=0isize;
+            for(index,selection)in ordered{
+                let plan=crate::paged_typing::prepare(capture.source.snapshot(),selection,crate::paged_typing::TypingRequest::CommentWithTokens{block:true,tokens:tokens.clone()},&capture.typing,&options.cancellation,|start,length|window(&capture,start,length,options))?.ok_or("Block comment plan unavailable")?;
+                after[index]=Selection{anchor:plan.selection.anchor.checked_add_signed(delta).ok_or("Comment selection overflow")?,caret:plan.selection.caret.checked_add_signed(delta).ok_or("Comment selection overflow")?};
+                for edit in &plan.transaction.edits{delta=delta.checked_add(edit.insert.len()as isize-(edit.range.end.0-edit.range.start.0)as isize).ok_or("Comment delta overflow")?;}edits.extend(plan.transaction.edits);
+            }
+            selections=SelectionSet{selections:after,primary:capture.selections.primary};
+        },
         "editor.caret.toggle"=>{let offset=parameter::<usize>(args,"offset")?;if offset>capture.source.snapshot().len(){return Err("Caret exceeds source".into());}let (origin,text)=window(&capture,TextOffset(offset.saturating_sub(65536)),131072,options)?;let local=offset.checked_sub(origin.0).ok_or("Caret context unavailable")?;use unicode_segmentation::UnicodeSegmentation;if local!=text.len()&&!text.grapheme_indices(true).any(|(start,_)|start==local){return Err("Caret is not a verified grapheme boundary".into());}if let Some(index)=selections.selections.iter().position(|selection|selection.anchor==offset&&selection.caret==offset){if selections.selections.len()>1{selections.selections.remove(index);selections.primary=selections.primary.min(selections.selections.len()-1);}}else{if selections.selections.len()>=limits.max_selections{return Err("Caret quota exceeded".into());}selections.selections.push(Selection{anchor:offset,caret:offset});selections.selections.sort_by_key(|selection|selection.anchor.min(selection.caret));selections.primary=selections.selections.iter().position(|selection|selection.anchor==offset&&selection.caret==offset).unwrap();}},
         "editor.lines.refreshHidden"=>{},
         "editor.column.context"=>{let selected=selections.primary();let range=selected.range();let first=line_at(&capture,range.start,options)?;let last=line_at(&capture,range.end.saturating_sub(usize::from(!range.is_empty())),options)?;let caret_line=line_range(&capture,line_at(&capture,selected.caret,options)?,options)?;let text=read(&capture,caret_line.clone(),options,limit)?;let number=line_at(&capture,selected.caret,options)?;let fallback=power::DisplayColumnMap::new(text.trim_end_matches(['\r','\n']),capture.tab_width);let map=if let Some(maps)=capture.column_maps.as_ref(){maps.get(&number).ok_or("Missing measured caret row")?}else{&fallback};let column=map.column(selected.caret-caret_line.start);capture.state.rectangle=Some(Rectangle{first_line:first,last_line:last,start_column:column,end_column:column});},
@@ -199,9 +215,11 @@ pub fn prepare_input(mut capture:Capture,input:crate::Input,options:&StagingOpti
         return prepare(capture,id,&args,options);
     }
     let _claim=options.budget.claim(options.memory).map_err(|e|format!("Input memory quota: {e:?}"))?;
-    let mut edits=Vec::new();let mut after=Vec::new();let mut delta=0isize;
-    for selection in &capture.selections.selections {
-        let plan=crate::paged_typing::prepare(capture.source.snapshot(),*selection,crate::paged_typing::TypingRequest::Input(input.clone()),&capture.typing,&options.cancellation,|start,length|window(&capture,start,length,options))?;
+    let mut edits=Vec::new();let mut after=capture.selections.selections.clone();let mut delta=0isize;
+    let mut ordered=capture.selections.selections.iter().enumerate().collect::<Vec<_>>();ordered.sort_by_key(|(_,selection)|selection.range().start);
+    for (index,selection) in ordered {
+        let mut config=capture.typing.clone();config.literal_context=capture.literal_contexts.get(index).copied().flatten();
+        let plan=crate::paged_typing::prepare(capture.source.snapshot(),*selection,crate::paged_typing::TypingRequest::Input(input.clone()),&config,&options.cancellation,|start,length|window(&capture,start,length,options))?;
         let (mut planned,next)=if let Some(plan)=plan{(plan.transaction.edits,plan.selection)}else{
             let range=selection.range();match &input{
                 crate::Input::Insert(text)=>(vec![Edit{range:TextOffset(range.start)..TextOffset(range.end),insert:text.clone()}],Selection{anchor:range.start+text.len(),caret:range.start+text.len()}),
@@ -210,7 +228,7 @@ pub fn prepare_input(mut capture:Capture,input:crate::Input,options:&StagingOpti
                 _=>return Err("Unsupported paged power input".into()),
             }
         };
-        after.push(Selection{anchor:next.anchor.checked_add_signed(delta).ok_or("Input selection overflow")?,caret:next.caret.checked_add_signed(delta).ok_or("Input selection overflow")?});
+        after[index]=Selection{anchor:next.anchor.checked_add_signed(delta).ok_or("Input selection overflow")?,caret:next.caret.checked_add_signed(delta).ok_or("Input selection overflow")?};
         for edit in &planned{delta=delta.checked_add(edit.insert.len()as isize-(edit.range.end.0-edit.range.start.0)as isize).ok_or("Input edit overflow")?;}edits.append(&mut planned);
     }
     let selections=SelectionSet{selections:after,primary:capture.selections.primary};

@@ -406,6 +406,7 @@ impl DiskTranscoder {
         }
         self.platform.release_source_read(&self.input_path);
         Ok(DiskDecoded {
+            foreign: Default::default(),
             _directory_guard: None,
             platform: self.platform.clone(),
             sealed_hashes: [self.hash.clone().finalize().into(), self.text_hash.clone().finalize().into(), self.map_hash.clone().finalize().into()],
@@ -429,6 +430,7 @@ pub struct DiskOptions {
 }
 #[derive(Clone)]
 pub struct DiskDecoded {
+    foreign: Arc<std::sync::Mutex<std::collections::BTreeMap<u64, DiskDecoded>>>,
     _directory_guard: Option<Arc<dyn Send + Sync>>,
     platform: Arc<dyn LocalFileSystem>,
     sealed_hashes: [[u8; 32]; 3],
@@ -458,6 +460,29 @@ struct RetainedStore {
     sealed_hashes: [[u8; 32]; 3],
 }
 impl DiskDecoded {
+    /// Keep foreign original byte capabilities alive for lossless document transfers.
+    /// Entries are flattened so transferring back cannot form ownership cycles.
+    pub fn retain_foreign(&self, generation: bareline_document::source::Generation, source: &Self) -> Result<(), DiskError> {
+        let mut entries=source.foreign_sources()?;
+        let mut base=source.clone(); base.foreign=Default::default(); entries.push((generation.0,base));
+        let mut target=self.foreign.lock().map_err(|_|DiskError::Failed)?;
+        if target.len()+entries.iter().filter(|(id,_)|!target.contains_key(id)).count()>100 {return Err(DiskError::Failed);}
+        for (id,store) in entries {target.entry(id).or_insert(store);}
+        Ok(())
+    }
+    pub fn foreign_sources(&self)->Result<Vec<(u64,Self)>,DiskError>{Ok(self.foreign.lock().map_err(|_|DiskError::Failed)?.iter().map(|(id,store)|(*id,store.clone())).collect())}
+    pub fn foreign_source(&self,generation:bareline_document::source::Generation)->Result<Option<Self>,DiskError>{Ok(self.foreign.lock().map_err(|_|DiskError::Failed)?.get(&generation.0).cloned())}
+    pub fn attach_text_loader(&self,source:&bareline_document::source::MemorySource,cancel:&Cancellation)->Result<(),DiskError>{
+        struct Loader(std::sync::Mutex<SealedStoreRead>);
+        impl bareline_document::source::OwnedPageLoader for Loader {fn read(&self,offset:u64,out:&mut[u8])->io::Result<()>{let mut file=self.0.lock().map_err(|_|io::Error::other("Foreign source reader stopped"))?;file.seek(SeekFrom::Start(offset))?;file.read_exact(out)}}
+        source.attach_owned_loader(Arc::new(Loader(std::sync::Mutex::new(self.sealed_text_reader(cancel)?)))).map_err(|_|DiskError::Failed)
+    }
+    pub fn retained_size(&self)->Result<u64,DiskError>{
+        let guards=self.lock_sealed()?;let mut total=16384u64;
+        for file in guards {total=total.checked_add(file.metadata()?.len()).ok_or(DiskError::Failed)?;}
+        Ok(total)
+    }
+
     /// Restart at a final opaque decoder unit so a split scalar can complete on append.
     /// Coordinates are relative to this immutable segment's raw and UTF-8 domains.
     pub fn tail_boundary(&self) -> Result<(u64, u64), DiskError> {
@@ -510,7 +535,7 @@ impl DiskDecoded {
         let metadata: RetainedStore = serde_json::from_reader(manifest).map_err(io::Error::other)?;
         if metadata.version != 1 || metadata.codec_catalog != "bareline-codecs-v1" { return Err(DiskError::Failed); }
         let [volume, file, length, modified] = metadata.identity;
-        let store = Self { _directory_guard: Some(directory_guard), platform, original_encoding: metadata.original_encoding, fingerprint: crate::lifecycle::Fingerprint { identity: FileIdentity { volume, file, length, modified }, sha256: metadata.original_hash }, store: Arc::new(Directory(directory.into(), true)), sealed_hashes: metadata.sealed_hashes, state: metadata.state, eol: metadata.eol, text_len: metadata.text_len, raw_len: metadata.raw_len };
+        let store = Self { foreign: Default::default(), _directory_guard: Some(directory_guard), platform, original_encoding: metadata.original_encoding, fingerprint: crate::lifecycle::Fingerprint { identity: FileIdentity { volume, file, length, modified }, sha256: metadata.original_hash }, store: Arc::new(Directory(directory.into(), true)), sealed_hashes: metadata.sealed_hashes, state: metadata.state, eol: metadata.eol, text_len: metadata.text_len, raw_len: metadata.raw_len };
         let _sealed = store.lock_sealed()?;
         store.validate_sealed(cancel)?;
         Ok(store)
@@ -558,9 +583,9 @@ impl DiskDecoded {
             let remap=|error:DiskError,source_start:u64|match error {DiskError::At {range,reason}=>DiskError::At {range:document_offset+(range.start as u64-source_start) as usize..document_offset+(range.end as u64-source_start) as usize,reason},error=>error};
             let length=match piece {
                 PagedPiece::Original {source,range}|PagedPiece::OriginalOwned {source,range,..}=>{
-                    if source.generation()!=original_generation{return Err(DiskError::Changed);}
                     let length=(range.end-range.start) as usize;let start=range.start;
-                    self.write_source_range_validated(range,target,out,cancel).map_err(|error|remap(error,start))?;length
+                    if source.generation()==original_generation {self.write_source_range_validated(range,target,out,cancel).map_err(|error|remap(error,start))?;}
+                    else {self.foreign_source(source.generation())?.ok_or(DiskError::Changed)?.write_source_range(range,target,out,cancel).map_err(|error|remap(error,start))?;} length
                 }
                 PagedPiece::Inserted(text)=>{
                     let encoded=encoder.encode_text(text).map_err(|error|DiskError::At {range:super::failure::rejected_range(text,target,document_offset),reason:format!("{error:?}")})?;
@@ -569,9 +594,9 @@ impl DiskDecoded {
                 PagedPiece::OwnedSource {source,range,original}=>{
                     let length=(range.end-range.start) as usize;
                     if let Some((original_source,original_range))=original {
-                        if original_source.generation()!=original_generation{return Err(DiskError::Changed);}
                         let start=original_range.start;
-                        self.write_source_range_validated(original_range,target,out,cancel).map_err(|error|remap(error,start))?;
+                        if original_source.generation()==original_generation {self.write_source_range_validated(original_range,target,out,cancel).map_err(|error|remap(error,start))?;}
+                        else {self.foreign_source(original_source.generation())?.ok_or(DiskError::Changed)?.write_source_range(original_range,target,out,cancel).map_err(|error|remap(error,start))?;}
                     } else {
                         let mut at=document_offset;
                         crate::owned_read::visit_utf8::<DiskError>(source,range,cancel,|text|{

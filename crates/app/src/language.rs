@@ -122,6 +122,14 @@ impl Default for LanguageController {
     }
 }
 impl LanguageController {
+    /// Resolve only an already installed, validated definition; session data never
+    /// supplies a definition body or triggers an import.
+    pub fn definition_by_id(&self, id: &str) -> Option<Arc<bareline_syntax::udl::Definition>> {
+        self.definitions.get(id).cloned()
+    }
+    /// Catalog mutations share the primary worker queue. Waiting for that queue
+    /// is conservative when its current job is unrelated to the catalog.
+    pub fn catalog_ready(&self) -> bool { self.receiver.is_none() }
     pub fn busy(&self) -> bool {
         self.receiver.is_some()
     }

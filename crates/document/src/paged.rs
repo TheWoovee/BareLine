@@ -263,9 +263,13 @@ impl PagedSnapshot {
     /// Explicit worker-only owned-page resolution; false routes to the original producer.
     pub fn resolve_owned(&self, ticket: PageTicket) -> Result<bool, Error> {
         for piece in self.pieces() {
-            if let PagedPiece::OwnedSource { source, .. } = piece
-                && source.generation() == ticket.generation
-            {
+            let source = match piece {
+                PagedPiece::OwnedSource { source, .. }
+                | PagedPiece::Original { source, .. }
+                | PagedPiece::OriginalOwned { source, .. } => source,
+                PagedPiece::Inserted(_) => continue,
+            };
+            if source.generation() == ticket.generation && source.has_owned_loader() {
                 return source.resolve_owned(ticket);
             }
         }
@@ -440,6 +444,10 @@ impl TextWindow {
 
 /// Owned bytes for journal consumers; never depends on a live source page.
 pub enum RestoredPiece {
+    OriginalSource {
+        source: MemorySource,
+        range: Range<u64>,
+    },
     OwnedSource {
         source: MemorySource,
         range: Range<u64>,
@@ -455,6 +463,7 @@ pub struct OwnedDelta {
 }
 #[derive(Clone)]
 pub(crate) struct PagedHistory {
+    pub(crate) group: Option<crate::paged_group::PagedGroupTag>,
     pub(crate) before_metadata: crate::DocumentMetadata,
     pub(crate) after_metadata: crate::DocumentMetadata,
     pub(crate) typing_insert: bool,
@@ -575,6 +584,7 @@ impl PagedDocument {
         )?;
         self.current.applied_change = Some(change);
         self.undo.push(PagedHistory {
+            group: None,
             before_metadata: self.current.metadata.clone(),
             after_metadata: metadata.clone(),
             typing_insert: false,
@@ -732,6 +742,7 @@ impl PagedDocument {
             .try_reserve(1)
             .map_err(|_| Error::BudgetExceeded)?;
         let entry = PagedHistory {
+            group: None,
             before_metadata: self.current.metadata.clone(),
             after_metadata: self.current.metadata.clone(),
             typing_insert,
@@ -812,6 +823,12 @@ impl PagedDocument {
                         return Err(Error::OutOfBounds);
                     }
                     tree::charged_owned(source, range, original, &bytes)?
+                }
+                RestoredPiece::OriginalSource { source, range } => {
+                    if range.start > range.end || range.end > source.len() {
+                        return Err(Error::OutOfBounds);
+                    }
+                    tree::charged_source(source, range, &bytes)?
                 }
                 RestoredPiece::Original(range) => {
                     if range.start > range.end || range.end > source.len() {

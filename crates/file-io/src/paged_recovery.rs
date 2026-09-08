@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Paged recovery owns the original codec triplet and journals bounded UTF-8 edits.
 //! Baseline copying runs on a separate bounded worker without locking the edit actor.
+#[path="paged_group_recovery.rs"]
+pub mod group;
 use crate::{
     cancellation::Cancellation,
     codecs::disk::DiskDecoded,
@@ -143,6 +145,8 @@ impl PagedRecovery {
                         .map_err(|e| format!("{e:?}"))?;
                     let mut text = SnapshotRead {
                         source: text,
+                        store: store.clone(),
+                        foreign_readers: std::collections::BTreeMap::new(),
                         snapshot: baseline,
                         offset: 0,
                         cancellation: cancel.clone(),
@@ -188,7 +192,7 @@ impl PagedRecovery {
                 .lock()
                 .map_err(|_| "Recovery writer stopped".to_owned())?;
             let receipt = if edits.is_empty() {writer.append_metadata(revision,snapshot.metadata())} else {writer.append(revision,edits)}.map_err(|e|e.to_string())?;
-            write_root(&self.directory, snapshot, self.platform.as_ref(), &self.cancellation)
+            write_root(&self.directory, snapshot, self.platform.as_ref(), &self.cancellation, &self.store)
                 .map_err(|e| e.to_string())?;
             writer
                 .checkpoint(self.platform.as_ref())
@@ -219,6 +223,7 @@ impl Drop for PagedRecovery {
 #[serde(deny_unknown_fields)]
 enum RootPiece {
     Original { start: u64, end: u64 },
+    Foreign { generation: u64, start: u64, end: u64 },
     Inserted { text: String },
     Owned { start: u64, end: u64 },
 }
@@ -228,6 +233,7 @@ enum RootPiece {
 struct RootOwned { name: String, len: u64, sha256: [u8;32] }
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(Clone)]
 struct RootReceipt {
     version: u32,
     revision: u64,
@@ -237,6 +243,16 @@ struct RootReceipt {
     metadata: std::collections::BTreeMap<String,String>,
     #[serde(default)]
     owned: Option<RootOwned>,
+    #[serde(default,deserialize_with="read_foreign_references")]
+    foreign: std::collections::BTreeMap<u64,String>,
+}
+fn read_foreign_references<'de,D:serde::Deserializer<'de>>(decoder:D)->Result<std::collections::BTreeMap<u64,String>,D::Error>{
+    struct Visitor;
+    impl<'de> serde::de::Visitor<'de> for Visitor {type Value=std::collections::BTreeMap<u64,String>;
+        fn expecting(&self,f:&mut std::fmt::Formatter)->std::fmt::Result{f.write_str("at most 100 retained source references")}
+        fn visit_map<M:serde::de::MapAccess<'de>>(self,mut map:M)->Result<Self::Value,M::Error>{let mut result=std::collections::BTreeMap::new();while let Some(key)=map.next_key::<u64>()?{if result.len()>=100{return Err(serde::de::Error::custom("Recovery foreign source limit"));}let name=map.next_value::<String>()?;if name!=format!("foreign-{key}")||result.insert(key,name).is_some(){return Err(serde::de::Error::custom("Invalid foreign source reference"));}}Ok(result)}
+    }
+    decoder.deserialize_map(Visitor)
 }
 fn prepare_root(
     directory: &Path,
@@ -244,10 +260,20 @@ fn prepare_root(
     platform: &dyn LocalFileSystem,
     cancel: &Cancellation,
     quota: u64,
+    sources: Option<&DiskDecoded>,
 ) -> std::io::Result<RootReceipt> {
     use sha2::{Digest, Sha256};
     use std::io::{Read, Write};
-    let receipt_bound=RootReceipt{version:2,revision:snapshot.revision.0,file:format!("root-{}.json",snapshot.revision.0),sha256:[255;32],metadata:snapshot.metadata().values().clone(),owned:Some(RootOwned{name:format!("root-owned-{}.bin",snapshot.revision.0),len:u64::MAX,sha256:[255;32]})};
+    let mut foreign=std::collections::BTreeMap::new();
+    if let Some(sources)=sources {for (generation,store) in sources.foreign_sources().map_err(|e|std::io::Error::other(format!("{e:?}")))? {
+        let name=format!("foreign-{generation}");let target=directory.join(&name);
+        if !target.exists() {
+            crate::recovery::admit_disk(directory,quota,store.retained_size().map_err(|e|std::io::Error::other(format!("{e:?}")))?,platform,cancel)?;
+            store.retain_recovery(&target,cancel).map_err(|e|std::io::Error::other(format!("{e:?}")))?;
+        }
+        foreign.insert(generation,name);
+    }}
+    let receipt_bound=RootReceipt{version:2,revision:snapshot.revision.0,file:format!("root-{}.json",snapshot.revision.0),sha256:[255;32],metadata:snapshot.metadata().values().clone(),owned:Some(RootOwned{name:format!("root-owned-{}.bin",snapshot.revision.0),len:u64::MAX,sha256:[255;32]}),foreign:foreign.clone()};
     let receipt_bytes=serde_json::to_vec(&receipt_bound).map_err(std::io::Error::other)?.len() as u64;
     // Historical receipt plus the future atomic latest-pointer staging file.
     let remaining_quota=crate::recovery::admit_disk(directory,quota,receipt_bytes.checked_mul(2).ok_or_else(||std::io::Error::other("Recovery quota overflow"))?,platform,cancel)?;
@@ -286,10 +312,10 @@ fn prepare_root(
     for piece in snapshot.pieces() {
         use bareline_document::paged::PagedPiece;
         match piece {
-            PagedPiece::Original {range,..}|PagedPiece::OriginalOwned {range,..}=>emit(RootPiece::Original{start:range.start,end:range.end})?,
+            PagedPiece::Original {source,range}|PagedPiece::OriginalOwned {source,range,..}=>if foreign.contains_key(&source.generation().0){emit(RootPiece::Foreign{generation:source.generation().0,start:range.start,end:range.end})?}else{emit(RootPiece::Original{start:range.start,end:range.end})?},
             PagedPiece::Inserted(text)=>{ let range=store_owned(text)?; emit(RootPiece::Owned{start:range.start,end:range.end})?; },
             PagedPiece::OwnedSource {source,range,original}=>{
-                if let Some((_,original_range))=original {emit(RootPiece::Original{start:original_range.start,end:original_range.end})?;}
+                if let Some((original_source,original_range))=original {if foreign.contains_key(&original_source.generation().0){emit(RootPiece::Foreign{generation:original_source.generation().0,start:original_range.start,end:original_range.end})?;}else{emit(RootPiece::Original{start:original_range.start,end:original_range.end})?;}}
                 else { let mut stored:Option<std::ops::Range<u64>>=None; crate::owned_read::visit_utf8::<std::io::Error>(source,range,cancel,|text| { let next=store_owned(text)?; if let Some(previous)=stored.as_mut() {previous.end=next.end;} else {stored=Some(next);} Ok(()) })?; if let Some(range)=stored {emit(RootPiece::Owned{start:range.start,end:range.end})?;} }
             }
         }
@@ -317,6 +343,7 @@ fn prepare_root(
     }
     let receipt = RootReceipt {
         version: 2,
+        foreign,
         revision: snapshot.revision.0,
         file: name,
         sha256: hash.finalize().into(),
@@ -336,8 +363,8 @@ fn prepare_root(
 fn publish_root(directory: &Path, receipt: &RootReceipt, platform: &dyn LocalFileSystem) -> std::io::Result<()> {
     crate::session::publish_json(&directory.join("paged-root.json"), &serde_json::to_vec(receipt).map_err(std::io::Error::other)?, platform)
 }
-fn write_root(directory: &Path, snapshot: &bareline_document::paged::PagedSnapshot, platform: &dyn LocalFileSystem, cancel: &Cancellation) -> std::io::Result<()> {
-    let receipt = prepare_root(directory,snapshot,platform,cancel,20 * 1024 * 1024 * 1024)?;
+fn write_root(directory: &Path, snapshot: &bareline_document::paged::PagedSnapshot, platform: &dyn LocalFileSystem, cancel: &Cancellation, store: &DiskDecoded) -> std::io::Result<()> {
+    let receipt = prepare_root(directory,snapshot,platform,cancel,20 * 1024 * 1024 * 1024,Some(store))?;
     publish_root(directory,&receipt,platform)
 }
 /// Reconstruct the primary paged document with unchanged raw provenance intact.
@@ -379,8 +406,10 @@ pub fn restore(
     {
         return Err("Invalid recovery source".into());
     }
-    let mut root: RootReceipt =
-        serde_json::from_slice(&read_small("paged-root.json")?).map_err(|e| e.to_string())?;
+    let committed_group=group::committed_root(directory,platform.as_ref(),cancel)?;
+    let group_revision=committed_group.as_ref().map(|root|root.revision);
+    let pointer=read_small("paged-root.json").and_then(|bytes|serde_json::from_slice::<RootReceipt>(&bytes).map_err(|e|e.to_string()));
+    let mut root: RootReceipt = match pointer {Ok(root)=>root,Err(error)=>committed_group.clone().ok_or(error)?};
     if !matches!(root.version,1|2) || root.file != format!("root-{}.json", root.revision) {
         return Err("Invalid recovery root".into());
     }
@@ -391,6 +420,7 @@ pub fn restore(
     if inspection.status == crate::recovery::RecoveryStatus::CorruptTail
         && let Some(validated) = inspection.last_durable
         && validated.revision < root.revision
+        && group_revision.is_none_or(|revision|revision<root.revision)
     {
         root = serde_json::from_slice(&read_small(&format!(
             "root-{}.receipt.json",
@@ -404,10 +434,12 @@ pub fn restore(
             return Err("Invalid validated-prefix recovery root".into());
         }
     }
+    if let Some(group_root)=committed_group && group_root.revision>=root.revision {root=group_root;}
     // The historical recipe is flushed before a streamed journal commit. A
     // failed latest-pointer update must not hide that acknowledged revision.
     if let Some(durable) = inspection.last_durable
         && durable.revision != root.revision
+        && (durable.revision>root.revision || group_revision.is_none_or(|revision|revision<root.revision))
     {
         let candidate: RootReceipt = serde_json::from_slice(&read_small(&format!("root-{}.receipt.json",durable.revision))?).map_err(|e|e.to_string())?;
         if !matches!(candidate.version,1|2) || candidate.revision != durable.revision || candidate.file != format!("root-{}.json",durable.revision) { return Err("Invalid durable recovery root".into()); }
@@ -416,7 +448,7 @@ pub fn restore(
     if !inspection.complete_baseline
         || inspection
             .last_durable
-            .is_none_or(|r| r.revision != root.revision)
+            .is_none_or(|r| r.revision != root.revision) && group_revision!=Some(root.revision)
     {
         return Err("Recovery root is stale or not durable; inspect/export protected edits".into());
     }
@@ -462,12 +494,24 @@ pub fn restore(
         )
         .map_err(|e| format!("{e:?}"))?;
     let owned_source = root.owned.as_ref().map(|owned| crate::recovery::open_retained_owned(directory,&owned.name,owned.len,owned.sha256,platform.as_ref(),crate::source::SourceOptions::default(),bytes.clone(),cancel)).transpose().map_err(|e|e.to_string())?;
+    let mut foreign_sources=std::collections::BTreeMap::new();
+    if root.foreign.len()>100 {return Err("Recovery foreign source limit".into());}
+    for (generation,name) in &root.foreign {
+        if *name!=format!("foreign-{generation}"){return Err("Invalid foreign source name".into());}
+        let foreign_store=DiskDecoded::open_retained(&directory.join(name),platform.clone(),cancel).map_err(|e|format!("{e:?}"))?;
+        let foreign_opened=foreign_store.open_paged(platform.clone(),crate::source::SourceOptions::default(),bytes.clone(),history.clone(),cancel.clone()).map_err(|e|format!("{e:?}"))?;
+        let source=foreign_opened.source.source();
+        foreign_store.attach_text_loader(&source,cancel).map_err(|e|format!("{e:?}"))?;
+        store.retain_foreign(source.generation(),&foreign_store).map_err(|e|format!("{e:?}"))?;
+        foreign_sources.insert(*generation,source);
+    }
     let pieces = pieces
         .into_iter()
         .map(|piece| match piece {
             RootPiece::Original { start, end } => {
                 Ok(bareline_document::paged::RestoredPiece::Original(start..end))
             }
+            RootPiece::Foreign {generation,start,end} => {let source=foreign_sources.get(&generation).ok_or("Missing foreign provenance")?.clone();Ok(bareline_document::paged::RestoredPiece::OriginalSource {source,range:start..end})},
             RootPiece::Inserted { text } => Ok(bareline_document::paged::RestoredPiece::Inserted(text)),
             RootPiece::Owned {start,end} => Ok(bareline_document::paged::RestoredPiece::OwnedSource {source:owned_source.clone().ok_or("Missing recovery owned source")?,range:start..end,original:None}),
         })
@@ -518,6 +562,8 @@ fn read_pieces(bytes: &[u8]) -> Result<Vec<RootPiece>, serde_json::Error> {
 
 struct SnapshotRead {
     source: crate::codecs::disk::SealedStoreRead,
+    store: DiskDecoded,
+    foreign_readers: std::collections::BTreeMap<u64, crate::codecs::disk::SealedStoreRead>,
     snapshot: bareline_document::paged::PagedSnapshot,
     offset: usize,
     cancellation: Cancellation,
@@ -546,14 +592,26 @@ impl std::io::Read for SnapshotRead {
                 continue;
             }
             let local = self.offset - start;
-            let count = (length - local).min(out.len());
+            let count = (length - local).min(out.len()).min(65536);
             match piece {
                 bareline_document::paged::PagedPiece::OwnedSource {source,range,..}=>crate::owned_read::read_exact(source,range.start+local as u64,&mut out[..count],&self.cancellation)?,
-                bareline_document::paged::PagedPiece::Original { range, .. }
-                | bareline_document::paged::PagedPiece::OriginalOwned { range, .. } => {
-                    self.source
-                        .seek(SeekFrom::Start(range.start + local as u64))?;
-                    self.source.read_exact(&mut out[..count])?;
+                bareline_document::paged::PagedPiece::Original { source, range }
+                | bareline_document::paged::PagedPiece::OriginalOwned { source, range, .. } => {
+                    let foreign = self.store.foreign_source(source.generation())
+                        .map_err(|error| std::io::Error::other(format!("{error:?}")))?;
+                    if let Some(store) = foreign {
+                        if !self.foreign_readers.contains_key(&source.generation().0) {
+                            let reader = store.sealed_text_reader(&self.cancellation)
+                                .map_err(|error| std::io::Error::other(format!("{error:?}")))?;
+                            self.foreign_readers.insert(source.generation().0, reader);
+                        }
+                        let reader = self.foreign_readers.get_mut(&source.generation().0).expect("retained foreign reader");
+                        reader.seek(SeekFrom::Start(range.start + local as u64))?;
+                        reader.read_exact(&mut out[..count])?;
+                    } else {
+                        self.source.seek(SeekFrom::Start(range.start + local as u64))?;
+                        self.source.read_exact(&mut out[..count])?;
+                    }
                 }
                 bareline_document::paged::PagedPiece::Inserted(text) => {
                     out[..count].copy_from_slice(&text.as_bytes()[local..local + count])
@@ -575,7 +633,7 @@ impl PagedRecovery {
     pub fn append_sources(&mut self, snapshot: &bareline_document::paged::PagedSnapshot, edits: &[bareline_document::paged::SourceEdit], quota: u64) -> Result<(), String> {
         let result: Result<(),String> = (|| {
             self.writer.lock().map_err(|_|"Recovery writer stopped")?.prepare_recipe_revision(snapshot.revision.0).map_err(|e|e.to_string())?;
-            let root = prepare_root(&self.directory,snapshot,self.platform.as_ref(),&self.cancellation,quota).map_err(|e|e.to_string())?;
+            let root = prepare_root(&self.directory,snapshot,self.platform.as_ref(),&self.cancellation,quota,Some(&self.store)).map_err(|e|e.to_string())?;
             let journal_quota=quota.checked_sub(serde_json::to_vec(&root).map_err(|e|e.to_string())?.len() as u64).ok_or("Recovery pointer quota")?;
             let mut writer=self.writer.lock().map_err(|_|"Recovery writer stopped".to_owned())?;
             let receipt=writer.append_source_transaction(snapshot.revision.0,edits,snapshot.metadata(),journal_quota,&self.cancellation,self.platform.as_ref()).map_err(|e|e.to_string())?;
@@ -596,14 +654,14 @@ impl PagedRecovery {
     pub fn append_source_history(&mut self,snapshot:&bareline_document::paged::PagedSnapshot,edits:&[bareline_document::paged::HistorySourceEdit],quota:u64)->Result<(),String> {
         let result: Result<(),String>=(|| {
             self.writer.lock().map_err(|_|"Recovery writer stopped")?.prepare_recipe_revision(snapshot.revision.0).map_err(|e|e.to_string())?;
-            let root=prepare_root(&self.directory,snapshot,self.platform.as_ref(),&self.cancellation,quota).map_err(|e|e.to_string())?;
+            let root=prepare_root(&self.directory,snapshot,self.platform.as_ref(),&self.cancellation,quota,Some(&self.store)).map_err(|e|e.to_string())?;
             let ranges:Vec<_>=edits.iter().map(|edit|(edit.range.start.0 as u64,edit.removed.len() as u64,edit.inserted.len() as u64)).collect();
             let journal_quota=quota.checked_sub(serde_json::to_vec(&root).map_err(|e|e.to_string())?.len() as u64).ok_or("Recovery pointer quota")?;
             let mut writer=self.writer.lock().map_err(|_|"Recovery writer stopped".to_owned())?;
             let receipt=writer.append_streams(snapshot.revision.0,&ranges,snapshot.metadata(),journal_quota,&self.cancellation,self.platform.as_ref(),|output| {
                 for edit in edits {for captured in [&edit.removed,&edit.inserted] {
                     let mut original=self.store.sealed_text_reader(&self.cancellation).map_err(|e|std::io::Error::other(format!("{e:?}")))?;
-                    stream_snapshot(captured,&mut original,&self.cancellation,output)?;
+                    stream_snapshot(captured,&self.store,&mut original,&self.cancellation,output)?;
                 }}
                 Ok(())
             }).map_err(|e|e.to_string())?;
@@ -616,7 +674,7 @@ impl PagedRecovery {
     }
 }
 
-fn stream_snapshot(snapshot:&bareline_document::paged::PagedSnapshot,original:&mut crate::codecs::disk::SealedStoreRead,cancel:&Cancellation,output:&mut dyn std::io::Write)->std::io::Result<()> {
+fn stream_snapshot(snapshot:&bareline_document::paged::PagedSnapshot,store:&DiskDecoded,original:&mut crate::codecs::disk::SealedStoreRead,cancel:&Cancellation,output:&mut dyn std::io::Write)->std::io::Result<()> {
     use std::io::{Read,Seek,SeekFrom};
     use bareline_document::paged::PagedPiece;
     let mut buffer=[0u8;65536];
@@ -624,9 +682,12 @@ fn stream_snapshot(snapshot:&bareline_document::paged::PagedSnapshot,original:&m
         match piece {
             PagedPiece::Inserted(text)=>for chunk in text.as_bytes().chunks(65536){cancel.check().map_err(|_|std::io::Error::new(std::io::ErrorKind::Interrupted,"Recovery cancelled"))?;output.write_all(chunk)?;},
             PagedPiece::OwnedSource{source,range,..}=>crate::owned_read::visit_utf8::<std::io::Error>(source,range,cancel,|text|output.write_all(text.as_bytes()))?,
-            PagedPiece::Original{range,..}|PagedPiece::OriginalOwned{range,..}=>{
-                original.seek(SeekFrom::Start(range.start))?;let mut remaining=range.end-range.start;
-                while remaining>0{cancel.check().map_err(|_|std::io::Error::new(std::io::ErrorKind::Interrupted,"Recovery cancelled"))?;let count=remaining.min(buffer.len() as u64) as usize;original.read_exact(&mut buffer[..count])?;output.write_all(&buffer[..count])?;remaining-=count as u64;}
+            PagedPiece::Original{source,range}|PagedPiece::OriginalOwned{source,range,..}=>{
+                let foreign=store.foreign_source(source.generation()).map_err(|error|std::io::Error::other(format!("{error:?}")))?;
+                let mut foreign_reader=foreign.as_ref().map(|store|store.sealed_text_reader(cancel)).transpose().map_err(|error|std::io::Error::other(format!("{error:?}")))?;
+                let reader=foreign_reader.as_mut().unwrap_or(&mut *original);
+                reader.seek(SeekFrom::Start(range.start))?;let mut remaining=range.end-range.start;
+                while remaining>0{cancel.check().map_err(|_|std::io::Error::new(std::io::ErrorKind::Interrupted,"Recovery cancelled"))?;let count=remaining.min(buffer.len() as u64) as usize;reader.read_exact(&mut buffer[..count])?;output.write_all(&buffer[..count])?;remaining-=count as u64;}
             }
         }
     }
@@ -662,9 +723,9 @@ mod quota_tests{
         use bareline_document::{Budget,source::{MemorySource,Generation,SourceKind},paged::PagedSnapshot};
         let path=std::env::temp_dir().join(format!("bareline-recipe-quota-{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));fs::create_dir(&path).unwrap();
         let (source,_)=MemorySource::new(0,Generation(1),SourceKind::Paged,4096,4096,Budget::new(65536)).unwrap();let snapshot=PagedSnapshot::utf8(source,0).unwrap();let cancel=Cancellation::default();
-        let root=prepare_root(&path,&snapshot,&Platform,&cancel,8192).unwrap();assert_eq!(root.owned.as_ref().unwrap().len,0);let physical=crate::recovery::disk_usage(&path,&cancel).unwrap();assert!(physical>2);
+        let root=prepare_root(&path,&snapshot,&Platform,&cancel,8192,None).unwrap();assert_eq!(root.owned.as_ref().unwrap().len,0);let physical=crate::recovery::disk_usage(&path,&cancel).unwrap();assert!(physical>2);
         fs::remove_file(path.join(root.file)).unwrap();fs::remove_file(path.join("root-0.receipt.json")).unwrap();fs::remove_file(path.join("root-owned-0.bin")).unwrap();
-        assert!(prepare_root(&path,&snapshot,&Platform,&cancel,physical-1).is_err());assert_eq!(fs::read_dir(&path).unwrap().count(),0);
-        fs::write(path.join("retained.bin"),b"existing").unwrap();assert!(prepare_root(&path,&snapshot,&Platform,&cancel,0).is_err());assert_eq!(fs::read(path.join("retained.bin")).unwrap(),b"existing");fs::remove_dir_all(path).unwrap();
+        assert!(prepare_root(&path,&snapshot,&Platform,&cancel,physical-1,None).is_err());assert_eq!(fs::read_dir(&path).unwrap().count(),0);
+        fs::write(path.join("retained.bin"),b"existing").unwrap();assert!(prepare_root(&path,&snapshot,&Platform,&cancel,0,None).is_err());assert_eq!(fs::read(path.join("retained.bin")).unwrap(),b"existing");fs::remove_dir_all(path).unwrap();
     }
 }

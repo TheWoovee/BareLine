@@ -443,6 +443,31 @@ mod tests {
     }
 
     #[test]
+    fn completion_target_tracks_secondary_cursor_and_rejects_focus_change() {
+        let mut workspace = Workspace::new(std::sync::Arc::new(|| {}), std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem)).unwrap();
+        workspace.new_document().unwrap();
+        workspace.editors[0].enqueue(Input::Insert("alpha".into()));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while workspace.editors[0].busy() { workspace.pump(); assert!(Instant::now() < deadline); std::thread::yield_now(); }
+        let mut views = ViewsRuntime::default(); views.split(&mut workspace, 0, Orientation::Vertical);
+        views.activate(&workspace, &mut App::default(), 1);
+        assert_eq!(bareline_app::accessibility::source_identity(views.secondary.as_ref().unwrap()), bareline_app::accessibility::source_identity(&workspace.editors[0]));
+        views.secondary.as_mut().unwrap().enqueue(Input::SetCaret(1, false));
+        while views.secondary.as_ref().unwrap().busy() { views.secondary.as_mut().unwrap().pump(); assert!(Instant::now() < deadline); std::thread::yield_now(); }
+        let requested = super::super::language::completion_target(&views, &workspace, 0).unwrap();
+        workspace.editors[0].enqueue(Input::SetCaret(2, false));
+        while workspace.editors[0].busy() { workspace.pump(); assert!(Instant::now() < deadline); std::thread::yield_now(); }
+        assert_eq!(super::super::language::completion_target(&views, &workspace, 0), Some(requested.clone()), "inactive primary cursor must not redirect a secondary request");
+        views.secondary.as_mut().unwrap().enqueue(Input::SetCaret(3, false));
+        while views.secondary.as_ref().unwrap().busy() { views.secondary.as_mut().unwrap().pump(); assert!(Instant::now() < deadline); std::thread::yield_now(); }
+        assert_ne!(super::super::language::completion_target(&views, &workspace, 0), Some(requested.clone()), "selection movement makes completion stale");
+        views.secondary.as_mut().unwrap().enqueue(Input::SetCaret(1, false));
+        while views.secondary.as_ref().unwrap().busy() { views.secondary.as_mut().unwrap().pump(); assert!(Instant::now() < deadline); std::thread::yield_now(); }
+        assert_eq!(super::super::language::completion_target(&views, &workspace, 0), Some(requested.clone()));
+        views.activate(&workspace, &mut App::default(), 0);
+        assert_ne!(super::super::language::completion_target(&views, &workspace, 0), Some(requested), "pane identity must prevent accepting into another clone");
+    }
+    #[test]
     fn delayed_fold_result_targets_the_requested_view_after_focus_moves() {
         let mut workspace = Workspace::new(
             std::sync::Arc::new(|| {}),
@@ -1693,6 +1718,15 @@ impl ViewsRuntime {
     fn open(&self) -> bool {
         self.secondary.is_some() && self.controller.as_ref().is_some_and(|c| c.split)
     }
+    pub(super) fn active_syntax_result<'a>(&'a self, workspace:&'a Workspace)->Option<&'a bareline_syntax::SyntaxResult> {
+        if self.secondary.is_none() {return workspace.syntax_result();}
+        let pane=self.pane() as usize;
+        let editor=if pane==1 {self.secondary.as_ref()?} else {workspace.editors.get(self.primary_index(workspace)?)?};
+        self.styling[pane].syntax_view(editor).result
+    }
+    pub(super) fn pane_token(&self, pane: usize) -> Option<u64> {
+        self.loaded_tabs.get(pane).copied().flatten()
+    }
     pub(super) fn pane(&self) -> u32 {
         self.controller
             .as_ref()
@@ -2461,6 +2495,7 @@ fn workspace_view_state(editor: &WorkspaceEditor) -> ViewState {
     state
 }
 fn restore_workspace_view(editor: &mut WorkspaceEditor, state: &ViewState) -> Result<(), String> {
+    editor.restore_session_language(state.language.as_ref());
     match editor {
         WorkspaceEditor::Resident(editor) => {
             restore_view(editor, state);
@@ -2528,6 +2563,7 @@ fn finish_workspace_view_restore(
 fn view_state(editor: &SharedEditorView) -> ViewState {
     let (line, _, x) = editor.logical_scroll();
     ViewState {
+        language: editor.session_language_selection(),
         anchor: editor.selection.anchor as u64,
         caret: editor.selection.caret as u64,
         scroll_line: line,
@@ -2538,6 +2574,7 @@ fn view_state(editor: &SharedEditorView) -> ViewState {
     }
 }
 fn restore_view(editor: &mut SharedEditorView, state: &ViewState) {
+    editor.restore_session_language(state.language.as_ref());
     let bound = |offset: u64| {
         let mut offset = usize::try_from(offset)
             .unwrap_or(usize::MAX)
