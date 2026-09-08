@@ -99,10 +99,35 @@ fn session_mutations_preserve_validation_and_pinned_roundtrip() {
     }
     let mut duplicate = original.clone();
     duplicate.tabs.push(duplicate.tabs[0].clone());
-    assert!(session::decode(&serde_json::to_vec(&duplicate).unwrap()).is_err());
+    let decoded = session::decode_report(&serde_json::to_vec(&duplicate).unwrap()).unwrap();
+    decoded.manifest.validate().unwrap();
+    assert_eq!(decoded.manifest.documents, original.documents);
+    assert_eq!(decoded.manifest.tabs, original.tabs);
+    assert_eq!(decoded.manifest.active_tab, Some(7));
+    assert_eq!(decoded.diagnostics.skipped, 1);
+    assert!(
+        decoded
+            .diagnostics
+            .entries
+            .iter()
+            .any(|entry| entry.section == "tabs"
+                && entry.index == Some(1)
+                && entry.issue == session::SessionIssue::DuplicateIdentity)
+    );
     let mut oversized = original;
     oversized.documents[0].title = "x".repeat(4097);
-    assert!(session::decode(&serde_json::to_vec(&oversized).unwrap()).is_err());
+    let decoded = session::decode_report(&serde_json::to_vec(&oversized).unwrap()).unwrap();
+    decoded.manifest.validate().unwrap();
+    assert!(decoded.manifest.documents.is_empty() && decoded.manifest.tabs.is_empty());
+    assert_eq!(decoded.diagnostics.skipped_documents, 1);
+    assert!(
+        decoded
+            .diagnostics
+            .entries
+            .iter()
+            .any(|entry| entry.section == "documents"
+                && entry.issue == session::SessionIssue::ResourceLimit)
+    );
     oversized.documents[0].title = "safe".into();
     oversized.documents[0].path = Some(bareline_platform::SerializedPath {
         version: 1,
@@ -110,7 +135,19 @@ fn session_mutations_preserve_validation_and_pinned_roundtrip() {
         data: "not-base64!".into(),
         display: "untrusted display".into(),
     });
-    assert!(session::decode(&serde_json::to_vec(&oversized).unwrap()).is_err());
+    let decoded = session::decode_report(&serde_json::to_vec(&oversized).unwrap()).unwrap();
+    decoded.manifest.validate().unwrap();
+    assert!(decoded.manifest.documents.is_empty() && decoded.manifest.tabs.is_empty());
+    assert_eq!(decoded.diagnostics.skipped_documents, 1);
+    assert!(
+        decoded
+            .diagnostics
+            .entries
+            .iter()
+            .any(|entry| entry.section == "documents"
+                && entry.issue == session::SessionIssue::InvalidPath)
+    );
+    assert!(!decoded.diagnostics.summary().contains("untrusted display"));
     assert!(session::decode(&vec![b' '; session::MAX_SESSION_BYTES + 1]).is_err());
 }
 

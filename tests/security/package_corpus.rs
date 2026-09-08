@@ -66,7 +66,7 @@ fn corpus_install(bytes: &[u8], mut catalog: Catalog) -> Result<(), PackageError
 #[test]
 fn authenticated_package_mutations_reach_manifest_and_archive_guards() {
     let (seed, catalog) = fixture();
-    corpus_install(&seed, catalog.clone()).unwrap();
+    corpus_install(&seed, catalog).unwrap();
     let mut archive = zip::ZipArchive::new(Cursor::new(&seed)).unwrap();
     let mut manifest = String::new();
     archive
@@ -78,7 +78,7 @@ fn authenticated_package_mutations_reach_manifest_and_archive_guards() {
     for index in 0..16 {
         let cut = index * seed.len() / 16;
         assert!(
-            corpus_install(&seed[..cut], catalog.clone()).is_err(),
+            corpus_install(&seed[..cut], fixture().1).is_err(),
             "truncated archive {index}"
         );
     }
@@ -86,7 +86,7 @@ fn authenticated_package_mutations_reach_manifest_and_archive_guards() {
         let cut = index * manifest.len() / 16;
         let bytes = corpus_archive(&manifest[..cut], "entry.wasm");
         assert!(
-            corpus_install(&bytes, catalog.clone()).is_err(),
+            corpus_install(&bytes, fixture().1).is_err(),
             "truncated manifest {index}"
         );
     }
@@ -99,9 +99,9 @@ fn authenticated_package_mutations_reach_manifest_and_archive_guards() {
         format!("{manifest}\nunknown_security_field = true\n"),
     ] {
         assert_ne!(text, manifest, "mutation must change serialized fixture");
-        assert!(corpus_install(&corpus_archive(&text, "entry.wasm"), catalog.clone()).is_err());
+        assert!(corpus_install(&corpus_archive(&text, "entry.wasm"), fixture().1).is_err());
     }
     for entry in ["../entry.wasm", "C:entry.wasm", "NUL.wasm"] {
-        assert!(corpus_install(&corpus_archive(&manifest, entry), catalog.clone()).is_err());
+        assert!(corpus_install(&corpus_archive(&manifest, entry), fixture().1).is_err());
     }
 }

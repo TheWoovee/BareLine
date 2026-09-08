@@ -3977,10 +3977,13 @@ dependencies = [
  "bareline-commands",
  "bareline-diff",
  "bareline-document",
+ "bareline-extensions-protocol",
  "bareline-file-io",
+ "bareline-platform",
  "bareline-platform-windows",
  "bareline-renderer",
  "bareline-search",
+ "bareline-syntax",
  "serde_json",
  "sha2",
 ]
