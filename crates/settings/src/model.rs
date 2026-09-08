@@ -109,6 +109,21 @@ pub static DEFINITIONS: &[SettingDefinition] = &[
         false
     ),
     setting!(
+        "document.page_size_bytes", "Source page bytes", "Bytes per source page for newly opened stores.", "Advanced", SettingKind::Integer(4096, 16777216), false, false
+    ),
+    setting!(
+        "document.page_cache_bytes", "Document page cache bytes", "Maximum cached source bytes per newly opened store.", "Advanced", SettingKind::Integer(4096, 1073741824), false, false
+    ),
+    setting!(
+        "document.aggregate_cache_bytes", "Aggregate document memory bytes", "Shared cap across tabs. Lowering retains live data and pauses new allocations above the cap.", "Advanced", SettingKind::Integer(1048576, 1099511627776), false, false
+    ),
+    setting!(
+        "undo.aggregate_ram_bytes", "Aggregate undo memory bytes", "Shared undo RAM cap across tabs. Lowering preserves retained history.", "Advanced", SettingKind::Integer(1048576, 1099511627776), false, false
+    ),
+    setting!(
+        "undo.max_changes", "Undo change limit", "Maximum retained undo and redo changes per document. Older complete changes are retired on document workers.", "Advanced", SettingKind::Integer(1, 1_000_000), false, false
+    ),
+    setting!(
         "transcode.temp_quota_bytes",
         "Transcode temporary storage limit",
         "Maximum disk bytes used for temporary transcoding, also limited by available disk space. Applies to newly opened files.",
@@ -641,6 +656,11 @@ impl EffectiveSettings {
                 SettingValue::Bool(self.workspace_preferences_enabled)
             }
             "document.resident_max_bytes" => SettingValue::Integer(self.resident_max_bytes as i64),
+            "undo.max_changes" => SettingValue::Integer(self.undo_max_changes as i64),
+            "document.page_size_bytes" => SettingValue::Integer(self.page_size_bytes as i64),
+            "document.page_cache_bytes" => SettingValue::Integer(self.page_cache_bytes as i64),
+            "document.aggregate_cache_bytes" => SettingValue::Integer(self.aggregate_cache_bytes as i64),
+            "undo.aggregate_ram_bytes" => SettingValue::Integer(self.undo_aggregate_ram_bytes as i64),
             "transcode.temp_quota_bytes" => {
                 SettingValue::Integer(self.transcode_quota_bytes as i64)
             }
@@ -746,6 +766,10 @@ fn parse_value(definition: &SettingDefinition, item: &Item) -> Result<SettingVal
     })
 }
 fn validate_value(definition: &SettingDefinition, value: &SettingValue) -> Result<(), String> {
+    if matches!(definition.key, "document.page_size_bytes" | "document.page_cache_bytes" | "document.aggregate_cache_bytes" | "undo.aggregate_ram_bytes")
+        && matches!(value, SettingValue::Integer(bytes) if usize::try_from(*bytes).is_err()) {
+        return Err("Resource limit exceeds this platform's address range".into());
+    }
     if definition.key == "language.locale" {
         if let SettingValue::Text(locale) = value {
             if locale.is_empty()
@@ -870,6 +894,11 @@ pub struct EffectiveSettings {
     pub clipboard_history_max_entry_bytes: usize,
     pub language_policies: BTreeMap<String, String>,
     pub resident_max_bytes: u64,
+    pub undo_max_changes: usize,
+    pub page_size_bytes: usize,
+    pub page_cache_bytes: usize,
+    pub aggregate_cache_bytes: usize,
+    pub undo_aggregate_ram_bytes: usize,
     pub transcode_quota_bytes: u64,
     pub restore_session: bool,
     pub workspace_preferences_enabled: bool,
@@ -900,6 +929,11 @@ impl Default for EffectiveSettings {
             clipboard_history_max_entry_bytes: 4 * 1024 * 1024,
             language_policies: BTreeMap::new(),
             resident_max_bytes: 268_435_456,
+            undo_max_changes: 100_000,
+            page_size_bytes: 1048576,
+            page_cache_bytes: 67108864,
+            aggregate_cache_bytes: 268435456,
+            undo_aggregate_ram_bytes: 134217728,
             transcode_quota_bytes: 21_474_836_480,
             restore_session: true,
             workspace_preferences_enabled: false,
@@ -963,10 +997,18 @@ pub fn resolve(
             apply(&mut resolved.values, &key, value);
         }
     }
+    // A cache must admit at least one page; display the effective bounded value.
+    resolved.values.page_cache_bytes = resolved.values.page_cache_bytes.min(resolved.values.aggregate_cache_bytes);
+    resolved.values.page_size_bytes = resolved.values.page_size_bytes.min(resolved.values.page_cache_bytes);
     resolved
 }
 fn apply(settings: &mut EffectiveSettings, key: &str, value: SettingValue) {
     match (key, value) {
+        ("undo.max_changes", SettingValue::Integer(v)) => settings.undo_max_changes = v as usize,
+        ("document.page_size_bytes", SettingValue::Integer(v)) => settings.page_size_bytes = v as usize,
+        ("document.page_cache_bytes", SettingValue::Integer(v)) => settings.page_cache_bytes = v as usize,
+        ("document.aggregate_cache_bytes", SettingValue::Integer(v)) => settings.aggregate_cache_bytes = v as usize,
+        ("undo.aggregate_ram_bytes", SettingValue::Integer(v)) => settings.undo_aggregate_ram_bytes = v as usize,
         ("editor.clipboard.history_enabled", SettingValue::Bool(v)) => {
             settings.clipboard_history_enabled = v
         }
@@ -1032,6 +1074,27 @@ pub fn pt_to_logical_px(points: f64) -> f64 {
 #[cfg(test)]
 mod input_contract_tests {
     use super::*;
+    #[test]
+    fn resource_limits_are_user_owned_and_effective_pages_fit_the_shared_cap() {
+        let mut user = SettingsDocument::empty(Scope::User);
+        assert_eq!(EffectiveSettings::default().undo_max_changes, 100_000);
+        user.set("undo.max_changes", SettingValue::Integer(37)).unwrap();
+        assert!(user.set("undo.max_changes", SettingValue::Integer(0)).is_err());
+        user.set("document.page_size_bytes", SettingValue::Integer(8 << 20)).unwrap();
+        user.set("document.page_cache_bytes", SettingValue::Integer(16 << 20)).unwrap();
+        user.set("document.aggregate_cache_bytes", SettingValue::Integer(4 << 20)).unwrap();
+        user.set("undo.aggregate_ram_bytes", SettingValue::Integer(2 << 20)).unwrap();
+        assert!(user.set("document.page_size_bytes", SettingValue::Integer(0)).is_err());
+        let mut workspace = SettingsDocument::empty(Scope::Workspace);
+        assert!(workspace.set("undo.max_changes", SettingValue::Integer(2)).is_err());
+        assert!(workspace.set("undo.aggregate_ram_bytes", SettingValue::Integer(8 << 20)).is_err());
+        let values = resolve(&user, Some(&workspace), true, None).values;
+        assert_eq!(values.undo_max_changes, 37);
+        assert_eq!(values.page_size_bytes, 4 << 20);
+        assert_eq!(values.page_cache_bytes, 4 << 20);
+        assert_eq!(values.undo_aggregate_ram_bytes, 2 << 20);
+        assert_eq!(values.setting_value("document.page_size_bytes"), Some(SettingValue::Integer(4 << 20)));
+    }
     #[test]
     fn policy_and_clipboard_inputs_roundtrip_and_invalid_input_preserves_document() {
         let mut document = SettingsDocument::empty(Scope::User);

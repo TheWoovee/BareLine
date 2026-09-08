@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Paged language reads run only on this worker. UI snapshots are projections.
 use bareline_document::{Budget, DocumentSnapshot, TextOffset, paged::WindowPoll};
-use bareline_editor_surface::paged_view::PagedReadHandle;
+use bareline_editor_surface::paged_view::{PagedReadHandle, ViewportSegment};
 use bareline_syntax::{
     Cancellation, Language, LexerPreference, MAX_REQUEST_BYTES, SyntaxResult,
-    folding::{Fold, FoldAccumulator},
+    folding::{AnchoredFold, FoldAccumulator},
     stream::{StreamLexer, ViewportProjection},
 };
 use std::sync::{
@@ -13,7 +13,7 @@ use std::sync::{
 };
 pub(super) struct ResultWindow {
     pub syntax: Option<SyntaxResult>,
-    pub folds: Vec<Fold>,
+    pub folds: Vec<AnchoredFold>,
     pub first_line: usize,
     pub partial: bool,
 }
@@ -21,6 +21,7 @@ pub(super) struct Job {
     pub identity: (u64, u64),
     pub local: DocumentSnapshot,
     pub origin: TextOffset,
+    pub segments: Vec<ViewportSegment>,
     pub language: Language,
     pub preference: LexerPreference,
     pub definition: Option<Arc<bareline_syntax::udl::Definition>>,
@@ -32,21 +33,48 @@ impl Drop for Job {
         self.cancel.cancel();
     }
 }
+#[allow(clippy::too_many_arguments)]
 pub(super) fn spawn(
     handle: PagedReadHandle,
     local: DocumentSnapshot,
     origin: TextOffset,
+    segments: Vec<ViewportSegment>,
     language: Language,
     preference: LexerPreference,
     definition: Option<Arc<bareline_syntax::udl::Definition>>,
     notify: Arc<dyn Fn() + Send + Sync>,
 ) -> Result<Job, String> {
+    if segments.len() > 8193 {
+        return Err("Syntax projection exceeds segment budget".into());
+    }
+    if !segments.is_empty() {
+        let mut local_end = 0;
+        let mut source_end = 0;
+        for segment in &segments {
+            if segment.local.start.0 != local_end
+                || segment.local.end.0 < local_end
+                || segment.source.start.0 < source_end
+                || segment.source.end.0 < segment.source.start.0
+                || segment.source.end.0 > handle.snapshot().len()
+                || segment.local.end.0 - segment.local.start.0
+                    != segment.source.end.0 - segment.source.start.0
+            {
+                return Err("Invalid syntax projection map".into());
+            }
+            local_end = segment.local.end.0;
+            source_end = segment.source.end.0;
+        }
+        if local_end != local.len() {
+            return Err("Incomplete syntax projection map".into());
+        }
+    }
     let (tx, receiver) = mpsc::sync_channel(1);
     let cancel = Cancellation::default();
     let job = Job {
         identity: handle.snapshot().identity_token(),
         local: local.clone(),
         origin,
+        segments: segments.clone(),
         language,
         preference,
         definition: definition.clone(),
@@ -61,7 +89,7 @@ pub(super) fn spawn(
                 let mut folds = FoldAccumulator::default();
                 let mut folds_active = true;
                 let mut projection = Some(
-                    ViewportProjection::new(local.clone(), origin, language)
+                    ViewportProjection::for_projection(local.clone(), language)
                         .map_err(|e| format!("{e:?}"))?,
                 );
                 let mut first_line = 0;
@@ -97,9 +125,29 @@ pub(super) fn spawn(
                     }
 
                     if let Some(view) = &mut projection {
-                        view.accept(&window).map_err(|e| format!("{e:?}"))?;
+                        if segments.is_empty() {
+                            view.accept_segment(
+                                &window,
+                                origin..TextOffset(origin.0 + local.len()),
+                                TextOffset(0)..TextOffset(local.len()),
+                            )
+                            .map_err(|e| format!("{e:?}"))?;
+                        } else {
+                            for segment in &segments {
+                                view.accept_segment(
+                                    &window,
+                                    segment.source.clone(),
+                                    segment.local.clone(),
+                                )
+                                .map_err(|e| format!("{e:?}"))?;
+                            }
+                        }
                     }
-                    let syntax = if projection.is_some() && lexer.next().0 >= origin.0 + local.len()
+                    let syntax = if projection.is_some()
+                        && lexer.next().0
+                            >= segments
+                                .last()
+                                .map_or(origin.0 + local.len(), |segment| segment.source.end.0)
                     {
                         let (syntax, line) = projection
                             .take()
@@ -115,7 +163,7 @@ pub(super) fn spawn(
                         if tx
                             .try_send(Ok(ResultWindow {
                                 syntax: None,
-                                folds: folds.known().to_vec(),
+                                folds: folds.anchored().to_vec(),
                                 first_line,
                                 partial: true,
                             }))
@@ -127,7 +175,7 @@ pub(super) fn spawn(
                     if syntax.is_some() || eof {
                         let mut value = Ok(ResultWindow {
                             syntax,
-                            folds: folds.known().to_vec(),
+                            folds: folds.anchored().to_vec(),
                             first_line,
                             partial: !eof || !folds_active || !folds.context_complete(),
                         });

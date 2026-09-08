@@ -831,7 +831,9 @@ pub struct InterpretRequest {
     pub fingerprint: Fingerprint,
 }
 type Notification = std::sync::Arc<dyn Fn() + Send + Sync>;
+enum ReadAuthorization{Grant(bareline_platform::RemoteReadGrant,bareline_platform::RemoteReadAction),Access(bareline_platform::RemoteReadAccess)}
 struct Job {
+    authorization: Option<ReadAuthorization>,
     cancellation: Cancellation,
     request: IoRequest,
     reply: std::sync::mpsc::SyncSender<IoCompletion>,
@@ -872,6 +874,16 @@ impl IoService {
             .name("file-io".into())
             .spawn(move || {
                 while let Ok(job) = receiver.recv() {
+                    let scoped=(||->io::Result<std::sync::Arc<dyn LocalFileSystem>>{
+                        let Some(authorization)=job.authorization else{return Ok(platform.clone());};
+                        let path=read_request_path(&job.request).ok_or_else(||io::Error::new(io::ErrorKind::PermissionDenied,"remote grant cannot authorize this operation"))?;
+                        let access=match authorization{
+                            ReadAuthorization::Grant(grant,action)=>{job.cancellation.check().map_err(|_|io::Error::new(io::ErrorKind::Interrupted,"read cancelled"))?;grant.claim(path,action,std::sync::Arc::new(||false))?},
+                            ReadAuthorization::Access(access)=>{access.check(path)?;access},
+                        };
+                        platform.scoped_remote_read(access)
+                    })();
+                    let platform=match scoped{Ok(platform)=>platform,Err(error)=>{let _=job.reply.try_send(IoCompletion::Open(Err(FileError::Io(error))));(job.notify)();continue;}};
                     let result = match job.request {
                         IoRequest::SpillOwnedResident { saved_state, service, captured, encoding, original, cache, quota, options, bytes, history } => {
                             let result = (|| {
@@ -1063,11 +1075,27 @@ impl IoService {
         request: IoRequest,
         notify: Notification,
     ) -> Result<IoTicket, Box<IoRequest>> {
+        self.submit_inner(request,notify,None)
+    }
+    pub fn submit_authorized(&self,request:IoRequest,grant:bareline_platform::RemoteReadGrant,action:bareline_platform::RemoteReadAction,notify:Notification)->Result<IoTicket,Box<IoRequest>>{
+        if read_request_path(&request).is_none(){return Err(Box::new(request));}
+        self.submit_inner(request,notify,Some(ReadAuthorization::Grant(grant,action)))
+    }
+    pub fn submit_follow_read(&self,request:IoRequest,access:bareline_platform::RemoteReadAccess,notify:Notification)->Result<IoTicket,Box<IoRequest>>{
+        if access.action()!=bareline_platform::RemoteReadAction::Follow||read_request_path(&request).is_none_or(|path|access.check(path).is_err()){return Err(Box::new(request));}
+        self.submit_inner(request,notify,Some(ReadAuthorization::Access(access)))
+    }
+    fn submit_inner(&self,request:IoRequest,notify:Notification,authorization:Option<ReadAuthorization>)->Result<IoTicket,Box<IoRequest>>{
         let (reply, receiver) = std::sync::mpsc::sync_channel(1);
         let (prefix_sender, prefix) = std::sync::mpsc::sync_channel(1);
-        let cancellation = Cancellation::default();
+        let cancellation=match &authorization{
+            Some(ReadAuthorization::Grant(grant,_))=>{let grant=grant.clone();Cancellation::with_check(std::sync::Arc::new(move||grant.is_revoked()))},
+            Some(ReadAuthorization::Access(access))=>{let access=access.clone();Cancellation::with_check(std::sync::Arc::new(move||access.is_revoked()))},
+            None=>Cancellation::default(),
+        };
         self.sender
             .try_send(Job {
+                authorization,
                 cancellation: cancellation.clone(),
                 request,
                 reply,
@@ -1337,3 +1365,37 @@ mod encoded_tests {
 #[cfg(test)]
 #[path = "fault_transitions.rs"]
 mod fault_transitions;
+
+fn read_request_path(request:&IoRequest)->Option<&Path>{match request{
+    IoRequest::Open{path,..}|IoRequest::OpenStreaming{path,..}|IoRequest::OpenEncoded{path,..}=>Some(path),
+    IoRequest::OpenPagedEncoded(request)=>Some(&request.path),
+    _=>None,
+}}
+#[cfg(test)]
+mod authorized_read_tests{
+    use super::*;
+    use bareline_platform::{RemoteReadGrant,RemoteReadAction,RemoteReadAccess};
+    use std::sync::{Arc,atomic::{AtomicUsize,Ordering}};
+    struct Platform{access:Option<RemoteReadAccess>,reads:Arc<AtomicUsize>}
+    impl LocalFileSystem for Platform{
+        fn scoped_remote_read(&self,access:RemoteReadAccess)->io::Result<Arc<dyn LocalFileSystem>>{Ok(Arc::new(Self{access:Some(access),reads:self.reads.clone()}))}
+        fn validate_source(&self,path:&Path)->io::Result<()>{self.access.as_ref().ok_or_else(||io::Error::new(io::ErrorKind::PermissionDenied,"no action grant"))?.check(path)?;self.reads.fetch_add(1,Ordering::SeqCst);Ok(())}
+        fn validate_target(&self,_:&Path)->io::Result<()>{Err(io::Error::new(io::ErrorKind::PermissionDenied,"read-only capability"))}
+        fn commit(&self,_:&Path,_:&Path,_:bool)->io::Result<()>{Err(io::Error::other("writes unavailable"))}
+        fn identity(&self,file:&File)->io::Result<FileIdentity>{Ok(FileIdentity{volume:1,file:1,length:file.metadata()?.len(),modified:0})}
+    }
+    fn request(path:&Path)->IoRequest{IoRequest::Open{path:path.into(),bytes:Budget::new(1024*1024),history:Budget::new(1024*1024)}}
+    fn result(ticket:&IoTicket)->IoCompletion{let deadline=std::time::Instant::now()+std::time::Duration::from_secs(5);loop{match ticket.try_recv(){Ok(result)=>return result,Err(std::sync::mpsc::TryRecvError::Empty)=>{assert!(std::time::Instant::now()<deadline);std::thread::yield_now();},Err(error)=>panic!("{error:?}")}}}
+    #[test]
+    fn grant_travels_to_only_its_read_job_and_never_enables_the_service(){
+        let path=std::env::temp_dir().join(format!("bareline-authorized-local-fixture-{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));fs::write(&path,b"fixture").unwrap();
+        let reads=Arc::new(AtomicUsize::new(0));let service=IoService::new(Arc::new(Platform{access:None,reads:reads.clone()})).unwrap();let notify:Notification=Arc::new(||{});
+        let plain=service.submit(request(&path),notify.clone()).ok().unwrap();assert!(matches!(result(&plain),IoCompletion::Open(Err(_))));assert_eq!(reads.load(Ordering::SeqCst),0);
+        let grant=RemoteReadGrant::after_consent(path.clone(),RemoteReadAction::Open,std::time::Duration::from_secs(10)).unwrap();
+        let wrong=service.submit_authorized(request(&path.with_extension("other")),grant.clone(),RemoteReadAction::Open,notify.clone()).ok().unwrap();assert!(matches!(result(&wrong),IoCompletion::Open(Err(_))));assert_eq!(reads.load(Ordering::SeqCst),0);
+        let authorized=service.submit_authorized(request(&path),grant.clone(),RemoteReadAction::Open,notify.clone()).ok().unwrap();assert!(matches!(result(&authorized),IoCompletion::Open(Ok(_))));assert!(reads.load(Ordering::SeqCst)>0);
+        let repeated=service.submit_authorized(request(&path),grant,RemoteReadAction::Open,notify.clone()).ok().unwrap();assert!(matches!(result(&repeated),IoCompletion::Open(Err(_))));
+        let plain_again=service.submit(request(&path),notify.clone()).ok().unwrap();assert!(matches!(result(&plain_again),IoCompletion::Open(Err(_))));
+        let revoked=RemoteReadGrant::after_consent(path.clone(),RemoteReadAction::Open,std::time::Duration::from_secs(10)).unwrap();revoked.revoke();let ticket=service.submit_authorized(request(&path),revoked,RemoteReadAction::Open,notify).ok().unwrap();assert!(matches!(result(&ticket),IoCompletion::Open(Err(_))));fs::remove_file(path).unwrap();
+    }
+}

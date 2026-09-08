@@ -30,6 +30,11 @@ impl Drop for TrackedEditCompletion {
     fn drop(&mut self){self.0.complete_once(Err("Edit completion was cancelled or disconnected".into()));}
 }
 impl crate::EditorSurface {
+    pub fn execute_power_tracked(&mut self,id:&str,args:&crate::power::consumer::Arguments)->Result<TrackedEditReceipt,String>{
+        crate::paged_power::validate_arguments(id,args)?;
+        let receipt=TrackedEditReceipt::new(self.snapshot.identity_token());self.execute_power_parameters(id,args,false)?;
+        if let Some(pending)=self.pending.as_mut(){pending.tracked=Some(TrackedEditCompletion(receipt.clone()));}else{receipt.complete_once(Ok(self.snapshot.revision));}Ok(receipt)
+    }
     /// Explicit transform replay uses the same actor path without creating a
     /// second command-recording event for the command being replayed.
     pub fn execute_transform_tracked(&mut self,id:&str)->Result<TrackedEditReceipt,String> {

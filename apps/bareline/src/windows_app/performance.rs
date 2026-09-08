@@ -168,7 +168,7 @@ impl PerformanceRuntime {
                     if config.workload == "regex-search" { workspace.find.toggle_mode(); workspace.find.toggle_mode(); }
                 }
                 "scroll" => {
-                    self.scroll_before = Some(scroll_position(&workspace.editors[app.active]));
+                    self.scroll_before = scroll_position(&workspace.editors[app.active]);
                     if !workspace.editors[app.active].page_by(true) { workspace.editors[app.active].scroll_y += 480.0; }
                 }
                 "save" | "save-as" => {
@@ -254,11 +254,11 @@ impl PerformanceRuntime {
             "scroll" => {
                 if self.frame_ready {
                     self.frame_ready = false;
-                    if self.frame_scroll == self.scroll_before { self.finish(false); return true; }
+                    if self.frame_scroll.is_none() || self.scroll_before.is_none() || self.frame_scroll == self.scroll_before { self.finish(false); return true; }
                     if let Some(start) = self.operation { self.samples.push(start.elapsed().as_micros()); }
                     if self.samples.len() >= 120 { self.finish(true); return true; }
                     let forward = self.samples.len() % 2 == 0;
-                    self.scroll_before = Some(scroll_position(&workspace.editors[app.active]));
+                    self.scroll_before = scroll_position(&workspace.editors[app.active]);
                     if !workspace.editors[app.active].page_by(forward) {
                         workspace.editors[app.active].scroll_y = (workspace.editors[app.active].scroll_y + if forward {480.0} else {-480.0}).max(0.0);
                     }
@@ -324,9 +324,15 @@ impl PerformanceRuntime {
     }
 }
 
-fn scroll_position(editor: &bareline_app::workspace::WorkspaceEditor) -> (usize, u64) {
-    let origin = match editor { bareline_app::workspace::WorkspaceEditor::Paged(paged) => paged.viewport_start().0, _ => 0 };
-    (origin, editor.scroll_y.to_bits())
+fn scroll_position(editor: &bareline_app::workspace::WorkspaceEditor) -> Option<(usize, u64)> {
+    let origin = match editor {
+        bareline_app::workspace::WorkspaceEditor::Paged(paged) => {
+            if !paged.viewport_ready() { return None; }
+            paged.source_offset(editor.visible_text.start, bareline_editor_surface::paged_view::SourceAffinity::After)?.0
+        }
+        _ => editor.visible_text.start.0,
+    };
+    Some((origin, editor.scroll_y.to_bits()))
 }
 
 impl super::Shell {
@@ -375,16 +381,28 @@ impl super::Shell {
                 })
         });
         if let Some(workspace) = &self.workspace && let Some(editor) = workspace.editors.get(self.app.active) {
-            let (identity, origin, length) = match editor {
-                bareline_app::workspace::WorkspaceEditor::Paged(paged) => (paged.snapshot().identity_token(), paged.viewport_start().0, paged.snapshot().len()),
-                bareline_app::workspace::WorkspaceEditor::Resident(resident) => (resident.snapshot().identity_token(), 0, resident.snapshot().len()),
+            let (identity, visible, length) = match editor {
+                bareline_app::workspace::WorkspaceEditor::Paged(paged) => {
+                    use bareline_editor_surface::paged_view::SourceAffinity;
+                    // A single styling receipt cannot certify an invented range across omitted fold bodies.
+                    let crosses_gap = paged.source_segments().windows(2).any(|pair|
+                        pair[0].source.end != pair[1].source.start
+                            && editor.visible_text.start < pair[0].local.end
+                            && pair[1].local.start < editor.visible_text.end);
+                    let visible = if crosses_gap { None } else {
+                        paged.source_offset(editor.visible_text.start, SourceAffinity::After)
+                            .zip(paged.source_offset(editor.visible_text.end, SourceAffinity::Before))
+                            .filter(|(start, end)| start <= end).map(|(start, end)| start..end)
+                    };
+                    (paged.snapshot().identity_token(), visible, paged.snapshot().len())
+                }
+                bareline_app::workspace::WorkspaceEditor::Resident(resident) => (resident.snapshot().identity_token(), Some(editor.visible_text.clone()), resident.snapshot().len()),
             };
             self.performance.frame_tail_len = self.performance.frame_ready.then_some(length);
-            self.performance.frame_scroll = self.performance.frame_ready.then(|| scroll_position(editor));
+            self.performance.frame_scroll = self.performance.frame_ready.then(|| scroll_position(editor)).flatten();
             self.performance.syntax_present = self.performance.frame_ready && workspace.styling_receipt().is_some_and(|receipt| {
                 receipt.ready && !receipt.unavailable && receipt.identity == identity && receipt.language != bareline_syntax::Language::PlainText
-                    && receipt.range.start.0 <= origin.saturating_add(editor.visible_text.start.0)
-                    && receipt.range.end.0 >= origin.saturating_add(editor.visible_text.end.0)
+                    && visible.as_ref().is_some_and(|range| receipt.range.start <= range.start && receipt.range.end >= range.end)
             });
             if self.performance.syntax_present && self.performance.syntax_present_us.is_none() {
                 self.performance.syntax_present_us = self.performance.started.map(|start| start.elapsed().as_micros());

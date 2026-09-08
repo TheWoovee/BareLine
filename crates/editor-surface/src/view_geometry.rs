@@ -19,6 +19,42 @@ impl Default for CaretBlink {
 mod tests {
     use super::*;
     #[test]
+    fn mapped_fold_gap_keeps_adjacent_shaped_rows_and_verified_gutter_labels() {
+        use bareline_document::{Budget, Document, TextOffset};
+        use crate::paged_view::ViewportSegment;
+        use bareline_renderer::{DrawOp, TextBackend};
+        let header = "தமிழ் {\n";
+        let hidden = "hidden\n".repeat(50_000);
+        assert!(hidden.len() > 256 * 1024);
+        let suffix = "مرحبا 👩🏽‍💻 e\u{301}";
+        let source = format!("{header}{hidden}{suffix}");
+        let suffix_start = header.len() + hidden.len();
+        let projected = format!("{}{}", &source[..header.len()], &source[suffix_start..]);
+        let document = Document::from_utf8(&projected, Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+        let mut view = EditorSurface::loading(document.snapshot(), std::sync::Arc::new(|| {}));
+        view.set_source_segments(&[
+            ViewportSegment { local: TextOffset(0)..TextOffset(header.len()), source: TextOffset(0)..TextOffset(header.len()), first_global_line: Some(0), source_line_start: Some(TextOffset(0)) },
+            ViewportSegment { local: TextOffset(header.len())..TextOffset(projected.len()), source: TextOffset(suffix_start)..TextOffset(source.len()), first_global_line: Some(50_001), source_line_start: Some(TextOffset(suffix_start)) },
+        ]);
+        let mut backend = bareline_renderer_recording::RecordingBackend::default();
+        let mut ops = Vec::new();
+        view.draw(&mut backend, 900.0, 400.0, &mut ops).unwrap();
+        let first = &view.layouts[&0];
+        let second = &view.layouts[&1];
+        assert!(first.end <= header.len());
+        assert_eq!(second.start, header.len());
+        assert_eq!(view.visual_line(1), 1);
+        assert_eq!(view.source_line_at(TextOffset(header.len() - 1)), Some(0));
+        assert_eq!(view.source_line_at(TextOffset(header.len())), Some(50_001));
+        for label in ["1", "50002"] {
+            assert!(ops.iter().any(|op| matches!(op, DrawOp::Text { origin, text, .. } if origin.x == 14.0 && text == label)));
+        }
+        let caret = backend.caret(second.id, 0).unwrap();
+        let hit = backend.hit_test(second.id, bareline_renderer::Point { x: caret.x, y: caret.y }).unwrap();
+        assert_eq!(second.start + hit.byte_offset, header.len());
+        assert!(view.accessibility_geometry(&backend, 900.0, 400.0).iter().any(|(range, _)| range.start == header.len()));
+    }
+    #[test]
     fn overlapping_window_retains_shaped_anchor_and_busy_wheel_delta() {
         use bareline_renderer::TextBackend;
         let make=|text:&str|{let doc=bareline_document::Document::from_utf8(text,bareline_document::Budget::new(1<<20),bareline_document::Budget::new(1<<20)).unwrap();EditorSurface::loading(doc.snapshot(),std::sync::Arc::new(||{}))};
@@ -56,6 +92,24 @@ mod tests {
     }
 }
 impl EditorSurface {
+    /// Installs the paged owner's verified map alongside its local projection.
+    /// Geometry stays in projection coordinates; omitted source bytes add no rows.
+    pub fn set_source_segments(&mut self, segments: &[crate::paged_view::ViewportSegment]) {
+        self.source_rows = (!segments.is_empty()).then(|| (self.snapshot.content_state, segments.to_vec()));
+    }
+
+    /// Zero-based source line at a local shaped position. At a fold seam the
+    /// following piece owns the caret, matching After affinity for hit testing.
+    pub fn source_line_at(&self, local: bareline_document::TextOffset) -> Option<u64> {
+        let local_line = self.snapshot.line_at(local).ok()?;
+        let Some((state, segments)) = &self.source_rows else { return Some(local_line as u64); };
+        if *state != self.snapshot.content_state { return None; }
+        let segment = segments.iter().find(|piece| piece.local.start <= local && local < piece.local.end)
+            .or_else(|| segments.last().filter(|piece| piece.local.end == local))?;
+        let first_local = self.snapshot.line_at(segment.local.start).ok()?;
+        segment.first_global_line?.checked_add(local_line.checked_sub(first_local)? as u64)
+    }
+
     pub fn horizontal_window_anchor(&self,backend:&impl bareline_renderer::TextBackend,width:f32)->Option<HorizontalAnchor> {
         if self.wrap||self.horizontal_intent==0||self.pending_horizontal_anchor.is_some(){return None;}
         let viewport=(width-crate::LEFT-16.0).max(1.0);

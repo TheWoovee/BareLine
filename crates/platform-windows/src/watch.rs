@@ -421,3 +421,17 @@ mod tests {
         );
     }
 }
+
+impl WindowsWatchService {
+    /// Consent text is constructed without opening, classifying, or querying the destination.
+    pub fn confirm_remote_read(path:&std::path::Path,action:bareline_platform::RemoteReadAction)->bool{
+        use windows::{core::PCWSTR,Win32::UI::WindowsAndMessaging::*};
+        let action=match action{bareline_platform::RemoteReadAction::Open=>"open",bareline_platform::RemoteReadAction::Reload=>"reload",bareline_platform::RemoteReadAction::Follow=>"follow"};
+        let destination=path.to_string_lossy();if destination.len()>8192||destination.contains('\0'){return false;}
+        let destination:String=destination.chars().flat_map(char::escape_debug).collect();
+        let text=format!("Allow Bareline to {action} this exact remote file?\n\n{destination}\n\nWindows may send your account credentials to the remote host. This read-only permission applies only to this request; it does not authorize saved-session or extension access.");
+        let message:Vec<u16>=text.encode_utf16().chain(Some(0)).collect();let title:Vec<u16>="Remote file permission".encode_utf16().chain(Some(0)).collect();
+        // SAFETY: both strings remain NUL-terminated for the synchronous dialog call.
+        unsafe{MessageBoxW(None,PCWSTR(message.as_ptr()),PCWSTR(title.as_ptr()),MB_YESNO|MB_DEFBUTTON2|MB_ICONWARNING)==IDYES}
+    }
+}

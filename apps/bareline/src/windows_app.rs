@@ -514,6 +514,7 @@ impl Shell {
                 .is_some_and(|workspace| !workspace.find.has_focus() && !workspace.search_focus)
     }
     fn search_overlay_event(&mut self, event: &WindowEvent) -> bool {
+        if self.search_folder_event(event) { return true; }
         if !self.search_modal() || self.palette.open {
             return false;
         }
@@ -828,6 +829,7 @@ impl Shell {
                 CommandState::disabled("No conversion is paused")
             },
         );
+        self.watch_annotate_context(&mut context);
         self.views.annotate_context(&mut context);
         if self
             .workspace
@@ -906,7 +908,7 @@ impl Shell {
                 Ok(mut workspace) => {
                     workspace.recovery_root = self.recovery_root.clone();
                     let settings = self.settings.effective();
-                    workspace.resident_max_bytes = settings.resident_max_bytes;
+                    workspace.apply_resource_settings(&settings);
                     workspace.transcode_quota_bytes = settings.transcode_quota_bytes;
                     self.workspace = Some(workspace);
                 }
@@ -1563,6 +1565,7 @@ impl ApplicationHandler for Shell {
         {
             return;
         }
+        if matches!(&event,WindowEvent::Focused(true)){self.watch_focus_check();}
         if matches!(
             &event,
             WindowEvent::ThemeChanged(_) | WindowEvent::Focused(true)
@@ -1609,6 +1612,7 @@ impl ApplicationHandler for Shell {
             || self.language_event(el, &event)
             || self.compare_event(el, &event)
             || self.search_overlay_event(&event)
+            || self.watch_event(el, &event)
             || self.scrolling_event(&event)
             || (!self.power.open && self.power_event(el, &event))
             || self.panels_event(el, &event)
@@ -2405,7 +2409,7 @@ impl ApplicationHandler for Shell {
                             *previous != effective || *count != workspace.editors.len()
                         })
                     {
-                        workspace.resident_max_bytes = effective.resident_max_bytes;
+                        workspace.apply_resource_settings(&effective);
                         workspace.transcode_quota_bytes = effective.transcode_quota_bytes;
                         let editor_theme = self.settings.editor_theme();
                         for editor in &mut workspace.editors {
@@ -2509,7 +2513,20 @@ impl ApplicationHandler for Shell {
                         &mut operations,
                     );
                 }
-                self.search.draw(
+                self.watch.hits.clear();
+                if let Some(workspace)=&self.workspace {
+                    let primary=self.views.primary_index(workspace).unwrap_or(self.app.active);
+                    if let Some(mut bounds)=self.views.bounds[0]{bounds.x+=editor_bounds.x;bounds.y+=editor_bounds.y;let hits=self.watch.draw_banner(workspace,primary,bounds,&mut operations);self.watch.hits.extend(hits.into_iter().map(|(rect,id)|(rect,0,primary,id)));}
+                    if let (Some(editor),Some(mut bounds))=(&self.views.secondary,self.views.bounds[1]){
+                        if let Some(index)=workspace.editors.iter().position(|candidate|candidate.snapshot().same_document(editor.snapshot())){
+                            bounds.x+=editor_bounds.x;bounds.y+=editor_bounds.y;
+                            let hits=if matches!(editor,bareline_app::workspace::WorkspaceEditor::Paged(e) if e.follow_status().is_some()){watch::draw_banner(editor,bounds,&mut operations)}else{self.watch.draw_banner(workspace,index,bounds,&mut operations)};
+                            self.watch.hits.extend(hits.into_iter().map(|(rect,id)|(rect,1,index,id)));
+                        }
+                    }
+                }                self.search.draw(
+                    renderer,
+                    self.settings.ui_theme(),
                     size.width as f32 / scale,
                     size.height as f32 / scale,
                     &mut operations,
@@ -2520,6 +2537,9 @@ impl ApplicationHandler for Shell {
                     size.height as f32 / scale,
                     &mut operations,
                 );
+                if let Some(caret)=self.search.folder_ime_caret() {
+                    window.set_ime_cursor_area(LogicalPosition::new(caret.x as f64,caret.y as f64),LogicalSize::new(caret.width.max(1.0)as f64,caret.height.max(1.0)as f64));
+                }
                 if let Some(caret) = self.extensions.ime_caret() {
                     window.set_ime_cursor_area(
                         LogicalPosition::new(caret.x as f64, caret.y as f64),

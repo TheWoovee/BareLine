@@ -1113,7 +1113,6 @@ impl CompareRuntime {
             return Ok(());
         };
         let inputs = indices.map(|i| compare_input(&workspace.editors[i]));
-        let bases=views.compare_viewport_starts(workspace);
         let geometry = views.compare_geometry();
         let line_height =
             (settings.effective().editor_font_size_pt.clamp(6.0, 72.0) * 96.0 / 72.0 * 1.2) as f32;
@@ -1140,8 +1139,7 @@ impl CompareRuntime {
                     .position(|r| r.is_some_and(|r| r.contains(*origin)))
             {
                 let bounds = geometry[side].unwrap();
-                if let Some(local_line) = views.compare_layout_range(workspace,side,*layout) {
-                    let line=bareline_document::TextOffset(local_line.start.0+bases[side])..bareline_document::TextOffset(local_line.end.0+bases[side]);
+                if let Some(line) = views.compare_source_layout_range(workspace,side,*layout) {
                     for hunk in hunks {
                         let range = if side == 0 { &hunk.left } else { &hunk.right };
                         if range.start < line.end && range.end > line.start {

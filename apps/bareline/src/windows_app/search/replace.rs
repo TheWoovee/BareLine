@@ -35,6 +35,7 @@ struct Preview {
     disk: DiskReplacePreview,
     skipped: usize,
     skip_reasons: String,
+    open_skips: Vec<String>,
 }
 #[derive(Clone, Copy)]
 enum Location {
@@ -263,6 +264,10 @@ pub(super) struct ReplaceRuntime {
     replaced_disk: usize,
     replaced_open: usize,
     failed_open: usize,
+    staging_token: Option<(u64, u64)>,
+    open_outcomes: Vec<String>,
+    report: Vec<String>,
+    open_labels: Vec<((u64, u64), String)>,
     skipped_preview: usize,
     skip_reasons: String,
     row: usize,
@@ -327,6 +332,19 @@ pub(super) fn register(registry: &mut CommandRegistry) {
     }
 }
 impl ReplaceRuntime {
+    fn record_open(&mut self, token: (u64, u64), reason: &str) {
+        let label = self
+            .open_labels
+            .iter()
+            .find(|(identity, _)| *identity == token)
+            .map(|(_, label)| label.as_str())
+            .unwrap_or("Open document");
+        self.open_outcomes.push(format!(
+            "{label} [document {}, revision {}]: {reason}",
+            token.0, token.1
+        ));
+    }
+
     pub(super) fn is_open(&self) -> bool {
         self.open
     }
@@ -402,7 +420,10 @@ impl ReplaceRuntime {
             }
             option_x += 190.0;
         }
-        let rows = self.preview.as_ref().map_or(0, Preview::count_rows);
+        let rows = self
+            .preview
+            .as_ref()
+            .map_or(self.report.len(), Preview::count_rows);
         self.top = self.top.min(rows.saturating_sub(1));
         for visible in 0..6 {
             let row = self.top + visible;
@@ -414,7 +435,12 @@ impl ReplaceRuntime {
             if row == self.row {
                 ops.push(DrawOp::Fill(rect, BORDER));
             }
-            if let Some(label) = self.preview.as_ref().and_then(|preview| preview.label(row)) {
+            if let Some(label) = self
+                .preview
+                .as_ref()
+                .and_then(|preview| preview.label(row))
+                .or_else(|| self.report.get(row).cloned())
+            {
                 text(ops, 26.0, y + 5.0, label, 12.0, TEXT);
                 self.hits.push((rect, Hit::Row(row)));
             }
@@ -546,8 +572,19 @@ impl Shell {
             {
                 job.cancel();
             }
-            self.search.replace.paged_queue.clear();
-            self.search.replace.disk_queue = None;
+            let cancelled: Vec<_> = self
+                .search
+                .replace
+                .paged_queue
+                .drain(..)
+                .map(|file| file.source.identity_token())
+                .collect();
+            for token in cancelled {
+                self.search
+                    .replace
+                    .record_open(token, "Skipped: cancelled before submission");
+                self.search.replace.skipped_preview += 1;
+            }
             self.search.replace.status = "Stopping at the next safe commit boundary…".into();
             return true;
         }
@@ -626,6 +663,7 @@ impl Shell {
         let mut labels = Vec::new();
         let mut paged = Vec::new();
         let mut identities = Vec::new();
+        let mut open_skips = Vec::new();
         for (index, editor) in workspace.editors.iter().enumerate() {
             let in_scope = workspace
                 .path(index)
@@ -634,12 +672,6 @@ impl Shell {
             if !in_scope {
                 continue;
             }
-            if editor.busy() || editor.read_only() {
-                self.search.replace.status =
-                    "An in-scope open document is busy or read-only; review after it is available"
-                        .into();
-                return true;
-            }
             if let Some(fingerprint) = workspace.fingerprint(index) {
                 identities.push(fingerprint.identity.clone());
             }
@@ -647,6 +679,17 @@ impl Shell {
                 .path(index)
                 .map(|path| path.display().to_string())
                 .unwrap_or_else(|| format!("Untitled {}", index + 1));
+            if editor.busy() || editor.read_only() {
+                open_skips.push(format!(
+                    "{label}: {}",
+                    if editor.read_only() {
+                        "Read-only; unlock and refresh preview"
+                    } else {
+                        "Busy; wait and refresh preview"
+                    }
+                ));
+                continue;
+            }
             match editor {
                 WorkspaceEditor::Resident(editor) => {
                     if let Some(service) = editor.document_service() {
@@ -683,12 +726,20 @@ impl Shell {
                             found.summary.completeness, found.summary.skipped_files
                         ));
                     }
-                    let skipped = found.summary.skipped_files;
-                    let skip_reasons = found
+                    let skipped = found.summary.skipped_files + open_skips.len();
+                    let disk_skip_reasons = found
                         .skips
                         .iter()
                         .take(4)
                         .map(|(path, reason)| format!("{}: {reason:?}", path.display()))
+                        .collect::<Vec<_>>()
+                        .join("; ");
+                    let skip_reasons = open_skips
+                        .iter()
+                        .take(4)
+                        .cloned()
+                        .chain(std::iter::once(disk_skip_reasons))
+                        .filter(|value| !value.is_empty())
                         .collect::<Vec<_>>()
                         .join("; ");
                     let paths = found
@@ -825,6 +876,7 @@ impl Shell {
                         disk,
                         skipped,
                         skip_reasons,
+                        open_skips,
                     })
                 },
                 self.notify.clone(),
@@ -844,6 +896,25 @@ impl Shell {
         let Some(workspace) = &mut self.workspace else {
             return;
         };
+        self.search.replace.report.clear();
+        self.search.replace.open_outcomes = preview.open_skips.clone();
+        self.search.replace.open_labels = preview
+            .open
+            .as_ref()
+            .map(|open| {
+                open.documents()
+                    .iter()
+                    .zip(&preview.labels)
+                    .map(|(document, label)| (document.snapshot.identity_token(), label.clone()))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        self.search.replace.open_labels.extend(
+            preview
+                .paged
+                .iter()
+                .map(|file| (file.source.identity_token(), file.label.clone())),
+        );
         self.search.replace.skipped_preview = preview.skipped;
         self.search.replace.skip_reasons = preview.skip_reasons.clone();
         self.search.replace.changed_open = 0;
@@ -852,8 +923,40 @@ impl Shell {
         self.search.replace.replaced_open = 0;
         self.search.replace.failed_open = 0;
         self.search.replace.cancel_requested = false;
-        if let Some(open) = preview.open {
+        if let Some(mut open) = preview.open {
+            for index in 0..open.documents().len() {
+                let source = &open.documents()[index].snapshot;
+                let reason = match workspace
+                    .editors
+                    .iter()
+                    .find(|editor| editor.snapshot().same_document(source))
+                {
+                    Some(editor) if editor.read_only() => {
+                        Some("Skipped: document became read-only; unlock and refresh preview")
+                    }
+                    Some(editor) if editor.busy() => {
+                        Some("Skipped: document is busy; wait and refresh preview")
+                    }
+                    None => Some("Skipped: document closed; refresh preview"),
+                    _ => None,
+                };
+                if let Some(reason) = reason {
+                    self.search
+                        .replace
+                        .record_open(source.identity_token(), reason);
+                    self.search.replace.skipped_preview += 1;
+                    open.set_document_included(index, false);
+                }
+            }
             let count = open.selected_matches();
+            let selected_tokens: Vec<_> = open
+                .documents()
+                .iter()
+                .filter(|document| {
+                    document.included && document.changes.iter().any(|change| change.included)
+                })
+                .map(|document| document.snapshot.identity_token())
+                .collect();
             if count > 0 {
                 match open.prepare(&SearchJob::default()) {
                     Ok(prepared) => {
@@ -879,28 +982,48 @@ impl Shell {
                                     self.search.replace.pending_open =
                                         Some(PendingOpen::Single(receipt, count))
                                 }
-                                _ => self.search.replace.failed_open += 1,
+                                error => {
+                                    self.search.replace.failed_open += 1;
+                                    let reason = match error {
+                                        Some(Err(error)) => error,
+                                        _ => "Document unavailable",
+                                    };
+                                    self.search
+                                        .replace
+                                        .record_open(source.identity_token(), reason);
+                                }
                             }
                         } else {
-                            let sources = transactions
+                            let sources: Vec<_> = transactions
                                 .iter()
                                 .map(|(source, _)| source.clone())
                                 .collect();
+                            let failed_sources = sources.clone();
                             match workspace.apply_reviewed_open(transactions) {
                                 Ok(group) => {
                                     self.search.replace.pending_open =
                                         Some(PendingOpen::Group(group, sources, count))
                                 }
                                 Err(error) => {
-                                    self.search.replace.failed_open += 1;
+                                    self.search.replace.failed_open += failed_sources.len();
+                                    for source in failed_sources {
+                                        self.search
+                                            .replace
+                                            .record_open(source.identity_token(), &error);
+                                    }
                                     self.search.replace.status = error;
                                 }
                             }
                         }
                     }
                     Err(error) => {
-                        self.search.replace.failed_open += 1;
+                        self.search.replace.failed_open += selected_tokens.len();
                         self.search.replace.status = format!("Open replacement failed: {error:?}");
+                        for token in selected_tokens {
+                            self.search
+                                .replace
+                                .record_open(token, &format!("Preparation failed: {error:?}"));
+                        }
                     }
                 }
             }
@@ -970,6 +1093,11 @@ impl Shell {
                         }
                         Err(error) => {
                             self.search.replace.failed_open += sources.len();
+                            for source in &sources {
+                                self.search
+                                    .replace
+                                    .record_open(source.identity_token(), &error);
+                            }
                             self.search.replace.status = error;
                             changed = true;
                         }
@@ -986,6 +1114,9 @@ impl Shell {
                     }
                     Some(Err(error)) => {
                         self.search.replace.failed_open += 1;
+                        self.search
+                            .replace
+                            .record_open(receipt.captured_identity_token, &error);
                         self.search.replace.status = error;
                         changed = true;
                     }
@@ -998,6 +1129,7 @@ impl Shell {
                 result => {
                     self.search.replace.staging_paged = None;
                     changed = true;
+                    let staging_token = self.search.replace.staging_token.take();
                     match result {
                         Ok(Ok((source, prepared, count)))
                             if !self.search.replace.cancel_requested =>
@@ -1023,6 +1155,7 @@ impl Shell {
                                 }
                                 _ => {
                                     self.search.replace.failed_open += 1;
+                                    self.search.replace.record_open(source.identity_token(), "Source changed or became read-only before apply; refresh preview");
                                     self.search.replace.status =
                                         "Paged replacement source changed before apply".into();
                                 }
@@ -1030,6 +1163,9 @@ impl Shell {
                         }
                         Ok(Err(error)) => {
                             self.search.replace.failed_open += 1;
+                            if let Some(token) = staging_token {
+                                self.search.replace.record_open(token, &error);
+                            }
                             self.search.replace.status = error;
                         }
                         _ => {}
@@ -1047,6 +1183,9 @@ impl Shell {
                 }
                 Some(Err(error)) => {
                     self.search.replace.failed_open += 1;
+                    self.search
+                        .replace
+                        .record_open(receipt.captured_identity_token, &error);
                     self.search.replace.status = error;
                     changed = true;
                 }
@@ -1071,6 +1210,15 @@ impl Shell {
                         })
                 });
                 if let Some(editor) = target {
+                    if editor.read_only() || editor.busy() {
+                        self.search.replace.record_open(
+                            next.source.identity_token(),
+                            "Skipped: document became read-only or busy; refresh preview",
+                        );
+                        self.search.replace.skipped_preview += 1;
+                        return true;
+                    }
+                    self.search.replace.staging_token = Some(next.source.identity_token());
                     let handle = editor.read_handle();
                     let cache = self
                         .recovery_root
@@ -1094,6 +1242,10 @@ impl Shell {
                         ));
                 } else {
                     self.search.replace.failed_open += 1;
+                    self.search.replace.record_open(
+                        next.source.identity_token(),
+                        "Document closed before apply; refresh preview",
+                    );
                 }
                 changed = true;
             } else if let Some(disk) = self.search.replace.disk_queue.take() {
@@ -1104,12 +1256,16 @@ impl Shell {
                         .clone()
                         .unwrap_or_else(std::env::temp_dir);
                     let disable_backup = std::mem::take(&mut self.search.replace.disable_backup);
+                    let open_outcomes = self.search.replace.open_outcomes.clone();
+                    let cancelled = self.search.replace.cancel_requested;
                     self.search.replace.applying =
                         Some(self.search.replace.worker.as_ref().unwrap().operation(
                             move |job| {
                                 std::fs::create_dir_all(&directory)
                                     .map_err(|error| error.to_string())?;
                                 let mut options = DiskReplaceOptions::new(directory);
+                                options.open_outcomes = open_outcomes;
+                                if cancelled { job.cancel(); }
                                 if disable_backup { options.backup = bareline_search::replace_disk::BackupPolicy::DisabledForThisJob; }
                                 apply_disk_files_with_paging(
                                     disk,
@@ -1135,6 +1291,20 @@ impl Shell {
                     changed = true;
                     match result {
                         Ok(Ok(summary)) => {
+                            self.search.replace.report = summary.receipt.open_outcomes.clone();
+                            self.search
+                                .replace
+                                .report
+                                .extend(summary.receipt.files.iter().map(|file| {
+                                    let label = file
+                                        .path
+                                        .to_native()
+                                        .map(|path| path.display().to_string())
+                                        .unwrap_or_else(|_| "Disk file".into());
+                                    format!("{label}: {:?} ({} matches)", file.state, file.matches)
+                                }));
+                            self.search.replace.top = 0;
+                            self.search.replace.row = 0;
                             self.search.replace.changed_disk = summary.changed_files();
                             self.search.replace.replaced_disk = summary.replaced_matches();
                             let failed=summary.receipt.files.iter().filter(|file|matches!(file.state,bareline_search::replace_disk::ReceiptState::Failed(_)|bareline_search::replace_disk::ReceiptState::Uncertain(_)|bareline_search::replace_disk::ReceiptState::Conflict)).count();
@@ -1162,6 +1332,12 @@ impl Shell {
                                 self.search.replace.status.push_str(&format!(
                                     " Skipped examples: {}",
                                     self.search.replace.skip_reasons
+                                ));
+                            }
+                            if !summary.receipt.open_outcomes.is_empty() {
+                                self.search.replace.status.push_str(&format!(
+                                    " Open outcomes: {}",
+                                    summary.receipt.open_outcomes.join("; ")
                                 ));
                             }
                             self.search.replace.receipt = Some(summary.receipt_path);
@@ -1255,7 +1431,7 @@ impl Shell {
             .replace
             .preview
             .as_ref()
-            .map_or(0, Preview::count_rows);
+            .map_or(self.search.replace.report.len(), Preview::count_rows);
         match key {
             Key::Escape => {
                 let id = if self.search.replace.busy() {

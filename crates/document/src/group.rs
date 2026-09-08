@@ -3,7 +3,8 @@
 use crate::{Document, Error, PreparedEdit, Revision};
 use std::sync::Arc;
 
-pub const MAX_GROUP_DOCUMENTS: usize = 64;
+// The specified 100-document replace scenario shares existing staging budgets.
+pub const MAX_GROUP_DOCUMENTS: usize = 100;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct UndoGroup(pub u64);
 #[derive(Clone)]
@@ -67,6 +68,7 @@ fn move_history(
 ) -> Result<(), Error> {
     let members = members(documents)?;
     let mut revisions = Vec::with_capacity(documents.len());
+    let mut changes = Vec::with_capacity(documents.len());
     for document in documents.iter_mut() {
         let history = if redo { &document.redo } else { &document.undo };
         let entry = history.last().ok_or(Error::EmptyHistory)?;
@@ -82,6 +84,24 @@ fn move_history(
                 .checked_add(1)
                 .ok_or(Error::RevisionOverflow)?,
         ));
+        changes.push(crate::change::AppliedChange::owned(
+            document.current.document_id,
+            document.current.revision,
+            *revisions.last().expect("prepared revision"),
+            document.current.content_state,
+            if redo {
+                entry.after_state
+            } else {
+                entry.before_state
+            },
+            if redo {
+                crate::change::ChangeDirection::Redo
+            } else {
+                crate::change::ChangeDirection::Undo
+            },
+            &entry.edits,
+            &document.bytes,
+        )?);
         let destination = if redo {
             &mut document.undo
         } else {
@@ -91,7 +111,8 @@ fn move_history(
             .try_reserve(1)
             .map_err(|_| Error::BudgetExceeded)?;
     }
-    for (document, revision) in documents.iter_mut().zip(revisions) {
+    for ((document, revision), change) in documents.iter_mut().zip(revisions).zip(changes) {
+        document.current.applied_change = Some(change);
         let entry = if redo {
             document.redo.pop().unwrap()
         } else {

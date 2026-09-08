@@ -8,6 +8,14 @@ pub struct Fold {
     pub end: usize,
     pub level: usize,
 }
+/// Exact source bytes of a verified fold. The header remains visible; `body`
+/// begins after its newline and ends after the final folded logical line.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AnchoredFold {
+    pub fold: Fold,
+    pub header: TextOffset,
+    pub body: std::ops::Range<TextOffset>,
+}
 /// Bounded carry for a single forward pass. Open headers survive byte-window
 /// boundaries; only closed regions are published. Revision ownership remains
 /// with the caller's immutable snapshot.
@@ -18,12 +26,17 @@ pub struct FoldAccumulator {
     indent_open: Vec<(usize, usize)>,
     indent_candidate: Option<(usize, usize)>,
     known: Vec<Fold>,
+    anchored: Vec<AnchoredFold>,
+    retained_lines: std::collections::BTreeMap<usize, std::ops::Range<TextOffset>>,
     next: usize,
     lost_headers: bool,
 }
 impl FoldAccumulator {
     pub fn context_complete(&self) -> bool {
         !self.lost_headers
+    }
+    pub fn anchored(&self) -> &[AnchoredFold] {
+        &self.anchored
     }
     pub fn known(&self) -> &[Fold] {
         &self.known
@@ -148,8 +161,95 @@ impl FoldAccumulator {
                 line_base,
             )?;
         }
+        self.record_anchors(snapshot, syntax, origin, line_base)?;
         self.known.sort_by_key(|fold| (fold.header, fold.level));
         self.next = origin + syntax.range.end.0 - syntax.range.start.0;
+        Ok(())
+    }
+    fn record_anchors(
+        &mut self,
+        snapshot: &DocumentSnapshot,
+        syntax: &SyntaxResult,
+        origin: usize,
+        line_base: usize,
+    ) -> Result<(), Error> {
+        let first = snapshot
+            .line_at(syntax.range.start)
+            .map_err(|_| Error::InvalidRange)?
+            + line_base;
+        let last = snapshot
+            .line_at(syntax.range.end)
+            .map_err(|_| Error::InvalidRange)?
+            + line_base;
+        let current_line = |line: usize| -> Option<std::ops::Range<TextOffset>> {
+            if line < first || line > last {
+                return None;
+            }
+            let range = snapshot.line_range(line.checked_sub(line_base)?).ok()?;
+            Some(
+                TextOffset(
+                    origin
+                        .checked_add(range.start.0)?
+                        .checked_sub(syntax.range.start.0)?,
+                )
+                    ..TextOffset(
+                        origin
+                            .checked_add(range.end.0)?
+                            .checked_sub(syntax.range.start.0)?,
+                    ),
+            )
+        };
+        let anchored: std::collections::BTreeSet<_> = self
+            .anchored
+            .iter()
+            .map(|anchor| (anchor.fold.header, anchor.fold.end, anchor.fold.level))
+            .collect();
+        for fold in &self.known {
+            if anchored.contains(&(fold.header, fold.end, fold.level)) {
+                continue;
+            }
+            let header = self
+                .retained_lines
+                .get(&fold.header)
+                .cloned()
+                .or_else(|| current_line(fold.header));
+            let end =
+                current_line(fold.end).or_else(|| self.retained_lines.get(&fold.end).cloned());
+            if let (Some(header), Some(end)) = (header, end)
+                && header.end <= end.end
+            {
+                self.anchored.push(AnchoredFold {
+                    fold: fold.clone(),
+                    header: header.start,
+                    body: header.end..end.end,
+                });
+            } else {
+                self.lost_headers = true;
+            }
+        }
+        let mut keep: std::collections::BTreeSet<usize> = self
+            .open
+            .iter()
+            .map(|(line, _)| *line)
+            .chain(self.native_open.iter().map(|(_, line)| *line))
+            .chain(self.indent_open.iter().map(|(line, _)| *line))
+            .collect();
+        if let Some((line, _)) = self.indent_candidate {
+            keep.insert(line);
+        }
+        // A primary fold may close at the first line of the next window.
+        keep.insert(last);
+        if last > 0 {
+            keep.insert(last - 1);
+        }
+        self.retained_lines.retain(|line, _| keep.contains(line));
+        for line in keep {
+            if let Some(range) = current_line(line) {
+                self.retained_lines.insert(line, range);
+            }
+        }
+        self.anchored
+            .sort_by_key(|anchor| (anchor.fold.header, anchor.fold.level));
         Ok(())
     }
 }

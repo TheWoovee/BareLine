@@ -3,11 +3,15 @@ pub mod completion;
 pub mod group_view;
 pub mod search_marks;
 pub mod paged_view;
+pub mod paged_typing;
 pub mod paged_navigation;
 pub mod power;
+pub mod paged_power;
 mod tracked_edit;
 pub use tracked_edit::TrackedEditReceipt;
 mod view_geometry;
+mod measured_columns;
+pub use measured_columns::measure_column_text;
 pub use view_geometry::HorizontalAnchor;
 mod grapheme_navigation;
 mod virtual_layout;
@@ -177,6 +181,7 @@ pub struct EditorSurface {
     view_spacers: Vec<(usize,usize)>,
     tab_width: usize,
     line_numbers: bool,
+    source_rows: Option<(bareline_document::ContentStateId, Vec<paged_view::ViewportSegment>)>,
     highlight_current_line: bool,
     whitespace: String,
     composition: Option<(String, Option<(usize, usize)>)>,
@@ -275,6 +280,7 @@ impl EditorSurface {
             view_spacers: Vec::new(),
             tab_width: 4,
             line_numbers: true,
+            source_rows: None,
             highlight_current_line: true,
             whitespace: "none".into(),
             composition: None,
@@ -493,6 +499,7 @@ impl EditorSurface {
         view.font_family = self.font_family.clone();
         view.tab_width = self.tab_width;
         view.line_numbers = self.line_numbers;
+        view.source_rows = self.source_rows.clone();
         view.highlight_current_line = self.highlight_current_line;
         view.whitespace = self.whitespace.clone();
         view
@@ -1560,7 +1567,7 @@ impl EditorSurface {
                     ops,
                     14.0,
                     y,
-                    (number + 1).to_string(),
+                    self.source_line_at(TextOffset(start)).map_or_else(|| "…".into(), |line| line.saturating_add(1).to_string()),
                     self.font_pixels,
                     self.theme.gutter,
                 );
@@ -1741,7 +1748,7 @@ impl EditorSurface {
                     self.snapshot.line_count()
                 )
             },
-            format!("Ln {}, Col {}", caret_line + 1, column),
+            format!("Ln {}, Col {}", self.source_line_at(TextOffset(self.selection.caret)).map_or_else(|| "indexing…".into(), |line| line.saturating_add(1).to_string()), column),
             self.eol_status_label().into(),
             self.encoding_label.clone(),
             if self.read_only() { "RO" } else { "INS" }.into(),

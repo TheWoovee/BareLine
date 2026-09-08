@@ -19,6 +19,11 @@ use std::{
     },
 };
 const WINDOW: usize = 64 * 1024;
+#[path = "paged_spill.rs"]
+mod paged_spill;
+#[path = "mapped_viewport.rs"]
+mod mapped_viewport;
+pub use mapped_viewport::{SourceAffinity, ViewportSegment};
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum GlobalScrollPosition { Ready(u64, f64, f64), Pending }
 #[derive(Clone, Debug)]
@@ -76,7 +81,7 @@ enum Action {
     },
 }
 struct Completed {
-    selection: Option<Selection>,
+    selections: Option<crate::power::SelectionSet>,
     append_receipt: Option<bareline_file_io::tail::AppendReceipt>,
     generation_owner: Arc<()>,
     peer_epoch: u64,
@@ -108,6 +113,7 @@ struct RetiredGeneration {
 /// Never resolve pages on the UI thread. Busy returns without waiting for the actor.
 #[derive(Clone)]
 pub struct PagedReadHandle {
+    source_mismatch: Arc<std::sync::atomic::AtomicBool>,
     _generation: Arc<()>,
     retired: Arc<Mutex<Vec<RetiredGeneration>>>,
     _views: Arc<()>,
@@ -158,8 +164,8 @@ impl PagedReadHandle {
             let mut retired = match self.retired.try_lock() { Ok(retired) => retired, Err(std::sync::TryLockError::WouldBlock) => return Ok(false), Err(_) => return Err("Captured generation owner failed".into()) };
             let generation = retired.iter_mut().find(|generation| generation.opened.transcoded.document.snapshot().same_document(&self.snapshot)).ok_or("Captured generation is unavailable")?;
             if self.snapshot.resolve_owned(ticket).map_err(|error| format!("Captured owned source unavailable: {error:?}"))? { return Ok(true); }
-            let handled = match generation.tail.as_mut() { Some(tail) => tail.read_page(ticket).map_err(|e| format!("{e:?}"))?, None => false };
-            if !handled { generation.opened.transcoded.source.read_page(ticket).map_err(|e| format!("Captured source unavailable: {e:?}"))?; }
+            let handled = match generation.tail.as_mut() { Some(tail) => tail.read_page(ticket).map_err(|error| source_read_error(error, &self.source_mismatch))?, None => false };
+            if !handled { generation.opened.transcoded.source.read_page(ticket).map_err(|error| source_read_error(error, &self.source_mismatch))?; }
             return Ok(true);
         }
         if !current.same_document(&self.snapshot) || (!historical && current.content_state != self.snapshot.content_state) {
@@ -167,12 +173,22 @@ impl PagedReadHandle {
         }
         if self.snapshot.resolve_owned(ticket).map_err(|error| format!("Owned source unavailable: {error:?}"))? { return Ok(true); }
         let mut tail = match self.tail.try_lock() { Ok(tail) => tail, Err(std::sync::TryLockError::WouldBlock) => return Ok(false), Err(_) => return Err("Tail worker failed".into()) };
-        let handled = match tail.as_mut() { Some(tail) => tail.read_page(ticket).map_err(|e| format!("{e:?}"))?, None => false };
-        if !handled { opened.transcoded.source.read_page(ticket).map_err(|error| format!("Paged source unavailable: {error:?}"))?; }
+        let handled = match tail.as_mut() { Some(tail) => tail.read_page(ticket).map_err(|error| source_read_error(error, &self.source_mismatch))?, None => false };
+        if !handled { opened.transcoded.source.read_page(ticket).map_err(|error| source_read_error(error, &self.source_mismatch))?; }
         Ok(true)
     }
 }
 pub struct PagedEditorSurface {
+    source_mismatch: Arc<std::sync::atomic::AtomicBool>,
+    manual_hidden: Vec<std::ops::Range<usize>>,
+    mapping_dirty: bool,
+    rebased_folds: Vec<mapped_viewport::FoldAnchor>,
+    known_fold_anchors: Vec<mapped_viewport::FoldAnchor>,
+    fold_history: std::collections::VecDeque<(ContentStateId, Vec<bareline_syntax::folding::Fold>, bareline_syntax::folding::FoldState, std::collections::BTreeMap<usize, bool>, Vec<mapped_viewport::FoldAnchor>)>,
+    mapped: Option<mapped_viewport::MappedViewport>,
+    mapping_job: Option<mapped_viewport::MappingJob>,
+    mapping_generation: u64,
+    mapping_folds: Vec<std::ops::Range<usize>>,
     viewport_request: Option<TextOffset>,
     queued_viewport: Option<TextOffset>,
     queued_wheel: (f64, f32),
@@ -180,7 +196,13 @@ pub struct PagedEditorSurface {
     horizontal_anchor: Option<(usize, f32)>,
     queued_horizontal: f64,
     prefetch: crate::paged_navigation::ViewportPrefetch,
-    global_selection: Selection,
+    global_selections: crate::power::SelectionSet,
+    power_state: crate::paged_power::PowerViewState,
+    power_state_history:crate::paged_power::PowerStateHistory,
+    power_inputs:std::collections::VecDeque<Input>,
+    power_preparing:bool,
+    power_input_enabled:bool,
+    power_hidden_refresh:bool,
     projected_selection: Selection,
     selection_token: u64,
     selection_status: SelectionRestoreStatus,
@@ -211,6 +233,7 @@ pub struct PagedEditorSurface {
     retired: Arc<Mutex<Vec<RetiredGeneration>>>,
     captured: Option<PagedReadHandle>,
     peer: Arc<Mutex<PeerState>>,
+    owned_spill: Arc<Mutex<paged_spill::SpillState>>,
     peer_epoch: u64,
     views: Arc<()>,
     tail: Arc<Mutex<Option<bareline_file_io::tail::TailSession>>>,
@@ -224,6 +247,7 @@ pub struct PagedEditorSurface {
     saved_state: Option<ContentStateId>,
     recovery_config: Option<(PathBuf, Arc<dyn LocalFileSystem>)>,
     streaming_quota: u64,
+    configured_history_limit: Option<usize>,
     tracked_acknowledged: std::collections::VecDeque<u64>,
     pub save_as_required: bool,
     can_undo: bool,
@@ -244,13 +268,27 @@ pub struct PagedEditorSurface {
     pub error: Option<String>,
 }
 impl PagedEditorSurface {
+    /// Retryable, nonblocking policy update on the same worker as paged edits.
+    pub fn configure_history_limit(&mut self, max_changes: usize) -> bool {
+        if self.configured_history_limit == Some(max_changes) { return true; }
+        let actor = self.actor.clone();
+        let notify = self.notify.clone();
+        if worker().try_send(Box::new(move || {
+            let mut opened = actor.lock().unwrap_or_else(|error| error.into_inner());
+            opened.transcoded.document.set_history_limit(max_changes);
+            drop(opened);
+            notify();
+        })).is_err() { return false; }
+        self.configured_history_limit = Some(max_changes);
+        true
+    }
     pub fn initial_eol_label(&self)->Option<&'static str> {self.initial_eol.filter(|(identity,_)|*identity==self.snapshot.identity_token()).map(|(_,eol)|eol.label())}
     pub fn encoding_failure(&self)->Option<bareline_file_io::codecs::failure::EncodingFailure>{self.encoding_failure.try_lock().ok().and_then(|failure|failure.clone())}
     pub fn encoding_state(&self) -> Option<bareline_file_io::codecs::state::EncodingState> { bareline_file_io::codecs::state::metadata_encoding(self.snapshot.metadata()).or_else(||self.actor.try_lock().ok().map(|opened| opened.transcoded.store.state.clone())) }
     pub fn apply_document_metadata(&mut self, metadata: bareline_document::DocumentMetadata) -> Result<(),String> { if self.surface.user_read_only {return Err("Document is read only".into());} self.submit(Action::Metadata(metadata)) }
     pub fn read_handle(&self) -> PagedReadHandle {
         if let Some(captured) = &self.captured { return captured.clone(); }
-        PagedReadHandle { _generation: self.view_generation.clone(), retired: self.retired.clone(), _views: self.views.clone(), path: self.path.clone(), fingerprint: self.fingerprint.clone(), actor: self.actor.clone(), tail: self.tail.clone(), snapshot: self.snapshot.clone() }
+        PagedReadHandle { source_mismatch: self.source_mismatch.clone(), _generation: self.view_generation.clone(), retired: self.retired.clone(), _views: self.views.clone(), path: self.path.clone(), fingerprint: self.fingerprint.clone(), actor: self.actor.clone(), tail: self.tail.clone(), snapshot: self.snapshot.clone() }
     }
     pub fn new(
         opened: Box<PagedOpened>,
@@ -267,16 +305,19 @@ impl PagedEditorSurface {
         surface.user_read_only = opened.transcoded.store.state.binary_warning;
         let generation_owner = Arc::new(());
         let mut view = Self {
+            source_mismatch: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            mapped: None, mapping_job: None, mapping_generation: 0, mapping_folds: Vec::new(), manual_hidden: Vec::new(), mapping_dirty: false, rebased_folds: Vec::new(), known_fold_anchors: Vec::new(), fold_history: Default::default(),
             viewport_request: None, queued_viewport: None, queued_wheel: (0.0, 0.0), bottom_scroll: None, horizontal_anchor: None, queued_horizontal: 0.0, prefetch: Default::default(),
             initial_eol: (opened.recovery_origin.is_none() && snapshot.revision.0==0 && snapshot.content_state==opened.transcoded.document.saved_content_state()).then_some((snapshot.identity_token(),opened.transcoded.store.eol)),
             encoding_failure: Arc::new(Mutex::new(None)),
             navigation: crate::paged_navigation::GlobalNavigation::new(), navigation_ready: None, requested_scroll: None, pending_scroll_mapping: None, viewport_mapping: None, global_spacers: Vec::new(),
             global_folds: Vec::new(), global_fold_state: Default::default(), global_fold_overrides: Default::default(), global_folds_partial: true, global_fold_initialized: false, pending_global_folds: Vec::new(), fold_viewport_line: None,
-            global_selection: Selection::default(), projected_selection: Selection::default(), selection_token: 0, selection_status: SelectionRestoreStatus::Superseded, selection_validation: None, pending_moves_selection: false, deferred_input: None, navigation_anchor: None,
+            power_hidden_refresh:false,power_input_enabled:false,power_inputs:std::collections::VecDeque::new(),power_preparing:false,power_state_history:Default::default(),power_state:crate::paged_power::PowerViewState::default(),global_selections: Selection::default().into(), projected_selection: Selection::default(), selection_token: 0, selection_status: SelectionRestoreStatus::Superseded, selection_validation: None, pending_moves_selection: false, deferred_input: None, navigation_anchor: None,
             generation_owner: Arc::new(Mutex::new(generation_owner.clone())), view_generation: generation_owner,
             search_marks: Default::default(), pending_marks: None,
             append_receipt: None,
             retired: Arc::new(Mutex::new(Vec::new())), captured: None,
+            owned_spill: Arc::new(Mutex::new(paged_spill::SpillState::default())),
             peer: Arc::new(Mutex::new(PeerState { epoch: 0, saved_state: opened.recovery_origin.is_none().then_some(opened.transcoded.document.saved_content_state()), save_as_required: opened.recovery_origin.is_some() })),
             peer_epoch: 0,
             views: Arc::new(()),
@@ -291,6 +332,7 @@ impl PagedEditorSurface {
             can_redo: opened.transcoded.document.can_redo(),
             recovery_config: None,
             streaming_quota: 20 * 1024 * 1024 * 1024,
+            configured_history_limit: None,
             tracked_acknowledged: Default::default(),
             recovery: Arc::new(Mutex::new(None)),
             recovery_status: Arc::new(Mutex::new(Default::default())),
@@ -341,19 +383,22 @@ impl PagedEditorSurface {
         surface.whitespace = self.surface.whitespace.clone();
         let mut view = Self {
             navigation: crate::paged_navigation::GlobalNavigation::new(), navigation_ready: None, requested_scroll: None, pending_scroll_mapping: None, viewport_mapping: None, global_spacers: self.global_spacers.clone(),
+            source_mismatch: self.source_mismatch.clone(),
+            mapped: None, mapping_job: None, mapping_generation: 0, mapping_folds: Vec::new(), manual_hidden: self.manual_hidden.clone(), mapping_dirty: true, rebased_folds: Vec::new(), known_fold_anchors: self.known_fold_anchors.clone(), fold_history: Default::default(),
             viewport_request: None, queued_viewport: None, queued_wheel: (0.0, 0.0), bottom_scroll: None, horizontal_anchor: None, queued_horizontal: 0.0, prefetch: Default::default(),
             retired: self.retired.clone(), captured: captured.clone(),
-            global_selection: if captured.is_some() { Selection::default() } else { let (anchor, caret) = self.global_selection(); Selection { anchor: anchor.0, caret: caret.0 } }, projected_selection: Selection::default(), selection_token: 0, selection_status: SelectionRestoreStatus::Superseded, selection_validation: None, pending_moves_selection: false, deferred_input: None, navigation_anchor: None,
+            power_hidden_refresh:false,power_input_enabled:self.power_input_enabled,power_inputs:std::collections::VecDeque::new(),power_preparing:false,power_state_history:self.power_state_history.clone(),power_state:self.power_state.clone(),global_selections: if captured.is_some() { Selection::default().into() } else { self.global_selection_set() }, projected_selection: Selection::default(), selection_token: 0, selection_status: SelectionRestoreStatus::Superseded, selection_validation: None, pending_moves_selection: false, deferred_input: None, navigation_anchor: None,
             global_folds: self.global_folds.clone(), global_fold_state: self.global_fold_state.clone(), global_fold_overrides: self.global_fold_overrides.clone(), global_folds_partial: self.global_folds_partial, global_fold_initialized: self.global_fold_initialized, pending_global_folds: self.pending_global_folds.clone(), fold_viewport_line: None,
             search_marks: self.search_marks.clone(), pending_marks: None,
             append_receipt: self.append_receipt,
             generation_owner: self.generation_owner.clone(), view_generation: captured.as_ref().map_or_else(|| self.view_generation.clone(), |h| h._generation.clone()),
-            peer: self.peer.clone(), peer_epoch: self.peer_epoch, views: self.views.clone(),
+            peer: self.peer.clone(), owned_spill: self.owned_spill.clone(), peer_epoch: self.peer_epoch, views: self.views.clone(),
             tail: self.tail.clone(), following: captured.is_none() && self.following, follow_paused: self.follow_paused,
             tail_pending: self.tail_pending, tail_changed: self.tail_changed, surface,
             initial_eol:self.initial_eol, encoding_failure:self.encoding_failure.clone(),
             actor: self.actor.clone(), snapshot: captured.as_ref().map_or_else(|| self.snapshot.clone(), |h| h.snapshot.fork_identity()), saved_state: captured.as_ref().map_or(self.saved_state, |h| Some(h.snapshot.content_state)),
             streaming_quota: self.streaming_quota,
+            configured_history_limit: self.configured_history_limit,
             tracked_acknowledged: self.tracked_acknowledged.clone(),
             recovery_config: self.recovery_config.clone(), save_as_required: self.save_as_required,
             can_undo: self.can_undo, can_redo: self.can_redo, recovery: self.recovery.clone(),
@@ -400,12 +445,116 @@ impl PagedEditorSurface {
         self.can_redo
     }
     pub fn busy(&self) -> bool {
-        self.pending.is_some() || self.selection_validation.is_some()
+        self.power_preparing||!self.power_inputs.is_empty()||self.power_actor_busy()
+    }
+    pub fn power_actor_busy(&self)->bool {
+        self.pending.is_some() || self.selection_validation.is_some() || self.mapping_job.is_some()
+    }
+    pub fn take_power_input(&mut self)->Option<Input>{if self.power_actor_busy()||self.power_preparing{return None;}self.sync_global_selection();let input=self.power_inputs.pop_front()?;self.power_preparing=true;Some(input)}
+    /// Enable the composition root's staged input worker before accepting input.
+    pub fn enable_power_input(&mut self){self.power_input_enabled=true;}
+    pub fn finish_power_preparation(&mut self){self.power_preparing=false;}
+    pub fn take_power_hidden_refresh(&mut self)->bool{if self.busy(){false}else{std::mem::take(&mut self.power_hidden_refresh)}}
+    pub fn acknowledge_power_input(&mut self,receipt:Option<&crate::TrackedEditReceipt>,source:&PagedSnapshot,input:Input)->Result<(),String>{
+        let revision=if let Some(receipt)=receipt{receipt.terminal().ok_or("Input is still pending")??}else{source.revision};
+        if source.identity_token().0!=self.snapshot.identity_token().0||revision!=self.snapshot.revision{return Err("Input receipt source changed".into());}self.surface.acknowledge(input);Ok(())
+    }
+    pub fn source_segments(&self) -> &[ViewportSegment] { self.mapped.as_ref().map_or(&[], |map| map.segments.as_slice()) }
+    pub fn source_changed(&self) -> bool { self.tail_changed || self.source_mismatch.load(std::sync::atomic::Ordering::Acquire) }
+    pub fn source_offset(&self, local: TextOffset, affinity: SourceAffinity) -> Option<TextOffset> {
+        if local.0 > self.surface.snapshot.len() { return None; }
+        if let Some(map) = &self.mapped { map.source_offset(local, affinity) } else { Some(TextOffset(self.viewport_start + local.0)) }
+    }
+    pub fn local_offset(&self, source: TextOffset) -> Option<TextOffset> {
+        if let Some(map) = &self.mapped { map.local_offset(source) }
+        else { source.0.checked_sub(self.viewport_start).filter(|offset| *offset <= self.surface.snapshot.len()).map(TextOffset) }
+    }
+    fn local_line_for_global(&self, global: u64) -> Option<u64> {
+        if self.mapped.is_none() { return global.checked_sub(self.viewport_first_global_line()?).filter(|line| *line < self.surface.snapshot.line_count() as u64); }
+        for segment in self.source_segments() {
+            let relative = global.checked_sub(segment.first_global_line?)?;
+            let base = self.surface.snapshot.line_at(segment.local.start).ok()?;
+            let line = base.checked_add(usize::try_from(relative).ok()?)?;
+            if let Ok(range) = self.surface.snapshot.line_range(line) && range.start >= segment.local.start && range.start < segment.local.end { return Some(line as u64); }
+        }
+        None
+    }
+    fn queue_fold_projection(&mut self) {
+        if self.pending.is_some() || !self.viewport_valid { return; }
+        let folds: Vec<_> = self.global_folds.iter().filter(|fold| self.global_fold_state.collapsed.contains(&fold.header)).map(|fold| fold.header + 1..fold.end + 1).collect();
+        if !self.mapping_dirty && folds == self.mapping_folds && (self.mapping_job.is_some() || self.mapped.as_ref().is_some_and(|map| map.source.same_document(self.read_handle().snapshot()) && map.source.content_state == self.snapshot.content_state)) { return; }
+        if folds.is_empty() && self.manual_hidden.is_empty() && self.rebased_folds.is_empty() && self.mapped.is_none() && self.mapping_job.is_none() { return; }
+        self.mapping_generation = self.mapping_generation.wrapping_add(1);
+        self.mapping_folds = folds.clone();
+        let collapsed = self.global_folds.iter().filter(|fold| self.global_fold_state.collapsed.contains(&fold.header)).cloned().collect();
+        match mapped_viewport::request(self.read_handle(), TextOffset(self.viewport_start), collapsed, self.manual_hidden.clone(), self.rebased_folds.clone(), self.mapping_generation, self.budget.clone(), self.notify.clone()) {
+            Ok(job) => { self.mapping_job = Some(job); self.mapping_dirty = false; }, Err(error) => self.error = Some(error),
+        }
+    }
+    pub fn set_global_hidden_ranges(&mut self, ranges: &[std::ops::Range<u64>]) -> Result<(), String> {
+        if ranges.len() > 8192 { return Err("Too many hidden line ranges".into()); }
+        let hidden = ranges.iter().map(|range| { if range.start >= range.end { return Err("Invalid hidden line range".to_owned()); } Ok(usize::try_from(range.start).map_err(|_| "Hidden line exceeds platform")?..usize::try_from(range.end).map_err(|_| "Hidden line exceeds platform")?) }).collect::<Result<Vec<_>, String>>()?;
+        if self.manual_hidden != hidden { self.manual_hidden = hidden; self.mapping_dirty = true; self.queue_fold_projection(); }
+        Ok(())
+    }
+    fn transition_fold_anchors(&mut self, next: &PagedSnapshot) {
+        if next.content_state == self.snapshot.content_state { return; }
+        self.manual_hidden.clear();
+        self.fold_history.retain(|entry| entry.0 != self.snapshot.content_state);
+        self.fold_history.push_back((self.snapshot.content_state, self.global_folds.clone(), self.global_fold_state.clone(), self.global_fold_overrides.clone(), self.known_fold_anchors.clone()));
+        while self.fold_history.len() > 16 { self.fold_history.pop_front(); }
+        self.rebased_folds.clear(); self.mapping_dirty = true;
+        if let Some((_, folds, state, overrides, anchors)) = self.fold_history.iter().find(|entry| entry.0 == next.content_state) {
+            self.global_folds = folds.clone(); self.global_fold_state = state.clone(); self.global_fold_overrides = overrides.clone(); self.known_fold_anchors = anchors.clone(); return;
+        }
+        if let Some(change) = next.applied_change().filter(|change| change.matches_before(self.snapshot.identity_token(), self.snapshot.content_state)) {
+            {
+                let anchors = self.known_fold_anchors.iter().chain(self.mapped.iter().flat_map(|map| map.anchors.iter()));
+                for anchor in anchors {
+                    let overlaps = change.edits().iter().any(|edit| if edit.before.is_empty() { anchor.header < edit.before.start && edit.before.start < anchor.end } else { edit.before.start < anchor.end && edit.before.end > anchor.header });
+                    if overlaps { continue; }
+                    let shift = |offset: TextOffset, before: bool| -> Option<TextOffset> {
+                        let mut result = offset.0 as i128;
+                        for edit in change.edits() {
+                            if edit.before.end < offset || (edit.before.end == offset && !(before && edit.before.is_empty())) { result += edit.inserted_len as i128 - (edit.before.end.0 - edit.before.start.0) as i128; }
+                        }
+                        usize::try_from(result).ok().filter(|offset| *offset <= next.len()).map(TextOffset)
+                    };
+                    if let (Some(header), Some(end)) = (shift(anchor.header, false), shift(anchor.end, true)) { self.rebased_folds.push(mapped_viewport::FoldAnchor { header, end, fold: anchor.fold.clone(), collapsed: self.global_fold_state.collapsed.contains(&anchor.fold.header) }); }
+                }
+            }
+        }
+        self.rebased_folds.sort_by_key(|anchor| (anchor.header, anchor.end)); self.rebased_folds.dedup_by_key(|anchor| (anchor.header, anchor.end)); self.rebased_folds.truncate(8192);
+        self.known_fold_anchors.clear();
+        self.global_folds.clear(); self.global_fold_overrides.clear(); self.global_fold_state.unfold_all(); self.global_fold_initialized = false;
+    }
+    fn pump_fold_projection(&mut self) -> bool {
+        let Some(job) = &self.mapping_job else { return false; };
+        let result = match job.result.try_recv() { Ok(result) => result, Err(TryRecvError::Empty) => return false, Err(_) => Err("Fold viewport worker stopped".into()) };
+        self.mapping_job = None;
+        match result {
+            Ok(map) if map.generation == self.mapping_generation && map.source.same_document(self.read_handle().snapshot()) && map.source.content_state == self.snapshot.content_state => {
+                self.surface.snapshot = map.projection.clone(); self.surface.layout_revision = None;
+                self.surface.set_source_segments(&map.segments);
+                for anchor in &map.anchors { if !self.global_folds.iter().any(|fold| fold.header == anchor.fold.header && fold.end == anchor.fold.end) { self.global_folds.push(anchor.fold.clone()); } if anchor.collapsed { self.global_fold_state.collapsed.insert(anchor.fold.header); self.global_fold_overrides.insert(anchor.fold.header, true); } }
+                for anchor in &map.anchors { self.known_fold_anchors.retain(|known| known.header != anchor.header); self.known_fold_anchors.push(anchor.clone()); }
+                self.known_fold_anchors.truncate(8192);
+                self.global_folds.sort_by_key(|fold| (fold.header, std::cmp::Reverse(fold.end)));
+                self.rebased_folds.clear();
+                self.mapping_folds = self.global_folds.iter().filter(|fold| self.global_fold_state.collapsed.contains(&fold.header)).map(|fold| fold.header + 1..fold.end + 1).collect();
+                self.mapped = Some(map);
+                self.project_mapped_fold_gutter();
+                self.project_global_selection(); self.project_search_marks(); let _ = self.project_global_spacers();
+                self.error = None;
+            }
+            Ok(_) => { self.mapping_dirty = true; }, Err(error) => { self.viewport_valid = false; self.mapping_dirty = true; self.error = Some(error); },
+        }
+        true
     }
     pub fn recovery_origin_path(&self) -> Option<&std::path::Path> { self.recovery_origin.as_deref() }
     pub fn viewport_ready(&self) -> bool { self.viewport_valid && !self.busy() }
     pub fn paged_frame_state(&self) -> PagedFrameState {
-        PagedFrameState { displayed: TextOffset(self.viewport_start)..TextOffset(self.viewport_start + self.surface.snapshot.len()), requested: self.queued_viewport.or(self.viewport_request), ready: self.viewport_ready() && self.viewport_request.is_none() && self.queued_viewport.is_none() && self.requested_scroll.is_none() }
+        PagedFrameState { displayed: self.source_offset(TextOffset(0), SourceAffinity::After).unwrap_or(TextOffset(self.viewport_start))..self.source_offset(TextOffset(self.surface.snapshot.len()), SourceAffinity::Before).unwrap_or(TextOffset(self.viewport_start)), requested: self.queued_viewport.or(self.viewport_request), ready: self.viewport_ready() && self.viewport_request.is_none() && self.queued_viewport.is_none() && self.requested_scroll.is_none() }
     }
     pub fn paged_scroll_metrics(&self, height: f32) -> PagedScrollMetrics {
         let snapshot = self.surface.snapshot();
@@ -416,12 +565,13 @@ impl PagedEditorSurface {
         let end = snapshot.line_range(line.saturating_add(rows)).map_or(snapshot.len(), |range| range.start.0);
         let viewport = end.saturating_sub(start).max(1).min(self.snapshot.len().max(1)) as f64;
         let total = self.snapshot.len().max(1) as f64;
-        let offset = self.queued_viewport.or(self.viewport_request).map_or(self.viewport_start.saturating_add(start), |offset| offset.0) as f64;
+        let offset = self.queued_viewport.or(self.viewport_request).or_else(|| self.source_offset(TextOffset(start), SourceAffinity::After)).map_or(self.viewport_start, |offset| offset.0) as f64;
         PagedScrollMetrics { offset: offset.min((total - viewport).max(0.0)), viewport, total, lines_known: self.viewport_start == 0 && snapshot.len() == self.snapshot.len() }
     }
     pub fn set_known_global_folds(&mut self, mut folds: Vec<bareline_syntax::folding::Fold>, level: usize, partial: bool, viewport_first_line: usize) -> Result<(), String> {
         if !self.viewport_valid { return Err("Wait for the paged viewport before projecting folds".into()); }
         if folds.iter().any(|fold| fold.header >= fold.end) { return Err("Invalid global fold range".into()); }
+        if partial { folds.extend(self.global_folds.iter().cloned()); }
         let truncated = folds.len() > 8192; folds.truncate(8192); folds.sort_by_key(|fold| (fold.header, std::cmp::Reverse(fold.end))); folds.dedup_by_key(|fold| (fold.header, fold.end));
         self.global_folds = folds; self.global_folds_partial = partial || truncated; self.fold_viewport_line = Some(viewport_first_line);
         if !self.global_fold_initialized { if level > 0 { self.global_fold_state.apply_level(&self.global_folds, level); } self.global_fold_initialized = true; }
@@ -444,13 +594,19 @@ impl PagedEditorSurface {
     pub fn fold_all_known(&mut self, level: usize) { self.global_fold_initialized = true; self.global_fold_overrides.clear(); self.global_fold_state.apply_level(&self.global_folds, level); self.project_global_folds(); }
     pub fn unfold_all_known(&mut self) { self.global_fold_initialized = true; self.global_fold_overrides.clear(); self.global_fold_state.unfold_all(); self.project_global_folds(); }
     pub fn toggle_current_known(&mut self) -> Result<(), String> {
+        let caret = self.global_selection().1;
+        if let Some(header) = self.known_fold_anchors.iter().filter(|anchor| anchor.header <= caret && caret < anchor.end).max_by_key(|anchor| anchor.header).map(|anchor| anchor.fold.header) {
+            self.global_fold_state.toggle(header); self.global_fold_overrides.insert(header, self.global_fold_state.collapsed.contains(&header)); self.project_global_folds(); return Ok(());
+        }
         let first = self.fold_viewport_line.ok_or("Global line mapping is pending")?;
         let local = self.surface.snapshot.line_at(TextOffset(self.surface.selection.caret)).map_err(|_| "Caret line unavailable")?;
-        let line = first.saturating_add(local);
+        let line = if self.mapped.is_some() { self.surface.source_line_at(TextOffset(self.surface.selection.caret)).and_then(|line| usize::try_from(line).ok()).ok_or("Fold source line is unavailable")? } else { first.saturating_add(local) };
         let header = self.global_folds.iter().filter(|fold| fold.header <= line && line <= fold.end).max_by_key(|fold| fold.header).map(|fold| fold.header).ok_or("No verified fold at the caret")?;
         self.global_fold_state.toggle(header); self.global_fold_overrides.insert(header, self.global_fold_state.collapsed.contains(&header)); self.project_global_folds(); Ok(())
     }
     fn project_global_folds(&mut self) {
+        self.queue_fold_projection();
+        if self.mapped.is_some() || self.mapping_job.is_some() { self.project_mapped_fold_gutter(); return; }
         let Some(first) = self.fold_viewport_line else { self.surface.set_known_folds(Vec::new(), 8, true); return; };
         let end = first.saturating_add(self.surface.snapshot.line_count());
         let length = self.surface.snapshot.len();
@@ -463,18 +619,44 @@ impl PagedEditorSurface {
         self.surface.fold_state.collapsed = self.global_fold_state.collapsed.iter().filter(|header| **header >= first && **header < end).map(|header| header - first).collect();
         self.surface.refresh_hidden_lines();
     }
+    pub fn set_known_anchored_folds(&mut self, anchors: Vec<bareline_syntax::folding::AnchoredFold>, level: usize, partial: bool, viewport_first_line: usize) -> Result<(), String> {
+        if anchors.len() > 8192 || anchors.iter().any(|anchor| anchor.header >= anchor.body.start || anchor.body.start > anchor.body.end || anchor.body.end.0 > self.snapshot.len()) { return Err("Invalid verified fold anchors".into()); }
+        self.set_known_global_folds(anchors.iter().map(|anchor| anchor.fold.clone()).collect(), level, partial, viewport_first_line)?;
+        if !partial { self.known_fold_anchors.clear(); }
+        for anchor in anchors {
+            self.known_fold_anchors.retain(|known| known.header != anchor.header);
+            self.known_fold_anchors.push(mapped_viewport::FoldAnchor { header: anchor.header, end: anchor.body.end, collapsed: self.global_fold_state.collapsed.contains(&anchor.fold.header), fold: anchor.fold });
+        }
+        self.known_fold_anchors.truncate(8192);
+        Ok(())
+    }
+    fn project_mapped_fold_gutter(&mut self) {
+        let headers: Vec<_> = self.global_folds.iter().filter_map(|fold| self.local_line_for_global(fold.header as u64).map(|local| (local as usize, fold.level, self.global_fold_state.collapsed.contains(&fold.header)))).collect();
+        // These are gutter-only zero-body markers: the mapped source already omitted
+        // the body. Feeding its old line count into hidden_lines would hide the suffix.
+        self.surface.known_folds = headers.iter().map(|(header, level, _)| bareline_syntax::folding::Fold { header: *header, end: *header, level: *level }).collect();
+        self.surface.fold_revision = Some(self.surface.snapshot.revision.0);
+        self.surface.fold_state.collapsed = headers.into_iter().filter(|(_, _, collapsed)| *collapsed).map(|(header, _, _)| header).collect();
+        self.surface.refresh_hidden_lines();
+    }
     pub fn viewport_first_global_line(&self) -> Option<u64> { self.viewport_mapping.filter(|mapping| self.viewport_valid && !self.busy() && mapping.offset == self.viewport_start).map(|mapping| mapping.line) }
     pub fn viewport_first_line_start(&self) -> Option<TextOffset> { self.viewport_mapping.filter(|mapping| self.viewport_valid && !self.busy() && mapping.offset == self.viewport_start).map(|mapping| mapping.line_start) }
     pub fn global_logical_scroll(&mut self) -> GlobalScrollPosition {
         if self.busy() || self.requested_scroll.is_some() || self.pending_scroll_mapping.is_some() { return GlobalScrollPosition::Pending; }
         if let Some(first) = self.viewport_first_global_line() {
             let (line, fraction, x) = self.surface.logical_scroll();
+            if self.mapped.is_some() {
+                let local = self.surface.snapshot.line_range(line as usize).ok().map(|range| range.start);
+                if local.is_some_and(|offset| self.source_segments().iter().any(|segment| segment.local.start == offset && segment.source_line_start != Some(segment.source.start))) { return GlobalScrollPosition::Pending; }
+                return local.and_then(|offset| self.surface.source_line_at(offset)).map_or(GlobalScrollPosition::Pending, |global| GlobalScrollPosition::Ready(global, fraction, x));
+            }
             // A clipped first line has no measured absolute horizontal origin.
             if line == 0 && self.viewport_first_line_start().is_some_and(|start| start.0 != self.viewport_start) { return GlobalScrollPosition::Pending; }
             GlobalScrollPosition::Ready(first.saturating_add(line), fraction, x)
         } else { self.ensure_viewport_mapping(); GlobalScrollPosition::Pending }
     }
     pub fn request_global_scroll(&mut self, line: u64, fraction: f64, x: f64) -> Result<(), String> {
+        if self.mapped.is_some() && let Some(local) = self.local_line_for_global(line) { self.surface.set_logical_scroll(local, fraction, x); return Ok(()); }
         if let Some(first) = self.viewport_first_global_line() && line >= first && line - first < self.surface.snapshot.line_count() as u64
             && (line > first || self.viewport_first_line_start() == Some(TextOffset(self.viewport_start))) {
             self.surface.set_logical_scroll(line - first, fraction, x); return Ok(());
@@ -491,14 +673,16 @@ impl PagedEditorSurface {
             self.queued_wheel.0 = (self.queued_wheel.0 + delta).clamp(-1.0e9, 1.0e9); self.queued_wheel.1 = height; return Ok(());
         }
         let line_height = self.surface.line_height() as f64;
-        let end = self.viewport_start.saturating_add(self.surface.snapshot.len());
+        let end = self.source_offset(TextOffset(self.surface.snapshot.len()), SourceAffinity::Before).map_or(self.viewport_start, |offset| offset.0);
         let at_top = self.surface.scroll_y + delta < 0.0;
         let at_bottom = self.surface.scroll_y + delta + height as f64 >= self.surface.snapshot.line_count() as f64 * line_height;
         if (delta < 0.0 && at_top && self.viewport_start != 0) || (delta > 0.0 && at_bottom && end < self.snapshot.len()) {
             if let GlobalScrollPosition::Ready(line, fraction, x) = self.global_logical_scroll() {
                 let position = fraction + delta / line_height;
                 let rows = position.floor() as i64;
-                let target = if rows < 0 { line.saturating_sub(rows.unsigned_abs()) } else { line.saturating_add(rows as u64) };
+                let mut target = if rows < 0 { line.saturating_sub(rows.unsigned_abs()) } else { line.saturating_add(rows as u64) };
+                for fold in &self.global_folds { if self.global_fold_state.collapsed.contains(&fold.header) && (fold.header as u64) < target && target <= fold.end as u64 { target = if delta < 0.0 { fold.header as u64 } else { fold.end as u64 + 1 }; } }
+                for range in &self.manual_hidden { if range.start as u64 <= target && target < range.end as u64 { target = if delta < 0.0 { (range.start as u64).saturating_sub(1) } else { range.end as u64 }; } }
                 return self.request_global_scroll(target, position - position.floor(), x);
             }
             let start = if delta < 0.0 { self.viewport_start.saturating_sub(WINDOW / 2) } else { self.viewport_start.saturating_add(WINDOW / 2).min(self.snapshot.len()) };
@@ -524,10 +708,12 @@ impl PagedEditorSurface {
     pub fn refine_horizontal_viewport(&mut self, backend: &impl bareline_renderer::TextBackend, width: f32) -> Result<bool, String> {
         if !self.paged_frame_state().ready { return Ok(false); }
         let Some(anchor) = self.surface.horizontal_window_anchor(backend, width) else { return Ok(false); };
-        let end = self.viewport_start.saturating_add(self.surface.snapshot.len());
-        if (anchor.direction < 0 && self.viewport_start == 0) || (anchor.direction > 0 && end >= self.snapshot.len()) { return Ok(false); }
-        let offset = if anchor.direction < 0 { self.viewport_start.saturating_sub(WINDOW / 2) } else { self.viewport_start.saturating_add(WINDOW / 2).min(self.snapshot.len()) };
-        let global_anchor = self.viewport_start.saturating_add(anchor.offset.0);
+        let first = self.source_offset(TextOffset(0), SourceAffinity::After).map_or(self.viewport_start, |offset| offset.0);
+        let end = self.source_offset(TextOffset(self.surface.snapshot.len()), SourceAffinity::Before).map_or(first, |offset| offset.0);
+        if (anchor.direction < 0 && first == 0) || (anchor.direction > 0 && end >= self.snapshot.len()) { return Ok(false); }
+        let Some(global_anchor) = self.source_offset(anchor.offset, SourceAffinity::After).map(|offset| offset.0) else { return Ok(false); };
+        let offset = if anchor.direction < 0 { first.saturating_sub(WINDOW / 2) } else { global_anchor.saturating_sub(WINDOW / 2) };
+        if offset == self.viewport_start { return Ok(false); }
         if global_anchor < offset || global_anchor > offset.saturating_add(WINDOW).min(self.snapshot.len()) { return Ok(false); }
         self.request_viewport(TextOffset(offset))?;
         self.horizontal_anchor = Some((global_anchor, anchor.screen_x));
@@ -549,9 +735,7 @@ impl PagedEditorSurface {
         self.global_spacers = rows.to_vec(); self.project_global_spacers()
     }
     fn project_global_spacers(&mut self) -> Result<(), String> {
-        let Some(first) = self.viewport_first_global_line() else { return self.surface.set_view_spacers(&[]); };
-        let end = first.saturating_add(self.surface.snapshot.line_count() as u64);
-        let rows: Vec<_> = self.global_spacers.iter().filter(|(line, _)| *line >= first && *line <= end).map(|(line, count)| (line - first, *count)).collect();
+        let rows: Vec<_> = self.global_spacers.iter().filter_map(|(line, count)| self.local_line_for_global(*line).map(|line| (line, *count))).collect();
         self.surface.set_view_spacers(&rows)
     }
     fn ensure_viewport_mapping(&mut self) {
@@ -585,12 +769,14 @@ impl PagedEditorSurface {
     pub fn clear_search_marks(&mut self, style: Option<u8>) { self.search_marks.clear(style); self.project_search_marks(); }
     fn project_search_marks(&mut self) {
         self.surface.clear_search_marks(None);
-        let start = self.viewport_start;
-        let end = start.saturating_add(self.surface.snapshot.len());
+        let fallback = [ViewportSegment { local: TextOffset(0)..TextOffset(self.surface.snapshot.len()), source: TextOffset(self.viewport_start)..TextOffset(self.viewport_start + self.surface.snapshot.len()), first_global_line: None, source_line_start: None }];
+        let segments = if self.mapped.is_some() { self.source_segments() } else { &fallback };
+        let mut projected = Vec::new();
         for style in 1..=5 {
-            let ranges = self.search_marks.iter().filter(|(s, range)| *s == style && range.start.0 < end && range.end.0 > start).map(|(_, range)| TextOffset(range.start.0.max(start) - start)..TextOffset(range.end.0.min(end) - start)).collect();
-            let _ = self.surface.set_search_marks(style, ranges);
+            let ranges = segments.iter().flat_map(|segment| self.search_marks.iter().filter(move |(s, range)| *s == style && range.start < segment.source.end && range.end > segment.source.start).map(move |(_, range)| TextOffset(segment.local.start.0 + range.start.0.max(segment.source.start.0) - segment.source.start.0)..TextOffset(segment.local.start.0 + range.end.0.min(segment.source.end.0) - segment.source.start.0))).collect();
+            projected.push((style, ranges));
         }
+        for (style, ranges) in projected { let _ = self.surface.set_search_marks(style, ranges); }
     }
     pub fn append_receipt(&self) -> Option<bareline_file_io::tail::AppendReceipt> { self.append_receipt }
     pub fn follow_status(&self) -> Option<(bool, bool)> { self.following.then_some((self.follow_paused, self.tail_changed)) }
@@ -626,42 +812,61 @@ impl PagedEditorSurface {
         TextOffset(self.viewport_start)
     }
     /// Canonical endpoints are independent of the displayed, possibly clipped range.
+    pub fn capture_power(&self)->crate::paged_power::Capture {
+        crate::paged_power::Capture{source:self.read_handle(),selections:self.global_selection_set(),state:self.power_state.clone(),language:self.surface.language,definition:self.surface.udl.clone(),tab_width:self.surface.configured_tab_width(),column_maps:None,typing:crate::paged_typing::TypingConfig{language:self.surface.language,definition:self.surface.udl.clone(),smart_pairs:self.surface.smart_typing&&self.surface.smart_pairs,smart_indent:self.surface.smart_typing&&self.surface.smart_indent,tab_width:self.surface.configured_tab_width(),literal_context:None}}
+    }
+    pub fn install_power_state(&mut self,source:&PagedSnapshot,revision:bareline_document::Revision,selections:crate::power::SelectionSet,state:crate::paged_power::PowerViewState,hidden:&[std::ops::Range<u64>])->Result<(),String>{
+        if source.identity_token().0!=self.snapshot.identity_token().0||revision!=self.snapshot.revision{return Err("Power result source changed".into());}
+        if selections.selections.is_empty()||selections.primary>=selections.selections.len()||selections.selections.iter().any(|selection|selection.anchor>self.snapshot.len()||selection.caret>self.snapshot.len()){return Err("Invalid prepared power selections".into());}
+        self.global_selections=selections;self.power_state=state;self.project_global_selection();
+        if source.revision!=revision&&!self.power_state.hidden.is_empty(){self.power_hidden_refresh=true;}
+        if !self.caret_in_viewport(){self.request_viewport(TextOffset(self.global_selections.primary().caret))?;}
+        self.set_global_hidden_ranges(hidden)?;Ok(())
+    }
+    pub fn acknowledge_power_view(&mut self,source:&PagedSnapshot,id:&str,args:&crate::power::consumer::Arguments)->Result<(),String>{
+        if source.identity_token()!=self.snapshot.identity_token()||source.content_state!=self.snapshot.content_state{return Err("Power view source changed".into());}
+        self.surface.acknowledge_command((id.into(),args.clone()));Ok(())
+    }
+    pub fn global_selection_set(&self)->crate::power::SelectionSet {
+        if self.surface.selection!=self.projected_selection {let(anchor,caret)=self.global_selection();Selection{anchor:anchor.0,caret:caret.0}.into()}else{self.global_selections.clone()}
+    }
     pub fn global_selection(&self) -> (TextOffset, TextOffset) {
         let selection = if self.viewport_valid && self.surface.selection != self.projected_selection
             && self.surface.selection.anchor <= self.surface.snapshot.len() && self.surface.selection.caret <= self.surface.snapshot.len()
             && self.surface.snapshot.is_boundary(TextOffset(self.surface.selection.anchor)) && self.surface.snapshot.is_boundary(TextOffset(self.surface.selection.caret)) {
-            Selection { anchor: self.navigation_anchor.unwrap_or(self.viewport_start + self.surface.selection.anchor), caret: self.viewport_start + self.surface.selection.caret }
-        } else { self.global_selection };
+            match (self.source_offset(TextOffset(self.surface.selection.anchor),SourceAffinity::After),self.source_offset(TextOffset(self.surface.selection.caret),SourceAffinity::After)) {
+                (Some(anchor),Some(caret))=>Selection { anchor: self.navigation_anchor.unwrap_or(anchor.0), caret:caret.0 },
+                _=>self.global_selections.primary(),
+            }
+        } else { self.global_selections.primary() };
         (TextOffset(selection.anchor), TextOffset(selection.caret))
     }
     fn sync_global_selection(&mut self) {
         let moved = self.surface.selection != self.projected_selection;
         let (anchor, caret) = self.global_selection();
-        self.global_selection = Selection { anchor: anchor.0, caret: caret.0 };
+        if moved {self.global_selections=Selection { anchor: anchor.0, caret: caret.0 }.into();}
         self.projected_selection = self.surface.selection;
         if moved { self.navigation_anchor = None; }
     }
     pub fn selection_fully_in_viewport(&self) -> bool {
-        let (anchor, caret) = self.global_selection();
-        let end = self.viewport_start.saturating_add(self.surface.snapshot.len());
-        self.viewport_valid && anchor.0 >= self.viewport_start && caret.0 >= self.viewport_start && anchor.0 <= end && caret.0 <= end
-            && self.surface.snapshot.is_boundary(TextOffset(anchor.0 - self.viewport_start)) && self.surface.snapshot.is_boundary(TextOffset(caret.0 - self.viewport_start))
+        self.viewport_valid && self.global_selection_set().selections.iter().all(|selection|self.local_offset(TextOffset(selection.anchor)).is_some()&&self.local_offset(TextOffset(selection.caret)).is_some())
     }
     pub fn caret_in_viewport(&self) -> bool {
         let (_, caret) = self.global_selection();
-        self.viewport_valid && caret.0 >= self.viewport_start && caret.0 <= self.viewport_start.saturating_add(self.surface.snapshot.len())
-            && self.surface.snapshot.is_boundary(TextOffset(caret.0 - self.viewport_start))
+        self.viewport_valid && self.local_offset(caret).is_some()
     }
     fn project_global_selection(&mut self) {
         let length = self.surface.snapshot.len();
-        let local = |offset: usize| offset.saturating_sub(self.viewport_start).min(length);
+        let local = |offset: usize| self.local_offset(TextOffset(offset)).map_or_else(||if offset<self.viewport_start{0}else{length},|offset|offset.0);
         // Clipping affects decoration only; it never writes back into the canonical endpoints.
-        self.projected_selection = Selection { anchor: local(self.global_selection.anchor), caret: local(self.global_selection.caret) };
+        let primary=self.global_selections.primary();
+        let projected=self.global_selections.selections.iter().map(|selection|Selection{anchor:local(selection.anchor),caret:local(selection.caret)}).collect();
+        self.projected_selection = Selection { anchor: local(primary.anchor), caret: local(primary.caret) };
         if !self.surface.snapshot.is_boundary(TextOffset(self.projected_selection.anchor)) || !self.surface.snapshot.is_boundary(TextOffset(self.projected_selection.caret)) {
             self.projected_selection = Selection::default();
         }
         self.surface.selection = self.projected_selection;
-        self.surface.selections = self.projected_selection.into();
+        self.surface.selections = crate::power::SelectionSet{selections:projected,primary:self.global_selections.primary};
         if !self.caret_in_viewport() { self.surface.reveal_caret = false; }
     }
     pub fn selection_restore_status(&self, token: u64) -> SelectionRestoreStatus {
@@ -716,7 +921,7 @@ impl PagedEditorSurface {
             Err(error) => { self.deferred_input = None; self.selection_status = SelectionRestoreStatus::Failed(error.clone()); self.error = Some(error); }
             Ok(selection) => {
                 self.error = None;
-                self.global_selection = selection; self.project_global_selection();
+                self.global_selections = selection.into(); self.project_global_selection();
                 if pending.preserve_viewport { self.surface.reveal_caret = false; }
                 self.selection_status = SelectionRestoreStatus::Applied;
                 if !pending.preserve_viewport {
@@ -732,7 +937,7 @@ impl PagedEditorSurface {
         if !self.viewport_ready() { return Err("Wait for the paged viewport to finish loading.".into()); }
         let local = |offset: TextOffset| -> Result<usize, String> {
             if offset.0 > self.snapshot.len() { return Err("Selection exceeds the document.".into()); }
-            let value = offset.0.checked_sub(self.viewport_start).ok_or("Selection precedes the viewport")?;
+            let value = self.local_offset(offset).ok_or("Selection is outside the visible source segments")?.0;
             if value > self.surface.snapshot().len() || !self.surface.snapshot().is_boundary(TextOffset(value)) {
                 return Err("Selection is outside the available UTF-8 viewport.".into());
             }
@@ -743,7 +948,7 @@ impl PagedEditorSurface {
         self.surface.selection.anchor = anchor;
         self.surface.selection.caret = caret;
         self.surface.selections = self.surface.selection.into();
-        self.global_selection = Selection { anchor: self.viewport_start + anchor, caret: self.viewport_start + caret };
+        self.global_selections = Selection { anchor: self.source_offset(TextOffset(anchor),SourceAffinity::After).ok_or("Invalid source anchor")?.0, caret:self.source_offset(TextOffset(caret),SourceAffinity::After).ok_or("Invalid source caret")?.0 }.into();
         self.projected_selection = self.surface.selection;
         Ok(())
     }
@@ -774,8 +979,8 @@ impl PagedEditorSurface {
         }
         if let Some(height) = self.bottom_scroll.take() && self.viewport_valid && self.error.is_none() { self.surface.scroll(f64::MAX, height); }
         if let Some((offset, screen_x)) = self.horizontal_anchor.take() && self.viewport_valid && self.error.is_none() {
-            if let Some(local) = offset.checked_sub(self.viewport_start) && local <= self.surface.snapshot.len() {
-                if let Err(error) = self.surface.restore_horizontal_anchor(TextOffset(local), screen_x) { self.error = Some(error); }
+            if let Some(local) = self.local_offset(TextOffset(offset)) {
+                if let Err(error) = self.surface.restore_horizontal_anchor(local, screen_x) { self.error = Some(error); }
             }
         }
         if self.queued_horizontal != 0.0 {
@@ -859,6 +1064,10 @@ impl PagedEditorSurface {
             self.error = Some("Document is read only.".into());
             return;
         }
+        if self.power_input_enabled&&matches!(input,Input::Insert(_)|Input::Backspace|Input::Delete){
+            if self.power_inputs.len()>=256{self.error=Some("Paged input queue is full".into());return;}
+            self.power_inputs.push_back(input);(self.notify)();return;
+        }
         if !self.viewport_valid
             && matches!(input, Input::Insert(_) | Input::Backspace | Input::Delete)
         {
@@ -872,27 +1081,27 @@ impl PagedEditorSurface {
         self.sync_global_selection();
         if let Input::SetCaret(local, extend) = input {
             if local > self.surface.snapshot.len() || !self.surface.snapshot.is_boundary(TextOffset(local)) { self.error = Some("Caret is outside the available viewport".into()); return; }
-            let caret = self.viewport_start + local;
-            self.global_selection = Selection { anchor: if extend { self.global_selection.anchor } else { caret }, caret };
+            let Some(caret)=self.source_offset(TextOffset(local),SourceAffinity::After).map(|offset|offset.0)else{self.error=Some("Caret is outside visible source segments".into());return;};
+            self.global_selections = Selection { anchor: if extend { self.global_selections.primary().anchor } else { caret }, caret }.into();
             self.project_global_selection(); self.surface.acknowledge(Input::SetCaret(local, extend)); return;
         }
         if matches!(input, Input::SelectAll) {
             if let Err(error) = self.restore_global_selection(TextOffset(0), TextOffset(self.snapshot.len()), true) { self.error = Some(error); }
             return;
         }
-        if matches!(input, Input::Left(false) | Input::Right(false)) && self.global_selection.anchor != self.global_selection.caret {
-            let range = self.global_selection.range(); let offset = if matches!(input, Input::Left(_)) { range.start } else { range.end };
+        if matches!(input, Input::Left(false) | Input::Right(false)) && self.global_selections.primary().anchor != self.global_selections.primary().caret {
+            let range = self.global_selections.primary().range(); let offset = if matches!(input, Input::Left(_)) { range.start } else { range.end };
             if let Err(error) = self.restore_global_selection(TextOffset(offset), TextOffset(offset), false) { self.error = Some(error); }
             return;
         }
-        let needs_caret = matches!(input, Input::Left(_) | Input::Right(_) | Input::Up(_) | Input::Down(_) | Input::Home(_) | Input::End(_)) || (matches!(input, Input::Backspace | Input::Delete) && self.global_selection.anchor == self.global_selection.caret);
+        let needs_caret = matches!(input, Input::Left(_) | Input::Right(_) | Input::Up(_) | Input::Down(_) | Input::Home(_) | Input::End(_)) || (matches!(input, Input::Backspace | Input::Delete) && self.global_selections.primary().anchor == self.global_selections.primary().caret);
         if needs_caret && !self.caret_in_viewport() {
             let (anchor, caret) = self.global_selection();
             match self.restore_global_selection(anchor, caret, false) { Ok(_) => self.deferred_input = Some(input), Err(error) => self.error = Some(error) }
             return;
         }
         let acknowledged = input.clone();
-        let selected = self.global_selection.range();
+        let selected = self.global_selections.primary().range();
         let action = match input {
             Input::Insert(insert) => Some(Action::Edit {
                 range: TextOffset(selected.start)..TextOffset(selected.end),
@@ -905,12 +1114,12 @@ impl PagedEditorSurface {
                 } else if backward {
                     self.surface
                         .previous_grapheme(self.surface.selection.caret)
-                        .map(|start| self.viewport_start + start..self.global_selection.caret)
+                        .and_then(|start|self.source_offset(TextOffset(start),SourceAffinity::After).map(|start|start.0..self.global_selections.primary().caret))
                         .unwrap_or(selected)
                 } else {
                     self.surface
                         .next_grapheme(self.surface.selection.caret)
-                        .map(|end| self.global_selection.caret..self.viewport_start + end)
+                        .and_then(|end|self.source_offset(TextOffset(end),SourceAffinity::Before).map(|end|self.global_selections.primary().caret..end.0))
                         .unwrap_or(selected)
                 };
                 Some(Action::Edit {
@@ -921,7 +1130,7 @@ impl PagedEditorSurface {
             Input::Undo => Some(Action::Undo),
             Input::Redo => Some(Action::Redo),
             navigation => {
-                if matches!(navigation, Input::Left(true) | Input::Right(true) | Input::Up(true) | Input::Down(true) | Input::Home(true) | Input::End(true)) { self.navigation_anchor = Some(self.global_selection.anchor); }
+                if matches!(navigation, Input::Left(true) | Input::Right(true) | Input::Up(true) | Input::Down(true) | Input::Home(true) | Input::End(true)) { self.navigation_anchor = Some(self.global_selections.primary().anchor); }
                 self.surface.enqueue(navigation);
                 None
             }
@@ -937,7 +1146,15 @@ impl PagedEditorSurface {
         if !self.paged_frame_state().ready || self.surface.horizontal_anchor_pending() {
             self.error = Some("Wait for the requested viewport before hit testing.".into()); return Ok(());
         }
-        if self.surface.composition.is_some() || point.x < crate::LEFT || point.y < self.surface.top() { return Ok(()); }
+        if self.surface.composition.is_some() || point.y < self.surface.top() { return Ok(()); }
+        if (38.0..crate::LEFT).contains(&point.x) {
+            let row = ((point.y - self.surface.top()) as f64 + self.surface.scroll_y) / self.surface.line_height() as f64;
+            let local = self.surface.logical_line(row.floor() as usize);
+            let global = if self.mapped.is_some() { self.surface.snapshot.line_range(local).ok().and_then(|range| self.surface.source_line_at(range.start)) } else { self.viewport_first_global_line().map(|first| first + local as u64) };
+            if let Some(header) = global.and_then(|line| usize::try_from(line).ok()) && self.global_folds.iter().any(|fold| fold.header == header) { self.global_fold_state.toggle(header); self.global_fold_overrides.insert(header, self.global_fold_state.collapsed.contains(&header)); self.project_global_folds(); }
+            return Ok(());
+        }
+        if point.x < crate::LEFT { return Ok(()); }
         let row = ((point.y - self.surface.top()) as f64 + self.surface.scroll_y) / self.surface.line_height() as f64;
         let line = self.surface.logical_line(row.floor() as usize);
         let Some(layout) = self.surface.layouts.get(&line) else { return Ok(()); };
@@ -946,13 +1163,13 @@ impl PagedEditorSurface {
             y: ((row - (self.surface.visual_line(line) + layout.row_origin) as f64) * self.surface.line_height() as f64) as f32 + layout.context_y,
         })?;
         let local = layout.start.saturating_add(hit.byte_offset).min(layout.end);
-        let caret = TextOffset(self.viewport_start.saturating_add(local));
+        let caret = self.source_offset(TextOffset(local),SourceAffinity::After).ok_or(bareline_renderer::LayoutError::InvalidOffset)?;
         let anchor = if extend { self.global_selection().0 } else { caret };
         if let Err(error) = self.restore_global_selection_mode(anchor, caret, true, true, extend) { self.error = Some(error); }
         Ok(())
     }
     fn submit(&mut self, action: Action) -> Result<(), String> {
-        if self.busy() {
+        if self.power_actor_busy() {
             return Err("A paged operation is already pending.".into());
         }
         self.sync_global_selection();
@@ -984,7 +1201,7 @@ impl PagedEditorSurface {
                             WindowPoll::Finished => break Err("Captured viewport already finished".into()),
                         }
                     };
-                    Ok(Completed { selection: None, append_receipt: None, generation_owner: captured._generation.clone(), peer_epoch: 0, saved_state: Some(snapshot.content_state), save_as_required: false, following: false, tail_pending: false, source_changed: false, fingerprint: captured.fingerprint.clone(), can_undo: false, can_redo: false, snapshot, window, path: captured.path.clone(), caret: start, saved: None })
+                    Ok(Completed { selections: None, append_receipt: None, generation_owner: captured._generation.clone(), peer_epoch: 0, saved_state: Some(snapshot.content_state), save_as_required: false, following: false, tail_pending: false, source_changed: false, fingerprint: captured.fingerprint.clone(), can_undo: false, can_redo: false, snapshot, window, path: captured.path.clone(), caret: start, saved: None })
                 })();
                 let _ = sender.try_send(result); notify();
             })).map_err(|_| "Paged worker queue is full; retry.".to_owned())?;
@@ -993,6 +1210,7 @@ impl PagedEditorSurface {
         }
         let encoding_failure=self.encoding_failure.clone();
         let actor = self.actor.clone();
+        let source_mismatch = self.source_mismatch.clone();
         let retired = self.retired.clone();
         let generation_owner = self.generation_owner.clone();
         let peer = self.peer.clone();
@@ -1007,7 +1225,7 @@ impl PagedEditorSurface {
         let notify = self.notify.clone();
         let revision = self.snapshot.revision;
         let current_start = self.viewport_start;
-        let current_caret = self.global_selection.caret;
+        let current_caret = self.global_selections.primary().caret;
         let (sender, receiver) = mpsc::sync_channel(1);
         worker()
             .try_send(Box::new(move || {
@@ -1105,7 +1323,7 @@ impl PagedEditorSurface {
                             ensure_stream_recovery(&opened,&baseline,&recovery_config,&recovery,&recovery_status,&notify)?;
                             let lease=opened.transcoded.document.lease_source_transaction(prepared).map_err(|e|format!("{e:?}"))?;
                             if let Some(journal)=recovery.lock().map_err(|_|"Recovery actor stopped")?.as_mut() {journal.append_sources(lease.snapshot(),lease.edits(),streaming_quota)?;}
-                            if let Some(selection)=lease.metadata().after.first(){caret=selection.caret.0;start=caret.saturating_sub(WINDOW/2);committed_selection=Some(Selection{anchor:selection.anchor.0,caret});}
+                            if let Some(selection)=lease.metadata().after.first(){caret=selection.caret.0;start=caret.saturating_sub(WINDOW/2);committed_selection=Some(crate::power::SelectionSet{selections:lease.metadata().after.iter().map(|selection|Selection{anchor:selection.anchor.0,caret:selection.caret.0}).collect(),primary:0});}
                             let revision=lease.publish();
                             if let Some(completion)=completion {completion.complete_once(Ok(revision));}
                             streaming_protected=true;
@@ -1121,7 +1339,7 @@ impl PagedEditorSurface {
                                 let length = edit.range.end.0.checked_sub(edit.range.start.0).ok_or("Invalid replacement range")?;
                                 used = used.checked_add(length).and_then(|value| value.checked_add(edit.insert.len() + 128)).ok_or("Replacement staging limit")?;
                                 if used > 16 * 1024 * 1024 { return Err("Replacement staging limit".into()); }
-                                let window = read_window(&mut opened, &mut tail, &snapshot, edit.range.start.0.saturating_sub(4), length + 8, &budget, &cancellation)?;
+                                let window = read_window(&mut opened, &mut tail, &snapshot, edit.range.start.0.saturating_sub(4), length + 8, &budget, &cancellation, &source_mismatch)?;
                                 let from = edit.range.start.0.checked_sub(window.range().start.0).ok_or("Invalid replacement boundary")?;
                                 let to = edit.range.end.0.checked_sub(window.range().start.0).ok_or("Invalid replacement boundary")?;
                                 let removed = window.text().get(from..to).ok_or("Invalid replacement boundary")?;
@@ -1146,6 +1364,7 @@ impl PagedEditorSurface {
                                 (range.end.0 - range.start.0 + 8).min(WINDOW + 8),
                                 &budget,
                                 &cancellation,
+                                &source_mismatch,
                             )?;
                             let local_start = range.start.0 - window.range().start.0;
                             let local_end = range.end.0 - window.range().start.0;
@@ -1175,7 +1394,7 @@ impl PagedEditorSurface {
                             let lease=opened.transcoded.document.lease_source_history(prepared).map_err(|e|format!("{e:?}"))?;
                             if let Some(journal)=recovery.lock().map_err(|_|"Recovery actor stopped")?.as_mut() {journal.append_source_history(lease.snapshot(),lease.edits(),streaming_quota)?;}
                             let selections=if undo{&lease.metadata().before}else{&lease.metadata().after};
-                            if let Some(selection)=selections.first(){caret=selection.caret.0;start=caret.saturating_sub(WINDOW/2);committed_selection=Some(Selection{anchor:selection.anchor.0,caret});}
+                            if let Some(selection)=selections.first(){caret=selection.caret.0;start=caret.saturating_sub(WINDOW/2);committed_selection=Some(crate::power::SelectionSet{selections:selections.iter().map(|selection|Selection{anchor:selection.anchor.0,caret:selection.caret.0}).collect(),primary:0});}
                             lease.publish();
                             streaming_protected=true;
                         }
@@ -1284,9 +1503,10 @@ impl PagedEditorSurface {
                         WINDOW,
                         &budget,
                         &cancellation,
+                        &source_mismatch,
                     );
                     Ok(Completed {
-                        selection: committed_selection,
+                        selections: committed_selection,
                         append_receipt: tail.as_ref().and_then(|tail| tail.append_receipt()),
                         generation_owner: generation_owner.lock().map_err(|_| "Generation owner failed")?.clone(),
                         peer_epoch, saved_state: shared_saved_state, save_as_required: shared_save_as_required,
@@ -1313,17 +1533,19 @@ impl PagedEditorSurface {
         Ok(())
     }
     pub fn pump(&mut self) -> bool {
+        self.pump_owned_spill();
         self.sync_global_selection();
+        let fold_changed = self.pump_fold_projection();
         let viewport_changed = self.pump_viewport_requests();
         let selection_changed = self.pump_selection_validation();
         let navigation_changed = self.pump_navigation();
         let Some(receiver) = &self.pending else {
             self.ensure_viewport_mapping();
-            return self.refresh_peer() || navigation_changed || selection_changed || viewport_changed;
+            return self.refresh_peer() || navigation_changed || selection_changed || viewport_changed || fold_changed;
         };
         let result = match receiver.try_recv() {
             Ok(result) => result,
-            Err(TryRecvError::Empty) => return selection_changed || navigation_changed || viewport_changed,
+            Err(TryRecvError::Empty) => return selection_changed || navigation_changed || viewport_changed || fold_changed,
             Err(TryRecvError::Disconnected) => Err("Paged worker stopped.".into()),
         };
         self.pending = None;
@@ -1332,8 +1554,10 @@ impl PagedEditorSurface {
             Ok(completed) => {
                 self.viewport_mapping = None;
                 self.fold_viewport_line = None;
-                if completed.snapshot.content_state != self.snapshot.content_state {
-                    self.global_folds.clear(); self.global_fold_overrides.clear(); self.global_fold_state.unfold_all(); self.global_fold_initialized = false;
+                self.transition_fold_anchors(&completed.snapshot);
+                if completed.snapshot.content_state!=self.snapshot.content_state {
+                    if let Some(change)=completed.snapshot.applied_change().filter(|change|change.matches_before(self.snapshot.identity_token(),self.snapshot.content_state)){self.power_state_history.transition(self.snapshot.content_state,completed.snapshot.content_state,&mut self.power_state,change);}else{self.power_state=crate::paged_power::PowerViewState::default();self.power_state_history=Default::default();}
+                    self.power_hidden_refresh=!self.power_state.hidden.is_empty();
                 }
                 if completed.snapshot.content_state != self.snapshot.content_state {
                     if let Some(marks) = self.pending_marks.take() { self.search_marks = marks; } else { self.search_marks.clear(None); }
@@ -1379,13 +1603,14 @@ impl PagedEditorSurface {
                 })();
                 match displayed {
                     Ok(snapshot) => {
+                        self.mapped = None; self.mapping_job = None; self.surface.set_source_segments(&[]);
                         self.viewport_valid = true;
                         self.viewport_start = window.range().start.0;
                         self.surface.snapshot = snapshot;
                         self.surface.layout_revision = None;
                         self.surface.scroll_y = 0.0;
                         if moves_selection {
-                            self.global_selection = completed.selection.unwrap_or(Selection { anchor: completed.caret, caret: completed.caret });
+                            self.global_selections = completed.selections.unwrap_or_else(||Selection { anchor: completed.caret, caret: completed.caret }.into());
                         }
                         self.project_global_selection();
                         if let Some((mapping, fraction, x)) = self.pending_scroll_mapping.take() && mapping.offset == self.viewport_start {
@@ -1422,6 +1647,10 @@ impl Drop for PagedEditorSurface {
         if Arc::strong_count(&self.views) == 1 { self.cancellation.cancel(); }
     }
 }
+fn source_read_error(error: bareline_file_io::lifecycle::FileError, changed: &std::sync::atomic::AtomicBool) -> String {
+    if matches!(error, bareline_file_io::lifecycle::FileError::Changed | bareline_file_io::lifecycle::FileError::Transcode(bareline_file_io::codecs::disk::DiskError::Changed)) { changed.store(true, std::sync::atomic::Ordering::Release); }
+    format!("Paged source unavailable: {error:?}")
+}
 fn read_window(
     opened: &mut PagedOpened,
     tail: &mut Option<bareline_file_io::tail::TailSession>,
@@ -1430,6 +1659,7 @@ fn read_window(
     count: usize,
     budget: &Budget,
     cancellation: &Cancellation,
+    source_mismatch: &std::sync::atomic::AtomicBool,
 ) -> Result<TextWindow, String> {
     let mut request = snapshot
         .begin_viewport(TextOffset(start), count, budget)
@@ -1439,10 +1669,12 @@ fn read_window(
         match request.poll() {
             WindowPoll::Ready(window) => return Ok(window),
             WindowPoll::Pending(ticket) => {
-                let handled = match tail.as_mut() { Some(tail) => tail.read_page(ticket).map_err(|e| format!("{e:?}"))?, None => false };
-                if !handled { opened.transcoded.source.read_page(ticket).map_err(|error| format!("{error:?}"))?; }
+                let owned = snapshot.resolve_owned(ticket).map_err(|error| format!("Owned page unavailable: {error:?}"))?;
+                let handled = owned || match tail.as_mut() { Some(tail) => tail.read_page(ticket).map_err(|error| source_read_error(error, source_mismatch))?, None => false };
+                if !handled { opened.transcoded.source.read_page(ticket).map_err(|error| source_read_error(error, source_mismatch))?; }
             }
             WindowPoll::Unavailable(reason) => {
+                if reason == bareline_document::source::Unavailable::SourceChanged { source_mismatch.store(true, std::sync::atomic::Ordering::Release); }
                 return Err(format!("Source unavailable: {reason:?}"));
             }
             WindowPoll::InvalidUtf8 => {
@@ -1477,6 +1709,26 @@ mod peer_tests {
             assert!(Instant::now() < deadline, "paged worker timed out");
             std::thread::yield_now();
         }
+    }
+    #[test]
+    fn staged_multicaret_input_uses_global_ranges_and_one_history_entry(){
+        use bareline_file_io::{codecs::disk::DiskOptions,lifecycle::{PagedOpenRequest,TranscodeOutcome,open_paged_encoded},source::SourceOptions};
+        let root=std::env::temp_dir().join(format!("bareline-global-power-{}-{}",std::process::id(),crate::power::consumer::next_receipt_sequence()));std::fs::create_dir(&root).unwrap();
+        let path=root.join("source.txt");let original="abc\n".repeat(50000);std::fs::write(&path,&original).unwrap();
+        let budget=Budget::new(64<<20);
+        let TranscodeOutcome::Complete(opened)=open_paged_encoded(PagedOpenRequest{path,bytes:budget.clone(),history:Budget::new(16<<20),cache:root.clone(),options:DiskOptions{temp_quota_bytes:16<<20,interpret:None},source_options:SourceOptions{resident_max_bytes:0,..Default::default()}},Arc::new(Platform),Cancellation::default(),|_|{})else{panic!("open failed")};
+        let mut view=PagedEditorSurface::new(opened,budget.clone(),Arc::new(||{})).unwrap();drain(&mut view);
+        let set=crate::power::SelectionSet{selections:vec![Selection{anchor:1,caret:1},Selection{anchor:180001,caret:180001}],primary:1};
+        view.global_selections=set.clone();view.project_global_selection();assert!(!view.selection_fully_in_viewport());
+        let before=view.snapshot().clone();let options=crate::power::captured::StagingOptions{cache:root.clone(),quota:16<<20,platform:Arc::new(Platform),source_options:Default::default(),budget:budget.clone(),memory:8<<20,cancellation:Cancellation::default()};
+        let mut prepared=crate::paged_power::prepare_input(view.capture_power(),Input::Insert("Z".into()),&options).unwrap();
+        let receipt=view.apply_prepared_source_tracked(&before,prepared.transaction.take().unwrap()).unwrap();drain(&mut view);assert!(receipt.terminal().unwrap().is_ok());
+        view.install_power_state(&before,view.snapshot().revision,prepared.selections,prepared.state,&prepared.hidden_lines).unwrap();drain(&mut view);
+        assert_eq!(view.global_selection_set().selections,vec![Selection{anchor:2,caret:2},Selection{anchor:180003,caret:180003}]);
+        let actual=crate::power::captured::clipboard_text(view.read_handle(),&[TextOffset(0)..TextOffset(view.snapshot().len())],1<<20,budget.clone(),Cancellation::default()).unwrap();let mut expected=original.clone();expected.insert(180001,'Z');expected.insert(1,'Z');assert_eq!(actual,expected);
+        view.enqueue(Input::Undo);drain(&mut view);assert_eq!(view.snapshot().len(),original.len());assert!(!view.can_undo());
+        let restored=view.global_selection_set();assert_eq!(restored.primary(),set.primary());assert!(set.selections.iter().all(|selection|restored.selections.contains(selection)));
+        drop(view);drop(before);drop(prepared.source);drop(options);std::fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn global_scroll_crosses_windows_and_keeps_midline_coordinates_exact() {
@@ -1546,6 +1798,7 @@ mod peer_tests {
         assert!(view.global_fold_state.collapsed.is_empty());
         view.fold_all_known(1);
         assert!(view.global_fold_state.collapsed.contains(&30001));
+        drain(&mut view);
         view.set_global_spacers(&[(30002, 3)]).unwrap();
         view.enqueue(Input::Insert("€".into())); drain(&mut view);
         assert_eq!(view.global_selection(), (TextOffset(5), TextOffset(5)));
@@ -1576,6 +1829,40 @@ mod peer_tests {
         assert_eq!(view.global_selection(), (TextOffset(0), TextOffset(entire)));
         assert!(view.error.as_ref().is_some_and(|error| error.contains("bounded viewport")));
         drop(view); std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn large_fold_projection_maps_seams_and_preserves_anchors_through_undo() {
+        use bareline_file_io::{codecs::disk::DiskOptions, lifecycle::{PagedOpenRequest, TranscodeOutcome, open_paged_encoded}, source::SourceOptions};
+        let root = std::env::temp_dir().join(format!("bareline-paged-fold-map-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let text = format!("intro\nheader\n{}suffix\n", "body with enough bytes for a large fold\n".repeat(12_000));
+        let suffix = text.find("suffix").unwrap(); assert!(suffix > 256 * 1024);
+        let path = root.join("fold.txt"); std::fs::write(&path, &text).unwrap();
+        let budget = Budget::new(16 * 1024 * 1024);
+        let TranscodeOutcome::Complete(opened) = open_paged_encoded(PagedOpenRequest { path, bytes: budget.clone(), history: Budget::new(1024 * 1024), cache: root.clone(), options: DiskOptions { temp_quota_bytes: 1024 * 1024, interpret: None }, source_options: SourceOptions { resident_max_bytes: 0, ..SourceOptions::default() } }, Arc::new(Platform), Cancellation::default(), |_| {}) else { panic!("open failed") };
+        let mut view = PagedEditorSurface::new(opened, budget, Arc::new(|| {})).unwrap(); drain(&mut view);
+        view.set_known_anchored_folds(vec![bareline_syntax::folding::AnchoredFold { fold: bareline_syntax::folding::Fold { header: 1, end: 12001, level: 1 }, header: TextOffset(6), body: TextOffset(13)..TextOffset(suffix) }], 0, false, 0).unwrap();
+        view.fold_all_known(1); drain(&mut view);
+        assert_eq!(view.surface.snapshot().read(TextOffset(0)..TextOffset(view.surface.snapshot().len()), WINDOW).unwrap(), "intro\nheader\nsuffix\n");
+        assert_eq!(view.source_offset(TextOffset(13), SourceAffinity::Before), Some(TextOffset(13)));
+        assert_eq!(view.source_offset(TextOffset(13), SourceAffinity::After), Some(TextOffset(suffix)));
+        assert_eq!(view.local_offset(TextOffset(suffix)), Some(TextOffset(13)));
+        assert!(view.local_offset(TextOffset(100_000)).is_none());
+        assert_eq!(view.surface.source_line_at(TextOffset(13)), Some(12002));
+        view.enqueue(Input::Insert("new\n".into())); drain(&mut view);
+        assert!(view.global_fold_state.collapsed.contains(&2));
+        assert_eq!(view.surface.snapshot().read(TextOffset(0)..TextOffset(view.surface.snapshot().len()), WINDOW).unwrap(), "new\nintro\nheader\nsuffix\n");
+        view.enqueue(Input::Undo); drain(&mut view);
+        assert!(view.global_fold_state.collapsed.contains(&1));
+        assert_eq!(view.local_offset(TextOffset(suffix)), Some(TextOffset(13)));
+        view.restore_global_selection(TextOffset(13), TextOffset(14), true).unwrap(); drain(&mut view);
+        view.enqueue(Input::Insert("X".into())); drain(&mut view);
+        assert!(!view.global_fold_state.collapsed.contains(&1), "overlapping anchor must await reverification");
+        view.enqueue(Input::Undo); drain(&mut view);
+        assert!(view.global_fold_state.collapsed.contains(&1));
+        let mut peer = view.clone_view().unwrap(); drain(&mut peer); peer.unfold_all_known(); drain(&mut peer);
+        assert_eq!(peer.source_segments().len(), 1); assert_eq!(view.source_segments().len(), 2);
+        drop(peer); drop(view); std::fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn horizontal_paged_line_crosses_source_windows_with_a_shaped_anchor() {

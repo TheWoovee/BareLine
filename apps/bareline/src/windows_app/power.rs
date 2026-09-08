@@ -50,7 +50,9 @@ pub(super) struct PowerRuntime {
     status: String,
     rectangle: Option<Rectangle>,
     target: Option<bareline_document::DocumentSnapshot>,
+    global_target:Option<bareline_document::paged::PagedSnapshot>,
     rectangle_drag: Option<(usize,usize)>,
+    paged_rectangle_drag:Option<(usize,usize,bareline_document::paged::PagedSnapshot,usize)>,
     drag: Option<(usize,u32,bareline_document::DocumentSnapshot,bareline_editor_surface::Selection)>,
     group: Option<(bareline_editor_surface::group_view::SurfaceGroup,usize)>,
     metric_job: Option<(bareline_document::DocumentSnapshot,Arguments,usize,usize,Option<Rectangle>)>,
@@ -58,7 +60,7 @@ pub(super) struct PowerRuntime {
 impl Default for PowerRuntime {
     fn default() -> Self {
         let fields = ["text","","0","1","0","10","1"].into_iter().map(|value| { let mut field = TextField::default(); field.insert(value); field }).collect();
-        Self { stream:stream::StreamRuntime::default(),open:false,history_open:false,history:ClipboardHistory::default(),history_limits:(20,16<<20,4<<20),fields,focus:0,selected:0,accessibility_focus:None,layout:PowerLayout::default(),status:String::new(),rectangle:None,target:None,rectangle_drag:None,drag:None,group:None,metric_job:None }
+        Self { paged_rectangle_drag:None,global_target:None,stream:stream::StreamRuntime::default(),open:false,history_open:false,history:ClipboardHistory::default(),history_limits:(20,16<<20,4<<20),fields,focus:0,selected:0,accessibility_focus:None,layout:PowerLayout::default(),status:String::new(),rectangle:None,target:None,rectangle_drag:None,drag:None,group:None,metric_job:None }
     }
 }
 pub(super) fn register(registry: &mut bareline_commands::CommandRegistry) {
@@ -110,6 +112,7 @@ impl PowerRuntime {
 impl Shell {
     pub(super) fn power_dispatch(&mut self, _el:&ActiveEventLoop,id:&str)->bool {
         if self.power_stream_dispatch(id) {if !self.power.status.is_empty(){if let Some(workspace)=self.workspace.as_mut(){workspace.message=Some(self.power.status.clone());}}if let Some(window)=&self.window{window.request_redraw();}return true;}
+        if self.power_paged_dispatch(id){return true;}
         if id=="editor.clipboard.toggleHistory" {
             let enabled=!self.settings.controller.effective().clipboard_history_enabled;
             let scope=self.settings.controller.scope;self.settings.controller.scope=bareline_settings::Scope::User;
@@ -121,6 +124,7 @@ impl Shell {
         let Some(editor)=self.views.active_editor_mut(workspace,self.app.active) else { return false; };
         match id {
             "editor.column.insert" | "editor.paste.fromHistory" => {
+                self.power.global_target=None;
                 self.power.open=true; self.power.history_open=id.ends_with("fromHistory"); self.power.selected=0; self.power.target=Some(editor.snapshot().clone()); self.power.status.clear();
                 if self.power.rectangle.is_none() {
                     let snapshot=editor.snapshot(); let selection=editor.selection; let first=snapshot.line_at(bareline_document::TextOffset(selection.anchor.min(selection.caret))).unwrap_or(0); let last=snapshot.line_at(bareline_document::TextOffset(selection.anchor.max(selection.caret))).unwrap_or(first);
@@ -151,6 +155,7 @@ impl Shell {
         let mut args=Arguments::new();
         if self.power.history_open { let Some(text)=self.power.history.entries().nth(self.power.selected) else{return;};args.insert("text".into(),text.into()); }
         else { let Some(rectangle)=self.power.rectangle else{return;};args=rectangle_arguments(rectangle);for (key,field) in ["mode","text","start","step","width","base","repeat"].iter().zip(&self.power.fields) { args.insert((*key).into(),field.value().into()); } }
+        if self.power.global_target.is_some(){if self.power_paged_literal(id,args){self.power.open=false;}return;}
         let Some(workspace)=self.workspace.as_mut() else{return;};let Some(editor)=self.views.active_editor_mut(workspace,self.app.active) else{return;};
         if !self.power.target.as_ref().is_some_and(|snapshot| snapshot.same_document(editor.snapshot()) && snapshot.revision==editor.snapshot().revision) {self.power.status="Document changed; reopen this dialog.".into();return;}
         if !self.power.history_open {
@@ -196,6 +201,7 @@ impl Shell {
         if self.power_pointer(event) { return true; }
         let WindowEvent::KeyboardInput{event,..}=event else{return false;};if event.state!=ElementState::Pressed||!self.modifiers.alt_key()||!self.modifiers.shift_key(){return false;}
         let (dx,dy)=match &event.logical_key {Key::Named(NamedKey::ArrowLeft)=>(-1,0),Key::Named(NamedKey::ArrowRight)=>(1,0),Key::Named(NamedKey::ArrowUp)=>(0,-1),Key::Named(NamedKey::ArrowDown)=>(0,1),_=>return false};
+        if self.power_paged_literal("editor.rectangle.extend",[("dx".into(),dx.to_string()),("dy".into(),dy.to_string())].into_iter().collect()){return true;}
         let Some(workspace)=self.workspace.as_mut()else{return false;};let Some(editor)=self.views.active_editor_mut(workspace,self.app.active)else{return false;};
         let (line,column)=editor.caret_display_position().unwrap_or((0,0));
         let mut rectangle=self.power.rectangle.unwrap_or(Rectangle{first_line:line,last_line:line,start_column:column,end_column:column});rectangle.last_line=rectangle.last_line.saturating_add_signed(dy).min(editor.snapshot().line_count().saturating_sub(1));rectangle.end_column=rectangle.end_column.saturating_add_signed(dx);if rectangle.last_line<rectangle.first_line{rectangle.first_line=rectangle.last_line;}
@@ -239,6 +245,7 @@ impl Shell {
         let pane=self.views.bounds.iter().position(|bounds|bounds.is_some_and(|b|b.contains(point))).unwrap_or(self.views.pane() as usize);
         let bounds=self.views.bounds[pane].unwrap_or(self.editor_bounds());
         let local=Point{x:point.x-bounds.x,y:point.y-bounds.y};
+        if self.power_paged_pointer(event,pane,local){return true;}
         let Some(workspace)=self.workspace.as_mut()else{return false;};let Some(renderer)=self.renderer.as_ref()else{return false;};
         if workspace.editors.get(self.app.active).is_some_and(|e| e.paged()) || self.views.secondary.as_ref().is_some_and(|e| e.paged()) {
             let power_gesture = self.modifiers.alt_key() || self.modifiers.control_key() || self.power.drag.is_some() || self.power.rectangle_drag.is_some();
@@ -327,6 +334,7 @@ impl Shell {
     /// One atomic clipboard read/write per editor action, including optional rectangle metadata.
     pub(super) fn power_clipboard_action(&mut self,action:Action)->bool {
         if !matches!(action,Action::Copy|Action::Cut|Action::Paste)||self.palette.open{return false;}
+        if action==Action::Paste&&self.power_paged_paste(){return true;}
         if matches!(action,Action::Copy|Action::Cut)&&self.power_global_clipboard(action==Action::Cut){if !self.power.status.is_empty(){if let Some(workspace)=self.workspace.as_mut(){workspace.message=Some(self.power.status.clone());}}return true;}
         let Some(workspace)=self.workspace.as_mut()else{return false;};let Some(platform)=self.platform.as_ref()else{return false;};
         let secondary=self.views.pane()==1;

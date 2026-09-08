@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Resident UTF-8 document core. All published bytes are owned and immutable.
+pub mod change;
 pub mod group;
 pub mod history;
 pub mod line_lookup;
@@ -43,7 +44,7 @@ pub enum Error {
 }
 
 struct BudgetInner {
-    limit: usize,
+    limit: std::sync::Mutex<usize>,
     used: AtomicUsize,
 }
 #[derive(Clone)]
@@ -60,7 +61,7 @@ impl Budget {
     }
     pub fn new(limit: usize) -> Self {
         Self(Arc::new(BudgetInner {
-            limit,
+            limit: std::sync::Mutex::new(limit),
             used: AtomicUsize::new(0),
         }))
     }
@@ -68,13 +69,19 @@ impl Budget {
         self.0.used.load(Ordering::Relaxed)
     }
     pub fn limit(&self) -> usize {
-        self.0.limit
+        *self.0.limit.lock().unwrap_or_else(|error| error.into_inner())
+    }
+    /// Retains every live claim. A lowered cap blocks new reservations until
+    /// owners release enough bytes; all clones observe the same admission cap.
+    pub fn set_limit(&self, limit: usize) {
+        *self.0.limit.lock().unwrap_or_else(|error| error.into_inner()) = limit;
     }
     fn reserve(&self, bytes: usize) -> Result<Reservation, Error> {
+        let limit = self.0.limit.lock().unwrap_or_else(|error| error.into_inner());
         self.0
             .used
             .fetch_update(Ordering::AcqRel, Ordering::Relaxed, |used| {
-                used.checked_add(bytes).filter(|n| *n <= self.0.limit)
+                used.checked_add(bytes).filter(|n| *n <= *limit)
             })
             .map_err(|_| Error::BudgetExceeded)?;
         Ok(Reservation {
@@ -86,6 +93,24 @@ impl Budget {
 struct Reservation {
     budget: Budget,
     bytes: usize,
+}
+#[cfg(test)]
+mod budget_limit_tests {
+    #[test]
+    fn lowering_shared_limit_preserves_live_claims_and_reopens_after_release() {
+        let budget = super::Budget::new(100);
+        let peer = budget.clone();
+        let claim = budget.claim(80).unwrap();
+        peer.set_limit(40);
+        assert_eq!(budget.used(), 80);
+        assert_eq!(budget.limit(), 40);
+        assert!(budget.claim(1).is_err());
+        drop(claim);
+        let retained = peer.claim(40).unwrap();
+        assert!(budget.claim(1).is_err());
+        drop(retained);
+        assert_eq!(budget.used(), 0);
+    }
 }
 impl Drop for Reservation {
     fn drop(&mut self) {
@@ -99,6 +124,7 @@ fn unique() -> u64 {
 
 #[derive(Clone)]
 pub struct DocumentSnapshot {
+    applied_change: Option<Arc<change::AppliedChange>>,
     metadata: DocumentMetadata,
     root: tree::Root,
     pub revision: Revision,
@@ -107,6 +133,9 @@ pub struct DocumentSnapshot {
     complete: bool,
 }
 impl DocumentSnapshot {
+    pub fn applied_change(&self) -> Option<&Arc<change::AppliedChange>> {
+        self.applied_change.as_ref()
+    }
     pub fn metadata(&self) -> &DocumentMetadata {
         &self.metadata
     }
@@ -205,6 +234,7 @@ struct History {
 }
 /// Validated, budget-reserved roots; dropping this token leaves the document unchanged.
 pub struct PreparedEdit {
+    change: Arc<change::AppliedChange>,
     document_id: u64,
     base_revision: Revision,
     revision: Revision,
@@ -263,6 +293,7 @@ impl Document {
         let state = ContentStateId(unique());
         Ok(Self {
             current: DocumentSnapshot {
+                applied_change: None,
                 metadata: snapshot.metadata.clone(),
                 root: snapshot.root.clone(),
                 revision: Revision(0),
@@ -284,6 +315,7 @@ impl Document {
         let state = ContentStateId(unique());
         Ok(Self {
             current: DocumentSnapshot {
+                applied_change: None,
                 metadata: DocumentMetadata::default(),
                 root,
                 revision: Revision(0),
@@ -340,6 +372,17 @@ impl Document {
             metadata: history::EditMetadata::default(),
             typing_insert: false,
         };
+        let change = change::AppliedChange::owned(
+            self.current.document_id,
+            self.current.revision,
+            revision,
+            self.current.content_state,
+            state,
+            change::ChangeDirection::Edit,
+            &entry.edits,
+            &self.bytes,
+        )?;
+        self.current.applied_change = Some(change);
         self.undo.push(entry);
         self.redo.clear();
         self.current.metadata = metadata;
@@ -529,7 +572,18 @@ impl Document {
             root = tree::concat(tree::concat(left, inserted), right);
         }
         let state = ContentStateId(unique());
+        let change = change::AppliedChange::owned(
+            self.current.document_id,
+            self.current.revision,
+            revision,
+            self.current.content_state,
+            state,
+            change::ChangeDirection::Edit,
+            &owned_edits,
+            &self.bytes,
+        )?;
         Ok(PreparedEdit {
+            change,
             document_id: self.current.document_id,
             base_revision: self.current.revision,
             revision,
@@ -565,6 +619,7 @@ impl Document {
         Ok(self.commit_prepared_unchecked(prepared))
     }
     fn commit_prepared_unchecked(&mut self, prepared: PreparedEdit) -> Revision {
+        self.current.applied_change = Some(prepared.change);
         self.redo.clear();
         self.current.root = prepared.entry.after.clone();
         self.current.content_state = prepared.entry.after_state;
@@ -609,7 +664,19 @@ impl Document {
             return Err(Error::EmptyHistory);
         }
         self.redo.try_reserve_exact(1)?;
+        let entry = self.undo.last().ok_or(Error::EmptyHistory)?;
+        let change = change::AppliedChange::owned(
+            self.current.document_id,
+            self.current.revision,
+            revision,
+            self.current.content_state,
+            entry.before_state,
+            change::ChangeDirection::Undo,
+            &entry.edits,
+            &self.bytes,
+        )?;
         let mut entry = self.undo.pop().ok_or(Error::EmptyHistory)?;
+        self.current.applied_change = Some(change);
         entry.typing_insert = false;
         if let Some(previous) = self.undo.last_mut() {
             previous.typing_insert = false;
@@ -630,7 +697,19 @@ impl Document {
             return Err(Error::EmptyHistory);
         }
         self.undo.try_reserve_exact(1)?;
+        let entry = self.redo.last().ok_or(Error::EmptyHistory)?;
+        let change = change::AppliedChange::owned(
+            self.current.document_id,
+            self.current.revision,
+            revision,
+            self.current.content_state,
+            entry.after_state,
+            change::ChangeDirection::Redo,
+            &entry.edits,
+            &self.bytes,
+        )?;
         let mut entry = self.redo.pop().ok_or(Error::EmptyHistory)?;
+        self.current.applied_change = Some(change);
         entry.typing_insert = false;
         self.current.metadata = entry.after_metadata.clone();
         self.current.root = entry.after.clone();

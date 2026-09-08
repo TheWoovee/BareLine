@@ -70,6 +70,7 @@ impl SpillPlan {
             return Err(Error::IncompleteSource);
         }
         let snapshot = PagedSnapshot {
+            applied_change: document.current.applied_change().cloned(),
             metadata: document.current.metadata.clone(),
             root: document.current.root.clone(),
             revision: document.current.revision,

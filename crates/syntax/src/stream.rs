@@ -171,21 +171,51 @@ impl ViewportProjection {
             first_line: None,
         })
     }
+    /// The caller retains the one authoritative visible-piece map; this builder
+    /// only validates/copies each supplied segment and stores no second map.
+    pub fn for_projection(
+        source: bareline_document::DocumentSnapshot,
+        language: Language,
+    ) -> Result<Self, Error> {
+        Self::new(source, TextOffset(0), language)
+    }
     pub fn accept(&mut self, window: &StreamResult) -> Result<(), Error> {
-        let start = self.origin.max(window.origin.0);
-        let end =
-            (self.origin + self.source.len()).min(window.origin.0 + window.syntax.range.end.0);
+        self.accept_segment(
+            window,
+            TextOffset(self.origin)..TextOffset(self.origin + self.source.len()),
+            TextOffset(0)..TextOffset(self.source.len()),
+        )
+    }
+    pub fn accept_segment(
+        &mut self,
+        window: &StreamResult,
+        source: std::ops::Range<TextOffset>,
+        local: std::ops::Range<TextOffset>,
+    ) -> Result<(), Error> {
+        if source.start > source.end
+            || local.start > local.end
+            || source.end.0 - source.start.0 != local.end.0 - local.start.0
+            || local.end.0 > self.source.len()
+        {
+            return Err(Error::InvalidRange);
+        }
+        let start = source.start.0.max(window.origin.0);
+        let end = source
+            .end
+            .0
+            .min(window.origin.0 + window.syntax.range.end.0);
         if start >= end {
             return Ok(());
         }
-        if start != self.origin + self.covered {
+        let projected = local.start.0 + start - source.start.0;
+        if projected != self.covered {
             return Err(Error::StaleCheckpoint);
         }
-        let local = start - window.origin.0;
+        let in_window = start - window.origin.0;
         let expected = self
             .source
             .read(
-                TextOffset(self.covered)..TextOffset(end - self.origin),
+                TextOffset(projected)..TextOffset(projected + end - start),
                 MAX_REQUEST_BYTES,
             )
             .map_err(|_| Error::InvalidRange)?;
@@ -193,7 +223,7 @@ impl ViewportProjection {
             .syntax
             .source
             .read(
-                TextOffset(local)..TextOffset(end - window.origin.0),
+                TextOffset(in_window)..TextOffset(end - window.origin.0),
                 MAX_REQUEST_BYTES,
             )
             .map_err(|_| Error::InvalidRange)?;
@@ -206,7 +236,7 @@ impl ViewportProjection {
                     + window
                         .syntax
                         .source
-                        .line_at(TextOffset(local))
+                        .line_at(TextOffset(in_window))
                         .map_err(|_| Error::InvalidRange)?,
             );
         }
@@ -218,12 +248,13 @@ impl ViewportProjection {
                     return Err(Error::BudgetExceeded);
                 }
                 self.spans.push(crate::StyleSpan {
-                    range: TextOffset(a - self.origin)..TextOffset(b - self.origin),
+                    range: TextOffset(local.start.0 + a - source.start.0)
+                        ..TextOffset(local.start.0 + b - source.start.0),
                     kind: span.kind,
                 });
             }
         }
-        self.covered = end - self.origin;
+        self.covered = projected + end - start;
         Ok(())
     }
     pub fn finish(self) -> Result<(SyntaxResult, usize), Error> {
@@ -283,6 +314,16 @@ mod tests {
         let mut folds = crate::folding::FoldAccumulator::default();
         folds.advance_stream(&one, 32).unwrap();
         folds.advance_stream(&two, 32).unwrap();
+        let anchor = folds
+            .anchored()
+            .iter()
+            .find(|anchor| anchor.fold.header == 0)
+            .unwrap();
+        assert_eq!(anchor.header, TextOffset(0));
+        assert_eq!(
+            anchor.body,
+            TextOffset(first.len())..TextOffset(first.len() + second.len())
+        );
         assert!(
             folds
                 .known()
@@ -368,5 +409,40 @@ mod tests {
                 .advance("\ny", TextOffset(2), true, &Cancellation::default())
                 .is_err()
         );
+    }
+    #[test]
+    fn projection_styles_two_visible_pieces_without_lexing_the_join() {
+        let text = "/* hidden */let x = 1;";
+        let mut lexer = StreamLexer::new(Language::Rust, LexerPreference::Native, None);
+        let window = lexer
+            .advance(text, TextOffset(0), true, &Cancellation::default())
+            .unwrap();
+        let mut projection =
+            ViewportProjection::for_projection(source("/*let"), Language::Rust).unwrap();
+        projection
+            .accept_segment(
+                &window,
+                TextOffset(0)..TextOffset(2),
+                TextOffset(0)..TextOffset(2),
+            )
+            .unwrap();
+        projection
+            .accept_segment(
+                &window,
+                TextOffset(12)..TextOffset(15),
+                TextOffset(2)..TextOffset(5),
+            )
+            .unwrap();
+        let (result, _) = projection.finish().unwrap();
+        assert!(
+            result
+                .spans
+                .iter()
+                .any(|span| span.kind == crate::StyleKind::Comment
+                    && span.range.end <= TextOffset(2))
+        );
+        assert!(result.spans.iter().any(
+            |span| span.kind == crate::StyleKind::Keyword && span.range.start >= TextOffset(2)
+        ));
     }
 }

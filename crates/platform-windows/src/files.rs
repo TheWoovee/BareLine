@@ -18,6 +18,7 @@ fn io_error(error: windows::core::Error) -> io::Error {
     io::Error::from_raw_os_error(error.code().0 & 0xffff)
 }
 impl LocalFileSystem for WindowsFileSystem {
+    fn scoped_remote_read(&self,access:bareline_platform::RemoteReadAccess)->io::Result<std::sync::Arc<dyn LocalFileSystem>>{Ok(std::sync::Arc::new(crate::remote_read::RemoteFileSystem::new(access)))}
     fn open_follow_read(&self,path:&Path)->io::Result<(File,std::sync::Arc<dyn Send+Sync>)> {
         crate::path_trust::WindowsPathTrustProvider.open_follow_read(path)
     }
@@ -111,6 +112,12 @@ impl WindowsFileSystem {
                 "device and alternate-stream paths are not supported",
             ));
         }
+        // Classify the drive root before querying any descendant or volume path.
+        // A mapped network drive needs an explicit action-scoped provider instead.
+        let drive=match path.components().next(){Some(Component::Prefix(prefix))=>match prefix.kind(){Prefix::Disk(drive)|Prefix::VerbatimDisk(drive)=>drive,_=>return Err(io::Error::new(io::ErrorKind::PermissionDenied,"unsupported drive"))},_=>return Err(io::Error::new(io::ErrorKind::PermissionDenied,"unsupported drive"))};
+        let drive_root=[drive as u16,b':' as u16,b'\\' as u16,0];
+        // SAFETY: the terminated drive-root buffer is live through classification.
+        if unsafe{GetDriveTypeW(PCWSTR(drive_root.as_ptr()))}!=3{return Err(io::Error::new(io::ErrorKind::PermissionDenied,"network/removable drive requires supported explicit policy"));}
         let value = wide(path);
         let mut root = vec![0u16; 32768];
         // SAFETY: owned terminated UTF-16 input and writable output buffers outlive calls.

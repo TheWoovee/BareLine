@@ -10,7 +10,7 @@ pub(super) struct LanguageRuntime {
     detection_seen: Option<((u64, u64), std::path::PathBuf)>,
     detection_associations: std::collections::BTreeMap<String, String>,
     last_hint: Option<((u64, u64), usize)>,
-    completion_source: Option<((u64, u64), usize)>,
+    completion_source: Option<((u64, u64), (u64, u64))>,
     restored: Option<bareline_document::DocumentSnapshot>,
     restored_language: Option<bareline_syntax::Language>,
     restored_definition: Option<std::sync::Arc<bareline_syntax::udl::Definition>>,
@@ -138,19 +138,19 @@ impl Shell {
                         .syntax_result()
                         .filter(|syntax| syntax.is_current(editor.snapshot()))
                         .cloned();
-                    if editor.paged() && syntax.is_none() {
+                    if editor.paged()
+                        && (syntax.is_none()
+                            || matches!(editor,
+                        bareline_app::workspace::WorkspaceEditor::Paged(paged)
+                        if !paged.caret_in_viewport() || paged.source_offset(bareline_document::TextOffset(paged.surface.selection.caret), bareline_editor_surface::paged_view::SourceAffinity::After) != Some(paged.global_selection().1)))
+                    {
                         self.language.controller.open = true;
                         self.language.controller.status =
                             "Syntax for this source window is still being prepared".into();
                     } else {
                         self.language.completion_source = Some((
                             bareline_app::accessibility::source_identity(editor),
-                            match editor {
-                                bareline_app::workspace::WorkspaceEditor::Paged(paged) => {
-                                    paged.viewport_start().0
-                                }
-                                _ => 0,
-                            },
+                            editor.snapshot().identity_token(),
                         ));
                         let documents = workspace
                             .editors
@@ -159,20 +159,22 @@ impl Shell {
                             .take(8)
                             .map(|other| other.snapshot().clone())
                             .collect();
+                        let mut completion_policy = self.settings.effective().language_policy(
+                            editor
+                                .udl
+                                .as_ref()
+                                .map_or(editor.language.metadata().id, |definition| {
+                                    definition.id.as_str()
+                                }),
+                        );
+                        completion_policy.parameter_hints &= contiguous_hint_context(editor);
                         self.language.controller.request_completion_configured(
                             editor.snapshot().clone(),
                             editor.selection.caret,
                             editor.language,
                             self.notify.clone(),
                             LanguageConfiguration {
-                                policy: self.settings.effective().language_policy(
-                                    editor
-                                        .udl
-                                        .as_ref()
-                                        .map_or(editor.language.metadata().id, |definition| {
-                                            definition.id.as_str()
-                                        }),
-                                ),
+                                policy: completion_policy,
                                 definition: editor.udl.clone(),
                             },
                             documents,
@@ -185,8 +187,11 @@ impl Shell {
                 if let Some(workspace) = self.workspace.as_mut() {
                     self.views.prepare_fold_target(workspace);
                 }
-                if id == "view.fold.unfoldAll" || id == "view.fold.toggleCurrent" { self.views.cancel_fold_target(); }
-                else { self.views.record_fold_target(); }
+                if id == "view.fold.unfoldAll" || id == "view.fold.toggleCurrent" {
+                    self.views.cancel_fold_target();
+                } else {
+                    self.views.record_fold_target();
+                }
                 if let Some(editor) = self
                     .workspace
                     .as_mut()
@@ -447,6 +452,7 @@ impl Shell {
                 });
             let policy = self.settings.effective().language_policy(id);
             if policy.parameter_hints
+                && contiguous_hint_context(editor)
                 && self.language.controller.has_signatures(id)
                 && self.language.last_hint != Some((identity, caret))
                 && let Some(syntax) = workspace
@@ -469,15 +475,8 @@ impl Shell {
                     .is_ok_and(|text| text.ends_with(['(', ',']))
                 {
                     self.language.last_hint = Some((identity, caret));
-                    self.language.completion_source = Some((
-                        identity,
-                        match editor {
-                            bareline_app::workspace::WorkspaceEditor::Paged(paged) => {
-                                paged.viewport_start().0
-                            }
-                            _ => 0,
-                        },
-                    ));
+                    self.language.completion_source =
+                        Some((identity, editor.snapshot().identity_token()));
                     self.language.controller.request_parameter_hint(
                         editor.snapshot().clone(),
                         bareline_document::TextOffset(caret),
@@ -500,12 +499,7 @@ impl Shell {
         {
             let current = (
                 bareline_app::accessibility::source_identity(editor),
-                match editor {
-                    bareline_app::workspace::WorkspaceEditor::Paged(paged) => {
-                        paged.viewport_start().0
-                    }
-                    _ => 0,
-                },
+                editor.snapshot().identity_token(),
             );
             if self.language.completion_source != Some(current) {
                 self.language.controller.close();
@@ -573,7 +567,13 @@ impl Shell {
         if let Some((snapshot, folds, partial)) = self.language.controller.folds.take()
             && let Some(workspace) = self.workspace.as_mut()
         {
-            self.views.apply_fold_result(workspace, &snapshot, folds, self.language.controller.fold_level, partial);
+            self.views.apply_fold_result(
+                workspace,
+                &snapshot,
+                folds,
+                self.language.controller.fold_level,
+                partial,
+            );
         }
         if let Some(window) = &self.window {
             window.request_redraw();
@@ -640,14 +640,12 @@ impl Shell {
                 editor.language = language;
             }
             LanguageEffect::Accept(index) => {
-                let origin = match editor {
-                    bareline_app::workspace::WorkspaceEditor::Paged(paged) => {
-                        paged.viewport_start().0
-                    }
-                    _ => 0,
-                };
+                let projection = editor.snapshot().identity_token();
                 if self.language.completion_source
-                    != Some((bareline_app::accessibility::source_identity(editor), origin))
+                    != Some((
+                        bareline_app::accessibility::source_identity(editor),
+                        projection,
+                    ))
                 {
                     self.language.controller.close();
                     self.language.controller.status = "Completion source changed".into();
@@ -673,10 +671,37 @@ impl Shell {
                     {
                         return;
                     }
-                    let text = item.text.clone();
-                    paged.surface.selection.anchor = result.replacement.start.0;
-                    paged.enqueue(Input::Insert(text));
-                    self.language.controller.close();
+                    use bareline_editor_surface::paged_view::SourceAffinity;
+                    let Some(start) =
+                        paged.source_offset(result.replacement.start, SourceAffinity::After)
+                    else {
+                        return;
+                    };
+                    let Some(end) =
+                        paged.source_offset(result.replacement.end, SourceAffinity::Before)
+                    else {
+                        return;
+                    };
+                    let (anchor, caret) = paged.global_selection();
+                    if anchor != caret
+                        || caret != end
+                        || end.0.checked_sub(start.0)
+                            != Some(result.replacement.end.0 - result.replacement.start.0)
+                    {
+                        return;
+                    }
+                    let source = paged.snapshot().clone();
+                    let transaction = bareline_document::EditTransaction {
+                        base_revision: source.revision,
+                        edits: vec![bareline_document::Edit {
+                            range: start..end,
+                            insert: item.text.clone(),
+                        }],
+                    };
+                    match paged.apply_prepared(&source, transaction) {
+                        Ok(()) => self.language.controller.close(),
+                        Err(error) => self.language.controller.status = error,
+                    }
                 } else {
                     let result = self
                         .language
@@ -888,4 +913,34 @@ pub(super) fn accessibility_test_cases() -> Vec<(
     );
     cases.push(capture("udl.focus", &mut runtime));
     cases
+}
+
+// Parameter hints inspect one logical line. Require that entire line prefix to
+// belong to one verified source piece, rather than a synthetic projection join.
+fn contiguous_hint_context(editor: &bareline_app::workspace::WorkspaceEditor) -> bool {
+    let bareline_app::workspace::WorkspaceEditor::Paged(paged) = editor else {
+        return true;
+    };
+    let caret = bareline_document::TextOffset(paged.surface.selection.caret);
+    if !paged.caret_in_viewport()
+        || paged.source_offset(
+            caret,
+            bareline_editor_surface::paged_view::SourceAffinity::After,
+        ) != Some(paged.global_selection().1)
+    {
+        return false;
+    }
+    let snapshot = paged.surface.snapshot();
+    let Ok(line) = snapshot
+        .line_at(caret)
+        .and_then(|line| snapshot.line_range(line))
+    else {
+        return false;
+    };
+    paged.source_segments().iter().any(|segment| {
+        segment.local.start <= line.start
+            && caret <= segment.local.end
+            && (line.start > segment.local.start
+                || segment.source_line_start == Some(segment.source.start))
+    })
 }

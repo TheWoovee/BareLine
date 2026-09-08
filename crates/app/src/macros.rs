@@ -5,6 +5,35 @@ use bareline_commands::{Action, CommandContext, CommandId, CommandRegistry, Comm
 mod manager;
 pub use bareline_macros as model;
 pub use manager::{MacroManager, ManagerEffect};
+
+fn validate_recorded_power(event: &MacroEvent) -> Result<(), String> {
+    if let MacroEvent::Command { id, arguments } = event
+        && id.starts_with("editor.")
+    {
+        if !bareline_editor_surface::paged_power::supports_command(id) {
+            return Err(format!(
+                "Command {id} has no deterministic power replay adapter"
+            ));
+        }
+        validate_power_arguments(id, arguments)?;
+    }
+    Ok(())
+}
+fn validate_power_arguments(id: &str, arguments: &BTreeMap<String, String>) -> Result<(), String> {
+    bareline_editor_surface::paged_power::validate_arguments(id, arguments)?;
+    let required: &[&str] = match id {
+        "editor.comment.toggleLine" => &["line_prefix"],
+        "editor.comment.toggleBlock" => &["block_start", "block_end"],
+        _ => &[],
+    };
+    if required
+        .iter()
+        .any(|key| arguments.get(*key).is_none_or(String::is_empty))
+    {
+        return Err("Macro comment command requires captured comment tokens".into());
+    }
+    Ok(())
+}
 /// Stable bounded slots retain shortcut identities across display-name changes.
 pub const SAVED_COMMANDS: [&str; 32] = [
     "macro.saved.01",
@@ -393,6 +422,7 @@ impl MacrosController {
                     }
                 }
             };
+            validate_recorded_power(&event)?;
             self.recorder.executed(event, true, registry)?;
         }
         Ok(())
@@ -445,6 +475,9 @@ impl MacrosController {
             return Err("Macro slot is already occupied".into());
         }
         let definition = Macro::import_toml(text, registry)?;
+        for event in &definition.events {
+            validate_recorded_power(event)?;
+        }
         self.check_library_budget(&definition)?;
         if self.library.contains_key(&definition.name) {
             return Err("A macro with this name already exists".into());
@@ -534,6 +567,9 @@ impl MacrosController {
         recordable: bool,
         registry: &CommandRegistry,
     ) -> Result<bool, String> {
+        if recordable && self.recorder.recording() {
+            validate_recorded_power(&event)?;
+        }
         self.recorder.executed(event, recordable, registry)
     }
     pub fn stop_recording(&mut self, name: &str, registry: &CommandRegistry) -> Result<(), String> {
@@ -649,6 +685,9 @@ impl MacrosController {
         else {
             return;
         };
+        if pending.terminal.is_some() {
+            return;
+        }
         if let Some(target) = completion.target {
             self.replay_document = Some(target);
         }
@@ -958,10 +997,7 @@ impl MacroExecutor for WorkspaceExecutor<'_> {
                     eof: editor.selection.caret >= editor.snapshot().len(),
                 },
                 crate::workspace::WorkspaceEditor::Paged(editor) => {
-                    let position = editor
-                        .viewport_start()
-                        .0
-                        .saturating_add(editor.surface.selection.caret);
+                    let position = editor.global_selection_set().primary().caret;
                     Progress {
                         document: 0,
                         position: position as u64,
@@ -1039,7 +1075,12 @@ impl MacroExecutor for WorkspaceExecutor<'_> {
                     );
                 }
                 crate::workspace::WorkspaceEditor::Paged(editor) => {
-                    let at = editor.viewport_start().0.saturating_add(at);
+                    let (anchor, caret) = editor.global_selection();
+                    let at = if backwards {
+                        anchor.0.min(caret.0)
+                    } else {
+                        anchor.0.max(caret.0)
+                    };
                     let range = self
                         .workspace
                         .find
@@ -1152,7 +1193,8 @@ impl MacroExecutor for WorkspaceExecutor<'_> {
         }
         if command.0.starts_with("editor.") {
             editor.error = None;
-            if bareline_editor_surface::power::transform_for_command(command.0).is_some() {
+            if bareline_editor_surface::paged_power::supports_command(command.0) {
+                validate_power_arguments(command.0, args)?;
                 let id = self
                     .next_power_id
                     .checked_add(1)
@@ -1168,12 +1210,7 @@ impl MacroExecutor for WorkspaceExecutor<'_> {
                                 view.selection_set()
                             }
                             crate::workspace::WorkspaceEditor::Paged(view) => {
-                                let (anchor, caret) = view.global_selection();
-                                bareline_editor_surface::Selection {
-                                    anchor: anchor.0,
-                                    caret: caret.0,
-                                }
-                                .into()
+                                view.global_selection_set()
                             }
                         },
                         target: PowerReplayTarget::capture(editor),
@@ -1185,13 +1222,10 @@ impl MacroExecutor for WorkspaceExecutor<'_> {
                 (self.notify)();
                 return Ok(());
             }
-            if matches!(editor, crate::workspace::WorkspaceEditor::Paged(_)) {
-                return Err(format!(
-                    "Recorded command {} has no paged replay adapter",
-                    command.0
-                ));
-            }
-            return editor.execute_power_recorded(command.0, args);
+            return Err(format!(
+                "Command {} has no deterministic power replay adapter",
+                command.0
+            ));
         }
         let input = match command.0 {
             "edit.paste" | "edit.insert_text" => Input::Insert(
@@ -1238,6 +1272,137 @@ mod tests {
         let mut registry = bareline_commands::shell_commands();
         register_commands(&mut registry);
         registry
+    }
+    #[test]
+    fn replay_comment_policy_requires_captured_tokens() {
+        assert!(validate_power_arguments("editor.comment.toggleLine", &BTreeMap::new()).is_err());
+        assert!(
+            validate_power_arguments(
+                "editor.comment.toggleBlock",
+                &BTreeMap::from([("block_start".into(), "/*".into())])
+            )
+            .is_err()
+        );
+        assert!(
+            validate_power_arguments(
+                "editor.comment.toggleBlock",
+                &BTreeMap::from([
+                    ("block_start".into(), "/*".into()),
+                    ("block_end".into(), "*/".into())
+                ])
+            )
+            .is_ok()
+        );
+    }
+    #[test]
+    fn staged_replay_waits_for_matching_terminal_and_retries_failed_event() {
+        struct NoIo;
+        impl bareline_platform::LocalFileSystem for NoIo {
+            fn identity(
+                &self,
+                _: &std::fs::File,
+            ) -> std::io::Result<bareline_platform::FileIdentity> {
+                Err(std::io::Error::other("fixture must not inspect files"))
+            }
+            fn validate_target(&self, _: &std::path::Path) -> std::io::Result<()> {
+                Err(std::io::Error::other("fixture must not access files"))
+            }
+            fn commit(
+                &self,
+                _: &std::path::Path,
+                _: &std::path::Path,
+                _: bool,
+            ) -> std::io::Result<()> {
+                Err(std::io::Error::other("fixture must not write files"))
+            }
+        }
+        let notify: Arc<dyn Fn() + Send + Sync> = Arc::new(|| {});
+        let mut workspace = Workspace::new(notify.clone(), Arc::new(NoIo)).unwrap();
+        workspace.new_document().unwrap();
+        let mut registry = registry();
+        bareline_editor_surface::power::register_commands(&mut registry);
+        let mut controller = MacrosController::default();
+        controller.library.insert(
+            "staged".into(),
+            Macro {
+                name: "staged".into(),
+                events: vec![
+                    MacroEvent::Command {
+                        id: "editor.paste.plainText".into(),
+                        arguments: BTreeMap::from([("text".into(), "captured clipboard".into())]),
+                    },
+                    MacroEvent::Command {
+                        id: "edit.insert_text".into(),
+                        arguments: BTreeMap::from([("text".into(), "must wait".into())]),
+                    },
+                ],
+            },
+        );
+        controller.selected = Some("staged".into());
+        controller.play(Repeat::Once, &registry).unwrap();
+        let tick = |controller: &mut MacrosController, workspace: &mut Workspace| {
+            controller
+                .tick(
+                    Instant::now(),
+                    &registry,
+                    workspace,
+                    0,
+                    CommandContext::default(),
+                    notify.clone(),
+                )
+                .unwrap()
+        };
+        assert!(matches!(
+            tick(&mut controller, &mut workspace),
+            PlaybackState::Waiting(_)
+        ));
+        let request = controller.take_power_replay().unwrap();
+        assert_eq!(request.command, "editor.paste.plainText");
+        assert_eq!(
+            request.arguments.get("text").map(String::as_str),
+            Some("captured clipboard")
+        );
+        assert_eq!(request.selections, workspace.editors[0].selection_set());
+        controller.complete_power_replay(
+            request.id + 1,
+            PowerReplayCompletion {
+                target: None,
+                result: Ok(()),
+            },
+        );
+        assert!(matches!(
+            tick(&mut controller, &mut workspace),
+            PlaybackState::Waiting(_)
+        ));
+        assert_eq!(workspace.editors[0].snapshot().len(), 0);
+        controller.complete_power_replay(
+            request.id,
+            PowerReplayCompletion {
+                target: None,
+                result: Err("staging quota refused".into()),
+            },
+        );
+        controller.complete_power_replay(
+            request.id,
+            PowerReplayCompletion {
+                target: None,
+                result: Ok(()),
+            },
+        );
+        assert!(
+            matches!(tick(&mut controller, &mut workspace), PlaybackState::Failed { location, reason }
+            if location.event == 0 && reason == "staging quota refused")
+        );
+        assert_eq!(workspace.editors[0].snapshot().len(), 0);
+        assert!(controller.playback.as_mut().unwrap().resume());
+        assert!(matches!(
+            tick(&mut controller, &mut workspace),
+            PlaybackState::Waiting(_)
+        ));
+        let retry = controller.take_power_replay().unwrap();
+        assert_ne!(retry.id, request.id);
+        assert_eq!(retry.command, request.command);
+        assert_eq!(retry.arguments, request.arguments);
     }
     #[test]
     fn mixed_receipts_keep_completion_order_through_save_and_replay() {

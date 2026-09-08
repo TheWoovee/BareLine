@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::{path::PathBuf, sync::mpsc::TryRecvError};
 
 mod encoding;
+mod remote;
 pub use bareline_file_io::codecs::failure::EncodingFailure;
 pub enum WorkspaceEditor {
     Resident(EditorSurface),
@@ -90,6 +91,9 @@ pub struct Workspace {
     bytes: Budget,
     history: Budget,
     pub resident_max_bytes: u64,
+    page_size_bytes: usize,
+    page_cache_bytes: usize,
+    undo_max_changes: usize,
     pub transcode_quota_bytes: u64,
     pub recovery_root: Option<PathBuf>,
     notify: Arc<dyn Fn() + Send + Sync>,
@@ -114,6 +118,7 @@ pub struct Workspace {
     retired: Vec<WorkspaceEditor>,
     closed: Vec<(WorkspaceEditor, Option<FileState>, String)>,
     paused_transcode: Option<Box<bareline_file_io::lifecycle::PausedTranscode>>,
+    paused_reload: Option<DocumentSnapshot>,
     eol_status: std::cell::RefCell<encoding::EolTracker>,
     encoding_failures: Vec<EncodingFailure>,
     eol_job: Option<encoding::EolJob>,
@@ -158,6 +163,28 @@ pub enum CloseError {
     Missing,
 }
 impl Workspace {
+    fn new_paged_editor(&self, opened: Box<bareline_file_io::lifecycle::PagedOpened>) -> Result<PagedEditorSurface, String> {
+        let mut editor = PagedEditorSurface::new(opened, self.bytes.clone(), self.notify.clone())?;
+        editor.configure_owned_spill(std::env::temp_dir().join("Bareline-owned-spill"), self.file_system.clone(), self.source_options());
+        Ok(editor)
+    }
+    pub fn source_options(&self) -> bareline_file_io::source::SourceOptions {
+        bareline_file_io::source::SourceOptions { resident_max_bytes: self.resident_max_bytes, page_size_bytes: self.page_size_bytes, page_cache_bytes: self.page_cache_bytes }
+    }
+    pub fn apply_resource_settings(&mut self, settings: &bareline_settings::EffectiveSettings) {
+        self.undo_max_changes = settings.undo_max_changes;
+        self.resident_max_bytes = settings.resident_max_bytes;
+        self.bytes.set_limit(settings.aggregate_cache_bytes);
+        self.history.set_limit(settings.undo_aggregate_ram_bytes);
+        self.page_cache_bytes = settings.page_cache_bytes.min(settings.aggregate_cache_bytes);
+        self.page_size_bytes = settings.page_size_bytes.min(self.page_cache_bytes);
+        let options = self.source_options();
+        for editor in &mut self.editors {
+            if let WorkspaceEditor::Paged(paged) = editor {
+                paged.configure_owned_spill(std::env::temp_dir().join("Bareline-owned-spill"), self.file_system.clone(), options);
+            }
+        }
+    }
     pub fn apply_reviewed_open(&mut self, mut prepared: Vec<(bareline_document::DocumentSnapshot, bareline_document::EditTransaction)>) -> Result<bareline_editor_surface::group_view::SurfaceGroup, String> {
         let mut views = Vec::new();
         let mut ordered = Vec::new();
@@ -193,6 +220,9 @@ impl Workspace {
             bytes: Budget::new(256 << 20),
             history: Budget::new(128 << 20),
             resident_max_bytes: 256 << 20,
+            page_size_bytes: 1 << 20,
+            page_cache_bytes: 64 << 20,
+            undo_max_changes: 100_000,
             transcode_quota_bytes: 20u64 << 30,
             recovery_root: None,
             notify,
@@ -217,6 +247,7 @@ impl Workspace {
             retired: Vec::new(),
             closed: Vec::new(),
             paused_transcode: None,
+            paused_reload: None,
             eol_status: Default::default(),
             encoding_failures: Vec::new(),
             eol_job: None,
@@ -265,13 +296,20 @@ impl Workspace {
         changed |= self.search_panel.pump();
         changed |= self.styling.pump();
         for (index, editor) in self.editors.iter_mut().enumerate() {
+            let policy_ready = match editor {
+                WorkspaceEditor::Resident(surface) => surface.document_service().is_none_or(|service| service.configure_history_limit(self.undo_max_changes)),
+                WorkspaceEditor::Paged(surface) => surface.configure_history_limit(self.undo_max_changes),
+            };
+            if !policy_ready { (self.notify)(); }
             if let Some(root) = &self.recovery_root {
                 match editor {
                     WorkspaceEditor::Resident(surface) => surface.enable_recovery(root.clone(), self.file_system.clone(), self.files[index].as_ref().and_then(|file|file.encoding.clone()), self.files[index].as_ref().map(|file|file.path.clone()), self.bytes.clone()),
                     WorkspaceEditor::Paged(surface) => surface.enable_recovery(root.clone(), self.file_system.clone()),
                 }
             }
-            if let WorkspaceEditor::Paged(paged)=editor {paged.set_streaming_quota(self.transcode_quota_bytes);}
+            if let WorkspaceEditor::Paged(paged)=editor {
+                paged.set_streaming_quota(self.transcode_quota_bytes);
+            }
             changed |= editor.pump();
             if let WorkspaceEditor::Paged(paged) = editor { if let Some(error) = &paged.error { self.message = Some(error.clone()); } }
         }
@@ -491,17 +529,38 @@ impl Workspace {
                         let index = self.editors.iter().position(|editor| matches!(editor, WorkspaceEditor::Paged(editor) if editor.snapshot().same_document(&captured) && editor.snapshot().revision == captured.revision));
                         if let Some(index) = index {
                             let file = FileState { binary_accepted:false, _lease:admission.take(), path:opened.path.clone(), fingerprint:opened.fingerprint.clone(), bom:opened.transcoded.store.state.bom, encoding:None };
-                            match PagedEditorSurface::new(opened,self.bytes.clone(),self.notify.clone()) {
+                            match self.new_paged_editor(opened) {
                                 Ok(mut editor) => { if let Some(root)=&self.recovery_root {editor.enable_recovery(root.clone(),self.file_system.clone());} self.editors[index]=WorkspaceEditor::Paged(editor); self.files[index]=Some(file); self.find.clear_source(); self.message=Some("Original bytes reinterpreted.".into()); }
                                 Err(error)=>self.message=Some(error),
                             }
                         } else {self.message=Some("Document changed while interpreting; current edits retained.".into());}
                         continue;
                     }
+                    if let Some(captured) = &pending.reload {
+                        let current = self.editors.iter().position(|editor| editor.snapshot().same_document(captured));
+                        if let Some(index) = current && self.editors[index].snapshot().revision == captured.revision && !self.editors[index].busy() {
+                            let read_only = self.editors[index].user_read_only;
+                            let file = FileState { binary_accepted:false, _lease:admission.take(), path:opened.path.clone(), fingerprint:opened.fingerprint.clone(), bom:opened.transcoded.store.state.bom, encoding:None };
+                            match self.new_paged_editor(opened) {
+                                Ok(mut editor) => {
+                                    self.editors[index].copy_presentation_to(&mut editor.surface);
+                                    editor.surface.user_read_only = read_only;
+                                    if let Some(root) = &self.recovery_root { editor.enable_recovery(root.clone(), self.file_system.clone()); }
+                                    self.editors[index] = WorkspaceEditor::Paged(editor);
+                                    self.files[index] = Some(file);
+                                    self.refresh_encoding_open(index);
+                                    self.find.clear_source();
+                                    self.message = Some("Reloaded from disk.".into());
+                                }
+                                Err(error) => self.message = Some(error),
+                            }
+                        } else { self.message = Some("Document changed while reloading; current edits were preserved.".into()); }
+                        continue;
+                    }
                     if opened.recovery_origin.is_none() {self.note_recent(opened.path.clone());}
                     self.discard_preview(pending.preview.as_ref());
                     let file = FileState { binary_accepted:false, _lease: admission.take(), path: opened.path.clone(), fingerprint: opened.fingerprint.clone(), bom: opened.transcoded.store.state.bom, encoding: None };
-                    match PagedEditorSurface::new(opened, self.bytes.clone(), self.notify.clone()) {
+                    match self.new_paged_editor(opened) {
                         Ok(mut editor) => { if let Some(root) = &self.recovery_root { editor.enable_recovery(root.clone(), self.file_system.clone()); } self.editors.push(WorkspaceEditor::Paged(editor)); self.files.push(Some(file)); self.untitled_labels.push(String::new()); self.message = None; }
                         Err(error) => self.message = Some(error),
                     }
@@ -509,6 +568,7 @@ impl Workspace {
                 IoCompletion::Transcode(bareline_file_io::lifecycle::TranscodeOutcome::Paused(paused)) => {
                     self.discard_preview(pending.preview.as_ref());
                     self.message = Some(format!("Transcode quota reached: {:?}. Resume after increasing the quota.", paused.error));
+                    self.paused_reload = pending.reload.clone();
                     self.paused_transcode = Some(paused);
                 }
                 IoCompletion::Transcode(bareline_file_io::lifecycle::TranscodeOutcome::Failed(error)) => {
@@ -535,7 +595,7 @@ impl Workspace {
                                     Ok(document) => {
                                         transcoded.document = document;
                                         let opened = Box::new(bareline_file_io::lifecycle::PagedOpened { recovery_origin: None, path: self.files[index].as_ref().map_or_else(||PathBuf::from("Untitled"),|file|file.path.clone()), fingerprint: self.files[index].as_ref().map_or_else(||transcoded.store.fingerprint.clone(),|file|file.fingerprint.clone()), transcoded });
-                                        match PagedEditorSurface::new(opened, self.bytes.clone(), self.notify.clone()) {
+                                        match self.new_paged_editor(opened) {
                                             Err(error) => { let _ = self.editors[index].cancel_clean_spill(&captured); self.spill_paused = true; self.message = Some(error); }
                                             Ok(mut paged) => {
                                                 if self.files[index].is_none(){paged.require_save_as();}
@@ -606,7 +666,7 @@ impl Workspace {
         let encoding=self.files[index].as_ref().and_then(|file|file.encoding.clone());
         let original=self.files[index].as_ref().map(|file|(file.path.clone(),file.fingerprint.clone()));
         if !self.ensure_io(){return Err("File I/O unavailable".into());}
-        let request=IoRequest::SpillOwnedResident{saved_state,service,captured,encoding,original,cache:std::env::temp_dir().join("Bareline-owned-spill"),quota:self.transcode_quota_bytes,options:bareline_file_io::source::SourceOptions::default(),bytes:self.bytes.clone(),history:self.history.clone()};
+        let request=IoRequest::SpillOwnedResident{saved_state,service,captured,encoding,original,cache:std::env::temp_dir().join("Bareline-owned-spill"),quota:self.transcode_quota_bytes,options:self.source_options(),bytes:self.bytes.clone(),history:self.history.clone()};
         let receiver=self.io.as_ref().unwrap().submit(request,self.notify.clone()).map_err(|_|"Spill queue full")?;
         self.promotion_target=Some(captured_identity);self.spill_pending=true;self.spill_paused=false;
         self.pending_io.push(PendingIo{completion:None,receiver,save:None,copy_only:false,open_path:None,preview:None,reload:None});
@@ -627,7 +687,7 @@ impl Workspace {
         let Some(service) = self.editors[index].document_service() else { return false; };
         let request = IoRequest::SpillOwnedResident { saved_state: self.editors[index].saved_content_state(), service, captured: self.editors[index].snapshot().clone(), encoding: file.encoding.clone(), original: Some((file.path.clone(), file.fingerprint.clone())),
             cache: std::env::temp_dir().join("Bareline-owned-spill"), quota: self.transcode_quota_bytes,
-            options: bareline_file_io::source::SourceOptions::default(), bytes: self.bytes.clone(), history: self.history.clone() };
+            options: self.source_options(), bytes: self.bytes.clone(), history: self.history.clone() };
         match self.io.as_ref().unwrap().submit(request, self.notify.clone()) {
             Ok(receiver) => { self.spill_pending = true; self.spill_paused = false; self.pending_io.push(PendingIo { completion: None, receiver, save: None, copy_only: false, open_path: None, preview: None, reload: None }); true }
             Err(_) => false,
@@ -703,7 +763,7 @@ impl Workspace {
             path: path.clone(), bytes: self.bytes.clone(), history: self.history.clone(),
             cache: std::env::temp_dir().join("Bareline-transcodes"),
             options: bareline_file_io::codecs::disk::DiskOptions { temp_quota_bytes: self.transcode_quota_bytes, interpret: None },
-            source_options: bareline_file_io::source::SourceOptions::default(),
+            source_options: self.source_options(),
         });
         self.submit_paged(request, path);
     }
@@ -723,7 +783,12 @@ impl Workspace {
     }
     pub fn resume_transcode(&mut self, quota_bytes: u64) {
         self.transcode_quota_bytes = quota_bytes;
-        if let Some(paused) = self.paused_transcode.take() { let path = paused.path.clone(); self.submit_paged(IoRequest::ResumeTranscode { paused, temp_quota_bytes: quota_bytes }, path); }
+        if let Some(paused) = self.paused_transcode.take() {
+            let path = paused.path.clone();
+            let before = self.pending_io.len();
+            self.submit_paged(IoRequest::ResumeTranscode { paused, temp_quota_bytes: quota_bytes }, path);
+            if self.pending_io.len() > before { self.pending_io.last_mut().unwrap().reload = self.paused_reload.take(); }
+        }
     }
     /// Recent paths are metadata only; loading this list never opens a file.
     pub fn recent_paths(&self) -> &[bareline_platform::SerializedPath] { &self.recent }
@@ -752,12 +817,13 @@ impl Workspace {
     }
     pub fn reload(&mut self, index: usize, discard_confirmed: bool) -> Result<(), String> {
         let editor = self.editors.get(index).ok_or("Document is unavailable")?;
-        if editor.busy() || editor.read_only() || (editor.dirty() && !discard_confirmed) { return Err("Confirm discard of current edits before reloading".into()); }
+        if editor.busy() || (editor.dirty() && !discard_confirmed) { return Err("Confirm discard of current edits before reloading".into()); }
         let captured = editor.snapshot().clone();
         let path = self.path(index).ok_or("Save this document before reloading")?.to_path_buf();
         if self.path_loading(&path) { return Err("This file is already loading".into()); }
         if !self.ensure_io() { return Err("File service unavailable".into()); }
-        let receiver = self.io.as_ref().unwrap().submit(IoRequest::OpenStreaming {path:path.clone(),bytes:self.bytes.clone(),history:self.history.clone(),resident_max_bytes:self.resident_max_bytes}, self.notify.clone()).map_err(|_| "File queue is full")?;
+        let request = if matches!(self.editors[index], WorkspaceEditor::Paged(_)) { self.remote_open_request(path.clone()) } else { IoRequest::OpenStreaming {path:path.clone(),bytes:self.bytes.clone(),history:self.history.clone(),resident_max_bytes:self.resident_max_bytes} };
+        let receiver = self.io.as_ref().unwrap().submit(request, self.notify.clone()).map_err(|_| "File queue is full")?;
         self.pending_io.push(PendingIo {completion:None,receiver,save:None,copy_only:false,open_path:Some(path),preview:None,reload:Some(captured)});
         self.message = Some("Reloading… current text remains available until complete.".into());
         Ok(())
@@ -1185,15 +1251,15 @@ impl Workspace {
                         bareline_syntax::LexerPreference::Lexilla => bareline_settings::LexerPreference::Primary,
                         bareline_syntax::LexerPreference::Native => bareline_settings::LexerPreference::Native,
                     };
-                    self.styling.refresh_paged(
-                        paged.read_handle(), paged.surface.snapshot(), paged.viewport_start(), language,
+                    self.styling.refresh_paged_mapped(
+                        paged.read_handle(), paged.surface.snapshot(), paged.viewport_start(), paged.source_segments().to_vec(), language,
                         crate::language::LanguageConfiguration { policy, definition: definition.clone() }, self.notify.clone(),
                     );
                     if self.styling.receipt().is_some_and(|receipt| receipt.identity == paged.snapshot().identity_token())
                         && self.styling.result.as_ref().is_some_and(|result| result.is_current(&paged.surface.snapshot()))
                         && let Some((folds, first_line, partial)) = self.styling.paged_folds.take()
                     {
-                        if let Err(error) = paged.set_known_global_folds(folds, 0, partial, first_line) {
+                        if let Err(error) = paged.set_known_anchored_folds(folds, 0, partial, first_line) {
                             self.message = Some(error);
                         }
                     }
@@ -1315,6 +1381,19 @@ mod tests {
         }
         fn validate_target(&self, _: &std::path::Path) -> std::io::Result<()> { Ok(()) }
         fn commit(&self, staged: &std::path::Path, target: &std::path::Path, _: bool) -> std::io::Result<()> { if target.exists() { std::fs::remove_file(target)?; } std::fs::rename(staged, target) }
+    }
+    #[test]
+    fn readonly_paged_reload_replaces_same_tab_and_preserves_policy() {
+        let directory=std::env::temp_dir().join(format!("bareline-readonly-reload-{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir(&directory).unwrap(); let path=directory.join("source.txt");
+        std::fs::write(&path,"a".repeat(8192)).unwrap();
+        let mut workspace=Workspace::new(Arc::new(||{}),Arc::new(PagedFileSystem)).unwrap(); workspace.resident_max_bytes=4096; workspace.open(path.clone());
+        fn settle(workspace:&mut Workspace){let deadline=std::time::Instant::now()+std::time::Duration::from_secs(10);loop{workspace.pump();if !workspace.io_busy()&&!workspace.editors.iter().any(WorkspaceEditor::busy){break;}assert!(std::time::Instant::now()<deadline,"{:?}",workspace.message);std::thread::yield_now();}}
+        settle(&mut workspace); workspace.editors[0].set_read_only(true);
+        std::fs::write(&path,"b".repeat(12288)).unwrap(); workspace.reload(0,false).unwrap(); settle(&mut workspace);
+        assert_eq!(workspace.editors.len(),1); assert!(workspace.editors[0].user_read_only);
+        assert!(matches!(&workspace.editors[0],WorkspaceEditor::Paged(editor) if editor.snapshot().len() == 12288));
+        drop(workspace); let _=std::fs::remove_dir_all(directory);
     }
     #[test]
     fn paged_eol_counts_whole_file_and_rejects_stale_scan_results() {

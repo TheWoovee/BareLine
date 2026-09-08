@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 #[cfg(windows)]
+mod remote_read;
+#[cfg(windows)]
 mod native;
 #[cfg(windows)]
 pub use native::*;

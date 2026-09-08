@@ -315,6 +315,7 @@ impl DiskTranscoder {
         Ok(())
     }
     pub fn step(&mut self) -> Result<TranscodeProgress, DiskError> {
+        self.platform.check_source_read(&self.input_path)?;
         if self.failed {
             return Err(DiskError::Failed);
         }
@@ -403,6 +404,7 @@ impl DiskTranscoder {
         if !self.complete {
             return Err(DiskError::NotComplete);
         }
+        self.platform.release_source_read(&self.input_path);
         Ok(DiskDecoded {
             _directory_guard: None,
             platform: self.platform.clone(),
@@ -1040,3 +1042,4 @@ mod tests {
         assert_eq!(budget.used(), 0);
     }
 }
+impl Drop for DiskTranscoder{fn drop(&mut self){self.platform.release_source_read(&self.input_path);}}

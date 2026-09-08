@@ -69,6 +69,9 @@ pub struct FileReceipt {
 pub struct ReplaceReceipt {
     pub version: u32,
     pub files: Vec<FileReceipt>,
+    /// Bounded per-document outcomes from the acknowledged open-document phase.
+    #[serde(default)]
+    pub open_outcomes: Vec<String>,
 }
 pub struct DiskChange {
     pub range: Range<TextOffset>,
@@ -536,12 +539,14 @@ pub enum BackupPolicy {
 pub struct DiskReplaceOptions {
     pub receipt_directory: PathBuf,
     pub backup: BackupPolicy,
+    pub open_outcomes: Vec<String>,
 }
 impl DiskReplaceOptions {
     pub fn new(receipt_directory: PathBuf) -> Self {
         Self {
             receipt_directory,
             backup: BackupPolicy::Required,
+            open_outcomes: Vec::new(),
         }
     }
 }
@@ -712,6 +717,7 @@ fn apply_disk_files_impl(
         .filter(|f| f.included && f.changes.iter().any(|c| c.included))
         .collect();
     let mut receipt = ReplaceReceipt {
+        open_outcomes: options.open_outcomes.clone(),
         version: 1,
         files: selected
             .iter()
@@ -746,6 +752,17 @@ fn apply_disk_files_impl(
         }) {
             receipt.files[index].state =
                 ReceiptState::Skipped("File is open; review its document revision".into());
+            persist(&receipt_path, &receipt, platform)?;
+            continue;
+        }
+        // Inspect the approved leaf off the UI thread; retain no leaf handle across rename.
+        let read_only = approved(&file.path, trust, true)
+            .and_then(|guard| guard.file.metadata())
+            .map(|metadata| metadata.permissions().readonly());
+        if matches!(read_only, Ok(true)) {
+            receipt.files[index].state = ReceiptState::Skipped(
+                "File is read-only; change its permissions and preview again".into(),
+            );
             persist(&receipt_path, &receipt, platform)?;
             continue;
         }
@@ -1351,6 +1368,42 @@ mod tests {
         .unwrap();
         assert_eq!(restored.files[0].state, ReceiptState::RolledBack);
         assert_eq!(fs::read(path).unwrap(), original);
+    }
+    #[test]
+    fn readonly_target_is_skipped_while_eligible_target_commits_and_open_reasons_persist() {
+        let fixture = Fixture::new();
+        let locked = fixture.file("readonly.txt", b"x");
+        let eligible = fixture.file("eligible.txt", b"x");
+        let job = SearchJob::default();
+        let reviewed = preview(vec![locked.clone(), eligible.clone()], &job);
+        let mut permissions = fs::metadata(&locked).unwrap().permissions();
+        permissions.set_readonly(true);
+        fs::set_permissions(&locked, permissions).unwrap();
+        let mut options = fixture.options();
+        options
+            .open_outcomes
+            .push("Open example.txt: became read-only; refresh preview".into());
+        let summary = apply_disk_files(
+            reviewed,
+            &options,
+            &OpenFileRegistry::default(),
+            &job,
+            &WindowsPathTrustProvider,
+            &WindowsFileSystem,
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&locked).unwrap().permissions();
+        permissions.set_readonly(false);
+        fs::set_permissions(&locked, permissions).unwrap();
+        assert_eq!(summary.changed_files(), 1);
+        assert!(
+            matches!(&summary.receipt.files[0].state, ReceiptState::Skipped(reason) if reason.contains("read-only"))
+        );
+        assert_eq!(fs::read(locked).unwrap(), b"x");
+        assert_eq!(fs::read(eligible).unwrap(), b"Y");
+        let receipt: ReplaceReceipt =
+            serde_json::from_slice(&fs::read(summary.receipt_path).unwrap()).unwrap();
+        assert_eq!(receipt.open_outcomes, options.open_outcomes);
     }
     #[test]
     fn changed_file_and_new_open_document_are_skipped_for_review() {

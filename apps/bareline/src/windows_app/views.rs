@@ -143,6 +143,58 @@ mod tests {
     }
 
     #[test]
+    fn folded_large_gap_keeps_independent_pane_source_layout_and_click() {
+        use bareline_document::TextOffset;
+        use bareline_editor_surface::paged_view::SourceAffinity;
+        let path=std::env::temp_dir().join(format!("bareline-mapped-native-{}.txt",std::process::id()));
+        let body=format!("header\n{}suffix\n", "interior row with bounded content\n".repeat(12_000));
+        let suffix=body.find("suffix").unwrap(); assert!(suffix>256*1024);
+        std::fs::write(&path,&body).unwrap();
+        let mut workspace=Workspace::new(std::sync::Arc::new(||{}),std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem)).unwrap();
+        workspace.resident_max_bytes=1;workspace.open(path.clone());
+        let deadline=Instant::now()+Duration::from_secs(30);
+        loop {assert!(Instant::now()<deadline);workspace.pump();if workspace.editors.first().is_some_and(|editor|matches!(editor,WorkspaceEditor::Paged(p) if p.viewport_ready())){break;}std::thread::yield_now();}
+        let mut views=ViewsRuntime::default();views.split(&mut workspace,0,Orientation::Vertical);
+        loop {assert!(Instant::now()<deadline);workspace.pump();views.pump(&mut workspace);if !views.busy(&workspace)&&views.pending_restore.iter().all(Option::is_none)&&views.pending_view_scroll.iter().all(Option::is_none){break;}std::thread::yield_now();}
+        let WorkspaceEditor::Paged(peer)=views.secondary.as_mut().unwrap() else {unreachable!()};
+        peer.set_known_global_folds(vec![bareline_syntax::folding::Fold {header:0,end:12_000,level:1}],1,false,0).unwrap();
+        loop {assert!(Instant::now()<deadline);peer.pump();if peer.paged_frame_state().ready&&peer.source_segments().len()>1{break;}std::thread::yield_now();}
+        assert!(peer.local_offset(TextOffset(100_000)).is_none());
+        let suffix_local=peer.local_offset(TextOffset(suffix)).unwrap();
+        assert_eq!(peer.source_offset(suffix_local,SourceAffinity::After),Some(TextOffset(suffix)));
+        let mut renderer=bareline_renderer_recording::RecordingBackend::default();let mut ops=Vec::new();
+        peer.draw_styled(&mut renderer,1000.0,800.0,&mut ops,bareline_editor_surface::SyntaxView{result:None,language:"Plain text",unavailable:false}).unwrap();
+        let suffix_box=peer.accessibility_geometry(&renderer,1000.0,800.0).into_iter().find(|(range,_)|range.start==suffix_local.0).unwrap().1;
+        let mut boxes=peer.accessibility_geometry(&renderer,1000.0,800.0).into_iter().map(|(range,bounds)|bareline_platform::accessibility::AccessibilityTextBox{start:range.start,end:range.end,bounds:[bounds.x as f64,bounds.y as f64,bounds.width as f64,bounds.height as f64]}).collect();
+        super::super::accessibility::map_paged_geometry(peer,&mut boxes);
+        let footer=boxes.iter().find(|rect|rect.bounds[0]==suffix_box.x as f64&&rect.bounds[1]==suffix_box.y as f64).unwrap();
+        assert_eq!(footer.start,suffix);
+        assert!(boxes.iter().any(|rect|rect.start==0));
+        assert!(boxes.iter().all(|rect|rect.end<=7||rect.start>=suffix));
+        let identity=peer.snapshot().identity_token();
+        let source=bareline_app::accessibility::text_source(views.secondary.as_ref().unwrap(),std::sync::Arc::new(||{}));
+        assert_eq!(source.len(),body.len());
+        assert_eq!(source.identity(),identity);
+        loop {
+            match source.read(suffix,7) {
+                bareline_platform::accessibility::AccessibleRead::Ready{start,text}=>{assert_eq!(start,suffix);assert_eq!(text,"suffix\n");break;},
+                bareline_platform::accessibility::AccessibleRead::Pending=>{assert!(Instant::now()<deadline);std::thread::yield_now();},
+                _=>panic!("Visible footer unavailable through canonical text reader"),
+            }
+        }
+        let WorkspaceEditor::Paged(peer)=views.secondary.as_mut().unwrap() else {unreachable!()};
+        peer.click(&renderer,Point{x:suffix_box.x+0.1,y:suffix_box.y+suffix_box.height*0.5},false).unwrap();
+        while peer.busy(){assert!(Instant::now()<deadline);peer.pump();std::thread::yield_now();}
+        assert_eq!(peer.global_selection().1.0,suffix);
+        let prior=peer.global_selection();peer.request_viewport(TextOffset(0)).unwrap();
+        peer.click(&renderer,Point{x:suffix_box.x+0.1,y:suffix_box.y+suffix_box.height*0.5},false).unwrap();
+        assert_eq!(peer.global_selection(),prior);
+        let WorkspaceEditor::Paged(primary)=&workspace.editors[0] else {unreachable!()};
+        assert!(primary.source_segments().is_empty());assert_ne!(primary.global_selection(),prior);
+        drop(views);drop(workspace);let _=std::fs::remove_file(path);
+    }
+
+    #[test]
     fn paged_split_synchronizes_global_lines_after_pending_lookup() {
         use bareline_editor_surface::paged_view::GlobalScrollPosition;
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -329,7 +381,7 @@ mod tests {
                 64 * 1024,
             )
             .unwrap();
-        invalid.anchor = (paged.viewport_start().0 + text.find('é').unwrap() + 1) as u64;
+        invalid.anchor = paged.source_offset(bareline_document::TextOffset(text.find('é').unwrap() + 1), bareline_editor_surface::paged_view::SourceAffinity::After).unwrap().0 as u64;
         let mut token = None;
         loop {
             match finish_workspace_view_restore(editor, &invalid, &mut token) {
@@ -1410,6 +1462,19 @@ impl ViewsRuntime {
         };
         editor.layout_range(layout)
     }
+    pub(super) fn compare_source_layout_range(&self, workspace: &Workspace, side: usize, layout: bareline_renderer::LayoutId) -> Option<std::ops::Range<bareline_document::TextOffset>> {
+        let editor=if side==0 {workspace.editors.get(self.primary_index(workspace)?)?} else if side==1 {self.secondary.as_ref()?} else {return None;};
+        let local=editor.layout_range(layout)?;
+        match editor {
+            WorkspaceEditor::Resident(_) => Some(local),
+            WorkspaceEditor::Paged(paged) => {
+                use bareline_editor_surface::paged_view::SourceAffinity;
+                let start=paged.source_offset(local.start,SourceAffinity::After)?;
+                let end=paged.source_offset(local.end,SourceAffinity::Before)?;
+                (end.0.checked_sub(start.0)==Some(local.end.0-local.start.0)).then_some(start..end)
+            }
+        }
+    }
     pub(super) fn compare_viewport_starts(&self, workspace: &Workspace) -> [usize; 2] {
         let start = |editor: &WorkspaceEditor| match editor {
             WorkspaceEditor::Paged(editor) => editor.viewport_start().0,
@@ -1903,6 +1968,11 @@ impl ViewsRuntime {
         {
             app.active = index;
         }
+    }
+    pub(super) fn activate_watch_pane(&mut self, workspace: &Workspace, app: &mut App, pane: u32) -> bool {
+        if pane > 1 || (pane == 1 && self.secondary.is_none()) { return false; }
+        self.activate(workspace, app, pane);
+        true
     }
     fn activate(&mut self, workspace: &Workspace, app: &mut App, pane: u32) {
         if let Some(controller) = &mut self.controller {

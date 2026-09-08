@@ -486,6 +486,16 @@ impl PagedDocument {
         next.root = root;
         next.revision = revision;
         next.content_state = state;
+        next.applied_change = Some(crate::change::AppliedChange::owned(
+            self.current.document_id,
+            self.current.revision,
+            revision,
+            self.current.content_state,
+            state,
+            crate::change::ChangeDirection::Edit,
+            &history.edits,
+            &self.bytes,
+        )?);
         Ok(SourceCommitLease {
             document: self,
             next,
@@ -681,6 +691,20 @@ impl PagedDocument {
         } else {
             entry.after_state
         };
+        next.applied_change = Some(crate::change::AppliedChange::owned(
+            self.current.document_id,
+            self.current.revision,
+            revision,
+            self.current.content_state,
+            next.content_state,
+            if prepared.undo {
+                crate::change::ChangeDirection::Undo
+            } else {
+                crate::change::ChangeDirection::Redo
+            },
+            &entry.edits,
+            &self.bytes,
+        )?);
         (if prepared.undo {
             &mut self.redo
         } else {

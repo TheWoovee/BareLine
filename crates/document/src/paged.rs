@@ -231,6 +231,7 @@ impl SparseLineIndex {
 }
 #[derive(Clone)]
 pub struct PagedSnapshot {
+    pub(crate) applied_change: Option<std::sync::Arc<crate::change::AppliedChange>>,
     pub(crate) metadata: crate::DocumentMetadata,
     pub(crate) root: tree::Root,
     pub revision: Revision,
@@ -239,6 +240,9 @@ pub struct PagedSnapshot {
     pub(crate) _structure: Option<std::sync::Arc<crate::BudgetClaim>>,
 }
 impl PagedSnapshot {
+    pub fn applied_change(&self) -> Option<&std::sync::Arc<crate::change::AppliedChange>> {
+        self.applied_change.as_ref()
+    }
     pub fn metadata(&self) -> &crate::DocumentMetadata {
         &self.metadata
     }
@@ -250,6 +254,7 @@ impl PagedSnapshot {
     pub fn fork_identity(&self) -> Self {
         let mut snapshot = self.clone();
         snapshot.document_id = crate::unique();
+        snapshot.applied_change = None;
         snapshot
     }
     pub fn same_document(&self, other: &Self) -> bool {
@@ -282,6 +287,7 @@ impl PagedSnapshot {
         let end = source.len();
         let _ = length;
         Ok(Self {
+            applied_change: None,
             root: tree::from_source(source, text_start..end),
             revision: Revision(0),
             content_state: ContentStateId(crate::unique()),
@@ -502,6 +508,7 @@ impl PagedDocument {
             return Err(Error::IncompleteSource);
         }
         let snapshot = PagedSnapshot {
+            applied_change: captured.applied_change().cloned(),
             root: tree::from_source(source.clone(), 0..source.len()),
             revision: captured.revision,
             content_state: captured.content_state,
@@ -556,6 +563,17 @@ impl PagedDocument {
             .try_reserve(1)
             .map_err(|_| Error::BudgetExceeded)?;
         let state = ContentStateId(crate::unique());
+        let change = crate::change::AppliedChange::owned(
+            self.current.document_id,
+            self.current.revision,
+            revision,
+            self.current.content_state,
+            state,
+            crate::change::ChangeDirection::Edit,
+            &[],
+            &self.bytes,
+        )?;
+        self.current.applied_change = Some(change);
         self.undo.push(PagedHistory {
             before_metadata: self.current.metadata.clone(),
             after_metadata: metadata.clone(),
@@ -723,6 +741,16 @@ impl PagedDocument {
             after_state: state,
             _reservation: crate::history::Charge::new(reservation),
         };
+        let change = crate::change::AppliedChange::owned(
+            self.current.document_id,
+            self.current.revision,
+            revision,
+            self.current.content_state,
+            state,
+            crate::change::ChangeDirection::Edit,
+            &entry.edits,
+            &self.bytes,
+        )?;
         let merge = self.undo.last().is_some_and(|last| {
             last.typing_insert
                 && entry.typing_insert
@@ -748,6 +776,7 @@ impl PagedDocument {
             self.undo.push(entry);
         }
         self.redo.clear();
+        self.current.applied_change = Some(change);
         self.current.root = after;
         self.current.revision = revision;
         self.current.content_state = state;
@@ -843,14 +872,36 @@ impl PagedDocument {
         );
         let (prefix, _) = tree::charged_split(self.current.root.clone(), from.0, &self.bytes)?;
         let suffix = tree::charged_source(source.clone(), 0..source.len(), &self.bytes)?;
-        self.current.root = tree::charged_concat(prefix, suffix, &self.bytes)?;
+        let root = tree::charged_concat(prefix, suffix, &self.bytes)?;
+        let state = ContentStateId(crate::unique());
+        let change = crate::change::AppliedChange::build(
+            self.current.document_id,
+            self.current.revision,
+            revision,
+            self.current.content_state,
+            state,
+            crate::change::ChangeDirection::Edit,
+            1,
+            std::iter::once(crate::change::CompactEdit {
+                before: from..TextOffset(self.current.len()),
+                inserted_len: suffix_len,
+            }),
+            &self.bytes,
+        )?;
+        self.current.applied_change = Some(change);
+        self.current.root = root;
         self.current.revision = revision;
-        self.current.content_state = ContentStateId(crate::unique());
+        self.current.content_state = state;
         Ok(revision)
     }
     pub fn set_history_policy(&mut self, policy: crate::history::HistoryPolicy) {
         self.history_policy = policy;
         self.trim_history();
+    }
+    pub fn set_history_limit(&mut self, max_changes: usize) {
+        let mut policy = self.history_policy;
+        policy.max_changes = max_changes;
+        self.set_history_policy(policy);
     }
     pub(crate) fn trim_history(&mut self) {
         let excess = self

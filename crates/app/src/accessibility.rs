@@ -245,7 +245,7 @@ pub fn editor_text(editor: &EditorSurface) -> Option<AccessibilityText> {
         editor.selection.caret,
     )
 }
-fn bounded_text(
+pub fn bounded_text(
     value: String,
     start_byte: usize,
     anchor: usize,

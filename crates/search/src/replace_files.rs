@@ -357,6 +357,63 @@ mod tests {
             .unwrap()
     }
     #[test]
+    fn hundred_document_replacement_is_one_bounded_atomic_group_and_undo() {
+        let scheduler = Scheduler::new(1, 8).unwrap();
+        let targets: Vec<_> = (0..100).map(|_| target(&scheduler, "x")).collect();
+        let job = SearchJob::default();
+        let preview = preview_open_documents(
+            targets.clone(),
+            &SearchQuery::literal("x"),
+            "Y",
+            &job,
+            MAX_RESULT_BYTES,
+        )
+        .unwrap();
+        assert_eq!(preview.documents().len(), 100);
+        let completion = apply(preview.prepare(&job).unwrap(), &scheduler);
+        assert_eq!(completion.matches_replaced, 100);
+        assert!(
+            completion
+                .snapshots
+                .iter()
+                .all(|snapshot| text(snapshot) == "Y")
+        );
+        let group = completion.result.unwrap().unwrap();
+        let participants = completion
+            .snapshots
+            .into_iter()
+            .map(|snapshot| {
+                let service = targets
+                    .iter()
+                    .find(|(_, original)| original.same_document(&snapshot))
+                    .unwrap()
+                    .0
+                    .clone();
+                GroupParticipant { service, snapshot }
+            })
+            .collect();
+        let restored = scheduler
+            .submit_group(
+                GroupMutation::Undo {
+                    group,
+                    participants,
+                },
+                None,
+            )
+            .map_err(|(error, _)| error)
+            .unwrap()
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        assert!(restored.result.is_ok());
+        assert_eq!(restored.snapshots.len(), 100);
+        assert!(
+            restored
+                .snapshots
+                .iter()
+                .all(|snapshot| text(snapshot) == "x")
+        );
+    }
+    #[test]
     fn preview_exclusions_apply_only_reviewed_matches_and_linked_undo_restores_both() {
         let scheduler = Scheduler::new(1, 8).unwrap();
         let a = target(&scheduler, "x x");

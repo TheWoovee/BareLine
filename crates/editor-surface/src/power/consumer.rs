@@ -42,13 +42,24 @@ impl EditorSurface {
     }
     /// Replay takes explicit plain-text parameters; it never opens a dialog or reads a clipboard.
     pub fn execute_power_recorded(&mut self, id: &str, args: &Arguments) -> Result<(), String> {
+        self.execute_power_parameters(id,args,true)
+    }
+    pub(crate) fn execute_power_parameters(&mut self, id: &str, args: &Arguments, record:bool) -> Result<(), String> {
         if self.busy() || self.read_only() || self.composition.is_some() { return Err("Document is busy or read only.".into()); }
         if args.len() > 16 || args.iter().try_fold(0usize, |n,(k,v)| n.checked_add(k.len())?.checked_add(v.len())).is_none_or(|n| n > self.power_limits().max_bytes) { return Err("Command arguments exceed the edit budget.".into()); }
         let limits = self.power_limits();
+        let captured_rectangle=self.power_rectangle;
+        let captured_comments=if matches!(id,"editor.comment.toggleLine"|"editor.comment.toggleBlock")&&args.is_empty(){if let Some(definition)=self.udl.as_deref(){crate::completion::DefinitionComments(definition).tokens_for(&self.snapshot)}else{crate::completion::LanguageComments(self.language).tokens_for(&self.snapshot)}}else{None};
         let err = |e| format!("Command was not applied: {e:?}");
         match id {
-            "editor.indent" | "editor.unindent" if self.power_rectangle.is_some() => {
-                let rectangle=self.power_rectangle.unwrap();
+            "editor.comment.toggleLine"|"editor.comment.toggleBlock" if !args.is_empty()=>{
+                crate::paged_power::validate_arguments(id,args)?;
+                struct Policy(CommentTokens);impl CommentProvider for Policy{fn tokens_for(&self,_:&DocumentSnapshot)->Option<CommentTokens>{Some(self.0.clone())}}
+                let tokens=CommentTokens{line:args.get("line_prefix").cloned(),block:args.get("block_start").zip(args.get("block_end")).map(|(a,b)|(a.clone(),b.clone()))};
+                self.apply_power(crate::completion::toggle_comment_with_provider(&self.snapshot,&self.selection_set(),&Policy(tokens),id.ends_with("toggleBlock"),limits).map_err(err)?)?;
+            }
+            "editor.indent" | "editor.unindent" if self.power_rectangle.is_some()||args.contains_key("first_line") => {
+                let rectangle=if args.contains_key("first_line"){rectangle(args)?}else{self.power_rectangle.unwrap()};
                 self.apply_power(rectangle_indent(&self.snapshot,rectangle,id=="editor.unindent",limits).map_err(err)?)?;
             }
             "editor.rectangle.select" => {self.select_rectangle(rectangle(args)?)?;}
@@ -66,7 +77,8 @@ impl EditorSurface {
             }
             "editor.paste.plainText" | "editor.paste.fromHistory" => {
                 let text = args.get("text").ok_or("Missing plain text.")?;
-                let prepared=if let Some(rectangle)=self.power_rectangle {self.prepare_rectangle_paste(rectangle,text)}else{replace(&self.snapshot,&self.selection_set(),text,limits)};
+                let rectangle=if args.contains_key("first_line"){Some(rectangle(args)?)}else{self.power_rectangle};
+                let prepared=if let Some(rectangle)=rectangle {self.prepare_rectangle_paste(rectangle,text)}else{replace(&self.snapshot,&self.selection_set(),text,limits)};
                 self.apply_power(prepared.map_err(err)?)?;
             }
             "editor.lines.hide" => {
@@ -93,8 +105,10 @@ impl EditorSurface {
                 self.execute_power(id)?;
             }
         }
-        let receipt = (id.to_owned(),args.clone());
-        if self.pending.is_some() { self.pending_command = Some(receipt); } else { self.acknowledge_command(receipt); }
+        if record {let mut recorded=args.clone();if let Some(tokens)=captured_comments{if let Some(prefix)=tokens.line{recorded.insert("line_prefix".into(),prefix);}if let Some((start,end))=tokens.block{recorded.insert("block_start".into(),start);recorded.insert("block_end".into(),end);}}
+        if matches!(id,"editor.paste.plainText"|"editor.paste.fromHistory"|"editor.indent"|"editor.unindent"){if let Some(rectangle)=captured_rectangle{for(key,value)in[("first_line",rectangle.first_line),("last_line",rectangle.last_line),("start_column",rectangle.start_column),("end_column",rectangle.end_column)]{recorded.entry(key.into()).or_insert_with(||value.to_string());}}}
+        let receipt = (id.to_owned(),recorded);
+        if self.pending.is_some() { self.pending_command = Some(receipt); } else { self.acknowledge_command(receipt); }}
         Ok(())
     }
     pub fn logical_scroll(&self) -> (u64, f64, f64) {
@@ -264,16 +278,19 @@ impl EditorSurface {
 
 /// Rectangle indentation touches only the insertion column or whitespace immediately before it.
 pub fn rectangle_indent(snapshot:&DocumentSnapshot, rectangle:Rectangle, backward:bool, limits:Limits)->Result<PowerEdit,Error> {
+    rectangle_indent_mapped(snapshot,rectangle,backward,limits,None)
+}
+pub fn rectangle_indent_mapped(snapshot:&DocumentSnapshot, rectangle:Rectangle, backward:bool, limits:Limits,maps:Option<&BTreeMap<usize,DisplayColumnMap>>)->Result<PowerEdit,Error> {
     let left=rectangle.start_column.min(rectangle.end_column);
     if !backward {
         if limits.tab_width>limits.max_bytes{return Err(Error::BudgetExceeded);}
-        return column_insert(snapshot,Rectangle {start_column:left,end_column:left,..rectangle},ColumnInsert::Text(" ".repeat(limits.tab_width)),limits);
+        return column_insert_mapped(snapshot,Rectangle {start_column:left,end_column:left,..rectangle},ColumnInsert::Text(" ".repeat(limits.tab_width)),limits,maps);
     }
     if rectangle.first_line>rectangle.last_line||rectangle.last_line-rectangle.first_line>=limits.max_selections{return Err(Error::BudgetExceeded);}
     let mut edits=Vec::new();
     for number in rectangle.first_line..=rectangle.last_line {
         let (start,text)=line(snapshot,number,limits)?;
-        let body=content(&text);let map=DisplayColumnMap::new(body,limits.tab_width);let end=map.at(left).0;
+        let body=content(&text);let fallback=DisplayColumnMap::new(body,limits.tab_width);let map=if let Some(maps)=maps{maps.get(&number).ok_or(Error::OutOfBounds)?}else{&fallback};let end=map.at(left).0;
         let mut begin=end;
         for (index,character) in body[..end].char_indices().rev().take(limits.tab_width) {
             if character==' ' {begin=index;} else if character=='\t' {begin=index;break;} else {break;}

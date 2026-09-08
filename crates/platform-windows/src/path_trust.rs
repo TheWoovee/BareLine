@@ -231,3 +231,48 @@ mod tests {
         assert!(!WindowsPathTrustProvider.permits(&trust, PathOperation::Execute));
     }
 }
+
+impl WindowsPathTrustProvider{
+    /// This method is reachable only with an admitted exact-path read capability.
+    /// Every ancestor is opened no-follow and pinned before its descendant.
+    pub(crate) fn open_remote_read(&self,path:&Path,access:&bareline_platform::RemoteReadAccess)->io::Result<TrustedRead>{
+        access.check(path)?;
+        if !path.is_absolute(){return Err(denied());}
+        match path.components().next(){
+            Some(Component::Prefix(prefix))=>match prefix.kind(){
+                Prefix::UNC(server,share)|Prefix::VerbatimUNC(server,share)=>{if server.is_empty()||share.is_empty()||[server,share].iter().any(|part|part.encode_wide().any(|u|u==0||u==b':' as u16)){return Err(denied());}},
+                Prefix::Disk(drive)|Prefix::VerbatimDisk(drive)=>{let root=[drive as u16,b':' as u16,b'\\' as u16,0];if unsafe{GetDriveTypeW(PCWSTR(root.as_ptr()))}!=4{return Err(denied());}},
+                _=>return Err(denied()),
+            },
+            _=>return Err(denied()),
+        }
+        if path.components().any(|part|matches!(part,Component::ParentDir)|matches!(part,Component::Normal(name) if reserved_device(name)||name.encode_wide().any(|u|u==0||u==b':' as u16))){return Err(denied());}
+        let mut held=Vec::new();
+        for ancestor in path.ancestors().collect::<Vec<_>>().into_iter().rev(){
+            access.check(path)?;
+            let final_file=ancestor==path;
+            let sharing=if final_file&&access.action()==bareline_platform::RemoteReadAction::Follow{FILE_SHARE_READ.0|FILE_SHARE_WRITE.0|FILE_SHARE_DELETE.0}else{FILE_SHARE_READ.0};
+            let file=OpenOptions::new().access_mode(if final_file{FILE_GENERIC_READ.0}else{FILE_READ_ATTRIBUTES.0}).share_mode(sharing).custom_flags(FILE_FLAG_BACKUP_SEMANTICS.0|FILE_FLAG_OPEN_REPARSE_POINT.0).open(ancestor)?;
+            let mut info=BY_HANDLE_FILE_INFORMATION::default();
+            // SAFETY: the file retains its handle and the output buffer is live.
+            unsafe{GetFileInformationByHandle(HANDLE(file.as_raw_handle()),&mut info)}.map_err(|error|io::Error::from_raw_os_error(error.code().0&0xffff))?;
+            if info.dwFileAttributes&(FILE_ATTRIBUTE_REPARSE_POINT.0|FILE_ATTRIBUTE_OFFLINE.0)!=0||final_file&&info.dwFileAttributes&FILE_ATTRIBUTE_DIRECTORY.0!=0{return Err(denied());}
+            held.push(file);
+        }
+        access.check(path)?;
+        let file=held.pop().ok_or_else(denied)?;
+        Ok(TrustedRead{trust:PathTrust{canonical:path.into(),storage:StorageKind::Network,origin:PathOrigin::User,traverses_reparse_point:false},file,ancestors:held})
+    }
+}
+
+#[cfg(test)]
+mod remote_rejection_tests{
+    use super::*;
+    #[test]
+    fn unsafe_remote_components_fail_before_destination_access(){
+        use bareline_platform::{RemoteReadGrant,RemoteReadAction};
+        for path in [r"\\never-contact.invalid\share\..\file",r"\\never-contact.invalid\share\file:stream",r"\\never-contact.invalid\share\NUL"]{
+            let path=Path::new(path);let grant=RemoteReadGrant::after_consent(path.into(),RemoteReadAction::Open,std::time::Duration::from_secs(1)).unwrap();let access=grant.claim(path,RemoteReadAction::Open,std::sync::Arc::new(||false)).unwrap();assert!(WindowsPathTrustProvider.open_remote_read(path,&access).is_err());
+        }
+    }
+}

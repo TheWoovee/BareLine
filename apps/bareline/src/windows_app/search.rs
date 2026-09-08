@@ -2,6 +2,7 @@
 //! Native search scope commands and fingerprint-bound file-result navigation.
 use super::*;
 mod replace;
+mod folder;
 use bareline_app::workspace::WorkspaceEditor;
 use bareline_commands::{CommandId, CommandPresentation, CommandRegistry, CommandSpec};
 use bareline_document::TextOffset;
@@ -10,6 +11,7 @@ use bareline_search::folders::FolderScope;
 use std::{ops::Range, sync::Arc};
 #[derive(Default)]
 pub(super) struct SearchRuntime {
+    folder: folder::FolderControls,
     replace: replace::ReplaceRuntime,
     navigation: Option<(PathBuf, Fingerprint, Range<TextOffset>)>,
 }
@@ -51,18 +53,22 @@ pub(super) fn register(registry: &mut CommandRegistry) {
     }
 }
 impl SearchRuntime {
+    pub(super) fn folder_ime_caret(&self)->Option<bareline_renderer::Rect> {self.folder.ime_caret}
     pub(super) fn draw(
         &mut self,
+        renderer: &mut WindowsRenderer,
+        theme: bareline_ui::theme::UiTheme,
         width: f32,
         height: f32,
         ops: &mut Vec<bareline_renderer::DrawOp>,
     ) {
         self.replace.draw(width, height, ops);
+        self.folder.draw(renderer, theme, width, height, ops);
     }
 }
 impl Shell {
     pub(super) fn search_modal(&self) -> bool {
-        self.search.replace.is_open()
+        self.search.replace.is_open() || self.search.folder.open
     }
     pub(super) fn search_draw(
         &mut self,
@@ -93,14 +99,8 @@ impl Shell {
                     if let Some(workspace) = &mut self.workspace {
                         let query = workspace.find.query();
                         workspace.find.blur();
-                        workspace.search_focus = true;
-                        workspace.search_panel.start_folder(
-                            FolderScope::user(root),
-                            query,
-                            Arc::new(bareline_platform_windows::WindowsPathTrustProvider),
-                            Arc::new(bareline_platform_windows::WindowsFileSystem),
-                            self.notify.clone(),
-                        );
+                        workspace.search_focus = false;
+                        self.search.folder.show(root, query);
                     }
                 }
                 Some(Err(error)) => {
@@ -115,16 +115,18 @@ impl Shell {
         if id == "search.scope.selection" || id == "search.scope.current" {
             if let Some(workspace) = &mut self.workspace {
                 let scope = if id.ends_with("selection") {
-                    workspace.editors.get(self.app.active).map(|editor| {
-                        let origin = match editor {
-                            WorkspaceEditor::Paged(paged) => paged.viewport_start().0,
-                            _ => 0,
-                        };
-                        TextOffset(origin + editor.selection.anchor.min(editor.selection.caret))
-                            ..TextOffset(
-                                origin + editor.selection.anchor.max(editor.selection.caret),
-                            )
-                    })
+                    let Some(editor) = workspace.editors.get(self.app.active) else { return true; };
+                    if editor.busy() || matches!(editor, WorkspaceEditor::Paged(paged) if !paged.paged_frame_state().ready) {
+                        workspace.message = Some("Wait for the current selection before searching it.".into());
+                        return true;
+                    }
+                    let (anchor, caret) = match editor {
+                        WorkspaceEditor::Paged(paged) => paged.global_selection(),
+                        WorkspaceEditor::Resident(editor) => (
+                            TextOffset(editor.selection.anchor), TextOffset(editor.selection.caret),
+                        ),
+                    };
+                    Some(anchor.min(caret)..anchor.max(caret))
                 } else {
                     None
                 };

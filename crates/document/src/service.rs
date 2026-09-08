@@ -23,6 +23,7 @@ pub enum Mutation {
     Redo,
 }
 pub struct Completion {
+    pub change: Option<Arc<crate::change::AppliedChange>>,
     pub result: Result<Revision, Error>,
     pub snapshot: DocumentSnapshot,
     pub metadata: Option<crate::history::EditMetadata>,
@@ -37,6 +38,7 @@ struct Request {
 }
 struct Actor {
     document: Document,
+    configured_history_limit: Option<usize>,
     queue: std::collections::VecDeque<Request>,
     scheduled: bool,
     retired: bool,
@@ -45,6 +47,7 @@ struct Actor {
 type Job = Arc<Mutex<Actor>>;
 enum Work {
     Actor(Job),
+    HistoryPolicy(Job, usize),
     Group(GroupRequest),
 }
 pub struct GroupParticipant {
@@ -193,6 +196,19 @@ impl Scheduler {
                     while let Some(work) = incoming.next() {
                         let job = match work {
                             Work::Actor(job) => job,
+                            Work::HistoryPolicy(job, max_changes) => {
+                                let mut actor = job.lock().unwrap_or_else(|error| error.into_inner());
+                                if !actor.retired {
+                                    let mut policy = actor.document.history_policy;
+                                    // Multiple workers may acquire this actor out of queue
+                                    // order; coalesce to the latest admitted setting.
+                                    policy.max_changes = actor.configured_history_limit.unwrap_or(max_changes);
+                                    actor.document.set_history_policy(policy);
+                                }
+                                drop(actor);
+                                incoming.complete(None);
+                                continue;
+                            }
                             Work::Group(request) => {
                                 run_group(request);
                                 incoming.complete(None);
@@ -211,6 +227,7 @@ impl Scheduler {
                                 Mutation::Undo => actor.document.history_metadata(true).cloned(),
                                 Mutation::Redo => actor.document.history_metadata(false).cloned(),
                             };
+                            let before_revision = actor.document.snapshot().revision;
                             let result = match request.mutation {
                                 Mutation::Apply(edit) => match request.metadata {
                                     Some(metadata) => {
@@ -231,7 +248,13 @@ impl Scheduler {
                             let depths = actor.document.history_stats();
                             let snapshot = actor.document.snapshot();
                             actor.published.update(snapshot.clone());
+                            let change = if result.is_ok() && snapshot.revision != before_revision {
+                                snapshot.applied_change().cloned()
+                            } else {
+                                None
+                            };
                             let _ = request.reply.try_send(Completion {
+                                change,
                                 result,
                                 snapshot,
                                 metadata,
@@ -291,6 +314,7 @@ impl Scheduler {
         DocumentService {
             actor: Arc::new(Mutex::new(Actor {
                 document,
+                configured_history_limit: None,
                 queue: std::collections::VecDeque::new(),
                 scheduled: false,
                 retired: false,
@@ -453,6 +477,16 @@ impl Drop for Scheduler {
     }
 }
 impl DocumentService {
+    /// Nonblocking policy admission. The caller retries when the bounded queue
+    /// is full; retirement of retained roots happens on the document worker.
+    pub fn configure_history_limit(&self, max_changes: usize) -> bool {
+        let Ok(mut actor) = self.actor.try_lock() else { return false; };
+        if actor.retired { return false; }
+        if actor.configured_history_limit == Some(max_changes) { return true; }
+        if self.ready.submit(Work::HistoryPolicy(self.actor.clone(), max_changes)).is_err() { return false; }
+        actor.configured_history_limit = Some(max_changes);
+        true
+    }
     pub fn same_document(&self, snapshot: &DocumentSnapshot) -> bool {
         self.document_id == snapshot.document_id
     }
@@ -776,6 +810,31 @@ mod tests {
                 .unwrap(),
             "one"
         );
+    }
+    #[test]
+    fn configured_history_limit_retires_on_worker_without_changing_content() {
+        let pool = Scheduler::new(1, 8).unwrap();
+        let mut document = Document::from_utf8("", Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+        for _ in 0..4 {
+            let snapshot = document.snapshot();
+            document.apply(EditTransaction { base_revision: snapshot.revision, edits: vec![Edit { range: TextOffset(snapshot.len())..TextOffset(snapshot.len()), insert: "x".into() }] }).unwrap();
+        }
+        let captured = document.snapshot();
+        let service = pool.document(document, 8);
+        let peer = service.clone();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            peer.configure_history_limit(1);
+            if let Ok(actor) = service.actor.try_lock() {
+                if actor.document.history_stats().undo_changes == 1 {
+                    assert_eq!(actor.document.snapshot().content_state, captured.content_state);
+                    assert_eq!(actor.document.snapshot().revision, captured.revision);
+                    break;
+                }
+            }
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
     }
     #[test]
     fn many_documents_share_workers_and_stale_concurrent_edits_are_rejected() {

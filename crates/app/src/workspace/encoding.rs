@@ -44,7 +44,7 @@ impl Workspace {
             if self.interpreting_paged.is_some() {return Err("An interpretation is already running".into());}
             let captured=paged.snapshot().clone();
             let path=source.path.clone();
-            let request=bareline_file_io::lifecycle::InterpretPagedRequest {source:paged.read_handle().original_store()?,target,path:path.clone(),fingerprint:source.fingerprint.clone(),cache:std::env::temp_dir().join("Bareline-transcode"),quota:self.transcode_quota_bytes,options:bareline_file_io::source::SourceOptions::default(),bytes:self.bytes.clone(),history:self.history.clone()};
+            let request=bareline_file_io::lifecycle::InterpretPagedRequest {source:paged.read_handle().original_store()?,target,path:path.clone(),fingerprint:source.fingerprint.clone(),cache:std::env::temp_dir().join("Bareline-transcode"),quota:self.transcode_quota_bytes,options:self.source_options(),bytes:self.bytes.clone(),history:self.history.clone()};
             if !self.ensure_io(){return Err("File service unavailable".into());}
             let receiver=self.io.as_ref().unwrap().submit(IoRequest::InterpretPaged(Box::new(request)),self.notify.clone()).map_err(|_|"File queue is full")?;
             self.interpreting_paged=Some((captured,path.clone()));

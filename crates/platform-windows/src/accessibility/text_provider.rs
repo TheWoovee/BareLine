@@ -79,6 +79,7 @@ struct View {
     overlay: Option<Overlay>,
     selection: (usize, usize),
     visible: (usize, usize),
+    visible_ranges: Vec<(usize, usize)>,
     page: usize,
 }
 impl Life {
@@ -111,7 +112,25 @@ impl Life {
         // replaced on commit; describe the actual current virtual text domain.
         let overlay = context.composition.as_ref().map(|text| Overlay { start: c, end: c, text: text.clone() });
         let visible = shared.snapshot.text.as_ref().map(|t| (t.start_byte, t.start_byte + t.value.len())).unwrap_or((c,c));
-        Ok(View { source, overlay, selection: (a,c), visible, page: visible.1.saturating_sub(visible.0).clamp(1024, LIMIT) })
+        // Geometry is already in the source-mapped virtual byte domain. Capture
+        // it with selection/composition under this same coherent publication.
+        // A folded header and footer are distinct visible ranges even though
+        // the bounded text cache contains only the header's contiguous window.
+        if shared.snapshot.text_geometry.len() > 4096 { return Err(unavailable()); }
+        let length=source.len().checked_add(overlay.as_ref().map_or(0,|o|o.text.len())).ok_or_else(unavailable)?;
+        let mut spans=Vec::with_capacity(shared.snapshot.text_geometry.len());
+        for rect in &shared.snapshot.text_geometry {
+            if rect.start>rect.end || rect.end>length {return Err(unavailable());}
+            if rect.start<rect.end {spans.push((rect.start,rect.end));}
+        }
+        spans.sort_unstable();
+        let mut visible_ranges:Vec<(usize,usize)>=Vec::new();
+        for (start,end) in spans {
+            if let Some(previous)=visible_ranges.last_mut() && start<=previous.1 {
+                previous.1=previous.1.max(end);
+            } else {visible_ranges.push((start,end));}
+        }
+        Ok(View { source, overlay, selection: (a,c), visible, visible_ranges, page: visible.1.saturating_sub(visible.0).clamp(1024, LIMIT) })
     }
     fn action(&self, action: AccessibilityAction) -> Result<()> {
         let mut shared = self.shared.lock().unwrap_or_else(|e| e.into_inner());
@@ -201,7 +220,11 @@ impl ITextProvider_Impl for Provider_Impl {
     }
     fn GetVisibleRanges(&self) -> Result<*mut SAFEARRAY> {
         let view = self.life.upgrade().ok_or_else(unavailable)?.view()?;
-        array(&[self.range(view.virtual_offset(view.visible.0), view.virtual_offset(view.visible.1).min(view.len()), &view)?.cast()?])
+        let spans=if view.visible_ranges.is_empty() {
+            vec![(view.virtual_offset(view.visible.0),view.virtual_offset(view.visible.1).min(view.len()))]
+        } else {view.visible_ranges.clone()};
+        let ranges=spans.into_iter().map(|(start,end)|self.range(start,end,&view)?.cast()).collect::<Result<Vec<IUnknown>>>()?;
+        array(&ranges)
     }
     fn RangeFromChild(&self, _child: Ref<IRawElementProviderSimple>) -> Result<ITextRangeProvider> { Err(invalid()) }
     fn RangeFromPoint(&self, point: &UiaPoint) -> Result<ITextRangeProvider> {
@@ -509,6 +532,56 @@ mod identity_tests {
         let (life,provider)=provider(text,None);(life,provider.cast().unwrap())
     }
     #[test]
+    fn com_visible_ranges_preserve_source_mapped_footer_across_large_fold() {
+        // Only the header is cached. Retained geometry maps the footer past a
+        // hidden body larger than the paged viewport; UIA must not expose that
+        // hidden body as visible or substitute header bytes for the footer.
+        let hidden=300*1024;
+        let text: &'static str=Box::leak(format!("HEAD{}FOOT", "x".repeat(hidden)).into_boxed_str());
+        let footer=4+hidden;
+        let (life,pattern)=provider_fixture(text);
+        {
+            let mut shared=life.shared.lock().unwrap();
+            shared.snapshot.text=Some(AccessibilityText {editor_id:2,run_id:u64::MAX,start_byte:0,value:"HEAD".into(),character_lengths:vec![1;4],selection:None});
+            // Reordered and adjacent glyph boxes exercise normalization; only
+            // adjacency in global source offsets permits merging.
+            shared.snapshot.text_geometry=vec![
+                AccessibilityTextBox{start:footer+2,end:footer+4,bounds:[20.,40.,20.,20.]},
+                AccessibilityTextBox{start:0,end:2,bounds:[0.,0.,20.,20.]},
+                AccessibilityTextBox{start:footer,end:footer+2,bounds:[0.,40.,20.,20.]},
+                AccessibilityTextBox{start:2,end:4,bounds:[20.,0.,20.,20.]},
+            ];
+        }
+        let array=unsafe{pattern.GetVisibleRanges()}.unwrap();
+        let result=(||->Result<Vec<ITextRangeProvider>> {
+            use windows::Win32::System::Ole::{SafeArrayGetElement,SafeArrayGetUBound};
+            let upper=unsafe{SafeArrayGetUBound(array,1)}?;
+            let mut ranges=Vec::new();
+            for index in 0..=upper {
+                let mut raw=std::ptr::null_mut();
+                // VT_UNKNOWN GetElement returns an owned AddRef. from_raw
+                // transfers it to the RAII interface before the SAFEARRAY dies.
+                unsafe{SafeArrayGetElement(array,&index,(&mut raw as *mut *mut std::ffi::c_void).cast())}?;
+                let unknown=unsafe{IUnknown::from_raw(raw)};
+                ranges.push(unknown.cast()?);
+            }
+            Ok(ranges)
+        })();
+        unsafe{SafeArrayDestroy(array)}.unwrap();
+        let ranges=result.unwrap();
+        assert_eq!(ranges.len(),2);
+        assert_eq!(unsafe{ranges[0].GetText(-1)}.unwrap().to_string(),"HEAD");
+        assert_eq!(unsafe{ranges[1].GetText(-1)}.unwrap().to_string(),"FOOT");
+        let document=unsafe{pattern.DocumentRange()}.unwrap();
+        assert_eq!(ranges[0].cast_object_ref::<TextRange>().unwrap().endpoints(),(0,4));
+        assert_eq!(ranges[1].cast_object_ref::<TextRange>().unwrap().endpoints(),(footer,footer+4));
+        assert_eq!(unsafe{ranges[1].CompareEndpoints(TextPatternRangeEndpoint_Start,&document,TextPatternRangeEndpoint_Start)}.unwrap(),1);
+        assert_eq!(unsafe{ranges[1].CompareEndpoints(TextPatternRangeEndpoint_End,&document,TextPatternRangeEndpoint_End)}.unwrap(),0);
+        life.shared.lock().unwrap().snapshot.text_context.as_mut().unwrap().source_identity=(90,2);
+        assert!(unsafe{pattern.GetVisibleRanges()}.is_err());
+        assert!(unsafe{ranges[1].GetText(-1)}.is_err());
+    }
+    #[test]
     fn com_active_composition_and_virtual_document_share_offsets(){
         let (_life,provider)=provider("ab",Some("界"));
         let active=unsafe{provider.GetActiveComposition()}.unwrap();
@@ -540,7 +613,7 @@ mod identity_tests {
     }
     #[test]
     fn virtual_preedit_read_crosses_both_seams_without_changing_source() {
-        let view=View{source:Arc::new(Text("ab")),overlay:Some(Overlay{start:1,end:1,text:"界".into()}),selection:(1,1),visible:(0,2),page:1024};
+        let view=View{source:Arc::new(Text("ab")),overlay:Some(Overlay{start:1,end:1,text:"界".into()}),selection:(1,1),visible:(0,2),visible_ranges:vec![],page:1024};
         assert_eq!(view.read(0,LIMIT).unwrap(),(0,"a界b".into()));
         assert_eq!(view.read(1,4).unwrap(),(1,"界b".into()));
         assert_eq!(view.read(4,1).unwrap(),(4,"b".into()));
@@ -550,11 +623,11 @@ mod identity_tests {
     }
     #[test]
     fn page_targets_never_split_combining_or_emoji_clusters(){
-        let view=View{source:Arc::new(Text("a👩‍💻e\u{301}xyz")),overlay:None,selection:(0,0),visible:(0,4),page:4};
+        let view=View{source:Arc::new(Text("a👩‍💻e\u{301}xyz")),overlay:None,selection:(0,0),visible:(0,4),visible_ranges:vec![],page:4};
         // The cluster is larger than the bounded context; report unsupported,
         // rather than manufacture an endpoint inside the ZWJ sequence.
         assert!(page_position(&view,0,true).is_err());
-        let view=View{source:Arc::new(Text("ae\u{301}xyz")),overlay:None,selection:(0,0),visible:(0,3),page:3};
+        let view=View{source:Arc::new(Text("ae\u{301}xyz")),overlay:None,selection:(0,0),visible:(0,3),visible_ranges:vec![],page:3};
         let at=page_position(&view,0,true).unwrap();
         assert_eq!(at,4);
     }
@@ -569,7 +642,7 @@ mod identity_tests {
                 AccessibleRead::Ready{start,text:"x".repeat(limit.min(self.len()-start))}
             }
         }
-        let view=View{source:Arc::new(Generated),overlay:None,selection:(0,0),visible:(0,2048),page:2048};
+        let view=View{source:Arc::new(Generated),overlay:None,selection:(0,0),visible:(0,2048),visible_ranges:vec![],page:2048};
         let start=4*1024*1024*1024;
         let (at,text)=view.read(start,usize::MAX).unwrap();
         assert_eq!(at,start);assert_eq!(text.len(),2048);

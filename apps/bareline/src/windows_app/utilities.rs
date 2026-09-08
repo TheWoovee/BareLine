@@ -80,11 +80,11 @@ impl Shell {
         let Some(editor)=workspace.editors.get(self.app.active) else{return true;};
         let selection=editor.selection;
         let snapshot=editor.snapshot().clone();
-        let paged=match editor {bareline_app::workspace::WorkspaceEditor::Paged(p)=>Some((p.read_handle(),p.viewport_start().0)),_=>None};
-        let offset=paged.as_ref().map_or(0,|(_,offset)|*offset);
+        let paged=match editor {bareline_app::workspace::WorkspaceEditor::Paged(p)=>Some((p.read_handle(),p.global_selection())),_=>None};
+        let (anchor,caret)=paged.as_ref().map_or((TextOffset(selection.anchor),TextOffset(selection.caret)),|(_,selection)|*selection);
         let length=paged.as_ref().map_or(snapshot.len(),|(source,_)|source.snapshot().len());
-        let selected=selection.anchor!=selection.caret;
-        let range=if selected {TextOffset(offset+selection.anchor.min(selection.caret))..TextOffset(offset+selection.anchor.max(selection.caret))}else{TextOffset(0)..TextOffset(length)};
+        let selected=anchor!=caret;
+        let range=if selected {anchor.min(caret)..anchor.max(caret)}else{TextOffset(0)..TextOffset(length)};
         let language=editor.language;
         let title=workspace.titles().get(self.app.active).cloned().unwrap_or_else(||"Document".into());
         let algorithm=match id {"utilities.md5"=>Some(HashAlgorithm::Md5),"utilities.sha1"=>Some(HashAlgorithm::Sha1),"utilities.sha256"=>Some(HashAlgorithm::Sha256),"utilities.sha512"=>Some(HashAlgorithm::Sha512),_=>None};

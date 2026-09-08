@@ -209,7 +209,11 @@ impl Shell {
                 19000
             };
         }
+        let folder_semantics=self.search_folder_semantics();
+        if let Some(node)=folder_semantics.iter().find(|node|node.focused) {focus=node.id.0;}
+        semantic_group(&mut chrome,90_000_030,"Folder search",folder_semantics.iter().map(|node|bareline_app::accessibility::semantic_node(node,1)).collect());
         let active_layer = if self.palette.open { Some(90_000_002) }
+            else if self.search_folder_open() { Some(90_000_030) }
             else if self.shortcuts.open { Some(90_000_004) }
             else if self.power.open { Some(90_000_006) }
             else if self.settings.controller.open { Some(90_000_012) }
@@ -233,9 +237,21 @@ impl Shell {
             }).collect();
         }
         if let Some(bareline_app::workspace::WorkspaceEditor::Paged(editor)) = editor {
-            let base = editor.viewport_start().0;
-            if let Some(text) = &mut snapshot.text { text.start_byte += base; }
-            for rect in &mut snapshot.text_geometry { rect.start += base; rect.end += base; }
+            use bareline_document::TextOffset;
+            use bareline_editor_surface::paged_view::SourceAffinity;
+            // A platform text run is contiguous in source coordinates. Keep one
+            // real piece instead of presenting a concatenated folded gap as text.
+            snapshot.text = snapshot.text.take().and_then(|text| {
+                let local_start=text.start_byte;
+                let local_end=local_start.checked_add(text.value.len())?;
+                let piece=editor.source_segments().iter().find(|piece|piece.local.end.0>local_start && piece.local.start.0<local_end);
+                let (start,end)=piece.map_or((local_start,local_end),|piece|(local_start.max(piece.local.start.0),local_end.min(piece.local.end.0)));
+                let source=editor.source_offset(TextOffset(start),SourceAffinity::After)?;
+                let value=text.value.get(start-local_start..end-local_start)?.to_owned();
+                let (anchor,caret)=editor.global_selection();
+                bareline_app::accessibility::bounded_text(value,source.0,anchor.0,caret.0)
+            });
+            map_paged_geometry(editor, &mut snapshot.text_geometry);
             if let Some(context) = &mut snapshot.text_context {
                 context.source_identity = editor.snapshot().identity_token();
                 let (anchor, caret) = editor.global_selection();
@@ -275,6 +291,22 @@ impl Shell {
                     _ => None,
                 };
                 if !id.is_some_and(|id| self.palette.semantics().iter().any(|n|n.id.0==id && !n.disabled)) { continue; }
+            }
+            if self.search_folder_open() && !self.palette.open {
+                let target=match &action {
+                    AccessibilityAction::Focus(id)=>Some((*id,false,None)),
+                    AccessibilityAction::Invoke(id)=>Some((*id,true,None)),
+                    AccessibilityAction::SetValue{id,value}=>Some((*id,false,Some(value.as_str()))),
+                    _=>None,
+                };
+                if let Some((id,invoke,value))=target {
+                    if self.search_folder_accessibility(id,invoke,value) {
+                        if let Some(window)=&self.window {window.request_redraw();}
+                    }
+                }
+                // A folder dialog owns input; stale background actions cannot
+                // reach the editor or other controllers while it is active.
+                continue;
             }
             if self.power_accessibility(&action) { continue; }
             if self.power.open && !self.palette.open { continue; }
@@ -760,4 +792,16 @@ mod tests {
         let expected: serde_json::Value = serde_json::from_str(&expected).expect("valid reviewed semantic baseline");
         assert_eq!(actual,expected,"full semantic fields, hierarchy, focus and action capabilities changed");
     }
+}
+
+/// Translate each real shaped box independently; a hidden seam is never text.
+pub(super) fn map_paged_geometry(editor:&bareline_editor_surface::paged_view::PagedEditorSurface, boxes:&mut Vec<bareline_platform::accessibility::AccessibilityTextBox>) {
+    use bareline_document::TextOffset;
+    use bareline_editor_surface::paged_view::SourceAffinity;
+    boxes.retain_mut(|rect| {
+        let Some(start)=editor.source_offset(TextOffset(rect.start),SourceAffinity::After) else{return false;};
+        let Some(end)=editor.source_offset(TextOffset(rect.end),SourceAffinity::Before) else{return false;};
+        if end.0.checked_sub(start.0)!=rect.end.checked_sub(rect.start){return false;}
+        rect.start=start.0;rect.end=end.0;true
+    });
 }

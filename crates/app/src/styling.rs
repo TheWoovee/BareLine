@@ -22,7 +22,7 @@ pub struct StylingReceipt {
 pub struct Styling {
     view_label: String,
     paged: Option<paged::Job>,
-    pub paged_folds: Option<(Vec<bareline_syntax::folding::Fold>, usize, bool)>,
+    pub paged_folds: Option<(Vec<bareline_syntax::folding::AnchoredFold>, usize, bool)>,
     worker: Option<SyntaxWorker>,
     pending: Option<SyntaxTicket>,
     source: Option<DocumentSnapshot>,
@@ -78,10 +78,11 @@ impl Styling {
                         bareline_settings::LexerPreference::Native
                     }
                 };
-                self.refresh_paged(
+                self.refresh_paged_mapped(
                     paged.read_handle(),
                     paged.surface.snapshot(),
                     paged.viewport_start(),
+                    paged.source_segments().to_vec(),
                     language,
                     crate::language::LanguageConfiguration { policy, definition },
                     notify,
@@ -95,7 +96,8 @@ impl Styling {
                     .is_some_and(|result| result.is_current(paged.surface.snapshot()))
                     && let Some((folds, first_line, partial)) = self.paged_folds.take()
                 {
-                    if let Err(error) = paged.set_known_global_folds(folds, 0, partial, first_line)
+                    if let Err(error) =
+                        paged.set_known_anchored_folds(folds, 0, partial, first_line)
                     {
                         paged.surface.error = Some(error);
                     }
@@ -139,6 +141,7 @@ impl Styling {
                     && self.paged.as_ref().is_some_and(|job| {
                         job.identity == paged.snapshot().identity_token()
                             && job.origin == paged.viewport_start()
+                            && job.segments == paged.source_segments()
                             && job.local.same_document(paged.surface.snapshot())
                             && job.local.revision == paged.surface.snapshot().revision
                             && job.language == editor.language
@@ -172,7 +175,16 @@ impl Styling {
             return Some(StylingReceipt {
                 identity: job.identity,
                 language: job.language,
-                range: job.origin..TextOffset(job.origin.0 + job.local.len()),
+                range: job
+                    .segments
+                    .first()
+                    .map_or(job.origin, |segment| segment.source.start)
+                    ..job
+                        .segments
+                        .last()
+                        .map_or(TextOffset(job.origin.0 + job.local.len()), |segment| {
+                            segment.source.end
+                        }),
                 ready: self.result.as_ref().is_some_and(|result| {
                     result.is_current(&job.local)
                         && result.status == bareline_syntax::Status::Complete
@@ -204,11 +216,25 @@ impl Styling {
         config: crate::language::LanguageConfiguration,
         notify: Arc<dyn Fn() + Send + Sync>,
     ) {
+        self.refresh_paged_mapped(handle, local, origin, Vec::new(), language, config, notify);
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub fn refresh_paged_mapped(
+        &mut self,
+        handle: bareline_editor_surface::paged_view::PagedReadHandle,
+        local: &DocumentSnapshot,
+        origin: TextOffset,
+        segments: Vec<bareline_editor_surface::paged_view::ViewportSegment>,
+        language: Language,
+        config: crate::language::LanguageConfiguration,
+        notify: Arc<dyn Fn() + Send + Sync>,
+    ) {
         let current = self.paged.as_ref().is_some_and(|job| {
             job.identity == handle.snapshot().identity_token()
                 && job.local.same_document(local)
                 && job.local.revision == local.revision
                 && job.origin == origin
+                && job.segments == segments
                 && job.language == language
                 && job.preference == config.lexer()
                 && match (&job.definition, &config.definition) {
@@ -231,6 +257,7 @@ impl Styling {
             handle,
             local.clone(),
             origin,
+            segments,
             language,
             config.lexer(),
             config.definition,
