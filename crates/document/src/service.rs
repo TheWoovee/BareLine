@@ -197,12 +197,14 @@ impl Scheduler {
                         let job = match work {
                             Work::Actor(job) => job,
                             Work::HistoryPolicy(job, max_changes) => {
-                                let mut actor = job.lock().unwrap_or_else(|error| error.into_inner());
+                                let mut actor =
+                                    job.lock().unwrap_or_else(|error| error.into_inner());
                                 if !actor.retired {
                                     let mut policy = actor.document.history_policy;
                                     // Multiple workers may acquire this actor out of queue
                                     // order; coalesce to the latest admitted setting.
-                                    policy.max_changes = actor.configured_history_limit.unwrap_or(max_changes);
+                                    policy.max_changes =
+                                        actor.configured_history_limit.unwrap_or(max_changes);
                                     actor.document.set_history_policy(policy);
                                 }
                                 drop(actor);
@@ -480,10 +482,22 @@ impl DocumentService {
     /// Nonblocking policy admission. The caller retries when the bounded queue
     /// is full; retirement of retained roots happens on the document worker.
     pub fn configure_history_limit(&self, max_changes: usize) -> bool {
-        let Ok(mut actor) = self.actor.try_lock() else { return false; };
-        if actor.retired { return false; }
-        if actor.configured_history_limit == Some(max_changes) { return true; }
-        if self.ready.submit(Work::HistoryPolicy(self.actor.clone(), max_changes)).is_err() { return false; }
+        let Ok(mut actor) = self.actor.try_lock() else {
+            return false;
+        };
+        if actor.retired {
+            return false;
+        }
+        if actor.configured_history_limit == Some(max_changes) {
+            return true;
+        }
+        if self
+            .ready
+            .submit(Work::HistoryPolicy(self.actor.clone(), max_changes))
+            .is_err()
+        {
+            return false;
+        }
         actor.configured_history_limit = Some(max_changes);
         true
     }
@@ -814,10 +828,19 @@ mod tests {
     #[test]
     fn configured_history_limit_retires_on_worker_without_changing_content() {
         let pool = Scheduler::new(1, 8).unwrap();
-        let mut document = Document::from_utf8("", Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+        let mut document =
+            Document::from_utf8("", Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
         for _ in 0..4 {
             let snapshot = document.snapshot();
-            document.apply(EditTransaction { base_revision: snapshot.revision, edits: vec![Edit { range: TextOffset(snapshot.len())..TextOffset(snapshot.len()), insert: "x".into() }] }).unwrap();
+            document
+                .apply(EditTransaction {
+                    base_revision: snapshot.revision,
+                    edits: vec![Edit {
+                        range: TextOffset(snapshot.len())..TextOffset(snapshot.len()),
+                        insert: "x".into(),
+                    }],
+                })
+                .unwrap();
         }
         let captured = document.snapshot();
         let service = pool.document(document, 8);
@@ -827,7 +850,10 @@ mod tests {
             peer.configure_history_limit(1);
             if let Ok(actor) = service.actor.try_lock() {
                 if actor.document.history_stats().undo_changes == 1 {
-                    assert_eq!(actor.document.snapshot().content_state, captured.content_state);
+                    assert_eq!(
+                        actor.document.snapshot().content_state,
+                        captured.content_state
+                    );
                     assert_eq!(actor.document.snapshot().revision, captured.revision);
                     break;
                 }
@@ -869,7 +895,8 @@ mod tests {
             thread::yield_now();
         };
         assert_eq!(second.recv().unwrap().result, Err(Error::StaleRevision));
-        assert_eq!(budget.used(), 1);
+        let receipt_bytes = result.snapshot.applied_change().unwrap().charged_bytes();
+        assert_eq!(budget.used(), 1 + receipt_bytes);
         drop(services);
         drop(pool);
     }

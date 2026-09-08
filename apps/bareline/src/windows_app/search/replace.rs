@@ -1210,7 +1210,7 @@ impl Shell {
                         })
                 });
                 if let Some(editor) = target {
-                    if editor.read_only() || editor.busy() {
+                    if editor.surface.read_only() || editor.busy() {
                         self.search.replace.record_open(
                             next.source.identity_token(),
                             "Skipped: document became read-only or busy; refresh preview",

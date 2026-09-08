@@ -678,8 +678,8 @@ impl Shell {
             tab.view.anchor = editor.selection.anchor as u64;
             if let bareline_app::workspace::WorkspaceEditor::Paged(paged) = editor {
                 let selection=paged.global_selection();
-                tab.view.caret=selection.caret as u64;
-                tab.view.anchor=selection.anchor as u64;
+                tab.view.caret=selection.1.0 as u64;
+                tab.view.anchor=selection.0.0 as u64;
             }
             tab.view.scroll_y_bits = editor.scroll_y.max(0.0).to_bits();
             tab.view.folds = editor.persisted_folds();

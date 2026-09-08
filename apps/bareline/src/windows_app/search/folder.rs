@@ -384,10 +384,10 @@ impl Shell {
                                     "z" => field.undo(false),
                                     "y" => field.undo(true),
                                     "c" | "x" => {
-                                        if !field.selected_text().is_empty() {
+                                        if !field.selected().is_empty() {
                                             if let Some(platform) = &self.platform {
                                                 match platform
-                                                    .set_clipboard_text(field.selected_text())
+                                                    .set_clipboard_text(field.selected())
                                                 {
                                                     Ok(()) => {
                                                         if key.eq_ignore_ascii_case("x") {

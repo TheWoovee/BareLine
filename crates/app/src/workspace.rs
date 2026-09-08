@@ -118,7 +118,7 @@ pub struct Workspace {
     retired: Vec<WorkspaceEditor>,
     closed: Vec<(WorkspaceEditor, Option<FileState>, String)>,
     paused_transcode: Option<Box<bareline_file_io::lifecycle::PausedTranscode>>,
-    paused_reload: Option<DocumentSnapshot>,
+    paused_reload: Option<bareline_document::DocumentSnapshot>,
     eol_status: std::cell::RefCell<encoding::EolTracker>,
     encoding_failures: Vec<EncodingFailure>,
     eol_job: Option<encoding::EolJob>,

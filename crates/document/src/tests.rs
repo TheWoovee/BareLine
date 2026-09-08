@@ -152,6 +152,12 @@ fn failed_batch_and_exhausted_shared_budget_do_not_commit() {
     assert_eq!(doc.snapshot().revision, saved.revision);
     assert_eq!(undo.used(), 0);
     assert_eq!(budget.used(), saved.len());
+    // Failed phase above retains its16-byte cap. Success/undo additionally own
+    // both the preceding receipt and the newly prepared receipt until publication.
+    let receipt_bytes = std::mem::size_of::<crate::change::AppliedChange>()
+        + std::mem::size_of::<crate::change::CompactEdit>()
+        + 2 * std::mem::size_of::<usize>();
+    budget.set_limit(16 + 2 * receipt_bytes);
     edit(&mut doc, 0, 0, "z").unwrap();
     doc.mark_saved(&saved).unwrap();
     assert!(doc.dirty());

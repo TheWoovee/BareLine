@@ -50,8 +50,8 @@ impl PagedTransfer {
                     let mut found=false;let mut installed=true;
                     for view in views.iter_mut().filter(|view|view.snapshot.same_document(target)){
                         found=true;view.refresh_peer();view.pump();
-                        if view.snapshot.revision>target.revision{return Some(Err("Transfer committed; view changed before selection installation".into()));}
-                        if view.snapshot.revision<target.revision||view.busy(){
+                        if view.snapshot.revision.0>target.revision.0{return Some(Err("Transfer committed; view changed before selection installation".into()));}
+                        if view.snapshot.revision.0<target.revision.0||view.busy(){
                             if !view.busy()&&let Some(error)=&view.error{return Some(Err(format!("Transfer committed; viewport installation failed: {error}")));}
                             installed=false;
                         }else if !published.installed.contains(&target.identity_token().0){install_selection(view,selections.clone());}
@@ -170,6 +170,9 @@ fn registry()->&'static Mutex<Registry>{static VALUE:OnceLock<Mutex<Registry>>=O
 fn publication_id()->u64 {static NEXT:std::sync::atomic::AtomicU64=std::sync::atomic::AtomicU64::new(1);(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos() as u64).wrapping_add(NEXT.fetch_add(1,std::sync::atomic::Ordering::Relaxed))}
 fn register_group(id:bareline_document::group::UndoGroup,endpoints:&[Endpoint],options:&StagingOptions,capture:&PagedTransferCapture,after:&[crate::power::SelectionSet])->Result<(),String>{let mut registry=registry().lock().map_err(|_|"Transfer group registry stopped")?;registry.groups.retain(|group|group.endpoints.iter().any(|endpoint|endpoint.views.strong_count()>0));if registry.groups.len()>=100{return Err("Linked transfer history limit reached".into());}registry.groups.try_reserve(1).map_err(|_|"Transfer group memory limit")?;let before=endpoints.iter().map(|endpoint|if endpoint.snapshot.same_document(capture.source.snapshot()){capture.source_selections.clone()}else{capture.destination_selections.clone()}).collect();registry.groups.push(GroupRecord{id,endpoints:endpoints.to_vec(),options:options.clone(),before,after:after.to_vec()});Ok(())}
 fn unregister_group(id:bareline_document::group::UndoGroup){if let Ok(mut registry)=registry().lock(){registry.groups.retain(|group|group.id!=id);}}
+/// Public readiness includes the terminal receipt until this participant's
+/// authoritative viewport and selection have actually been installed.
+pub(super) fn history_pending(view:&PagedEditorSurface)->bool {registry().lock().map_or(true,|registry|registry.pending.contains_key(&view.snapshot.identity_token().0))}
 pub(super) fn history_busy(view:&PagedEditorSurface)->bool {registry().lock().ok().and_then(|registry|registry.pending.get(&view.snapshot.identity_token().0).cloned()).is_some_and(|result|result.lock().map_or(true,|result|result.is_none()))}
 pub(super) fn pump_history(view:&mut PagedEditorSurface)->bool {
     let id=view.snapshot.identity_token().0;
@@ -179,8 +182,8 @@ pub(super) fn pump_history(view:&mut PagedEditorSurface)->bool {
         Err(error)=>{view.error=Some(error);true},
         Ok(published)=>{let Some(index)=published.snapshots.iter().position(|snapshot|snapshot.same_document(&view.snapshot))else{return false;};
             let target=&published.snapshots[index];
-            if view.snapshot.revision<target.revision{view.refresh_peer();if !view.busy()&&view.error.is_some(){true}else{false}}
-            else if view.busy(){false}
+            if view.snapshot.revision.0<target.revision.0{view.refresh_peer();if !view.power_actor_busy()&&view.error.is_some(){true}else{false}}
+            else if view.power_preparing||!view.power_inputs.is_empty()||view.power_actor_busy(){false}
             else if view.snapshot.revision==target.revision{install_selection(view,published.selections[index].clone());true}
             else{view.error=Some("Linked history committed; view changed before selection installation".into());true}
         }
@@ -287,6 +290,8 @@ mod tests {
         destination.enqueue(Input::Undo);drain(&mut [&mut source,&mut destination]);assert_eq!(destination.snapshot.len(),4);
         let group=source.actor.lock().unwrap().transcoded.document.history_group(true).unwrap();
         source.enqueue(Input::Undo);drain(&mut [&mut source,&mut destination]);assert_eq!(source.snapshot.len(),3);assert_eq!(destination.snapshot.len(),1);
+        assert_eq!(source.global_selection_set().selections,vec![Selection{anchor:0,caret:3}]);assert_eq!(source.global_selection_set().primary,0);
+        assert_eq!(destination.global_selection_set().selections,vec![Selection{anchor:1,caret:1}]);
         source.enqueue(Input::Redo);drain(&mut [&mut source,&mut destination]);assert_eq!(source.snapshot.len(),0);assert_eq!(destination.snapshot.len(),4);
         drop(destination);
         source.enqueue(Input::Undo);drain(&mut [&mut source]);assert_eq!(source.snapshot.len(),3);

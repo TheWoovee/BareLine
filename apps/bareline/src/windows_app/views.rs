@@ -158,14 +158,16 @@ mod tests {
         loop {assert!(Instant::now()<deadline);workspace.pump();views.pump(&mut workspace);if !views.busy(&workspace)&&views.pending_restore.iter().all(Option::is_none)&&views.pending_view_scroll.iter().all(Option::is_none){break;}std::thread::yield_now();}
         let WorkspaceEditor::Paged(peer)=views.secondary.as_mut().unwrap() else {unreachable!()};
         peer.set_known_global_folds(vec![bareline_syntax::folding::Fold {header:0,end:12_000,level:1}],1,false,0).unwrap();
+        peer.fold_all_known(1);
+        assert_eq!(peer.persisted_global_folds(),vec![0..12_001]);
         loop {assert!(Instant::now()<deadline);peer.pump();if peer.paged_frame_state().ready&&peer.source_segments().len()>1{break;}std::thread::yield_now();}
         assert!(peer.local_offset(TextOffset(100_000)).is_none());
         let suffix_local=peer.local_offset(TextOffset(suffix)).unwrap();
         assert_eq!(peer.source_offset(suffix_local,SourceAffinity::After),Some(TextOffset(suffix)));
         let mut renderer=bareline_renderer_recording::RecordingBackend::default();let mut ops=Vec::new();
-        peer.draw_styled(&mut renderer,1000.0,800.0,&mut ops,bareline_editor_surface::SyntaxView{result:None,language:"Plain text",unavailable:false}).unwrap();
-        let suffix_box=peer.accessibility_geometry(&renderer,1000.0,800.0).into_iter().find(|(range,_)|range.start==suffix_local.0).unwrap().1;
-        let mut boxes=peer.accessibility_geometry(&renderer,1000.0,800.0).into_iter().map(|(range,bounds)|bareline_platform::accessibility::AccessibilityTextBox{start:range.start,end:range.end,bounds:[bounds.x as f64,bounds.y as f64,bounds.width as f64,bounds.height as f64]}).collect();
+        peer.surface.draw_styled(&mut renderer,1000.0,800.0,&mut ops,bareline_editor_surface::SyntaxView{result:None,language:"Plain text",unavailable:false}).unwrap();
+        let suffix_box=peer.surface.accessibility_geometry(&renderer,1000.0,800.0).into_iter().find(|(range,_)|range.start==suffix_local.0).unwrap().1;
+        let mut boxes=peer.surface.accessibility_geometry(&renderer,1000.0,800.0).into_iter().map(|(range,bounds)|bareline_platform::accessibility::AccessibilityTextBox{start:range.start,end:range.end,bounds:[bounds.x as f64,bounds.y as f64,bounds.width as f64,bounds.height as f64]}).collect();
         super::super::accessibility::map_paged_geometry(peer,&mut boxes);
         let footer=boxes.iter().find(|rect|rect.bounds[0]==suffix_box.x as f64&&rect.bounds[1]==suffix_box.y as f64).unwrap();
         assert_eq!(footer.start,suffix);

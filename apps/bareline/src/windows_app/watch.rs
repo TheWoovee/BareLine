@@ -471,7 +471,7 @@ impl Shell {
             if let Some((_,pane,index,id))=self.watch.hits.iter().find(|(bounds,_,_,_)|bounds.contains(self.pointer)).copied(){
                 if let Some(w)=&self.workspace{if !self.views.activate_watch_pane(w,&mut self.app,pane){return true;}}
                 self.app.active=index;
-                if let Some(action)=self.app.commands.dispatch_in(id,&self.command_context()){self.dispatch(el,action);}
+                if let Ok(action)=self.app.commands.dispatch_in(id,&self.command_context()){self.dispatch(el,action);}
                 if let Some(window)=&self.window{window.request_redraw();}return true;
             }
         }

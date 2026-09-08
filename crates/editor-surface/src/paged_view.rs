@@ -415,7 +415,9 @@ impl PagedEditorSurface {
     }
     /// Nonblocking peer publication check; the next viewport is fetched on the worker.
     pub fn refresh_peer(&mut self) -> bool {
-        if self.busy() || self.captured.is_some() { return false; }
+        // A completed linked-history receipt still keeps public busy true until
+        // installation; it must not prevent scheduling its own peer viewport.
+        if self.power_preparing || !self.power_inputs.is_empty() || self.power_actor_busy() || self.captured.is_some() { return false; }
         let changed = self.peer.try_lock().is_ok_and(|peer| peer.epoch != self.peer_epoch);
         if !changed { return false; }
         self.sync_global_selection();
@@ -448,7 +450,7 @@ impl PagedEditorSurface {
         self.can_redo
     }
     pub fn busy(&self) -> bool {
-        self.power_preparing||!self.power_inputs.is_empty()||self.power_actor_busy()
+        transfer::history_pending(self)||self.power_preparing||!self.power_inputs.is_empty()||self.power_actor_busy()
     }
     pub fn power_actor_busy(&self)->bool {
         if transfer::history_busy(self){return true;}

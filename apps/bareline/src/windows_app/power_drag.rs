@@ -114,10 +114,10 @@ impl Shell {
         if let Some(source)=editor(workspace,&self.views,request.source.pane) {
             if !source.busy()&&ranges(source)!=request.ranges {self.power.status="Text transfer selection changed.".into();workspace.message=Some(self.power.status.clone());return true;}
         }
-        for endpoint in [&request.source,&request.destination]{
-            let Some(index)=workspace.editors.iter().position(|editor|identity(editor)==endpoint.identity)else{self.power.status="Text transfer source tab closed.".into();return true;};
+        for captured_identity in [request.source.identity,request.destination.identity]{
+            let Some(index)=workspace.editors.iter().position(|editor|identity(editor)==captured_identity)else{self.power.status="Text transfer source tab closed.".into();return true;};
             if !workspace.editors[index].paged(){
-                match workspace.promote_resident_for_source_edit(index,endpoint.identity){
+                match workspace.promote_resident_for_source_edit(index,captured_identity){
                     Ok(_)=>{self.power.drag_runtime.pending=Some(request);(self.notify)();return true;},
                     Err(error)=>{self.power.status=error;workspace.message=Some(self.power.status.clone());return true;}
                 }

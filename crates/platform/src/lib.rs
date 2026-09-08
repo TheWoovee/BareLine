@@ -97,7 +97,7 @@ pub trait LocalFileSystem: Send + Sync {
     /// Release source-only guards after a private snapshot has been sealed.
     fn release_source_read(&self,_:&Path){}
     /// Recheck an admitted read capability without opening or querying a path.
-    fn check_source_read(&self,_:&Path)->io::Result<()>{Ok(())}
+    fn check_source_read(&self,_:&Path)->std::io::Result<()>{Ok(())}
     fn scoped_remote_read(&self,_:RemoteReadAccess)->std::io::Result<std::sync::Arc<dyn LocalFileSystem>>{Err(std::io::Error::new(std::io::ErrorKind::Unsupported,"remote read capability unavailable"))}
     /// Open a mutable followed file without following a final reparse point; retain
     /// the verified directory chain while allowing final-file rotation.

@@ -26,6 +26,11 @@ pub struct AppliedChange {
     _claim: BudgetClaim,
 }
 impl AppliedChange {
+    pub fn charged_bytes(&self) -> usize {
+        self.edits.len() * std::mem::size_of::<CompactEdit>()
+            + std::mem::size_of::<Self>()
+            + 2 * std::mem::size_of::<usize>()
+    }
     pub fn edits(&self) -> &[CompactEdit] {
         &self.edits
     }
@@ -75,7 +80,8 @@ impl AppliedChange {
         edits: impl Iterator<Item = CompactEdit>,
         budget: &Budget,
     ) -> Result<Arc<Self>, Error> {
-        if count > 4096 {
+        // Existing multi-caret commands admit 10,000 edits in one transaction.
+        if count > 10_000 {
             return Err(Error::BudgetExceeded);
         }
         let bytes = count
@@ -186,5 +192,57 @@ mod tests {
         );
         assert_eq!(document.snapshot().revision, revision);
         assert_eq!(applied.direction, ChangeDirection::Edit);
+    }
+    #[test]
+    fn ten_thousand_carets_have_complete_edit_and_undo_receipts() {
+        let mut document = Document::from_utf8(
+            &"a".repeat(10_000),
+            Budget::new(64 * 1024 * 1024),
+            Budget::new(64 * 1024 * 1024),
+        )
+        .unwrap();
+        let before = document.snapshot();
+        let edits = (0..10_000)
+            .map(|offset| Edit {
+                range: TextOffset(offset)..TextOffset(offset),
+                insert: "x".into(),
+            })
+            .collect();
+        document
+            .apply(EditTransaction {
+                base_revision: before.revision,
+                edits,
+            })
+            .unwrap();
+        let edited = document.snapshot();
+        let receipt = edited.applied_change().unwrap();
+        assert_eq!(receipt.edits().len(), 10_000);
+        assert_eq!(edited.len(), 20_000);
+        assert!(
+            receipt
+                .edits()
+                .iter()
+                .enumerate()
+                .all(
+                    |(offset, edit)| edit.before == (TextOffset(offset)..TextOffset(offset))
+                        && edit.inserted_len == 1
+                )
+        );
+        document.undo().unwrap();
+        let undone = document.snapshot();
+        let receipt = undone.applied_change().unwrap();
+        assert_eq!(receipt.direction, ChangeDirection::Undo);
+        assert_eq!(receipt.edits().len(), 10_000);
+        assert!(
+            receipt
+                .edits()
+                .iter()
+                .enumerate()
+                .all(|(offset, edit)| edit.before
+                    == (TextOffset(offset * 2)..TextOffset(offset * 2 + 1))
+                    && edit.inserted_len == 0)
+        );
+        assert_eq!(undone.content_state, before.content_state);
+        assert_eq!(undone.len(), 10_000);
     }
 }
