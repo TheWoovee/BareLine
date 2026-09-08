@@ -534,6 +534,24 @@ impl PagedEditorSurface {
     pub fn viewport_start(&self) -> TextOffset {
         TextOffset(self.viewport_start)
     }
+    /// Restore selection inside the current authoritative viewport without moving it.
+    pub fn set_viewport_selection(&mut self, anchor: TextOffset, caret: TextOffset) -> Result<(), String> {
+        if !self.viewport_ready() { return Err("Wait for the paged viewport to finish loading.".into()); }
+        let local = |offset: TextOffset| -> Result<usize, String> {
+            if offset.0 > self.snapshot.len() { return Err("Selection exceeds the document.".into()); }
+            let value = offset.0.checked_sub(self.viewport_start).ok_or("Selection precedes the viewport")?;
+            if value > self.surface.snapshot().len() || !self.surface.snapshot().is_boundary(TextOffset(value)) {
+                return Err("Selection is outside the available UTF-8 viewport.".into());
+            }
+            Ok(value)
+        };
+        let anchor = local(anchor)?;
+        let caret = local(caret)?;
+        self.surface.selection.anchor = anchor;
+        self.surface.selection.caret = caret;
+        self.surface.selections = self.surface.selection.into();
+        Ok(())
+    }
     pub fn restore_selection(
         &mut self,
         anchor: TextOffset,
