@@ -1,0 +1,13 @@
+# Batch 07 hardening closure
+
+PR020 is implementation complete pending acceptance after independent source review and the coordinated isolated gate. Seventeen packages have that state, ten remain in progress and none is fully accepted. This branch must be integrated before reporting these changes as present in another checkout.
+
+The affected offline gate selected file-io, platform-windows, extensions-protocol, app, bareline and xtask with `bareline/perf-spans,bareline/qa-inventory`. The one authorized lock refresh added exactly three existing path-dependency edges to xtask; versions did not change. Subsequent commands were locked.
+
+Native23, app82, protocol10, file-io54 and recovery integration3 passed. Backend47 initially passed with one existing health-probe failure; parser corpus3 passed with one obsolete whole-session rejection assertion. The corpus now verifies validated per-entry salvage and bounded diagnostics, and its targeted rerun passed4/4. The health probe passed with canonical path spelling; investigation exposed a real lexical path-identity defect. The repair compares held volume/file identities under the existing sealed update-read policy. Its actual compiled targeted test passed valid, case-variant same-file, same-byte different-file and forged-parent cases. Backend effective coverage is48. Sixteen new test entries bring cumulative distinct Rust coverage to **411**; nested child reruns are not added again.
+
+Fault coverage exercises six recovery transitions, nine save transitions and four native replacement branches using bounded owned child processes and disposable fixtures. Storage-full and process-death tests verify retained old/new state, valid journal history and backups. Parser mutations reach actual session, UDL, RPC, journal and authenticated package parsing. The unsafe inventory and sanitizer feasibility record distinguish source evidence from unexecuted platform tooling.
+
+The final default build passed in21.11 seconds, SHA-256 `AC79F6F07399C00460CD221E847DD57D422FB623AB212E121595A9A5465EA859`; twelve existing warning groups remain. Logs are in the original checkout's ignored `target/integration-batch-07-*.log`, particularly `hardening-rerun`, `corpus`, `health-identity-actual` and `default-build`. The earlier `health-identity` log ran old source before a misplaced owner patch was detected and transferred to the isolated checkout; only `health-identity-actual` verifies the repair.
+
+Manual desktop/crash journeys, external signing/deployment and feasible foreign-host sanitizer execution remain pending. No native benchmark, publication or remote operation ran. Active original-tree development is excluded from this verified branch.
