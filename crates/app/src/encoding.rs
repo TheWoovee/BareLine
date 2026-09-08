@@ -30,13 +30,14 @@ choices! {
     (Gbk, "GBK", "gbk"), (Big5, "Big5", "big5"),
     (EucJp, "EUC-JP", "eucjp"), (EucKr, "EUC-KR", "euckr"),
 }
-pub const ROOT: &[&str] = &["encoding.info", "encoding.choose_interpret", "encoding.choose_convert", "encoding.bom_on", "encoding.bom_off", "encoding.eol", "encoding.binary"];
+pub const ROOT: &[&str] = &["encoding.info", "encoding.failure", "encoding.choose_interpret", "encoding.choose_convert", "encoding.bom_on", "encoding.bom_off", "encoding.eol", "encoding.binary"];
 pub const EOLS: &[&str] = &["encoding.eol.lf", "encoding.eol.crlf", "encoding.eol.cr", "encoding.eol.selection_lf", "encoding.eol.selection_crlf", "encoding.eol.selection_cr"];
 pub const BINARY: &[&str] = &["encoding.binary.info", "encoding.binary.readonly", "encoding.binary.edit"];
 
 pub fn register(registry: &mut CommandRegistry) {
     for (id, title) in [
         ("encoding.choose", "Encoding…"), ("encoding.info", "Encoding Details"),
+        ("encoding.failure", "Show Encoding Save Failure"),
         ("encoding.choose_interpret", "Interpret Original Bytes As…"),
         ("encoding.choose_convert", "Convert Save Encoding To…"),
         ("encoding.bom_on", "Write Byte Order Mark"), ("encoding.bom_off", "Omit Byte Order Mark"),
@@ -76,6 +77,10 @@ pub fn summary(state: &EncodingState) -> String {
         label(state.interpreted()), label(state.save_target), state.confidence,
         if state.bom { "on" } else { "off" }, state.invalid_span_count, state.invalid_byte_count)
 }
+/// Coordinates are UTF-8 text bytes in the captured revision, never raw-file offsets.
+pub fn failure_description(revision: u64, range: std::ops::Range<bareline_document::TextOffset>, reason: &str) -> String {
+    format!("Save refused: {reason}; text bytes {}–{} (end exclusive), revision {revision}", range.start.0, range.end.0)
+}
 pub fn annotate(context: &mut CommandContext, state: Option<&EncodingState>, busy: bool, read_only: bool) {
     let unavailable = state.is_none() || busy;
     for id in ROOT.iter().chain(EOLS).chain(BINARY).copied().chain(["encoding.choose"])
@@ -86,6 +91,8 @@ pub fn annotate(context: &mut CommandContext, state: Option<&EncodingState>, bus
     let info = CommandState { label: Some(summary(state)), ..CommandState::disabled("Encoding detection and invalid-byte information") };
     context.states.insert(CommandId("encoding.info"), info);
     context.states.insert(CommandId("encoding.binary.info"), CommandState::disabled("Binary-like bytes detected; original bytes are preserved"));
+    // Native/workspace composition enables this only for an actual captured failure.
+    context.states.insert(CommandId("encoding.failure"), CommandState::disabled("No encoding save failure for this document"));
     for choice in CODECS {
         for (id, operation, checked) in [(choice.interpret, "Interpret as", state.interpreted() == choice.encoding), (choice.convert, "Convert to", state.save_target == choice.encoding)] {
             let mut item = if unavailable || (read_only && id == choice.convert) { CommandState::disabled("Document is busy or read-only") } else { CommandState::default() };

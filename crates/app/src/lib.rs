@@ -15,6 +15,7 @@ pub mod utilities;
 pub mod text_prototype;
 pub mod workspace;
 mod styling;
+pub use styling::Styling as ViewStyling;
 use bareline_commands::{Action, CommandRegistry, shell_commands};
 use bareline_renderer::DrawOp;
 pub struct App {

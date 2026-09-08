@@ -182,10 +182,15 @@ impl Shell {
                 }
             }
             id if id.starts_with("view.fold.") => {
+                if let Some(workspace) = self.workspace.as_mut() {
+                    self.views.prepare_fold_target(workspace);
+                }
+                if id == "view.fold.unfoldAll" || id == "view.fold.toggleCurrent" { self.views.cancel_fold_target(); }
+                else { self.views.record_fold_target(); }
                 if let Some(editor) = self
                     .workspace
                     .as_mut()
-                    .and_then(|w| w.editors.get_mut(self.app.active))
+                    .and_then(|w| self.views.active_workspace_editor_mut(w, self.app.active))
                 {
                     if let bareline_app::workspace::WorkspaceEditor::Paged(paged) = editor {
                         if id == "view.fold.unfoldAll" {
@@ -242,6 +247,9 @@ impl Shell {
         true
     }
     pub(super) fn language_pump(&mut self, _el: &ActiveEventLoop) {
+        if let Some(workspace) = self.workspace.as_mut() {
+            self.views.prepare_fold_target(workspace);
+        }
         let active = self.workspace.as_ref().and_then(|workspace| {
             workspace.editors.get(self.app.active).map(|editor| {
                 (
@@ -386,7 +394,7 @@ impl Shell {
         if let Some(editor) = self
             .workspace
             .as_ref()
-            .and_then(|w| w.editors.get(self.app.active))
+            .and_then(|w| self.views.active_workspace_editor(w, self.app.active))
             && !editor.paged()
             && (editor.language != bareline_syntax::Language::PlainText || editor.udl.is_some())
             && !self.language.restored.as_ref().is_some_and(|s| {
@@ -422,6 +430,7 @@ impl Shell {
                     definition: editor.udl.clone(),
                 },
             );
+            self.views.record_fold_target();
         }
         if !self.language.controller.open
             && !self.language.controller.busy()
@@ -562,14 +571,9 @@ impl Shell {
             self.language.applied_definition = Some(definition.clone());
         }
         if let Some((snapshot, folds, partial)) = self.language.controller.folds.take()
-            && let Some(editor) = self
-                .workspace
-                .as_mut()
-                .and_then(|w| w.editors.get_mut(self.app.active))
-            && editor.snapshot().same_document(&snapshot)
-            && editor.snapshot().revision == snapshot.revision
+            && let Some(workspace) = self.workspace.as_mut()
         {
-            editor.set_known_folds(folds, self.language.controller.fold_level, partial);
+            self.views.apply_fold_result(workspace, &snapshot, folds, self.language.controller.fold_level, partial);
         }
         if let Some(window) = &self.window {
             window.request_redraw();

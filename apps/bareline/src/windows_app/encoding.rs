@@ -13,6 +13,19 @@ impl Shell {
         let state = self.workspace.as_ref().and_then(|workspace| workspace.encoding_state(self.app.active));
         let editor = self.workspace.as_ref().and_then(|workspace| workspace.editors.get(self.app.active));
         model::annotate(context, state.as_ref(), editor.is_none_or(|editor| editor.busy()), editor.is_some_and(|editor| editor.read_only()));
+        let failure = self.workspace.as_ref().and_then(|workspace| workspace.encoding_failure(self.app.active));
+        let failure_state = match failure {
+            Some(failure) => bareline_commands::CommandState {
+                label: Some(format!("Show {}", model::failure_description(failure.revision, failure.range, &failure.reason))),
+                ..if editor.is_some_and(|editor| !editor.busy()) { bareline_commands::CommandState::default() } else { bareline_commands::CommandState::disabled("Wait for the document operation") }
+            },
+            None => bareline_commands::CommandState::disabled("No encoding save failure for this document"),
+        };
+        context.states.insert(CommandId("encoding.failure"), failure_state);
+        if let Some(workspace) = &self.workspace
+            && let Some(item) = context.states.get_mut(&CommandId("encoding.eol")) {
+            item.label = Some(format!("Line endings: {}…", workspace.encoding_eol_label(self.app.active)));
+        }
     }
     fn encoding_popup(&mut self, el: &ActiveEventLoop, ids: &[&'static str]) {
         let Some(window) = self.window.as_ref() else { return; };
@@ -45,6 +58,15 @@ impl Shell {
         }
         let active = self.app.active;
         let result = (|| {
+            if id == "encoding.failure" {
+                let workspace = self.workspace.as_mut().ok_or("No document")?;
+                let failure = workspace.encoding_failure(active).ok_or("No encoding save failure for this document")?;
+                // The workspace owns the captured identity and rejects stale revisions
+                // before selecting any bytes, including absolute Paged navigation.
+                workspace.encoding_reveal_failure(active)?;
+                workspace.message = Some(model::failure_description(failure.revision, failure.range, &failure.reason));
+                return Ok(());
+            }
             let state = self.workspace.as_ref().and_then(|workspace| workspace.encoding_state(active)).ok_or("No complete document encoding state")?;
             if id == "encoding.info" || id == "encoding.binary.info" { return Ok(()); }
             if let Some(choice) = model::CODECS.iter().find(|choice| choice.interpret == id) {
@@ -79,6 +101,12 @@ impl Shell {
         true
     }
     pub(super) fn encoding_pump(&mut self, el: &ActiveEventLoop) {
+        if let Some(workspace) = &mut self.workspace {
+            let eol = workspace.encoding_eol_label(self.app.active);
+            if let Some(editor) = workspace.editors.get_mut(self.app.active) {
+                editor.set_eol_status_override(Some(eol));
+            }
+        }
         if let Some(workspace) = &mut self.workspace
             && let Some(state) = workspace.encoding_state(self.app.active)
             && let Some(editor) = workspace.editors.get_mut(self.app.active) {

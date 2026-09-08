@@ -2372,6 +2372,7 @@ impl ApplicationHandler for Shell {
                         editor_bounds.width,
                         editor_bounds.height,
                         &mut operations,
+                        self.notify.clone(),
                     ) {
                         Ok(Some(mut caret)) => {
                             caret.x += editor_bounds.x;

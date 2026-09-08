@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::{path::PathBuf, sync::mpsc::TryRecvError};
 
 mod encoding;
+pub use bareline_file_io::codecs::failure::EncodingFailure;
 pub enum WorkspaceEditor {
     Resident(EditorSurface),
     Paged(PagedEditorSurface),
@@ -84,6 +85,8 @@ pub struct Workspace {
     retired: Vec<WorkspaceEditor>,
     closed: Vec<(WorkspaceEditor, Option<FileState>, String)>,
     paused_transcode: Option<Box<bareline_file_io::lifecycle::PausedTranscode>>,
+    eol_status: std::cell::RefCell<encoding::EolTracker>,
+    encoding_failures: Vec<EncodingFailure>,
     eol_job: Option<encoding::EolJob>,
     interpreting_paged: Option<(bareline_document::paged::PagedSnapshot, PathBuf)>,
     spill_pending: bool,
@@ -184,6 +187,8 @@ impl Workspace {
             retired: Vec::new(),
             closed: Vec::new(),
             paused_transcode: None,
+            eol_status: Default::default(),
+            encoding_failures: Vec::new(),
             eol_job: None,
             interpreting_paged: None,
             spill_pending: false,
@@ -527,6 +532,7 @@ impl Workspace {
                     if let Some(path) = pending.open_path { self.open_paged(path); }
                 }
                 IoCompletion::Open(Err(error)) | IoCompletion::Save(Err(error)) => {
+                    if let FileError::EncodingAt(failure)=&error {if self.encoding_failures.len()==32 {self.encoding_failures.remove(0);}self.encoding_failures.push(failure.clone());}
                     self.discard_preview(pending.preview.as_ref());
                     self.message = Some(file_error(error))
                 }
@@ -800,6 +806,7 @@ impl Workspace {
         self.editors.iter().enumerate().filter(|(_, editor)| editor.dirty()).map(|(index, _)| (index, self.path(index).map(PathBuf::from))).collect()
     }
     fn save_internal(&mut self, index: usize, path: PathBuf, copy_only: bool) {
+        if let Some(editor)=self.editors.get(index) {let identity=match editor {WorkspaceEditor::Resident(editor)=>editor.snapshot().identity_token(),WorkspaceEditor::Paged(editor)=>editor.snapshot().identity_token()};self.encoding_failures.retain(|failure|!failure.same_document(identity));}
         if copy_only && self.path(index).is_some_and(|source| source == path) {
             self.message = Some("Save Copy needs a different destination from the document source.".into());
             return;
@@ -1163,6 +1170,7 @@ impl Workspace {
 fn file_error(error: FileError) -> String {
     match error {
         FileError::Transcode(error) => format!("File conversion stopped: {error:?}"),
+        FileError::EncodingAt(failure)=>format!("{} at text bytes {}..{} (revision {}).",failure.reason,failure.range.start.0,failure.range.end.0,failure.revision),
         FileError::Encoding(error) => format!("Encoding operation was not applied: {error:?}"),
         FileError::Cancelled => "File operation cancelled.".into(),
         FileError::IncompleteSource => "File is still loading; wait before saving.".into(),
@@ -1203,6 +1211,30 @@ mod tests {
         }
         fn validate_target(&self, _: &std::path::Path) -> std::io::Result<()> { Ok(()) }
         fn commit(&self, staged: &std::path::Path, target: &std::path::Path, _: bool) -> std::io::Result<()> { if target.exists() { std::fs::remove_file(target)?; } std::fs::rename(staged, target) }
+    }
+    #[test]
+    fn paged_eol_counts_whole_file_and_rejects_stale_scan_results() {
+        let directory=std::env::temp_dir().join(format!("bareline-eol-{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir(&directory).unwrap();let path=directory.join("lines.txt");
+        std::fs::write(&path,format!("{}\r\n{}\r\n","x".repeat(65535),"x".repeat(65535))).unwrap();
+        let mut workspace=Workspace::new(Arc::new(||{}),Arc::new(PagedFileSystem)).unwrap();workspace.resident_max_bytes=4096;workspace.open(path);
+        fn settle(workspace:&mut Workspace){let deadline=std::time::Instant::now()+std::time::Duration::from_secs(10);loop{workspace.pump();if !workspace.io_busy()&&!workspace.editors.iter().any(WorkspaceEditor::busy){break;}assert!(std::time::Instant::now()<deadline);std::thread::yield_now();}}
+        settle(&mut workspace);assert_eq!(workspace.encoding_eol_label(0),"CRLF");
+        workspace.editors[0].enqueue(Input::Insert("\n".into()));settle(&mut workspace);
+        assert_eq!(workspace.encoding_eol_label(0),"Computing");
+        workspace.editors[0].enqueue(Input::Undo);settle(&mut workspace);
+        let deadline=std::time::Instant::now()+std::time::Duration::from_secs(10);
+        loop{let label=workspace.encoding_eol_label(0);assert_ne!(label,"Mixed","stale edited-root count escaped");if label!="Computing"{assert_eq!(label,"CRLF");break;}assert!(std::time::Instant::now()<deadline);std::thread::yield_now();}
+        drop(workspace);let _=std::fs::remove_dir_all(directory);
+    }
+    #[test]
+    fn encoding_failure_reveal_rejects_offsets_after_document_changes() {
+        let mut workspace=Workspace::new(Arc::new(||{}),Arc::new(PagedFileSystem)).unwrap();workspace.new_document().unwrap();
+        let identity=workspace.editors[0].snapshot().identity_token();
+        workspace.encoding_failures.push(EncodingFailure::new(identity,0..0,"fixture failure"));
+        workspace.encoding_reveal_failure(0).unwrap();workspace.editors[0].enqueue(Input::Insert("x".into()));
+        let deadline=std::time::Instant::now()+std::time::Duration::from_secs(10);while workspace.editors[0].busy(){workspace.pump();assert!(std::time::Instant::now()<deadline);std::thread::yield_now();}
+        assert!(workspace.encoding_reveal_failure(0).unwrap_err().contains("Document changed"));
     }
     #[test]
     fn encoding_policy_undo_redo_and_untitled_save() {

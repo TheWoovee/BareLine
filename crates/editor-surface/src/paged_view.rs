@@ -156,6 +156,8 @@ impl PagedReadHandle {
     }
 }
 pub struct PagedEditorSurface {
+    initial_eol: Option<((u64,u64),bareline_file_io::codecs::state::EolState)>,
+    encoding_failure: Arc<Mutex<Option<bareline_file_io::codecs::failure::EncodingFailure>>>,
     global_folds: Vec<bareline_syntax::folding::Fold>,
     global_fold_state: bareline_syntax::folding::FoldState,
     global_fold_overrides: std::collections::BTreeMap<usize, bool>,
@@ -209,6 +211,8 @@ pub struct PagedEditorSurface {
     pub error: Option<String>,
 }
 impl PagedEditorSurface {
+    pub fn initial_eol_label(&self)->Option<&'static str> {self.initial_eol.filter(|(identity,_)|*identity==self.snapshot.identity_token()).map(|(_,eol)|eol.label())}
+    pub fn encoding_failure(&self)->Option<bareline_file_io::codecs::failure::EncodingFailure>{self.encoding_failure.try_lock().ok().and_then(|failure|failure.clone())}
     pub fn encoding_state(&self) -> Option<bareline_file_io::codecs::state::EncodingState> { bareline_file_io::codecs::state::metadata_encoding(self.snapshot.metadata()).or_else(||self.actor.try_lock().ok().map(|opened| opened.transcoded.store.state.clone())) }
     pub fn apply_document_metadata(&mut self, metadata: bareline_document::DocumentMetadata) -> Result<(),String> { if self.surface.user_read_only {return Err("Document is read only".into());} self.submit(Action::Metadata(metadata)) }
     pub fn read_handle(&self) -> PagedReadHandle {
@@ -225,10 +229,13 @@ impl PagedEditorSurface {
             .map_err(|error| format!("{error:?}"))?
             .prefix();
         let mut surface = EditorSurface::loading(prefix, notify.clone());
+        surface.set_eol_status_override(Some("Computing".into()));
         surface.encoding_label = format!("{:?}", opened.transcoded.store.state.save_target);
         surface.user_read_only = opened.transcoded.store.state.binary_warning;
         let generation_owner = Arc::new(());
         let mut view = Self {
+            initial_eol: (opened.recovery_origin.is_none() && snapshot.revision.0==0 && snapshot.content_state==opened.transcoded.document.saved_content_state()).then_some((snapshot.identity_token(),opened.transcoded.store.eol)),
+            encoding_failure: Arc::new(Mutex::new(None)),
             navigation: crate::paged_navigation::GlobalNavigation::new(), navigation_ready: None, requested_scroll: None, pending_scroll_mapping: None, viewport_mapping: None, global_spacers: Vec::new(),
             global_folds: Vec::new(), global_fold_state: Default::default(), global_fold_overrides: Default::default(), global_folds_partial: true, global_fold_initialized: false, pending_global_folds: Vec::new(), fold_viewport_line: None,
             generation_owner: Arc::new(Mutex::new(generation_owner.clone())), view_generation: generation_owner,
@@ -283,6 +290,7 @@ impl PagedEditorSurface {
         let prefix = DocumentBuilder::new(self.budget.clone(), Budget::new(0)).map_err(|e| format!("{e:?}"))?.prefix();
         let mut surface = EditorSurface::loading(prefix, self.notify.clone());
         surface.encoding_label = self.surface.encoding_label.clone();
+        surface.set_eol_status_override(Some("Computing".into()));
         surface.user_read_only = captured.is_some() || self.surface.user_read_only;
         surface.theme = self.surface.theme;
         surface.language = self.surface.language;
@@ -305,6 +313,7 @@ impl PagedEditorSurface {
             peer: self.peer.clone(), peer_epoch: self.peer_epoch, views: self.views.clone(),
             tail: self.tail.clone(), following: captured.is_none() && self.following, follow_paused: self.follow_paused,
             tail_pending: self.tail_pending, tail_changed: self.tail_changed, surface,
+            initial_eol:self.initial_eol, encoding_failure:self.encoding_failure.clone(),
             actor: self.actor.clone(), snapshot: captured.as_ref().map_or_else(|| self.snapshot.clone(), |h| h.snapshot.fork_identity()), saved_state: captured.as_ref().map_or(self.saved_state, |h| Some(h.snapshot.content_state)),
             recovery_config: self.recovery_config.clone(), save_as_required: self.save_as_required,
             can_undo: self.can_undo, can_redo: self.can_redo, recovery: self.recovery.clone(),
@@ -671,6 +680,7 @@ impl PagedEditorSurface {
             self.pending = Some(receiver);
             return Ok(());
         }
+        let encoding_failure=self.encoding_failure.clone();
         let actor = self.actor.clone();
         let retired = self.retired.clone();
         let generation_owner = self.generation_owner.clone();
@@ -856,6 +866,7 @@ impl PagedEditorSurface {
                                 encoding: opened.transcoded.store.state.save_target,
                                 bom: opened.transcoded.store.state.bom,
                             };
+                            if let Ok(mut slot)=encoding_failure.lock(){*slot=None;}
                             let result = save_paged_cancellable(
                                 snapshot,
                                 &target,
@@ -864,7 +875,8 @@ impl PagedEditorSurface {
                                 platform.as_ref(),
                                 &cancellation,
                             )
-                            .map_err(|error| format!("{error:?}"))?;
+                            .map_err(|error| { if let bareline_file_io::lifecycle::FileError::EncodingAt(failure)=&error {if let Ok(mut slot)=encoding_failure.lock(){*slot=Some(failure.clone());}} format!("{error:?}") })?;
+                            if let Ok(mut slot)=encoding_failure.lock(){*slot=None;}
                             if !copy_only {
                                 opened.fingerprint = result.fingerprint.clone();
                                 opened.path = target;
@@ -1012,6 +1024,7 @@ impl PagedEditorSurface {
                     self.surface.acknowledge(input);
                 }
                 self.viewport_valid = false;
+                self.surface.set_eol_status_override(Some("Computing".into()));
                 self.snapshot = completed.snapshot;
                 self.path = completed.path;
                 if let Some(fingerprint) = completed.saved {

@@ -159,6 +159,7 @@ pub struct EditorSurface {
     pub folds_incomplete: bool,
     pending_folds: Vec<std::ops::Range<u64>>,
     pub encoding_label: String,
+    eol_status_override: Option<String>,
     occurrence_history: power::OccurrenceHistory,
     group_pending: bool,
     font_pixels: f32,
@@ -251,6 +252,7 @@ impl EditorSurface {
             folds_incomplete: false,
             pending_folds: Vec::new(),
             encoding_label: "UTF-8".into(),
+            eol_status_override: None,
             occurrence_history: power::OccurrenceHistory::default(),
             group_pending: false,
             font_pixels: 16.0,
@@ -463,6 +465,7 @@ impl EditorSurface {
         view.folds_incomplete = self.folds_incomplete;
         view.pending_folds = self.pending_folds.clone();
         view.encoding_label = self.encoding_label.clone();
+        view.eol_status_override = self.eol_status_override.clone();
         view.font_pixels = self.font_pixels;
         view.font_family = self.font_family.clone();
         view.tab_width = self.tab_width;
@@ -475,7 +478,19 @@ impl EditorSurface {
         if self.snapshot.same_document(&peer.snapshot) {
             self.initial_state = peer.initial_state;
             self.encoding_label = peer.encoding_label.clone();
+            self.eol_status_override = peer.eol_status_override.clone();
         }
+    }
+    /// Supplies an authoritative whole-document label for a viewport-backed surface.
+    /// The owner refreshes this after document changes and uses "Computing" while
+    /// full counts are unavailable. None restores the resident snapshot default.
+    pub fn set_eol_status_override(&mut self, label: Option<String>) {
+        self.eol_status_override = label;
+    }
+    pub fn eol_status_label(&self) -> &str {
+        self.eol_status_override
+            .as_deref()
+            .unwrap_or_else(|| self.snapshot.eol_label())
     }
     pub fn refresh_peer(&mut self, snapshot: &DocumentSnapshot) -> bool {
         if self.busy()
@@ -1672,7 +1687,7 @@ impl EditorSurface {
                 )
             },
             format!("Ln {}, Col {}", caret_line + 1, column),
-            self.snapshot.eol_label().into(),
+            self.eol_status_label().into(),
             self.encoding_label.clone(),
             if self.read_only() { "RO" } else { "INS" }.into(),
         ];

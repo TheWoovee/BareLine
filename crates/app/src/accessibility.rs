@@ -24,11 +24,11 @@ pub fn status(editor: &crate::workspace::WorkspaceEditor, width: f64, height: f6
                 format!("Line {}, column {column}", line+1)
             }).unwrap_or_else(|| "Position unavailable".into());
             let size = if snapshot.is_complete() { format!("{} bytes, {} lines",snapshot.len(),snapshot.line_count()) } else { format!("{} bytes loaded, indexing",snapshot.len()) };
-            (size,position,snapshot.eol_label().to_owned())
+            (size,position,e.eol_status_label().to_owned())
         }
         WorkspaceEditor::Paged(e) => {
             let lines = match e.snapshot().line_count() { bareline_document::paged::LineCount::Known(count) => format!("{count} lines"), bareline_document::paged::LineCount::Unknown => "lines indexing".into() };
-            (format!("{} bytes, {lines}",e.snapshot().len()), format!("Byte {}, line and column indexing",e.viewport_start().0+e.surface.selection.caret), "EOL indexing".into())
+            (format!("{} bytes, {lines}",e.snapshot().len()), format!("Byte {}, line and column indexing",e.viewport_start().0+e.surface.selection.caret), e.surface.eol_status_label().to_owned())
         }
     };
     let values = [("Language",editor.language.label().to_owned()),("Document size",size),("Caret position",position),("Line endings",eol),("Encoding",editor.encoding_label.clone()),("Editing mode",if editor.read_only(){"Read only"}else{"Insert"}.into())];

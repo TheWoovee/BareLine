@@ -248,6 +248,7 @@ impl EditorSurface {
 impl EditorSurface {
     /// Copy view preferences during storage migration without replacing document ownership.
     pub fn copy_presentation_to(&self, view: &mut EditorSurface) {
+        view.eol_status_override = self.eol_status_override.clone();
         view.theme=self.theme;
         view.language=self.language;view.language_override=self.language_override;
         view.detected_language=self.detected_language;view.syntax_preference=self.syntax_preference;

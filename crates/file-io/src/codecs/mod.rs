@@ -2,6 +2,7 @@
 //! Stateless encoding catalog and bounded streaming adapters. Original source ranges
 //! must be copied on unchanged same-encoding saves; encoding is not a bijection.
 pub mod disk;
+pub mod failure;
 pub mod resident;
 pub mod state;
 use crate::{

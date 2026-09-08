@@ -41,6 +41,15 @@ mod tests {
         Ok(out)
     }
     #[test]
+    fn failures_use_current_text_offsets_after_prefix_edits() {
+        let (mut document,codec)=open(vec![b'A',255,b'B'],Encoding::Utf8);
+        document.apply(EditTransaction {base_revision:document.snapshot().revision,edits:vec![Edit {range:TextOffset(0)..TextOffset(0),insert:"prefix".into()}]}).unwrap();
+        let Err(ResidentError::At {range,..})=save(&document,&codec,Encoding::Utf16Le) else {panic!("expected opaque range")};assert_eq!(range,7..10);
+        let (mut document,codec)=open(b"A".to_vec(),Encoding::Utf8);
+        document.apply(EditTransaction {base_revision:document.snapshot().revision,edits:vec![Edit {range:TextOffset(1)..TextOffset(1),insert:"x😀z".into()}]}).unwrap();
+        let Err(ResidentError::At {range,..})=save(&document,&codec,Encoding::Latin1) else {panic!("expected scalar range")};assert_eq!(range,2..6);
+    }
+    #[test]
     fn all_catalog_raw_bytes_survive_unchanged_and_unrelated_edits() {
         for e in [
             Encoding::Utf8,
@@ -89,7 +98,7 @@ mod tests {
         let (mut d, p) = open(vec![b'A', 255, b'B'], Encoding::Utf8);
         assert!(matches!(
             save(&d, &p, Encoding::Utf16Le),
-            Err(ResidentError::Codec(CodecError::UnresolvedOpaqueBytes))
+            Err(ResidentError::At { .. })
         ));
         d.apply(EditTransaction {
             base_revision: d.snapshot().revision,
@@ -145,7 +154,7 @@ mod tests {
         p.state.user_override = Some(Encoding::Utf16Le);
         assert!(matches!(
             save(&d, &p, Encoding::Utf16Le),
-            Err(ResidentError::Codec(CodecError::UnresolvedOpaqueBytes))
+            Err(ResidentError::At { .. })
         ));
     }
 }
@@ -161,6 +170,7 @@ pub struct ResidentEncoding {
 }
 #[derive(Debug)]
 pub enum ResidentError {
+    At {range: std::ops::Range<usize>, reason: String},
     Cancelled,
     Limit,
     Document(bareline_document::Error),
@@ -483,6 +493,7 @@ impl ResidentEncoding {
         let mut chunks = snapshot
             .chunks(TextOffset(0)..TextOffset(snapshot.len()))?
             .peekable();
+        let mut document_offset=0usize;
         while let Some(chunk) = chunks.next() {
             if let Some(start) = origin_of(chunk) {
                 let mut end = start + chunk.len();
@@ -501,11 +512,15 @@ impl ResidentEncoding {
                     let a = m.text.start.max(start);
                     let b = m.text.end.min(end);
                     if m.opaque && target != self.original_encoding {
-                        return Err(ResidentError::Codec(CodecError::UnresolvedOpaqueBytes));
+                        return Err(ResidentError::At {range:document_offset+a-start..document_offset+b-start,reason:"Unresolved original bytes cannot be converted".into()});
                     }
                     let encode_range = |a, b, out: &mut dyn Write| -> Result<(), ResidentError> {
+                        let mut at=document_offset+a-start;
                         for text in self.baseline.chunks(TextOffset(a)..TextOffset(b))? {
-                            write(out, &encoder.encode_text(text)?)?;
+                            for (local,part) in super::failure::bounded_chunks(text) {
+                                let encoded=encoder.encode_text(part).map_err(|error|ResidentError::At {range:super::failure::rejected_range(part,target,at+local),reason:format!("{error:?}")})?;
+                                write(out, &encoded)?;
+                            } at+=text.len();
                         }
                         Ok(())
                     };
@@ -527,8 +542,12 @@ impl ResidentEncoding {
                         encode_range(a, b, out)?;
                     }
                 }
+                document_offset+=end-start;
             } else {
-                write(out, &encoder.encode_text(chunk)?)?;
+                for (local,part) in super::failure::bounded_chunks(chunk) {
+                    let encoded=encoder.encode_text(part).map_err(|error|ResidentError::At {range:super::failure::rejected_range(part,target,document_offset+local),reason:format!("{error:?}")})?;
+                    write(out, &encoded)?;
+                } document_offset+=chunk.len();
             }
         }
         Ok(())

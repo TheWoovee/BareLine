@@ -31,6 +31,7 @@ const RECORD_BYTES: u64 = 49;
 const MAGIC: &[u8; 8] = b"BLMAP001";
 #[derive(Debug)]
 pub enum DiskError {
+    At {range: std::ops::Range<usize>, reason: String},
     Io(io::Error),
     Codec(CodecError),
     Budget,
@@ -549,26 +550,36 @@ impl DiskDecoded {
             out.write_all(target.bom())?;
         }
         let encoder = super::Encoder::new(target, false);
+        let mut document_offset=0usize;
         for piece in snapshot.pieces() {
             cancel.check().map_err(|_| DiskError::Cancelled)?;
-            match piece {
-                PagedPiece::Original { source, range }
-                | PagedPiece::OriginalOwned { source, range, .. } => {
-                    if source.generation() != original_generation {
-                        return Err(DiskError::Changed);
-                    }
-                    self.write_source_range_validated(range, target, out, cancel)?;
+            let remap=|error:DiskError,source_start:u64|match error {DiskError::At {range,reason}=>DiskError::At {range:document_offset+(range.start as u64-source_start) as usize..document_offset+(range.end as u64-source_start) as usize,reason},error=>error};
+            let length=match piece {
+                PagedPiece::Original {source,range}|PagedPiece::OriginalOwned {source,range,..}=>{
+                    if source.generation()!=original_generation{return Err(DiskError::Changed);}
+                    let length=(range.end-range.start) as usize;let start=range.start;
+                    self.write_source_range_validated(range,target,out,cancel).map_err(|error|remap(error,start))?;length
                 }
-                PagedPiece::Inserted(text) => out.write_all(&encoder.encode_text(text)?)?,
-                PagedPiece::OwnedSource { source, range, original } => {
+                PagedPiece::Inserted(text)=>{
+                    let encoded=encoder.encode_text(text).map_err(|error|DiskError::At {range:super::failure::rejected_range(text,target,document_offset),reason:format!("{error:?}")})?;
+                    out.write_all(&encoded)?;text.len()
+                }
+                PagedPiece::OwnedSource {source,range,original}=>{
+                    let length=(range.end-range.start) as usize;
                     if let Some((original_source,original_range))=original {
-                        if original_source.generation()!=original_generation {return Err(DiskError::Changed);}
-                        self.write_source_range_validated(original_range,target,out,cancel)?;
+                        if original_source.generation()!=original_generation{return Err(DiskError::Changed);}
+                        let start=original_range.start;
+                        self.write_source_range_validated(original_range,target,out,cancel).map_err(|error|remap(error,start))?;
                     } else {
-                        crate::owned_read::visit_utf8::<DiskError>(source,range,cancel,|text|{out.write_all(&encoder.encode_text(text)?)?;Ok(())})?;
-                    }
-                },
-            }
+                        let mut at=document_offset;
+                        crate::owned_read::visit_utf8::<DiskError>(source,range,cancel,|text|{
+                            let encoded=encoder.encode_text(text).map_err(|error|DiskError::At {range:super::failure::rejected_range(text,target,at),reason:format!("{error:?}")})?;
+                            out.write_all(&encoded)?;at+=text.len();Ok(())
+                        })?;
+                    }length
+                }
+            };
+            document_offset+=length;
         }
         self.validate_sealed(cancel)
     }
@@ -654,7 +665,7 @@ impl DiskDecoded {
             }
             let end = r.text_end.min(range.end);
             if r.opaque && target != self.original_encoding {
-                return Err(DiskError::Codec(CodecError::UnresolvedOpaqueBytes));
+                return Err(DiskError::At {range:cursor as usize..end as usize,reason:"Unresolved original bytes cannot be converted".into()});
             }
             if target == self.original_encoding {
                 let a = (r.text_start
@@ -780,12 +791,10 @@ fn encode_range(
             Err(e) if e.error_len().is_none() && remaining > 0 => e.valid_up_to(),
             Err(_) => return Err(DiskError::Codec(CodecError::InvalidSequence)),
         };
-        out.write_all(
-            &encoder.encode_text(
-                std::str::from_utf8(&pending[..valid])
-                    .map_err(|_| DiskError::Codec(CodecError::InvalidSequence))?,
-            )?,
-        )?;
+        let text=std::str::from_utf8(&pending[..valid]).map_err(|_|DiskError::Codec(CodecError::InvalidSequence))?;
+        let offset=(range.end-remaining-pending.len() as u64) as usize;
+        let encoded=encoder.encode_text(text).map_err(|error|DiskError::At {range:super::failure::rejected_range(text,target,offset),reason:format!("{error:?}")})?;
+        out.write_all(&encoded)?;
         pending.drain(..valid);
     }
     if !pending.is_empty() {
@@ -957,7 +966,7 @@ mod tests {
                 &mut vec![],
                 &Cancellation::default()
             ),
-            Err(DiskError::Codec(CodecError::UnresolvedOpaqueBytes))
+            Err(DiskError::At { .. })
         ));
         paged.document.undo().unwrap();
         let mut undone = vec![];
@@ -972,6 +981,9 @@ mod tests {
             )
             .unwrap();
         assert_eq!(undone, raw);
+        paged.document.apply_materialized(bareline_document::EditTransaction {base_revision:paged.document.snapshot().revision,edits:vec![bareline_document::Edit {range:TextOffset(0)..TextOffset(0),insert:"prefix".into()}]},std::slice::from_ref(&text)).unwrap();
+        let Err(DiskError::At {range,..})=store.write_snapshot(&paged.document.snapshot(),generation,Encoding::Utf8,false,&mut Vec::new(),&Cancellation::default()) else {panic!("expected located opaque conversion failure")};
+        assert_eq!(range,9..12);
         drop(text);
         drop(request);
         drop(snap);

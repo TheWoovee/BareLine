@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MPL-2.0
-//! One lazy syntax worker per workspace; active-view context is bounded and disposable.
+//! A bounded syntax cache per view, reusing the resident and paged workers.
 mod paged;
 use bareline_document::{DocumentSnapshot, TextOffset};
 use bareline_syntax::{
@@ -20,6 +20,7 @@ pub struct StylingReceipt {
 }
 #[derive(Default)]
 pub struct Styling {
+    view_label: String,
     paged: Option<paged::Job>,
     pub paged_folds: Option<(Vec<bareline_syntax::folding::Fold>, usize, bool)>,
     worker: Option<SyntaxWorker>,
@@ -35,6 +36,137 @@ pub struct Styling {
 }
 
 impl Styling {
+    /// Prepare one pane before drawing (invalidate old identity/configuration)
+    /// and after drawing (request its newly visible range). Each pane owns a
+    /// separate instance; cloned documents never share this pending-result slot.
+    pub fn prepare_view(
+        &mut self,
+        editor: &mut crate::workspace::WorkspaceEditor,
+        path: Option<&std::path::Path>,
+        notify: Arc<dyn Fn() + Send + Sync>,
+    ) {
+        use crate::workspace::WorkspaceEditor;
+        let definition = editor.udl.clone();
+        let language = if definition.is_some() {
+            Language::PlainText
+        } else {
+            editor
+                .language_override
+                .or(editor.detected_language)
+                .unwrap_or_else(|| path.map_or(Language::PlainText, Language::detect))
+        };
+        editor.language = language;
+        self.view_label = definition
+            .as_ref()
+            .map_or(language.label(), |definition| definition.name.as_str())
+            .to_owned();
+        match editor {
+            WorkspaceEditor::Paged(paged) => {
+                if !paged.viewport_ready() {
+                    self.paged = None;
+                    self.pending = None;
+                    self.result = None;
+                    self.paged_folds = None;
+                    return;
+                }
+                let mut policy = bareline_settings::LanguagePolicy::default();
+                policy.lexer = match paged.surface.syntax_preference {
+                    bareline_syntax::LexerPreference::Lexilla => {
+                        bareline_settings::LexerPreference::Primary
+                    }
+                    bareline_syntax::LexerPreference::Native => {
+                        bareline_settings::LexerPreference::Native
+                    }
+                };
+                self.refresh_paged(
+                    paged.read_handle(),
+                    paged.surface.snapshot(),
+                    paged.viewport_start(),
+                    language,
+                    crate::language::LanguageConfiguration { policy, definition },
+                    notify,
+                );
+                if self.paged.as_ref().is_some_and(|job| {
+                    job.identity == paged.snapshot().identity_token()
+                        && job.origin == paged.viewport_start()
+                }) && self
+                    .result
+                    .as_ref()
+                    .is_some_and(|result| result.is_current(paged.surface.snapshot()))
+                    && let Some((folds, first_line, partial)) = self.paged_folds.take()
+                {
+                    if let Err(error) = paged.set_known_global_folds(folds, 0, partial, first_line)
+                    {
+                        paged.surface.error = Some(error);
+                    }
+                }
+            }
+            WorkspaceEditor::Resident(resident) => {
+                if let Some(definition) = definition {
+                    self.refresh_udl(
+                        resident.snapshot(),
+                        definition,
+                        resident.visible_text.clone(),
+                        notify,
+                    );
+                } else {
+                    self.refresh_preferred(
+                        resident.snapshot(),
+                        language,
+                        resident.visible_text.clone(),
+                        notify,
+                        resident.syntax_preference,
+                    );
+                }
+            }
+        }
+    }
+    /// The return lifetime belongs only to this cache, so callers can draw the
+    /// editor mutably. The editor is consulted only while validating identity.
+    pub fn syntax_view<'a>(
+        &'a self,
+        editor: &crate::workspace::WorkspaceEditor,
+    ) -> bareline_editor_surface::SyntaxView<'a> {
+        let same_definition =
+            |cached: &Option<Arc<bareline_syntax::udl::Definition>>| match (cached, &editor.udl) {
+                (None, None) => true,
+                (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                _ => false,
+            };
+        let current = match editor {
+            crate::workspace::WorkspaceEditor::Paged(paged) => {
+                paged.viewport_ready()
+                    && self.paged.as_ref().is_some_and(|job| {
+                        job.identity == paged.snapshot().identity_token()
+                            && job.origin == paged.viewport_start()
+                            && job.local.same_document(paged.surface.snapshot())
+                            && job.local.revision == paged.surface.snapshot().revision
+                            && job.language == editor.language
+                            && job.preference == editor.syntax_preference
+                            && same_definition(&job.definition)
+                    })
+            }
+            crate::workspace::WorkspaceEditor::Resident(resident) => {
+                self.paged.is_none()
+                    && self.source.as_ref().is_some_and(|source| {
+                        source.same_document(resident.snapshot())
+                            && source.revision == resident.snapshot().revision
+                    })
+                    && self.language == Some(editor.language)
+                    && (editor.udl.is_some() || self.preference == editor.syntax_preference)
+                    && same_definition(&self.definition)
+            }
+        };
+        bareline_editor_surface::SyntaxView {
+            result: self.result.as_ref().filter(|result| {
+                current
+                    && result.is_current(editor.snapshot())
+                    && result.language == editor.language
+            }),
+            language: &self.view_label,
+            unavailable: self.unavailable && current,
+        }
+    }
     pub fn receipt(&self) -> Option<StylingReceipt> {
         if let Some(job) = &self.paged {
             return Some(StylingReceipt {
@@ -293,6 +425,69 @@ impl Styling {
 mod tests {
     use super::*;
     use bareline_document::{Budget, Document, Edit, EditTransaction};
+    #[test]
+    fn pane_caches_do_not_supersede_each_other_and_reject_foreign_views() {
+        use crate::workspace::WorkspaceEditor;
+        use bareline_editor_surface::EditorSurface;
+        let rust = Document::from_utf8("fn main() {}", Budget::new(1 << 20), Budget::new(1 << 20))
+            .unwrap()
+            .snapshot();
+        let json = Document::from_utf8(
+            "{\"value\":true}",
+            Budget::new(1 << 20),
+            Budget::new(1 << 20),
+        )
+        .unwrap()
+        .snapshot();
+        let (tx0, rx0) = std::sync::mpsc::channel();
+        let (tx1, rx1) = std::sync::mpsc::channel();
+        let notify0: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            let _ = tx0.send(());
+        });
+        let notify1: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            let _ = tx1.send(());
+        });
+        let mut first =
+            WorkspaceEditor::Resident(EditorSurface::loading(rust.clone(), notify0.clone()));
+        let mut second =
+            WorkspaceEditor::Resident(EditorSurface::loading(json.clone(), notify1.clone()));
+        first.visible_text = TextOffset(0)..TextOffset(rust.len());
+        second.visible_text = TextOffset(0)..TextOffset(json.len());
+        let mut caches = [Styling::default(), Styling::default()];
+        caches[0].prepare_view(
+            &mut first,
+            Some(std::path::Path::new("first.rs")),
+            notify0.clone(),
+        );
+        caches[1].prepare_view(
+            &mut second,
+            Some(std::path::Path::new("second.json")),
+            notify1.clone(),
+        );
+        rx0.recv_timeout(std::time::Duration::from_secs(3)).unwrap();
+        rx1.recv_timeout(std::time::Duration::from_secs(3)).unwrap();
+        assert!(caches[0].pump());
+        assert!(caches[1].pump());
+        assert!(caches[0].syntax_view(&first).result.is_some());
+        assert!(caches[1].syntax_view(&second).result.is_some());
+        assert!(caches[0].syntax_view(&second).result.is_none());
+        assert!(caches[1].syntax_view(&first).result.is_none());
+        first.syntax_preference = bareline_syntax::LexerPreference::Native;
+        assert!(caches[0].syntax_view(&first).result.is_none());
+        caches[0].prepare_view(&mut first, Some(std::path::Path::new("first.rs")), notify0);
+        assert!(caches[0].syntax_view(&first).result.is_none());
+        assert!(caches[1].syntax_view(&second).result.is_some());
+        // Both panes can reference one document while retaining independent jobs.
+        second = WorkspaceEditor::Resident(EditorSurface::loading(rust.clone(), notify1.clone()));
+        second.visible_text = TextOffset(0)..TextOffset(rust.len());
+        caches[1].prepare_view(&mut second, Some(std::path::Path::new("clone.rs")), notify1);
+        rx0.recv_timeout(std::time::Duration::from_secs(3)).unwrap();
+        rx1.recv_timeout(std::time::Duration::from_secs(3)).unwrap();
+        assert!(caches[0].pump());
+        assert!(caches[1].pump());
+        assert!(caches[0].syntax_view(&first).result.is_some());
+        assert!(caches[1].syntax_view(&second).result.is_some());
+    }
     #[test]
     fn bounded_checkpoint_progress_and_revision_invalidation() {
         let text = format!("/*\n{}*/\nlet crab = \"🦀\";\n", "comment\n".repeat(40_000));

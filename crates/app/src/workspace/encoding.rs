@@ -114,3 +114,64 @@ fn plan_eol(source:&EolSource,range:std::ops::Range<usize>,target:bareline_file_
     }
     if let Some(previous)=cr{emit(previous,1,Eol::Cr)?;}Ok(EditTransaction{base_revision:snapshot.revision,edits})
 }
+
+impl Workspace {
+    pub fn encoding_failure(&self,index:usize)->Option<EncodingFailure>{
+        match self.editors.get(index)? {
+            WorkspaceEditor::Paged(editor)=>editor.encoding_failure(),
+            WorkspaceEditor::Resident(editor)=>self.encoding_failures.iter().rev().find(|failure|failure.same_document(editor.snapshot().identity_token())).cloned(),
+        }
+    }
+    pub fn encoding_reveal_failure(&mut self,index:usize)->Result<(),String>{
+        let failure=self.encoding_failure(index).ok_or("No encoding failure for this document")?;
+        let editor=self.editors.get_mut(index).ok_or("Document unavailable")?;
+        let identity=match editor {WorkspaceEditor::Resident(editor)=>editor.snapshot().identity_token(),WorkspaceEditor::Paged(editor)=>editor.snapshot().identity_token()};
+        if !failure.matches(identity){return Err("Document changed since this failure; save again to locate the current problem".into());}
+        if editor.busy(){return Err("Document is busy".into());}
+        match editor {
+            WorkspaceEditor::Resident(editor)=>{editor.enqueue(Input::SetCaret(failure.range.start.0,false));editor.enqueue(Input::SetCaret(failure.range.end.0,true));Ok(())},
+            WorkspaceEditor::Paged(editor)=>editor.restore_selection(failure.range.start,failure.range.end),
+        }
+    }
+    /// Full-file status. Revision-keyed worker results can never describe a newer root.
+    pub fn encoding_eol_label(&self,index:usize)->String{
+        let Some(editor)=self.editors.get(index)else{return "Computing".into();};
+        let WorkspaceEditor::Paged(editor)=editor else{return editor.snapshot().eol_label().into();};
+        if let Some(label)=editor.initial_eol_label(){return label.into();}
+        let identity=editor.snapshot().identity_token();
+        let mut tracker=self.eol_status.borrow_mut();
+        if let Some(pending)=&tracker.pending {
+            match pending.receiver.try_recv(){
+                Ok((key,result))=>{tracker.pending=None;if tracker.ready.len()==32{tracker.ready.remove(0);}tracker.ready.push((key,result.unwrap_or_else(|_|"Unavailable".into())));},
+                Err(std::sync::mpsc::TryRecvError::Disconnected)=>{let key=pending.identity;tracker.pending=None;if tracker.ready.len()==32{tracker.ready.remove(0);}tracker.ready.push((key,"Unavailable".into()));},
+                Err(std::sync::mpsc::TryRecvError::Empty)=>{},
+            }
+        }
+        if let Some((_,label))=tracker.ready.iter().rev().find(|(key,_)|*key==identity){return label.clone();}
+        if tracker.pending.as_ref().is_none_or(|pending|pending.identity!=identity){
+            tracker.pending=None;
+            let source=editor.read_handle();let budget=self.bytes.clone();let notify=self.notify.clone();
+            let cancellation=bareline_file_io::cancellation::Cancellation::default();let cancel=cancellation.clone();
+            let(sender,receiver)=std::sync::mpsc::sync_channel(1);
+            if std::thread::Builder::new().name("encoding-eol-status".into()).spawn(move||{let result=scan_eol(&source,&budget,&cancel).map(|state|state.label().to_owned());let _=sender.send((identity,result));notify();}).is_err(){return "Unavailable".into();}
+            tracker.pending=Some(EolStatusPending {identity,cancellation,receiver});
+        }
+        "Computing".into()
+    }
+}
+#[derive(Default)]
+pub(super) struct EolTracker {ready:Vec<((u64,u64),String)>,pending:Option<EolStatusPending>}
+struct EolStatusPending {identity:(u64,u64),cancellation:bareline_file_io::cancellation::Cancellation,receiver:std::sync::mpsc::Receiver<((u64,u64),Result<String,String>)>}
+impl Drop for EolStatusPending {fn drop(&mut self){self.cancellation.cancel();}}
+fn scan_eol(handle:&bareline_editor_surface::paged_view::PagedReadHandle,budget:&Budget,cancel:&bareline_file_io::cancellation::Cancellation)->Result<bareline_file_io::codecs::state::EolState,String>{
+    use bareline_document::{TextOffset,paged::WindowPoll};
+    let snapshot=handle.snapshot();let mut offset=0;let mut eol=bareline_file_io::codecs::state::EolState::default();
+    while offset<snapshot.len(){
+        cancel.check().map_err(|_|"EOL scan cancelled")?;
+        let mut request=snapshot.begin_viewport(TextOffset(offset),(snapshot.len()-offset).min(64*1024),budget).map_err(|error|format!("{error:?}"))?;
+        let window=loop{cancel.check().map_err(|_|"EOL scan cancelled")?;match request.poll(){WindowPoll::Ready(window)=>break window,WindowPoll::Pending(ticket)=>{if !handle.resolve_captured_page(ticket)?{std::thread::sleep(std::time::Duration::from_millis(1));}},_=>return Err("EOL source unavailable".into())}};
+        let range=window.range();if range.end.0<=offset||range.start.0>offset{return Err("EOL scan made no progress".into());}
+        let text=&window.text()[offset-range.start.0..];eol.push(text,false);offset=range.end.0;
+    }
+    eol.push("",true);Ok(eol)
+}

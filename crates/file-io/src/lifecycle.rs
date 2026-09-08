@@ -32,6 +32,7 @@ pub struct Opened {
 }
 #[derive(Debug)]
 pub enum FileError {
+    EncodingAt(crate::codecs::failure::EncodingFailure),
     Transcode(DiskError),
     Encoding(ResidentError),
     Cancelled,
@@ -531,7 +532,7 @@ pub fn save_paged_cancellable(
                 out,
                 cancellation,
             )
-            .map_err(FileError::Transcode)
+            .map_err(|error|match error {DiskError::At {range,reason}=>FileError::EncodingAt(crate::codecs::failure::EncodingFailure::new(snapshot.identity_token(),range,reason)),error=>FileError::Transcode(error)})
     })?;
     Ok(PagedSaved {
         fingerprint,
@@ -609,17 +610,22 @@ fn save_impl(
         if let Some(encoding) = encoding {
             encoding
                 .write_snapshot(&snapshot, encoding.state.save_target, bom, out)
-                .map_err(FileError::Encoding)
+                .map_err(|error|match error {ResidentError::At {range,reason}=>FileError::EncodingAt(crate::codecs::failure::EncodingFailure::new(snapshot.identity_token(),range,reason)),error=>FileError::Encoding(error)})
         } else {
             let policy=crate::codecs::state::metadata_encoding(snapshot.metadata());
             let (encoding,bom)=policy.map_or((Encoding::Utf8,bom),|state|(state.save_target,state.bom));
             if bom { out.write_all(encoding.bom())?; }
             let encoder=crate::codecs::Encoder::new(encoding,false);
+            let mut offset=0usize;
             for chunk in snapshot
                 .chunks(TextOffset(0)..TextOffset(snapshot.len()))
                 .map_err(|_| FileError::Budget)?
             {
-                out.write_all(&encoder.encode_text(chunk).map_err(|error|FileError::Encoding(ResidentError::Codec(error)))?)?;
+                for (local,part) in crate::codecs::failure::bounded_chunks(chunk) {
+                    cancellation.check()?;
+                    let encoded=encoder.encode_text(part).map_err(|error|FileError::EncodingAt(crate::codecs::failure::EncodingFailure::new(snapshot.identity_token(),crate::codecs::failure::rejected_range(part,encoding,offset+local),format!("{error:?}"))))?;
+                    out.write_all(&encoded)?;
+                } offset+=chunk.len();
             }
             Ok(())
         }
@@ -1177,9 +1183,7 @@ mod encoded_tests {
                 &Cancellation::default(),
                 &encoding
             ),
-            Err(FileError::Encoding(ResidentError::Codec(
-                crate::CodecError::Unrepresentable
-            )))
+            Err(FileError::EncodingAt(_))
         ));
         assert_eq!(fs::read(&path).unwrap(), raw);
         assert_eq!(fs::read_dir(&temp.0).unwrap().count(), 1);
@@ -1301,9 +1305,7 @@ mod encoded_tests {
                 platform.as_ref(),
                 &Cancellation::default()
             ),
-            Err(FileError::Transcode(DiskError::Codec(
-                crate::CodecError::UnresolvedOpaqueBytes
-            )))
+            Err(FileError::EncodingAt(_))
         ));
         assert_eq!(fs::read(&path).unwrap(), raw);
         policy.encoding = Encoding::Utf16Le;

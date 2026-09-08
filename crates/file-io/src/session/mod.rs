@@ -21,6 +21,9 @@ pub struct ViewState {
     pub caret: u64,
     pub anchor: u64,
     pub scroll_line: u64,
+    /// Canonical paged viewport byte anchor; absent in older session manifests.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scroll_byte: Option<u64>,
     /// Exact logical-pixel scroll value, encoded with f64::to_bits. Finite and nonnegative.
     pub scroll_y_bits: u64,
     pub scroll_x: u32,
@@ -404,6 +407,7 @@ mod tests {
                         caret: 42,
                         anchor: 20,
                         scroll_line: 12,
+                        scroll_byte: Some(4096),
                         scroll_y_bits: 12.25f64.to_bits(),
                         scroll_x: 3,
                         split: 1,
@@ -435,6 +439,10 @@ mod tests {
             .replacen("\"version\":1", "\"version\":0", 1);
         assert_eq!(decode(old.as_bytes()).unwrap(), manifest);
         assert_eq!(manifest.restore_order(), vec![8, 7]);
+        let without_byte = String::from_utf8(encode(&manifest).unwrap()).unwrap().replace("\"scroll_byte\":4096,", "");
+        let legacy = decode(without_byte.as_bytes()).unwrap();
+        assert_eq!(legacy.tabs[0].view.scroll_byte, None);
+        assert_eq!(legacy.tabs[0].view.anchor, manifest.tabs[0].view.anchor);
     }
     #[test]
     fn malformed_and_oversized_manifests_fail_closed() {
