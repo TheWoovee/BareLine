@@ -95,12 +95,21 @@ protocol validation, trusted signed extension artifacts, actual runtime receipts
 same-machine paired runs and default-policy decisions remain external acceptance
 work. Source/product harness measurements cannot replace native evidence.
 
-The opt-in nightly series remains Bareline-only hosted evidence. Regression
+The opt-in nightly series includes separate hosted and dedicated full-native jobs;
+see [full native plan and accounting](README-NATIVE-NIGHTLY.md). The native job
+schedules every registry scenario, records unavailable prerequisites explicitly,
+and aggregates complete observations for its own rolling baseline. Regression
 reporting requires a separate repository opt-in and exactly the previous seven
 completed runs, with all seven reports present and matching configuration. It uses
 P50 increase above 10% and observed baseline noise, retaining commit history. Missing
 history produces no issue. Numeric findings never fail CI. This workflow definition
 does not authorize running it or publishing an issue in the current session.
+
+Both adapters now sample actual owned-state disk growth, including recovery,
+temporary/spill, extensions and isolated user caches. Before/after and sampled peak
+logical bytes are separate from copied fixture bytes. Extension import measures
+local acquisition bytes/time separately; historical download bytes are explicitly
+unavailable, never reconstructed or substituted with zero.
 
 Build once with the intended profile, then run the built harness directly to avoid recompiling during samples:
 

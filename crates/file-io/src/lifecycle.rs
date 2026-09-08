@@ -688,6 +688,7 @@ fn save_bytes(
             Err(error) => return Err(error.into()),
         }
     };
+    #[cfg(test)] fault_transitions::hit(fault_transitions::Point::StageCreated)?;
     let write_result = (|| -> Result<[u8; 32], FileError> {
         let mut staged_hash = Sha256::new();
         struct Writer<'a> {
@@ -701,6 +702,7 @@ fn save_bytes(
                     .check()
                     .map_err(|_| io::Error::other("cancelled"))?;
                 let n = self.file.write(bytes)?;
+                #[cfg(test)] fault_transitions::hit(fault_transitions::Point::StageWritten)?;
                 self.hash.update(&bytes[..n]);
                 Ok(n)
             }
@@ -716,7 +718,9 @@ fn save_bytes(
         cancellation.check()?;
         result?;
         cancellation.check()?;
+        #[cfg(test)] fault_transitions::hit(fault_transitions::Point::BeforeStageFlush)?;
         file.sync_all()?;
+        #[cfg(test)] fault_transitions::hit(fault_transitions::Point::StageFlushed)?;
         Ok(staged_hash.finalize().into())
     })();
     // Close before propagating write/cancellation errors so Windows can remove the stage.
@@ -730,6 +734,7 @@ fn save_bytes(
         },
         None => matches!(File::open(target), Err(error) if error.kind() == io::ErrorKind::NotFound),
     };
+    #[cfg(test)] fault_transitions::hit(fault_transitions::Point::ExpectedFingerprintChecked)?;
     if !unchanged {
         staged.retain = true;
         return Err(FileError::Conflict {
@@ -739,6 +744,7 @@ fn save_bytes(
     // Revalidate metadata policy immediately before replacement. No in-place fallback exists.
     platform.validate_target(target)?;
     cancellation.check()?;
+    #[cfg(test)] fault_transitions::hit(fault_transitions::Point::BeforeReplace)?;
     if let Err(error) = platform.commit(&staged.path, target, expected.is_some()) {
         staged.retain = true;
         return Err(FileError::Commit {
@@ -746,10 +752,13 @@ fn save_bytes(
             error,
         });
     }
+    #[cfg(test)] fault_transitions::hit(fault_transitions::Point::AfterReplace)?;
     let new_fingerprint = fingerprint(target, platform, &Cancellation::default())?;
+    #[cfg(test)] fault_transitions::hit(fault_transitions::Point::TargetFingerprintChecked)?;
     if new_fingerprint.sha256 != written_hash {
         return Err(FileError::Changed);
     }
+    #[cfg(test)] fault_transitions::hit(fault_transitions::Point::BeforeReceipt)?;
     Ok(new_fingerprint)
 }
 
@@ -1324,3 +1333,7 @@ mod encoded_tests {
         assert_eq!(fs::read_dir(&temp.0).unwrap().count(), 1);
     }
 }
+
+#[cfg(test)]
+#[path = "fault_transitions.rs"]
+mod fault_transitions;

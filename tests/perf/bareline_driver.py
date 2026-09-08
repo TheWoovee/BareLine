@@ -14,6 +14,7 @@ from perf_suite import measurement, read_json, validate_fixture_size
 from notepadpp_driver import require_hash, require_x64_pe, file_version
 from windows_process_metrics import OwnedProcessTree, MemorySampler
 from cache_protocol import prepare as prepare_cache
+from disk_metrics import DiskSampler, isolated_environment
 
 WORKLOADS = {
     'cold_launch': 'launch', 'warm_launch': 'launch', 'empty_idle': 'idle',
@@ -48,9 +49,11 @@ def run(args):
         raise ValueError('scenario requires an owned fixture copy')
     with tempfile.TemporaryDirectory(prefix='bareline-native-benchmark-') as temporary:
         root = Path(temporary)
+        environment = isolated_environment(root)
         (root / '.bareline-perf').touch(exist_ok=False)
         (root / 'settings.toml').write_bytes(settings)
         extension_bytes = 0
+        acquisition_started = time.perf_counter_ns()
         if args.scenario == 'extensions_memory':
             if not args.extension_inventory or not args.extension_command:
                 raise ValueError('extension scenario requires a pinned installed fixture inventory and owner/command')
@@ -76,6 +79,7 @@ def run(args):
                         digest.update(block); copied.write(block)
                 if digest.hexdigest() != record['sha256'].lower():
                     raise ValueError('extension fixture file hash mismatch')
+        acquisition_us = (time.perf_counter_ns() - acquisition_started) // 1000
         fixture = None
         copied_bytes = 0
         if args.fixture:
@@ -99,7 +103,7 @@ def run(args):
         cache_receipt = None
         if args.scenario == 'warm_launch':
             # Complete one unmeasured identical launch before the measured launch.
-            with OwnedProcessTree(argv, executable.parent) as warm:
+            with OwnedProcessTree(argv, executable.parent, environment=environment) as warm:
                 deadline = time.monotonic() + args.timeout
                 while warm.alive():
                     if time.monotonic() >= deadline:
@@ -109,10 +113,13 @@ def run(args):
             (root / 'performance-result.json').rename(root / 'warmup-result.json')
         if args.scenario == 'cold_launch':
             cache_receipt = prepare_cache(args.cache_plan, args.cache_plan_sha256, executable, fixture, root)
+        disk = DiskSampler(root)
         argv += ['--perf-origin-ns', str(time.perf_counter_ns())]
-        with OwnedProcessTree(argv, executable.parent) as tree:
-            sampler = MemorySampler(tree).start()
+        with OwnedProcessTree(argv, executable.parent, environment=environment) as tree:
+            sampler = MemorySampler(tree)
             try:
+                sampler.start()
+                disk.start()
                 deadline = time.monotonic() + args.timeout
                 while tree.alive():
                     if time.monotonic() >= deadline:
@@ -130,6 +137,8 @@ def run(args):
                 metrics = measurement(json.dumps(event))
                 sampler.stop()
                 metrics.update(sampler.metrics())
+                disk.stop()
+                metrics.update(disk.metrics())
                 if args.scenario == 'empty_idle':
                     idle = next((point for point in reversed(sampler.points) if point.process_count > 0 and not point.missing_processes), None)
                     if idle is None or idle.elapsed_ns < 9_000_000_000:
@@ -140,17 +149,27 @@ def run(args):
                     raise RuntimeError('sampler did not observe the extension child; no process-tree comparison emitted')
                 metrics['owned_fixture_disk_bytes'] = copied_bytes
                 metrics['extension_fixture_disk_bytes'] = extension_bytes
+                if args.scenario == 'extensions_memory':
+                    metrics['extension_acquisition_local_copy_bytes'] = extension_bytes
+                    metrics['extension_acquisition_local_copy_us'] = acquisition_us
                 print(json.dumps({'event': 'measurement', 'metrics': metrics, 'provenance': {
                     'application_sha256': args.sha256, 'version': args.version,
                     'settings_sha256': args.config_sha256, 'renderer_requested': args.renderer,
                     'cache_preparation': cache_receipt, 'warmup_launches': int(args.scenario == 'warm_launch'),
                     'no_extensions': args.scenario != 'extensions_memory',
                     'extension_inventory_sha256': args.extension_inventory_sha256 or None,
+                    'acquisition': {'mode': 'offline verified fixture import', 'local_copy_bytes': extension_bytes,
+                                    'downloaded_bytes': None, 'download_status': 'not measured; no downloader runs in this adapter'},
+                    'disk_scope': {'root': str(root), 'paths': ['recovery', 'extensions', 'temporary', 'user-state'],
+                                   'end_state': 'after native process exit; sampled peaks include the running workload',
+                                   'kind': 'logical file lengths; maximum sampled non-atomic category total; excludes allocation slack and external installation',
+                                   'temporary_scope': 'includes spill/transcode/cache files through isolated TEMP/TMP'},
                     'memory_peak_kind': 'maximum complete sampled live Job total',
                     'timing_scope': 'native driver/present receipts; not Scintilla roundtrip',
                 }}))
             finally:
                 sampler.stop()
+                disk.stop()
 
 
 def main():

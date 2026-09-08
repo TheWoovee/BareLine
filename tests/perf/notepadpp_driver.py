@@ -21,6 +21,7 @@ import xml.etree.ElementTree as ET
 from windows_process_metrics import OwnedProcessTree, MemorySampler, WinApi
 from cache_protocol import prepare as prepare_cache
 from perf_suite import validate_fixture_size
+from disk_metrics import DiskSampler, isolated_environment
 
 SCENARIOS = ('cold_launch', 'warm_launch', 'empty_idle', 'open_10mb', 'open_100mb',
              'open_1gb', 'open_5gb', 'long_line', 'scroll', 'edit_to_paint',
@@ -195,6 +196,7 @@ def run(args):
         raise ValueError('scenario needs a pinned fixture')
     with tempfile.TemporaryDirectory(prefix='bareline-npp-benchmark-') as temporary:
         root = Path(temporary); settings = root / 'settings'; settings.mkdir()
+        environment = isolated_environment(root)
         (settings / 'config.xml').write_bytes(config_bytes)
         fixture = None; fixture_bytes = 0
         if args.fixture:
@@ -209,15 +211,17 @@ def run(args):
         if fixture:
             argv.append(str(fixture))
         if args.scenario == 'warm_launch':
-            with OwnedProcessTree(argv, executable.parent) as warm:
+            with OwnedProcessTree(argv, executable.parent, environment=environment) as warm:
                 WindowDriver(warm, time.monotonic() + args.timeout).ready(0)
         cache_receipt = None
         if args.scenario == 'cold_launch':
             cache_receipt = prepare_cache(args.cache_plan, args.cache_plan_sha256, executable, fixture, root)
+        disk = DiskSampler(root)
         started = time.perf_counter_ns(); deadline = time.monotonic() + args.timeout
-        with OwnedProcessTree(argv, executable.parent) as tree:
-            sampler = MemorySampler(tree).start()
+        with OwnedProcessTree(argv, executable.parent, environment=environment) as tree:
+            sampler = MemorySampler(tree)
             try:
+                sampler.start(); disk.start()
                 driver = WindowDriver(tree, deadline); expected = args.expected_text_bytes if fixture else 0
                 driver.ready(expected)
                 metrics = {'launch_to_responsive_us': (time.perf_counter_ns() - started) / 1000}
@@ -292,17 +296,20 @@ def run(args):
                     metrics['save_command_roundtrip_us'] = elapsed
                     metrics['save_to_clean_ack_us'] = (time.perf_counter_ns() - save_started) / 1000
                 sampler.stop(); metrics.update(sampler.metrics())
+                disk.stop(); metrics.update(disk.metrics())
                 metrics.update(owned_fixture_disk_bytes=fixture_bytes, downloaded_bytes=0)
                 print(json.dumps({'event':'measurement','metrics':metrics,
                                   'provenance':{'application_sha256':args.sha256,'version':actual_version,
                                   'plugins_disabled':True,'config_sha256':args.config_sha256,
                                   'memory_peak_kind':'maximum complete sampled live Job total',
+                                  'disk_scope':'owned settings/temporary/user-state logical file bytes; sampled non-atomic peaks; final snapshot before owned process shutdown',
                                   'paint_completion_measured':False,'cache_preparation':cache_receipt,
                                   'warmup_launches':int(args.scenario == 'warm_launch'),
                                   'download_counter_scope':'adapter only',
                                   'search_scope':'Scintilla target-search primitive, not Find dialog cancellation'}}))
             finally:
                 sampler.stop()
+                disk.stop()
 
 
 def main():

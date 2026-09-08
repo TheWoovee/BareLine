@@ -150,8 +150,10 @@ fn execute(
                 .take((session::MAX_SESSION_BYTES + 1) as u64)
                 .read_to_end(&mut bytes)?;
             allowed()?;
+            let decoded=session::decode_report(&bytes)?;
             Ok(LoadedSession {
-                manifest: session::decode(&bytes)?,
+                manifest: decoded.manifest,
+                diagnostics: decoded.diagnostics,
                 recovered_previous: false,
             })
         })),

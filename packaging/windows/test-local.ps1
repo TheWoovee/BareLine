@@ -29,6 +29,31 @@ try {
     $refused = $false
     try { & (Join-Path $PSScriptRoot 'build.ps1') -PayloadDir $payload -Version 0.1.0 -OutputDir (Join-Path $taskRoot 'missing') } catch { $refused = $true }
     if (-not $refused) { throw 'Missing payload accepted' }
+    # Final inventory includes documents/runtime, rejects absent assets and stale signatures.
+    . (Join-Path $PSScriptRoot 'release-layout.ps1')
+    $final = Join-Path $taskRoot 'final'
+    [IO.Directory]::CreateDirectory($final) | Out-Null
+    foreach ($name in (Get-RequiredReleaseFiles '0.1.0')) { [IO.File]::WriteAllText((Join-Path $final $name), "final fixture: $name") }
+    [IO.File]::WriteAllText((Join-Path $final 'extra-evidence.json'), '{}')
+    & (Join-Path $PSScriptRoot 'build.ps1') -FinalInventory -Version 0.1.0 -OutputDir $final
+    $lines = [IO.File]::ReadAllLines((Join-Path $final 'SHA-256SUMS'))
+    if ($lines.Count -ne 11) { throw 'Complete final asset inventory missing entries' }
+    foreach ($line in $lines) {
+        if ($line -notmatch '^([a-f0-9]{64})  (.+)$') { throw 'Malformed final inventory' }
+        if ((Get-FileHash -LiteralPath (Join-Path $final $Matches[2])).Hash -ne $Matches[1]) { throw 'Final asset hash mismatch' }
+    }
+    $before = [IO.File]::ReadAllText((Join-Path $final 'SHA-256SUMS'))
+    & (Join-Path $PSScriptRoot 'build.ps1') -FinalInventory -Version 0.1.0 -OutputDir $final
+    if ([IO.File]::ReadAllText((Join-Path $final 'SHA-256SUMS')) -cne $before) { throw 'Final inventory not deterministic' }
+    Remove-Item -LiteralPath (Join-Path $final 'KNOWN-ISSUES.md')
+    $refused=$false
+    try { & (Join-Path $PSScriptRoot 'build.ps1') -FinalInventory -Version 0.1.0 -OutputDir $final } catch { $refused=$true }
+    if (-not $refused) { throw 'Missing release notes accepted' }
+    [IO.File]::WriteAllText((Join-Path $final 'KNOWN-ISSUES.md'), 'fixture')
+    [IO.File]::WriteAllText((Join-Path $final 'SHA-256SUMS.minisig'), 'old signature')
+    $refused=$false
+    try { & (Join-Path $PSScriptRoot 'build.ps1') -FinalInventory -Version 0.1.0 -OutputDir $final } catch { $refused=$true }
+    if (-not $refused) { throw 'Stale detached signature retained on regeneration' }
     Write-Output 'PASS: deterministic ZIP, extracted bytes, marker, refuse overwrite and missing payload.'
 } finally {
     $resolved = [IO.Path]::GetFullPath($taskRoot)

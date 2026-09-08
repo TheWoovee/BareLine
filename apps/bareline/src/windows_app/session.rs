@@ -177,10 +177,11 @@ impl Shell {
             }
             match result {
                 Ok(SessionCompletion::Loaded(Ok(loaded))) => {
+                    let diagnostic_warning=(!loaded.diagnostics.is_empty()).then(||format!("{}{}",if loaded.recovered_previous {"Recovered the previous session generation. "}else{""},loaded.diagnostics.summary()));
                     if !loaded.manifest.recent.is_empty() && self.ensure_workspace(el) {
                         self.workspace.as_mut().unwrap().restore_recent_paths(&loaded.manifest.recent);
                     }
-                    if !loaded.manifest.tabs.is_empty() && self.ensure_workspace(el) {
+                    if !loaded.manifest.documents.is_empty() && self.ensure_workspace(el) {
                         let warning = loaded.recovered_previous;
                         match RestoreQueue::new(loaded.manifest) {
                             Ok(mut queue) => {
@@ -220,6 +221,9 @@ impl Shell {
                                                 ),
                                             });
                                         }
+                                    } else {
+                                        // The document survived but its tab metadata did not.
+                                        let _ = self.workspace.as_mut().unwrap().new_document();
                                     }
                                 }
                                 self.session.queue = Some(queue);
@@ -232,6 +236,7 @@ impl Shell {
                             }
                         }
                     }
+                    if let Some(warning)=diagnostic_warning {self.session_message(warning);}
                 }
                 Ok(SessionCompletion::Loaded(Err(error)))
                     if error.kind() == std::io::ErrorKind::NotFound => {}

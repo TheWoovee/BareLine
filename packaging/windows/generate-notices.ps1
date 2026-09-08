@@ -2,14 +2,16 @@
 # Generate local notices from the exact locked Windows dependency graph and vendored
 # license texts. Refuses missing evidence; does not invent third-party license grants.
 [CmdletBinding()]
-param([Parameter(Mandatory)][string]$OutputFile)
+param([Parameter(Mandatory)][string]$OutputFile,[string]$SdkOutputFile)
 $ErrorActionPreference = 'Stop'
 $metadataText = & cargo metadata --format-version 1 --locked --offline --filter-platform x86_64-pc-windows-msvc
 if ($LASTEXITCODE -ne 0) { throw 'Cargo metadata failed' }
 $metadata = ($metadataText -join "`n") | ConvertFrom-Json
+$roots = @('bareline','bareline-update-helper','bareline-extension-host')
+foreach ($name in $roots) { if (-not ($metadata.packages | Where-Object name -eq $name)) { throw "Missing packaged Cargo root: $name" } }
 $ids = [Collections.Generic.HashSet[string]]::new()
 $pending = [Collections.Generic.Queue[string]]::new()
-foreach ($package in $metadata.packages | Where-Object { $_.name -in 'bareline', 'bareline-update-helper' }) { $pending.Enqueue($package.id) }
+foreach ($package in $metadata.packages | Where-Object { $_.name -in 'bareline', 'bareline-update-helper', 'bareline-extension-host' }) { $pending.Enqueue($package.id) }
 while ($pending.Count) {
     $id = $pending.Dequeue()
     if (-not $ids.Add($id)) { continue }
@@ -51,3 +53,22 @@ foreach ($component in @('lexilla', 'scintilla')) {
 if ($missing.Count) { throw ('Missing upstream license texts: ' + ($missing -join ', ')) }
 [IO.File]::WriteAllText([IO.Path]::GetFullPath($OutputFile), ($parts -join "`n`n"), [Text.UTF8Encoding]::new($false))
 Write-Output "Generated notices: $OutputFile"
+
+# Preserve the repository's exact dual-license texts and identify actual SDK packages.
+if (-not $SdkOutputFile) { $SdkOutputFile = Join-Path ([IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($OutputFile))) 'SDK-LICENSES.md' }
+if ([IO.Path]::GetFullPath($SdkOutputFile) -eq [IO.Path]::GetFullPath($OutputFile)) { throw 'SDK and third-party outputs must be distinct' }
+$repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
+$sdk = [Collections.Generic.List[string]]::new()
+$sdk.Add('# SDK and first-party licenses')
+foreach ($package in @($metadata.packages | Where-Object { -not $_.source -and $_.license -eq 'MIT OR Apache-2.0' } | Sort-Object name,version)) {
+    $sdk.Add("- $($package.name) $($package.version): $($package.license)")
+}
+foreach ($name in @('LICENSE-SDK','LICENSE-MIT','LICENSE-APACHE')) {
+    $path = Join-Path $repo $name
+    $item = Get-Item -LiteralPath $path
+    if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw "SDK license must be regular: $name" }
+    $sdk.Add("## $name")
+    $sdk.Add([IO.File]::ReadAllText($path))
+}
+[IO.File]::WriteAllText([IO.Path]::GetFullPath($SdkOutputFile),($sdk -join "`n`n"),[Text.UTF8Encoding]::new($false))
+Write-Output "Generated SDK license aggregation: $SdkOutputFile"

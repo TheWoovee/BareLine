@@ -730,6 +730,10 @@ mod tests {
 #[cfg(test)]
 mod signed_tests {
     use super::*;
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/security/package_corpus.rs"
+    ));
     use base64::{Engine, engine::general_purpose::STANDARD};
     use ed25519_dalek::{Signer, SigningKey};
     fn sign(bytes: &[u8]) -> (String, String) {

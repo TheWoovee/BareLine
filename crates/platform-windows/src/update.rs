@@ -699,7 +699,7 @@ pub fn launch_update_helper(
     Ok(())
 }
 
-pub struct HealthyUpdateProcess(HANDLE);
+pub struct HealthyUpdateProcess(HANDLE, Option<[File; 2]>);
 impl Drop for HealthyUpdateProcess {
     fn drop(&mut self) {
         let _ = unsafe { windows::Win32::Foundation::CloseHandle(self.0) };
@@ -716,7 +716,7 @@ pub fn hold_healthy_update_process(
     unsafe {
         use windows::Win32::System::Diagnostics::ToolHelp::*;
         let snapshot = HealthyUpdateProcess(
-            CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0).map_err(std::io::Error::other)?,
+            CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0).map_err(std::io::Error::other)?, None,
         );
         let mut entry = PROCESSENTRY32W {
             dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
@@ -732,13 +732,13 @@ pub fn hold_healthy_update_process(
         if entry.th32ParentProcessID != pid {
             return Err(std::io::Error::other("healthy PID is not helper's parent"));
         }
-        let process = HealthyUpdateProcess(
+        let mut process = HealthyUpdateProcess(
             OpenProcess(
                 PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
                 false,
                 pid,
             )
-            .map_err(std::io::Error::other)?,
+            .map_err(std::io::Error::other)?, None,
         );
         let mut buffer = vec![0u16; 32768];
         let mut length = buffer.len() as u32;
@@ -752,13 +752,25 @@ pub fn hold_healthy_update_process(
         use std::os::windows::ffi::OsStringExt;
         let actual =
             std::path::PathBuf::from(std::ffi::OsString::from_wide(&buffer[..length as usize]));
-        if actual != target
+        #[cfg(test)]
+        if std::env::var_os("BARELINE_TEST_HEALTH_PROBE").is_some() {
+            eprintln!("health fixture paths: observed={actual:?}, expected={target:?}");
+        }
+        // File identity respects case-sensitive directories and does not reinterpret path text.
+        // Both sealed handles survive the acknowledgement; neither file can be replaced/written.
+        use bareline_platform::LocalFileSystem;
+        let observed = open_update_read_file(&actual)?;
+        let expected = open_update_read_file(target)?;
+        let observed_id = crate::files::WindowsFileSystem.identity(&observed)?;
+        let expected_id = crate::files::WindowsFileSystem.identity(&expected)?;
+        if observed_id.volume != expected_id.volume || observed_id.file != expected_id.file
             || WaitForSingleObject(process.0, 0) != windows::Win32::Foundation::WAIT_TIMEOUT
         {
             return Err(std::io::Error::other(
                 "healthy process is not the running update target",
             ));
         }
+        process.1 = Some([observed, expected]);
         Ok(process)
     }
 }
@@ -775,7 +787,7 @@ pub fn signal_update_parent_ready(pid: u32, ready_event: &str) -> std::io::Resul
     unsafe {
         let event = HealthyUpdateProcess(
             OpenEventW(EVENT_MODIFY_STATE, false, PCWSTR(name.as_ptr()))
-                .map_err(std::io::Error::other)?,
+                .map_err(std::io::Error::other)?, None,
         );
         SetEvent(event.0).map_err(std::io::Error::other)
     }
@@ -943,20 +955,31 @@ mod stage_tests {
             .parse::<u32>()
             .unwrap();
         let mut target = std::env::current_exe().unwrap();
-        if mode == "wrong-image" {
-            target.set_file_name("bareline.rollback.exe");
+        if mode == "case-variant" {
+            use std::os::windows::ffi::{OsStrExt, OsStringExt};
+            let units: Vec<u16> = target.as_os_str().encode_wide().map(|unit| {
+                if (b'a' as u16..=b'z' as u16).contains(&unit) { unit - 32 }
+                else if (b'A' as u16..=b'Z' as u16).contains(&unit) { unit + 32 }
+                else { unit }
+            }).collect();
+            target = std::ffi::OsString::from_wide(&units).into();
         }
+        let wrong_root = if mode == "wrong-image" {
+            let root = create_private_stage(&std::env::temp_dir()).unwrap();
+            let copy = root.join("bareline.rollback.exe");
+            std::fs::copy(&target, &copy).unwrap(); target = copy; Some(root)
+        } else { None };
         if mode == "forged-pid" {
             pid = std::process::id();
         }
-        assert_eq!(
-            hold_healthy_update_process(pid, &target).is_ok(),
-            mode == "valid"
-        );
+        let result = hold_healthy_update_process(pid, &target);
+        let accepted = result.is_ok(); let error = result.err();
+        if let Some(root) = wrong_root { std::fs::remove_file(&target).unwrap(); std::fs::remove_dir(root).unwrap(); }
+        assert_eq!(accepted, matches!(mode.as_str(), "valid" | "case-variant"), "health fixture mode={mode}, expected={target:?}, error={error:?}");
     }
     #[test]
     fn health_ack_requires_actual_parent_and_exact_running_image() {
-        for mode in ["valid", "wrong-image", "forged-pid"] {
+        for mode in ["valid", "case-variant", "wrong-image", "forged-pid"] {
             let status = std::process::Command::new(std::env::current_exe().unwrap())
                 .args(["--exact", "update::stage_tests::healthy_parent_probe"])
                 .env("BARELINE_TEST_HEALTH_PROBE", mode)
