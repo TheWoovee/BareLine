@@ -34,9 +34,54 @@ jobs:
           path: tests/perf/results/
           retention-days: 90
           if-no-files-found: warn
+  native-measure:
+    if: vars.BARELINE_PERF_NATIVE_ENABLED == 'true'
+    runs-on: [self-hosted, Windows, bareline-perf]
+    timeout-minutes: 480
+    continue-on-error: true
+    concurrency:
+      group: bareline-dedicated-native-performance
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.98.1'
+      - name: Build the pinned native workload source
+        run: cargo build -p bareline --release --locked
+      - name: Schedule every native scenario with explicit prerequisite receipts
+        if: always()
+        shell: pwsh
+        env:
+          PERF_PLAN: ${{ vars.BARELINE_PERF_NATIVE_PLAN }}
+          PERF_PLAN_SHA256: ${{ vars.BARELINE_PERF_NATIVE_PLAN_SHA256 }}
+        run: >-
+          python tests/perf/native_nightly.py --plan "$env:PERF_PLAN"
+          --plan-sha256 "$env:PERF_PLAN_SHA256" --application target/release/bareline.exe
+          --destination tests/perf/native-nightly/${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Preserve native coverage, raw trials and aggregates
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-windows-perf-${{ github.sha }}-${{ github.run_id }}
+          path: tests/perf/native-nightly/
+          retention-days: 90
+          if-no-files-found: warn
   report-regressions:
-    needs: measure
-    if: always() && vars.BARELINE_PERF_ENABLED == 'true' && vars.BARELINE_PERF_ISSUES_ENABLED == 'true'
+    needs: [measure, native-measure]
+    if: always() && vars.BARELINE_PERF_ISSUES_ENABLED == 'true' && (vars.BARELINE_PERF_ENABLED == 'true' || vars.BARELINE_PERF_NATIVE_ENABLED == 'true')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - series: hosted
+            enabled: ${{ vars.BARELINE_PERF_ENABLED }}
+            artifact: hosted-windows-perf-*
+            report: hosted-report.json
+          - series: native
+            enabled: ${{ vars.BARELINE_PERF_NATIVE_ENABLED }}
+            artifact: native-windows-perf-*
+            report: native-report.json
     runs-on: windows-latest
     timeout-minutes: 10
     continue-on-error: true
@@ -47,39 +92,48 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Download current and rolling raw history
+        if: matrix.enabled == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           CURRENT_RUN: ${{ github.run_id }}
+          PERF_ARTIFACT: ${{ matrix.artifact }}
         shell: pwsh
         run: |
-          gh run download $env:CURRENT_RUN --pattern 'hosted-windows-perf-*' --dir current
+          gh run download $env:CURRENT_RUN --pattern $env:PERF_ARTIFACT --dir current
           $runs = @(gh run list --workflow perf-nightly.yml --status completed --limit 8 --json databaseId,headSha | ConvertFrom-Json)
           $previous = @($runs | Where-Object { [string]$_.databaseId -ne $env:CURRENT_RUN } | Select-Object -First 7)
           $previous | ConvertTo-Json -Depth 5 | Set-Content previous-runs.json
           foreach ($run in $previous) {
-            gh run download $run.databaseId --pattern 'hosted-windows-perf-*' --dir ('history/' + $run.databaseId)
+            gh run download $run.databaseId --pattern $env:PERF_ARTIFACT --dir ('history/' + $run.databaseId)
           }
       - name: Compute informational rolling regressions
+        if: matrix.enabled == 'true'
         shell: pwsh
+        env:
+          PERF_REPORT: ${{ matrix.report }}
         run: |
-          $candidate = Get-ChildItem current -Filter hosted-report.json -Recurse | Select-Object -First 1
+          $candidate = Get-ChildItem current -Filter $env:PERF_REPORT -Recurse | Select-Object -First 1
           $previous = @(Get-Content previous-runs.json -Raw | ConvertFrom-Json)
-          $history = @($previous | ForEach-Object { Get-ChildItem ('history/' + $_.databaseId) -Filter hosted-report.json -Recurse | Select-Object -First 1 })
+          $history = @($previous | ForEach-Object { Get-ChildItem ('history/' + $_.databaseId) -Filter $env:PERF_REPORT -Recurse | Select-Object -First 1 })
           if ($candidate -and $previous.Count -eq 7 -and $history.Count -eq 7) {
             python tests/perf/perf_suite.py regress $candidate.FullName regressions.json @($history.FullName)
           }
       - name: Open or update opt-in tracking issue
+        if: matrix.enabled == 'true'
         uses: actions/github-script@v7
+        env:
+          PERF_SERIES: ${{ matrix.series }}
         with:
           script: |
             const fs = require('fs');
             if (!fs.existsSync('regressions.json')) return;
             const report = JSON.parse(fs.readFileSync('regressions.json', 'utf8'));
             if (!report.findings?.length) return;
-            const title = 'Informational hosted performance regression';
-            const marker = '<!-- bareline-perf-regression -->';
-            const body = `${marker}\nHosted noise series; numbers do not fail CI or establish comparative claims.\n\nCommit: ${context.sha}\nPrevious seven commits: ${report.baseline_commits.join(', ')}\nRun: https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}\n\n` +
+            const series = process.env.PERF_SERIES;
+            const title = `Informational ${series} performance regression`;
+            const marker = `<!-- bareline-perf-regression-${series} -->`;
+            const body = `${marker}\n${series} series; numbers do not fail CI or establish comparative claims.\n\nCommit: ${context.sha}\nPrevious seven commits: ${report.baseline_commits.join(', ')}\nRun: https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}\n\n` +
               '```json\n' + JSON.stringify(report.findings, null, 2) + '\n```';
             const issues = await github.paginate(github.rest.issues.listForRepo, {...context.repo, state:'open', per_page:100});
             const existing = issues.find(i => i.title === title && i.body?.includes(marker));
