@@ -238,8 +238,8 @@ impl Shell {
             for rect in &mut snapshot.text_geometry { rect.start += base; rect.end += base; }
             if let Some(context) = &mut snapshot.text_context {
                 context.source_identity = editor.snapshot().identity_token();
-                context.selection.0 += base;
-                context.selection.1 += base;
+                let (anchor, caret) = editor.global_selection();
+                context.selection = (anchor.0, caret.0);
             }
         }
         // AccessKit Windows adds native client-to-screen origin; bounds must be

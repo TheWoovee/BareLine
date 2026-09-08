@@ -929,7 +929,7 @@ impl Workspace {
                 (SearchNavigationSource::Paged(source), WorkspaceEditor::Paged(editor)) if source.same_document(editor.snapshot()) => {
                     let same = source.revision == editor.snapshot().revision && source.content_state == editor.snapshot().content_state;
                     let job = self.find.completed_paged_results().map(|results| results.job);
-                    Some((same && job == Some(pending.job), editor.busy(), editor.viewport_start().0 + editor.surface.selection.anchor, editor.viewport_start().0 + editor.surface.selection.caret))
+                    Some((same && job == Some(pending.job), editor.busy(), editor.global_selection().0.0, editor.global_selection().1.0))
                 }
                 _ => None,
             };
@@ -963,7 +963,11 @@ impl Workspace {
         let query = self.find.query();
         let found = match editor {
             WorkspaceEditor::Resident(resident) => self.find.next(resident.snapshot(), at, backwards),
-            WorkspaceEditor::Paged(paged) => self.find.next_paged(paged.snapshot(), paged.viewport_start().0 + at, backwards),
+            WorkspaceEditor::Paged(paged) => {
+                let (anchor, caret) = paged.global_selection();
+                let at = if backwards { anchor.0.min(caret.0) } else { anchor.0.max(caret.0) };
+                self.find.next_paged(paged.snapshot(), at, backwards)
+            },
         };
         if let Some(range) = found {
             let applied = match editor {
@@ -1014,9 +1018,9 @@ impl Workspace {
             return;
         }
         if let WorkspaceEditor::Paged(paged) = editor {
-            let origin = paged.viewport_start().0;
-            let selection = bareline_document::TextOffset(origin + paged.surface.selection.anchor.min(paged.surface.selection.caret))
-                ..bareline_document::TextOffset(origin + paged.surface.selection.anchor.max(paged.surface.selection.caret));
+            let (anchor, caret) = paged.global_selection();
+            let selection = bareline_document::TextOffset(anchor.0.min(caret.0))
+                ..bareline_document::TextOffset(anchor.0.max(caret.0));
             match self.find.start_replace_paged(paged.read_handle(), selection, all, self.notify.clone()) {
                 Ok(ticket) => { self.pending_paged_replace = Some(ticket); self.message = Some("Preparing paged replacement…".into()); }
                 Err(error) => self.message = Some(error.into()),
@@ -1126,6 +1130,12 @@ impl Workspace {
                         unavailable: self.styling.unavailable,
                     },
                 );
+                let result = result.map(|caret| {
+                    if matches!(&*editor, WorkspaceEditor::Paged(paged) if !paged.caret_in_viewport()) {
+                        if let Some(rect) = caret { ops.retain(|op| !matches!(op, bareline_renderer::DrawOp::Fill(bounds, _) if *bounds == rect)); }
+                        None
+                    } else { caret }
+                });
                 if let WorkspaceEditor::Resident(_) = editor {
                 if let Some(definition) = definition {
                     self.styling.refresh_udl(editor.snapshot(), definition, editor.visible_text.clone(), self.notify.clone());

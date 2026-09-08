@@ -228,8 +228,21 @@ mod tests {
         let Some(WorkspaceEditor::Paged(target)) = &mut views.secondary else {
             unreachable!()
         };
-        let base = target.viewport_start().0;
-        target.set_viewport_selection(bareline_document::TextOffset(base), bareline_document::TextOffset(base + 4)).unwrap();
+        let original_viewport = target.viewport_start();
+        let selection_token = target.restore_global_selection(bareline_document::TextOffset(2), bareline_document::TextOffset(9), true).unwrap();
+        loop {
+            target.pump();
+            match target.selection_restore_status(selection_token) {
+                bareline_editor_surface::paged_view::SelectionRestoreStatus::Pending => { assert!(Instant::now() < deadline); std::thread::yield_now(); }
+                bareline_editor_surface::paged_view::SelectionRestoreStatus::Applied => break,
+                status => panic!("Global selection failed: {status:?}"),
+            }
+        }
+        assert_eq!(target.viewport_start(), original_viewport);
+        assert_eq!(target.global_selection(), (bareline_document::TextOffset(2), bareline_document::TextOffset(9)));
+        let mut peer = target.clone_view().unwrap();
+        peer.pump();
+        assert_eq!(peer.global_selection(), target.global_selection());
         target.surface.scroll_y = 17.5;
         target.restore_global_folds(&[8004..8011]);
         let saved_byte = target.viewport_start();
@@ -314,13 +327,26 @@ mod tests {
             )
             .unwrap();
         invalid.anchor = (paged.viewport_start().0 + text.find('é').unwrap() + 1) as u64;
-        assert!(finish_workspace_view_restore(editor, &invalid).is_err());
+        let mut token = None;
+        loop {
+            match finish_workspace_view_restore(editor, &invalid, &mut token) {
+                Err(_) => break,
+                Ok(false) => {
+                    while editor.busy() { assert!(Instant::now() < deadline); editor.pump(); std::thread::yield_now(); }
+                }
+                Ok(true) => panic!("Invalid UTF-8 endpoint was accepted"),
+            }
+        }
+        let WorkspaceEditor::Paged(paged) = &*editor else { unreachable!() };
+        assert!(matches!(paged.selection_restore_status(token.unwrap()), bareline_editor_surface::paged_view::SelectionRestoreStatus::Failed(_)));
+        assert_eq!(paged.global_selection(), (bareline_document::TextOffset(2), bareline_document::TextOffset(9)));
         assert_eq!(editor.selection, before);
         let mut invalid = workspace_view_state(editor);
         invalid.scroll_byte = Some(u64::MAX);
         assert!(restore_workspace_view(editor, &invalid).is_err());
         assert_eq!(editor.selection, before);
         let guarded = PendingViewScroll {
+            selection_token: None,
             state: workspace_view_state(&workspace.editors[0]),
             document: DocumentBinding::new(0, &workspace.editors[0]),
         };
@@ -623,6 +649,7 @@ struct MruPopup {
     bounds: Rect,
 }
 struct PendingViewScroll {
+    selection_token: Option<u64>,
     state: ViewState,
     document: DocumentBinding,
 }
@@ -1584,7 +1611,7 @@ impl ViewsRuntime {
             };
             if let Some(editor) = editor {
                 if !editor.busy() {
-                    if let Some(pending) = self.pending_view_scroll[pane].take() {
+                    if let Some(mut pending) = self.pending_view_scroll[pane].take() {
                         if !pending.document.matches_state(editor) {
                             editor.error = Some(
                                 "The document changed while its view was being restored.".into(),
@@ -1596,13 +1623,12 @@ impl ViewsRuntime {
                                 let _ = paged.global_logical_scroll();
                             }
                             self.pending_view_scroll[pane] = Some(pending);
-                        } else if let Err(error) =
-                            finish_workspace_view_restore(editor, &pending.state)
-                        {
-                            editor.error = Some(error);
-                            changed = true;
                         } else {
-                            changed = true;
+                            match finish_workspace_view_restore(editor, &pending.state, &mut pending.selection_token) {
+                                Ok(false) => self.pending_view_scroll[pane] = Some(pending),
+                                Ok(true) => changed = true,
+                                Err(error) => { editor.error = Some(error); changed = true; }
+                            }
                         }
                     }
                     if let Some(state) = self.pending_restore[pane].take() {
@@ -1610,7 +1636,7 @@ impl ViewsRuntime {
                         match restore_workspace_view(editor, &state) {
                             Ok(()) if editor.paged() => {
                                 self.pending_view_scroll[pane] =
-                                    Some(PendingViewScroll { state, document })
+                                    Some(PendingViewScroll { state, document, selection_token: None })
                             }
                             Ok(()) => {}
                             Err(error) => editor.error = Some(error),
@@ -2091,8 +2117,11 @@ impl ViewsRuntime {
             let local_height = bounds.height + 24.0;
             self.styling[side].prepare_view(editor, paths[side].as_deref(), notify.clone());
             let syntax = self.styling[side].syntax_view(editor);
-            let caret =
+            let mut caret =
                 editor.draw_styled(renderer, bounds.width, local_height, &mut local, syntax)?;
+            if matches!(&*editor, WorkspaceEditor::Paged(paged) if !paged.caret_in_viewport()) {
+                if let Some(rect) = caret.take() { local.retain(|op| !matches!(op, DrawOp::Fill(bounds, _) if *bounds == rect)); }
+            }
             self.styling[side].prepare_view(editor, paths[side].as_deref(), notify.clone());
             if side as u32 == pane {
                 status = local
@@ -2260,8 +2289,9 @@ fn workspace_view_state(editor: &WorkspaceEditor) -> ViewState {
         state.scroll_line = paged
             .viewport_first_global_line()
             .map_or(0, |first| first.saturating_add(state.scroll_line));
-        state.anchor = state.anchor.saturating_add(paged.viewport_start().0 as u64);
-        state.caret = state.caret.saturating_add(paged.viewport_start().0 as u64);
+        let (anchor, caret) = paged.global_selection();
+        state.anchor = anchor.0 as u64;
+        state.caret = caret.0 as u64;
     }
     state
 }
@@ -2300,44 +2330,36 @@ fn restore_workspace_view(editor: &mut WorkspaceEditor, state: &ViewState) -> Re
 fn finish_workspace_view_restore(
     editor: &mut WorkspaceEditor,
     state: &ViewState,
-) -> Result<(), String> {
+    selection_token: &mut Option<u64>,
+) -> Result<bool, String> {
     let WorkspaceEditor::Paged(editor) = editor else {
         restore_view(editor, state);
-        return Ok(());
+        return Ok(true);
     };
-    if !editor.viewport_ready() {
-        return Err("The saved viewport could not be loaded.".into());
-    }
+    if !editor.viewport_ready() { return Err("The saved viewport could not be loaded.".into()); }
     if state.scroll_byte.is_some() {
-        let local = |offset: u64| -> Result<usize, String> {
-            let offset = usize::try_from(offset)
-                .map_err(|_| "Saved selection exceeds this platform's range")?;
-            let offset = offset
-                .checked_sub(editor.viewport_start().0)
-                .ok_or("Saved selection precedes the saved viewport")?;
-            if offset > editor.surface.snapshot().len()
-                || !editor
-                    .surface
-                    .snapshot()
-                    .is_boundary(bareline_document::TextOffset(offset))
-            {
-                return Err("Saved selection is outside the available UTF-8 viewport.".into());
-            }
-            Ok(offset)
+        let token = if let Some(token) = *selection_token { token } else {
+            let anchor = usize::try_from(state.anchor).map_err(|_| "Saved anchor exceeds this platform's range")?;
+            let caret = usize::try_from(state.caret).map_err(|_| "Saved caret exceeds this platform's range")?;
+            let token = editor.restore_global_selection(bareline_document::TextOffset(anchor), bareline_document::TextOffset(caret), true)?;
+            *selection_token = Some(token);
+            token
         };
-        let anchor = local(state.anchor)?;
-        let caret = local(state.caret)?;
-        let base = editor.viewport_start().0;
-        editor.set_viewport_selection(bareline_document::TextOffset(base + anchor), bareline_document::TextOffset(base + caret))?;
-        editor
-            .surface
-            .set_logical_scroll(0, 0.0, state.scroll_x as f64);
+        use bareline_editor_surface::paged_view::SelectionRestoreStatus;
+        match editor.selection_restore_status(token) {
+            SelectionRestoreStatus::Pending => return Ok(false),
+            SelectionRestoreStatus::Failed(error) => return Err(error),
+            SelectionRestoreStatus::Superseded => return Err("Saved selection restoration was superseded.".into()),
+            SelectionRestoreStatus::Applied => {}
+        }
+        editor.surface.set_logical_scroll(0, 0.0, state.scroll_x as f64);
         editor.surface.scroll_y = f64::from_bits(state.scroll_y_bits);
     } else {
         editor.request_global_scroll(state.scroll_line, 0.0, state.scroll_x as f64)?;
     }
-    Ok(())
+    Ok(true)
 }
+
 fn view_state(editor: &SharedEditorView) -> ViewState {
     let (line, _, x) = editor.logical_scroll();
     ViewState {
@@ -3066,13 +3088,16 @@ impl Shell {
                 .map(Input::Insert),
             Action::Copy | Action::Cut => {
                 let editor = if pane == 1 {
-                    self.views.secondary.as_ref().map(|editor| &**editor)
+                    self.views.secondary.as_ref()
                 } else {
                     self.views
                         .primary_index(workspace)
                         .and_then(|i| workspace.editors.get(i))
-                        .map(|editor| &**editor)
                 };
+                if matches!(editor, Some(WorkspaceEditor::Paged(paged)) if !paged.selection_fully_in_viewport()) {
+                    workspace.message = Some("Reveal the complete selection before copying or cutting it.".into());
+                    return true;
+                }
                 let copied = editor
                     .and_then(|e| e.selected_text().ok())
                     .is_some_and(|value| {

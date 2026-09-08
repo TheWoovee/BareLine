@@ -322,6 +322,11 @@ impl Shell {
         if !matches!(action,Action::Copy|Action::Cut|Action::Paste)||self.palette.open{return false;}
         let Some(workspace)=self.workspace.as_mut()else{return false;};let Some(platform)=self.platform.as_ref()else{return false;};
         let secondary=self.views.pane()==1;
+        let editor=if secondary {self.views.secondary.as_ref()} else {workspace.editors.get(self.app.active)};
+        if matches!(editor,Some(bareline_app::workspace::WorkspaceEditor::Paged(paged)) if !paged.selection_fully_in_viewport()) {
+            workspace.message=Some("Reveal the complete selection before using clipboard commands.".into());
+            return true;
+        }
         if action==Action::Paste {
             match platform.clipboard_text_with_metadata(power::consumer::RectangleClipboardMetadata::FORMAT,262_144) {
                 Ok(contents)=>{

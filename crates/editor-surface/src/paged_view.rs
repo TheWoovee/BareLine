@@ -21,6 +21,14 @@ use std::{
 const WINDOW: usize = 64 * 1024;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum GlobalScrollPosition { Ready(u64, f64, f64), Pending }
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SelectionRestoreStatus { Pending, Applied, Failed(String), Superseded }
+struct SelectionValidation {
+    snapshot: PagedSnapshot,
+    selection: Selection,
+    preserve_viewport: bool,
+    result: Receiver<Result<(), String>>,
+}
 #[derive(Clone, Copy)]
 struct ViewportMapping { offset: usize, line: u64, line_start: TextOffset }
 type Job = Box<dyn FnOnce() + Send>;
@@ -156,6 +164,14 @@ impl PagedReadHandle {
     }
 }
 pub struct PagedEditorSurface {
+    global_selection: Selection,
+    projected_selection: Selection,
+    selection_token: u64,
+    selection_status: SelectionRestoreStatus,
+    selection_validation: Option<SelectionValidation>,
+    pending_moves_selection: bool,
+    deferred_input: Option<Input>,
+    navigation_anchor: Option<usize>,
     initial_eol: Option<((u64,u64),bareline_file_io::codecs::state::EolState)>,
     encoding_failure: Arc<Mutex<Option<bareline_file_io::codecs::failure::EncodingFailure>>>,
     global_folds: Vec<bareline_syntax::folding::Fold>,
@@ -204,7 +220,6 @@ pub struct PagedEditorSurface {
     notify: Arc<dyn Fn() + Send + Sync>,
     viewport_start: usize,
     viewport_valid: bool,
-    restoring_selection: Option<(usize, usize)>,
     pub fingerprint: Fingerprint,
     pub path: PathBuf,
     recovery_origin: Option<PathBuf>,
@@ -238,6 +253,7 @@ impl PagedEditorSurface {
             encoding_failure: Arc::new(Mutex::new(None)),
             navigation: crate::paged_navigation::GlobalNavigation::new(), navigation_ready: None, requested_scroll: None, pending_scroll_mapping: None, viewport_mapping: None, global_spacers: Vec::new(),
             global_folds: Vec::new(), global_fold_state: Default::default(), global_fold_overrides: Default::default(), global_folds_partial: true, global_fold_initialized: false, pending_global_folds: Vec::new(), fold_viewport_line: None,
+            global_selection: Selection::default(), projected_selection: Selection::default(), selection_token: 0, selection_status: SelectionRestoreStatus::Superseded, selection_validation: None, pending_moves_selection: false, deferred_input: None, navigation_anchor: None,
             generation_owner: Arc::new(Mutex::new(generation_owner.clone())), view_generation: generation_owner,
             search_marks: Default::default(), pending_marks: None,
             append_receipt: None,
@@ -271,7 +287,6 @@ impl PagedEditorSurface {
             notify,
             viewport_start: 0,
             viewport_valid: false,
-            restoring_selection: None,
             error: None,
         };
         view.request_viewport(TextOffset(0))?;
@@ -306,6 +321,7 @@ impl PagedEditorSurface {
         let mut view = Self {
             navigation: crate::paged_navigation::GlobalNavigation::new(), navigation_ready: None, requested_scroll: None, pending_scroll_mapping: None, viewport_mapping: None, global_spacers: self.global_spacers.clone(),
             retired: self.retired.clone(), captured: captured.clone(),
+            global_selection: if captured.is_some() { Selection::default() } else { let (anchor, caret) = self.global_selection(); Selection { anchor: anchor.0, caret: caret.0 } }, projected_selection: Selection::default(), selection_token: 0, selection_status: SelectionRestoreStatus::Superseded, selection_validation: None, pending_moves_selection: false, deferred_input: None, navigation_anchor: None,
             global_folds: self.global_folds.clone(), global_fold_state: self.global_fold_state.clone(), global_fold_overrides: self.global_fold_overrides.clone(), global_folds_partial: self.global_folds_partial, global_fold_initialized: self.global_fold_initialized, pending_global_folds: self.pending_global_folds.clone(), fold_viewport_line: None,
             search_marks: self.search_marks.clone(), pending_marks: None,
             append_receipt: self.append_receipt,
@@ -320,7 +336,6 @@ impl PagedEditorSurface {
             recovery_status: self.recovery_status.clone(), failed_retirements: self.failed_retirements.clone(),
             budget: self.budget.clone(), pending: None, pending_input: None, cancellation: self.cancellation.clone(),
             notify: self.notify.clone(), viewport_start: self.viewport_start, viewport_valid: false,
-            restoring_selection: Some((self.viewport_start + self.surface.selection.anchor, self.viewport_start + self.surface.selection.caret)),
             fingerprint: captured.as_ref().map_or_else(|| self.fingerprint.clone(), |h| h.fingerprint.clone()), path: captured.as_ref().map_or_else(|| self.path.clone(), |h| h.path.clone()), recovery_origin: self.recovery_origin.clone(), error: None,
         };
         view.request_viewport(TextOffset(self.viewport_start))?;
@@ -331,8 +346,8 @@ impl PagedEditorSurface {
         if self.busy() || self.captured.is_some() { return false; }
         let changed = self.peer.try_lock().is_ok_and(|peer| peer.epoch != self.peer_epoch);
         if !changed { return false; }
+        self.sync_global_selection();
         self.viewport_valid = false;
-        self.restoring_selection = Some((self.viewport_start + self.surface.selection.anchor, self.viewport_start + self.surface.selection.caret));
         match self.submit(Action::Read(self.viewport_start)) { Ok(()) => true, Err(error) => { self.error = Some(error); false } }
     }
     pub fn enable_recovery(&mut self, root: PathBuf, platform: Arc<dyn LocalFileSystem>) {
@@ -361,7 +376,7 @@ impl PagedEditorSurface {
         self.can_redo
     }
     pub fn busy(&self) -> bool {
-        self.pending.is_some()
+        self.pending.is_some() || self.selection_validation.is_some()
     }
     pub fn recovery_origin_path(&self) -> Option<&std::path::Path> { self.recovery_origin.as_deref() }
     pub fn viewport_ready(&self) -> bool { self.viewport_valid && !self.busy() }
@@ -534,6 +549,104 @@ impl PagedEditorSurface {
     pub fn viewport_start(&self) -> TextOffset {
         TextOffset(self.viewport_start)
     }
+    /// Canonical endpoints are independent of the displayed, possibly clipped range.
+    pub fn global_selection(&self) -> (TextOffset, TextOffset) {
+        let selection = if self.viewport_valid && self.surface.selection != self.projected_selection
+            && self.surface.selection.anchor <= self.surface.snapshot.len() && self.surface.selection.caret <= self.surface.snapshot.len()
+            && self.surface.snapshot.is_boundary(TextOffset(self.surface.selection.anchor)) && self.surface.snapshot.is_boundary(TextOffset(self.surface.selection.caret)) {
+            Selection { anchor: self.navigation_anchor.unwrap_or(self.viewport_start + self.surface.selection.anchor), caret: self.viewport_start + self.surface.selection.caret }
+        } else { self.global_selection };
+        (TextOffset(selection.anchor), TextOffset(selection.caret))
+    }
+    fn sync_global_selection(&mut self) {
+        let moved = self.surface.selection != self.projected_selection;
+        let (anchor, caret) = self.global_selection();
+        self.global_selection = Selection { anchor: anchor.0, caret: caret.0 };
+        self.projected_selection = self.surface.selection;
+        if moved { self.navigation_anchor = None; }
+    }
+    pub fn selection_fully_in_viewport(&self) -> bool {
+        let (anchor, caret) = self.global_selection();
+        let end = self.viewport_start.saturating_add(self.surface.snapshot.len());
+        self.viewport_valid && anchor.0 >= self.viewport_start && caret.0 >= self.viewport_start && anchor.0 <= end && caret.0 <= end
+            && self.surface.snapshot.is_boundary(TextOffset(anchor.0 - self.viewport_start)) && self.surface.snapshot.is_boundary(TextOffset(caret.0 - self.viewport_start))
+    }
+    pub fn caret_in_viewport(&self) -> bool {
+        let (_, caret) = self.global_selection();
+        self.viewport_valid && caret.0 >= self.viewport_start && caret.0 <= self.viewport_start.saturating_add(self.surface.snapshot.len())
+            && self.surface.snapshot.is_boundary(TextOffset(caret.0 - self.viewport_start))
+    }
+    fn project_global_selection(&mut self) {
+        let length = self.surface.snapshot.len();
+        let local = |offset: usize| offset.saturating_sub(self.viewport_start).min(length);
+        // Clipping affects decoration only; it never writes back into the canonical endpoints.
+        self.projected_selection = Selection { anchor: local(self.global_selection.anchor), caret: local(self.global_selection.caret) };
+        if !self.surface.snapshot.is_boundary(TextOffset(self.projected_selection.anchor)) || !self.surface.snapshot.is_boundary(TextOffset(self.projected_selection.caret)) {
+            self.projected_selection = Selection::default();
+        }
+        self.surface.selection = self.projected_selection;
+        self.surface.selections = self.projected_selection.into();
+        if !self.caret_in_viewport() { self.surface.reveal_caret = false; }
+    }
+    pub fn selection_restore_status(&self, token: u64) -> SelectionRestoreStatus {
+        if token == self.selection_token { self.selection_status.clone() } else { SelectionRestoreStatus::Superseded }
+    }
+    pub fn restore_global_selection(&mut self, anchor: TextOffset, caret: TextOffset, preserve_viewport: bool) -> Result<u64, String> {
+        if self.pending.is_some() { return Err("Wait for the pending paged operation.".into()); }
+        if anchor.0 > self.snapshot.len() || caret.0 > self.snapshot.len() { return Err("Selection exceeds the document.".into()); }
+        let handle = self.read_handle(); let snapshot = self.snapshot.clone();
+        let budget = self.budget.clone(); let cancellation = self.cancellation.clone(); let notify = self.notify.clone();
+        let historical = self.captured.is_some();
+        let (sender, result) = mpsc::sync_channel(1);
+        worker().try_send(Box::new(move || {
+            let validation = (|| {
+                if !historical { let _ = handle.original_store()?; }
+                for offset in [anchor, caret] {
+                    let mut request = handle.snapshot().begin_viewport(TextOffset(offset.0.saturating_sub(4)), 12, &budget).map_err(|e| format!("Selection validation: {e:?}"))?;
+                    loop {
+                        cancellation.check().map_err(|e| format!("Selection validation: {e:?}"))?;
+                        match request.poll() {
+                            WindowPoll::Ready(window) => {
+                                let local = offset.0.checked_sub(window.range().start.0).ok_or("Selection endpoint is unavailable")?;
+                                if local > window.text().len() || !window.text().is_char_boundary(local) { return Err("Selection endpoint is not a UTF-8 boundary".into()); }
+                                break;
+                            }
+                            WindowPoll::Pending(ticket) => { let ready = if historical { handle.resolve_captured_page(ticket)? } else { handle.resolve_page(ticket)? }; if !ready { std::thread::yield_now(); } }
+                            _ => return Err("Selection endpoint is unavailable".into()),
+                        }
+                    }
+                }
+                if !historical { let _ = handle.original_store()?; }
+                Ok(())
+            })();
+            let _ = sender.try_send(validation); notify();
+        })).map_err(|_| "Paged worker queue is full; retry.".to_owned())?;
+        self.selection_token = self.selection_token.wrapping_add(1);
+        self.selection_status = SelectionRestoreStatus::Pending;
+        self.selection_validation = Some(SelectionValidation { snapshot, selection: Selection { anchor: anchor.0, caret: caret.0 }, preserve_viewport, result });
+        Ok(self.selection_token)
+    }
+    fn pump_selection_validation(&mut self) -> bool {
+        let Some(pending) = &self.selection_validation else { return false; };
+        let result = match pending.result.try_recv() { Ok(result) => result, Err(TryRecvError::Empty) => return false, Err(TryRecvError::Disconnected) => Err("Selection validation worker stopped".into()) };
+        let pending = self.selection_validation.take().unwrap();
+        let result = if !pending.snapshot.same_document(&self.snapshot) || pending.snapshot.content_state != self.snapshot.content_state { Err("Document changed while validating selection".into()) }
+            else if self.captured.is_none() { result.and_then(|()| self.read_handle().original_store().map(|_| ())) } else { result };
+        match result {
+            Err(error) => { self.deferred_input = None; self.selection_status = SelectionRestoreStatus::Failed(error.clone()); self.error = Some(error); }
+            Ok(()) => {
+                self.error = None;
+                self.global_selection = pending.selection; self.project_global_selection();
+                if pending.preserve_viewport { self.surface.reveal_caret = false; }
+                self.selection_status = SelectionRestoreStatus::Applied;
+                if !pending.preserve_viewport {
+                    let start = if pending.selection.anchor.abs_diff(pending.selection.caret) <= WINDOW.saturating_sub(8) { pending.selection.anchor.min(pending.selection.caret) } else { pending.selection.caret };
+                    if let Err(error) = self.request_viewport(TextOffset(start.saturating_sub(4))) { self.deferred_input = None; self.selection_status = SelectionRestoreStatus::Failed(error.clone()); self.error = Some(error); }
+                }
+            }
+        }
+        true
+    }
     /// Restore selection inside the current authoritative viewport without moving it.
     pub fn set_viewport_selection(&mut self, anchor: TextOffset, caret: TextOffset) -> Result<(), String> {
         if !self.viewport_ready() { return Err("Wait for the paged viewport to finish loading.".into()); }
@@ -550,6 +663,8 @@ impl PagedEditorSurface {
         self.surface.selection.anchor = anchor;
         self.surface.selection.caret = caret;
         self.surface.selections = self.surface.selection.into();
+        self.global_selection = Selection { anchor: self.viewport_start + anchor, caret: self.viewport_start + caret };
+        self.projected_selection = self.surface.selection;
         Ok(())
     }
     pub fn restore_selection(
@@ -557,14 +672,7 @@ impl PagedEditorSurface {
         anchor: TextOffset,
         caret: TextOffset,
     ) -> Result<(), String> {
-        let anchor = anchor.0.min(self.snapshot.len());
-        let caret = caret.0.min(self.snapshot.len());
-        if anchor.abs_diff(caret) > WINDOW.saturating_sub(8) {
-            return Err("Selection exceeds the bounded paged viewport.".into());
-        }
-        self.request_viewport(TextOffset(anchor.min(caret).saturating_sub(4)))?;
-        self.restoring_selection = Some((anchor, caret));
-        Ok(())
+        self.restore_global_selection(anchor, caret, false).map(|_| ())
     }
     pub fn request_viewport(&mut self, start: TextOffset) -> Result<(), String> {
         self.submit(Action::Read(start.0.min(self.snapshot.len())))
@@ -617,12 +725,33 @@ impl PagedEditorSurface {
             self.error = Some("Wait for the pending page or edit.".into());
             return;
         }
+        self.sync_global_selection();
+        if let Input::SetCaret(local, extend) = input {
+            if local > self.surface.snapshot.len() || !self.surface.snapshot.is_boundary(TextOffset(local)) { self.error = Some("Caret is outside the available viewport".into()); return; }
+            let caret = self.viewport_start + local;
+            self.global_selection = Selection { anchor: if extend { self.global_selection.anchor } else { caret }, caret };
+            self.project_global_selection(); self.surface.acknowledge(Input::SetCaret(local, extend)); return;
+        }
+        if matches!(input, Input::SelectAll) {
+            if let Err(error) = self.restore_global_selection(TextOffset(0), TextOffset(self.snapshot.len()), true) { self.error = Some(error); }
+            return;
+        }
+        if matches!(input, Input::Left(false) | Input::Right(false)) && self.global_selection.anchor != self.global_selection.caret {
+            let range = self.global_selection.range(); let offset = if matches!(input, Input::Left(_)) { range.start } else { range.end };
+            if let Err(error) = self.restore_global_selection(TextOffset(offset), TextOffset(offset), false) { self.error = Some(error); }
+            return;
+        }
+        let needs_caret = matches!(input, Input::Left(_) | Input::Right(_) | Input::Up(_) | Input::Down(_) | Input::Home(_) | Input::End(_)) || (matches!(input, Input::Backspace | Input::Delete) && self.global_selection.anchor == self.global_selection.caret);
+        if needs_caret && !self.caret_in_viewport() {
+            let (anchor, caret) = self.global_selection();
+            match self.restore_global_selection(anchor, caret, false) { Ok(_) => self.deferred_input = Some(input), Err(error) => self.error = Some(error) }
+            return;
+        }
         let acknowledged = input.clone();
-        let selected = self.surface.selection.range();
+        let selected = self.global_selection.range();
         let action = match input {
             Input::Insert(insert) => Some(Action::Edit {
-                range: TextOffset(self.viewport_start + selected.start)
-                    ..TextOffset(self.viewport_start + selected.end),
+                range: TextOffset(selected.start)..TextOffset(selected.end),
                 insert,
             }),
             Input::Backspace | Input::Delete => {
@@ -632,23 +761,23 @@ impl PagedEditorSurface {
                 } else if backward {
                     self.surface
                         .previous_grapheme(self.surface.selection.caret)
-                        .map(|start| start..self.surface.selection.caret)
+                        .map(|start| self.viewport_start + start..self.global_selection.caret)
                         .unwrap_or(selected)
                 } else {
                     self.surface
                         .next_grapheme(self.surface.selection.caret)
-                        .map(|end| self.surface.selection.caret..end)
+                        .map(|end| self.global_selection.caret..self.viewport_start + end)
                         .unwrap_or(selected)
                 };
                 Some(Action::Edit {
-                    range: TextOffset(self.viewport_start + range.start)
-                        ..TextOffset(self.viewport_start + range.end),
+                    range: TextOffset(range.start)..TextOffset(range.end),
                     insert: String::new(),
                 })
             }
             Input::Undo => Some(Action::Undo),
             Input::Redo => Some(Action::Redo),
             navigation => {
+                if matches!(navigation, Input::Left(true) | Input::Right(true) | Input::Up(true) | Input::Down(true) | Input::Home(true) | Input::End(true)) { self.navigation_anchor = Some(self.global_selection.anchor); }
                 self.surface.enqueue(navigation);
                 None
             }
@@ -664,6 +793,8 @@ impl PagedEditorSurface {
         if self.busy() {
             return Err("A paged operation is already pending.".into());
         }
+        self.sync_global_selection();
+        let moves_selection = matches!(&action, Action::Edit { .. } | Action::Prepared(_) | Action::Undo | Action::Redo | Action::Tail { follow: true, .. });
         let mapped_marks = match &action {
             Action::Prepared(transaction) => Some(self.search_marks.mapped(transaction)),
             Action::Edit { range, insert } => Some(self.search_marks.mapped(&EditTransaction { base_revision: self.snapshot.revision, edits: vec![Edit { range: range.clone(), insert: insert.clone() }] })),
@@ -713,7 +844,7 @@ impl PagedEditorSurface {
         let notify = self.notify.clone();
         let revision = self.snapshot.revision;
         let current_start = self.viewport_start;
-        let current_caret = current_start + self.surface.selection.caret;
+        let current_caret = self.global_selection.caret;
         let (sender, receiver) = mpsc::sync_channel(1);
         worker()
             .try_send(Box::new(move || {
@@ -998,21 +1129,25 @@ impl PagedEditorSurface {
             }))
             .map_err(|_| "Paged worker queue is full; retry.".to_owned())?;
         self.pending = Some(receiver);
+        self.pending_moves_selection = moves_selection;
         self.pending_marks = mapped_marks;
         Ok(())
     }
     pub fn pump(&mut self) -> bool {
+        self.sync_global_selection();
+        let selection_changed = self.pump_selection_validation();
         let navigation_changed = self.pump_navigation();
         let Some(receiver) = &self.pending else {
             self.ensure_viewport_mapping();
-            return self.refresh_peer() || navigation_changed;
+            return self.refresh_peer() || navigation_changed || selection_changed;
         };
         let result = match receiver.try_recv() {
             Ok(result) => result,
-            Err(TryRecvError::Empty) => return false,
+            Err(TryRecvError::Empty) => return selection_changed || navigation_changed,
             Err(TryRecvError::Disconnected) => Err("Paged worker stopped.".into()),
         };
         self.pending = None;
+        let moves_selection = std::mem::take(&mut self.pending_moves_selection);
         match result {
             Ok(completed) => {
                 self.viewport_mapping = None;
@@ -1069,31 +1204,10 @@ impl PagedEditorSurface {
                         self.surface.snapshot = snapshot;
                         self.surface.layout_revision = None;
                         self.surface.scroll_y = 0.0;
-                        let mut caret = completed
-                            .caret
-                            .saturating_sub(self.viewport_start)
-                            .min(self.surface.snapshot.len());
-                        while !self.surface.snapshot.is_boundary(TextOffset(caret)) {
-                            caret -= 1;
+                        if moves_selection {
+                            self.global_selection = Selection { anchor: completed.caret, caret: completed.caret };
                         }
-                        self.surface.selection = Selection {
-                            anchor: caret,
-                            caret,
-                        };
-                        if let Some((anchor, caret)) = self.restoring_selection.take() {
-                            let local = |offset: usize| {
-                                offset
-                                    .saturating_sub(self.viewport_start)
-                                    .min(self.surface.snapshot.len())
-                            };
-                            let (anchor, caret) = (local(anchor), local(caret));
-                            if self.surface.snapshot.is_boundary(TextOffset(anchor))
-                                && self.surface.snapshot.is_boundary(TextOffset(caret))
-                            {
-                                self.surface.selection = Selection { anchor, caret };
-                            }
-                        }
-                        self.surface.selections = self.surface.selection.into();
+                        self.project_global_selection();
                         if let Some((mapping, fraction, x)) = self.pending_scroll_mapping.take() && mapping.offset == self.viewport_start {
                             self.viewport_mapping = Some(mapping); self.fold_viewport_line = usize::try_from(mapping.line).ok(); self.surface.set_logical_scroll(0, fraction, x);
                         }
@@ -1118,6 +1232,7 @@ impl PagedEditorSurface {
             }
         }
         self.ensure_viewport_mapping();
+        if !self.busy() && let Some(input) = self.deferred_input.take() { self.enqueue(input); }
         true
     }
 }
@@ -1200,11 +1315,53 @@ mod peer_tests {
         drain(&mut view);
         assert_eq!(view.viewport_first_global_line(), Some(30000));
         assert_eq!(view.viewport_first_line_start(), Some(TextOffset(120000)));
+        let viewport = view.viewport_start();
+        view.surface.scroll_y = 37.5; view.surface.scroll_x = 19.0;
+        let token = view.restore_global_selection(TextOffset(2), TextOffset(9), true).unwrap();
+        assert_eq!(view.selection_restore_status(token), SelectionRestoreStatus::Pending);
+        drain(&mut view);
+        assert_eq!(view.selection_restore_status(token), SelectionRestoreStatus::Applied);
+        assert_eq!(view.global_selection(), (TextOffset(2), TextOffset(9)));
+        assert_eq!(view.viewport_start(), viewport);
+        assert_eq!((view.surface.scroll_y, view.surface.scroll_x), (37.5, 19.0));
+        assert!(!view.caret_in_viewport());
+        let mut peer = view.clone_view().unwrap(); drain(&mut peer);
+        assert_eq!(peer.global_selection(), (TextOffset(2), TextOffset(9)));
+        assert_eq!(peer.viewport_start(), viewport);
+        drop(peer);
         view.set_known_global_folds(vec![bareline_syntax::folding::Fold { header: 30001, end: 30003, level: 1 }], 0, false, 30000).unwrap();
         assert!(view.global_fold_state.collapsed.is_empty());
         view.fold_all_known(1);
         assert!(view.global_fold_state.collapsed.contains(&30001));
         view.set_global_spacers(&[(30002, 3)]).unwrap();
+        view.enqueue(Input::Insert("€".into())); drain(&mut view);
+        assert_eq!(view.global_selection(), (TextOffset(5), TextOffset(5)));
+        let handle = view.read_handle();
+        let mut read = handle.snapshot().begin_read(TextOffset(0)..TextOffset(8), 16, &view.budget).unwrap();
+        loop { match read.poll() {
+            WindowPoll::Ready(window) => { assert_eq!(window.text(), "ab€bc\n"); break; }
+            WindowPoll::Pending(ticket) => { handle.resolve_page(ticket).unwrap(); }
+            _ => panic!("edited prefix unavailable"),
+        } }
+        let before = view.global_selection(); let before_viewport = view.viewport_start();
+        let superseded = view.restore_global_selection(TextOffset(2), TextOffset(5), true).unwrap();
+        let invalid = view.restore_global_selection(TextOffset(3), TextOffset(5), true).unwrap();
+        assert_eq!(view.selection_restore_status(superseded), SelectionRestoreStatus::Superseded);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while view.busy() { view.pump(); assert!(Instant::now() < deadline); std::thread::yield_now(); }
+        assert!(matches!(view.selection_restore_status(invalid), SelectionRestoreStatus::Failed(_)));
+        assert_eq!(view.global_selection(), before); assert_eq!(view.viewport_start(), before_viewport);
+        assert!(view.restore_global_selection(TextOffset(view.snapshot().len() + 1), TextOffset(0), true).is_err());
+        drop(handle); drop(read);
+        let entire = view.snapshot().len();
+        view.restore_global_selection(TextOffset(0), TextOffset(entire), true).unwrap(); drain(&mut view);
+        let content = view.snapshot().content_state;
+        view.enqueue(Input::Delete);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while view.busy() { view.pump(); assert!(Instant::now() < deadline); std::thread::yield_now(); }
+        assert_eq!(view.snapshot().content_state, content);
+        assert_eq!(view.global_selection(), (TextOffset(0), TextOffset(entire)));
+        assert!(view.error.as_ref().is_some_and(|error| error.contains("bounded viewport")));
         drop(view); std::fs::remove_dir_all(root).unwrap();
     }
     #[test]
