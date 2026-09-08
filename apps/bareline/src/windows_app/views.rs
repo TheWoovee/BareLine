@@ -228,9 +228,8 @@ mod tests {
         let Some(WorkspaceEditor::Paged(target)) = &mut views.secondary else {
             unreachable!()
         };
-        target.surface.selection.anchor = 0;
-        target.surface.selection.caret = 4;
-        target.surface.selections = target.surface.selection.into();
+        let base = target.viewport_start().0;
+        target.set_viewport_selection(bareline_document::TextOffset(base), bareline_document::TextOffset(base + 4)).unwrap();
         target.surface.scroll_y = 17.5;
         target.restore_global_folds(&[8004..8011]);
         let saved_byte = target.viewport_start();
@@ -2328,9 +2327,8 @@ fn finish_workspace_view_restore(
         };
         let anchor = local(state.anchor)?;
         let caret = local(state.caret)?;
-        editor.surface.selection.anchor = anchor;
-        editor.surface.selection.caret = caret;
-        editor.surface.selections = editor.surface.selection.into();
+        let base = editor.viewport_start().0;
+        editor.set_viewport_selection(bareline_document::TextOffset(base + anchor), bareline_document::TextOffset(base + caret))?;
         editor
             .surface
             .set_logical_scroll(0, 0.0, state.scroll_x as f64);
@@ -2369,7 +2367,10 @@ fn restore_view(editor: &mut SharedEditorView, state: &ViewState) {
     let caret = bound(state.caret);
     editor.selection.anchor = anchor;
     editor.selection.caret = caret;
-    editor.selections = editor.selection.into();
+    if let Err(error) = editor.set_selections(editor.selection.into()) {
+        editor.error = Some(error);
+        return;
+    }
     editor.set_logical_scroll(state.scroll_line, 0.0, state.scroll_x as f64);
     editor.scroll_y = f64::from_bits(state.scroll_y_bits);
     editor.restore_folds(&state.folds);

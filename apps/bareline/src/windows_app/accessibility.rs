@@ -756,6 +756,8 @@ mod tests {
             panic!("candidate captured; review full JSON and install baseline, then rerun without capture");
         }
         let expected=std::fs::read_to_string(&path).expect("reviewed full semantic baseline must exist");
+        let actual: serde_json::Value = serde_json::from_str(&actual).expect("serialized actual semantics");
+        let expected: serde_json::Value = serde_json::from_str(&expected).expect("valid reviewed semantic baseline");
         assert_eq!(actual,expected,"full semantic fields, hierarchy, focus and action capabilities changed");
     }
 }

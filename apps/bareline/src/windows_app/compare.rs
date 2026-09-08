@@ -1486,7 +1486,7 @@ pub(super) fn accessibility_test_setup(shell:&mut Shell,scenario:&str) {
     }
     let mut renderer=bareline_renderer_recording::RecordingBackend::default();let mut ops=Vec::new();
     let workspace=shell.workspace.as_mut().unwrap();
-    shell.views.draw(workspace,&mut shell.app,&mut renderer,1000.0,800.0,&mut ops).unwrap();
+    shell.views.draw(workspace,&mut shell.app,&mut renderer,1000.0,800.0,&mut ops,shell.notify.clone()).unwrap();
     shell.compare.draw(workspace,&mut shell.views,&shell.settings,&mut renderer,1000.0,800.0,&mut ops).unwrap();
 }
 

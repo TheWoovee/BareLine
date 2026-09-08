@@ -2,7 +2,7 @@
 
 Updated 2026-09-08. The original blueprint is preserved under `blueprint/`; its NOT_STARTED tables describe the supplied specification. This file tracks the implementation.
 
-Latest [accessibility closure](implementation/INTEGRATION-20260908-ACCESSIBILITY.md) follows the [extension checkpoint](implementation/INTEGRATION-20260908-BATCH05.md). Reviewed 97-scenario native golden and default build pass; cumulative coverage is 389 distinct passing Rust tests, seven pure performance-contract tests, six source-only journey-runner tests and architecture guard. Other development and manual/external acceptance remain open.
+Latest [encoding closure](implementation/INTEGRATION-20260908-BATCH06.md) adds PR007 with 395 cumulative distinct Rust passes and a passing default build; PR010 remains in progress. Prior [accessibility closure](implementation/INTEGRATION-20260908-ACCESSIBILITY.md) follows the [extension checkpoint](implementation/INTEGRATION-20260908-BATCH05.md). Reviewed 97-scenario native golden and default build pass; cumulative coverage is 389 distinct passing Rust tests, seven pure performance-contract tests, six source-only journey-runner tests and architecture guard. Other development and manual/external acceptance remain open.
 
 | Package | State | Evidence |
 |---|---|---|
@@ -12,7 +12,7 @@ Latest [accessibility closure](implementation/INTEGRATION-20260908-ACCESSIBILITY
 | PR-004 | IMPLEMENTATION_COMPLETE_PENDING_ACCEPTANCE | [Whole lifecycle closure](implementation/PR-004.md): Save Copy/All, recovery/provenance/Center compare, closed views and recent-file persistence connected; batch03 app53/native10 pass. Manual crash/input/visual acceptance pending. |
 | PR-005 | IN_PROGRESS | [Unicode literal/Extended search and replacement preparation](implementation/PR-005.md); replacement UI integration active, not yet accepted. |
 | PR-006 | IN_PROGRESS | Power-edit module lane assigned; implementation evidence pending. |
-| PR-007 | IN_PROGRESS | Codec lane assigned; streaming implementation and lifecycle integration evidence pending. |
+| PR-007 | IMPLEMENTATION_COMPLETE_PENDING_ACCEPTANCE | [Encoding closure](implementation/PR-007.md): lossless codec lifecycle, metadata undo, exact guarded failure ranges and full-source paged EOL status connected; batch06 app82/file-io48/editor29/native23 pass. Manual large-file, visual and detection-quality acceptance remains pending. |
 | PR-008 | IN_PROGRESS | Syntax-highlighting implementation active in parallel; evidence note and focused verification pending. |
 | PR-009 | IMPLEMENTATION_COMPLETE_PENDING_ACCEPTANCE | [Workspace closure](implementation/PR-009.md): lazy explorer, document list, outline import/export, bounded map and actual semantic consumers delivered; batch04 app70/native14/syntax18/backend40 pass. Large-fixture, upstream-definition and native acceptance pending. |
 | PR-010 | IN_PROGRESS | Views module assigned to controls after the PR-023 checkpoint. |
@@ -34,7 +34,7 @@ Latest [accessibility closure](implementation/INTEGRATION-20260908-ACCESSIBILITY
 | PR-021 | IN_PROGRESS | [Readiness audit](implementation/PR-021.md) and [native QA evidence](implementation/PR-021-NATIVE-20260906.md); full release gates and acceptance remain open. |
 | PR-027 | IMPLEMENTATION_COMPLETE_PENDING_ACCEPTANCE | [First-party extension closure](implementation/PR-027.md): JSON/XML/Hex source and all four serial actual release-host tests pass, including unchanged 1 GiB JSON and 5 GiB Hex fixtures. Integrated native/manual and signed-release acceptance remain pending. |
 
-Phase count: 27 specified packages; 14 in progress, 13 implementation complete pending acceptance, 0 not started, 0 fully accepted. Assignment means work has started, not that a compiling or verified slice has been delivered. Delivered slices below are usable implementation, not whole-phase completion or a percentage of product readiness.
+Phase count: 27 specified packages; 13 in progress, 14 implementation complete pending acceptance, 0 not started, 0 fully accepted. Assignment means work has started, not that a compiling or verified slice has been delivered. Delivered slices below are usable implementation, not whole-phase completion or a percentage of product readiness.
 
 Owner requirements: work locally; match current mocks; start each PR with its own document; limit reading to necessary references; avoid redundant tests and repeated full builds.
 
