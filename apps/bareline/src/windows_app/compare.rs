@@ -283,9 +283,37 @@ impl Shell {
         self.compare.annotate_context(&mut context,self.workspace.as_ref());
         let mut nodes:Vec<_>=self.compare.hits.iter().enumerate().filter_map(|(hit,(bounds,id))| {
             let command=self.app.commands.entries().find(|command|command.id.0==*id)?;
-            Some(AccessibilityNode{id:self.compare_accessibility_hit_id(hit)?,parent:1,role:AccessibilityRole::Button,name:command.title.into(),value:None,
+            let mut role=AccessibilityRole::Button;let mut selected=false;let mut value=None;
+            if let Some(controller)=&self.compare.controller {
+                let options=controller.options();
+                let checked=match *id {
+                    "compare.trimEdges"=>Some(options.whitespace==Whitespace::TrimEdges),
+                    "compare.ignoreWhitespace"=>Some(options.whitespace==Whitespace::IgnoreAll),
+                    "compare.ignoreBlank"=>Some(options.ignore_blank_lines),
+                    "compare.ignoreCase"=>Some(options.ignore_case),
+                    "compare.ignoreEol"=>Some(options.ignore_eol_style),
+                    "compare.ignoreBom"=>Some(options.ignore_encoding_bom),
+                    "compare.normalizeTabs"=>Some(options.normalize_tabs),
+                    "compare.pauseAutomatic"=>Some(controller.pause_automatic),
+                    "compare.syncHorizontal"=>Some(controller.sync_horizontal),
+                    "compare.colorblind"=>Some(self.compare.color_blind),_=>None,
+                };
+                if let Some(checked)=checked{role=AccessibilityRole::Checkbox;selected=checked;value=Some(if checked{"On"}else{"Off"}.into());}
+                match *id {
+                    "compare.whitespace"=>{role=AccessibilityRole::Combo;value=Some(match options.whitespace{Whitespace::Significant=>"Significant",Whitespace::TrimEdges=>"Trim edges",Whitespace::IgnoreAll=>"Ignore all"}.into());},
+                    "compare.leftSource"=>value=Some(controller.sources[0].label.clone()),
+                    "compare.rightSource"=>value=Some(controller.sources[1].label.clone()),
+                    "compare.next" if self.compare.hits[..hit].iter().any(|(_,candidate)|*candidate=="compare.next")=>{let (current,total)=controller.counter();value=Some(format!("Difference {current} of {total}"));},_=>{},
+                }
+            }
+            match *id {
+                "compare.generalTab"|"compare.colorsTab"=>{role=AccessibilityRole::Tab;selected=(*id=="compare.colorsTab")==self.compare.colors_tab;},
+                "compare.themeLight"|"compare.themeDark"|"compare.themeSystem"=>{role=AccessibilityRole::Radio;selected=matches!((*id,self.settings.effective().theme),("compare.themeLight",bareline_settings::ThemeMode::Light)|("compare.themeDark",bareline_settings::ThemeMode::Dark)|("compare.themeSystem",bareline_settings::ThemeMode::System));value=Some(if selected{"Selected"}else{"Not selected"}.into());},_=>{},
+            }
+            if let Some((_,key))=COLOR_CONTROLS.iter().find(|(candidate,_)|candidate==id){value=self.settings.theme_color(key).map(|color|format!("#{:06X}",color.0));}
+            Some(AccessibilityNode{id:self.compare_accessibility_hit_id(hit)?,parent:1,role,name:command.title.into(),value,
                 bounds:[(bounds.x+offset.x) as f64,(bounds.y+offset.y) as f64,bounds.width as f64,bounds.height as f64],
-                disabled:context.states.get(&command.id).is_some_and(|state|!state.enabled),selected:false,expanded:None,focusable:true,invokable:true})
+                disabled:context.states.get(&command.id).is_some_and(|state|!state.enabled),selected,expanded:None,focusable:true,invokable:true})
         }).collect();
         if self.compare.active_color.is_some(){if let Some(bounds)=self.compare.color_bounds{nodes.push(AccessibilityNode{id:59_999,parent:1,role:AccessibilityRole::TextField,name:"Compare color hexadecimal value".into(),value:Some(self.compare.color_field.value().into()),bounds:[(bounds.x+offset.x) as f64,(bounds.y+offset.y) as f64,bounds.width as f64,bounds.height as f64],disabled:false,selected:false,expanded:None,focusable:true,invokable:false});}}nodes
     }

@@ -7,6 +7,10 @@ use bareline_renderer::{DrawOp, Rect};
 use bareline_ui::{ACCENT, BORDER, CHROME, ELEVATED, MUTED, TEXT, rect, text_field::TextField};
 const ROOT: u64 = 60000;
 const FIELD: u64 = 61000;
+// Catalogs contain at most 4096 entries. Keep both dynamic ranges separate from
+// the manager's fixed controls and other panels (Language starts at 70000).
+const PACKAGE_ROW_BASE: u64 = 8_000_000;
+const PACKAGE_ACTION_BASE: u64 = 8_010_000;
 #[derive(Clone)]
 struct Control {
     id: u64,
@@ -412,7 +416,7 @@ impl ExtensionsRuntime {
                 ));
                 self.control(
                     ops,
-                    70000 + *index as u64,
+                    PACKAGE_ROW_BASE + *index as u64,
                     label,
                     format!("select:{index}"),
                     rect(cx + 8.0, 442.0, cw - 16.0, 36.0),
@@ -424,7 +428,7 @@ impl ExtensionsRuntime {
                 if catalog {
                     self.control(
                         ops,
-                        75000 + *index as u64,
+                        PACKAGE_ACTION_BASE + *index as u64,
                         "Install / update",
                         format!("install:{index}"),
                         rect(cx + 8.0, 488.0, cw - 16.0, 34.0),
@@ -445,7 +449,7 @@ impl ExtensionsRuntime {
                     ops.push(text(cx + 12.0, 530.0, caps, 12.0, MUTED));
                     self.control(
                         ops,
-                        75000 + *index as u64,
+                        PACKAGE_ACTION_BASE + *index as u64,
                         if enabled {
                             "Enabled · Disable"
                         } else {
@@ -996,9 +1000,10 @@ pub(super) fn accessibility_test_cases() -> Vec<(&'static str, Vec<Accessibility
         Catalog, CatalogPolicy, OfflinePackageSource, PackageRequest, VerifiedPackageSource,
     };
     use bareline_renderer::RenderBackend;
-    let capture = |name, runtime: &mut ExtensionsRuntime| {
-        let mut backend = bareline_renderer_recording::RecordingBackend::default();
-        backend.resize(1000, 800, 1.0).unwrap();
+    // TextFields retain backend-owned LayoutIds across frames, as in production.
+    let mut backend = bareline_renderer_recording::RecordingBackend::default();
+    backend.resize(1000, 800, 1.0).unwrap();
+    let mut capture = |name, runtime: &mut ExtensionsRuntime| {
         let mut ops = vec![];
         runtime.draw_manager(&mut backend, 1000.0, 800.0, &mut ops);
         backend.render(&ops).unwrap();

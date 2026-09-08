@@ -5,6 +5,35 @@ use bareline_editor_surface::power::{self, Rectangle, ClipboardHistory, consumer
 use bareline_renderer::{DrawOp, Rect, LayoutError};
 use bareline_ui::{rect, text, text_field::TextField};
 
+#[derive(Clone, Debug, Default)]
+struct PowerLayout {
+    bounds: Rect,
+    fields: Vec<Rect>,
+    history_rows: Vec<Rect>,
+    apply: Rect,
+    cancel: Rect,
+}
+impl PowerLayout {
+    fn new(width: f32, height: f32) -> Self {
+        let bounds = rect((width - 440.0).max(0.0) / 2.0, (height - 400.0).max(48.0) / 2.0, width.min(440.0), height.min(400.0));
+        let content_end = bounds.y + bounds.height - 70.0;
+        let fields = (0..7).map(|index| {
+            let y = bounds.y + 44.0 + index as f32 * 37.0;
+            rect(bounds.x + 190.0, y, (bounds.width - 206.0).max(0.0), (content_end - y).clamp(0.0, 30.0))
+        }).collect();
+        let row_count = ((content_end - bounds.y - 44.0) / 27.0).floor().clamp(0.0, 10.0) as usize;
+        let history_rows = (0..row_count).map(|row| rect(bounds.x + 10.0, bounds.y + 44.0 + row as f32 * 27.0, (bounds.width - 20.0).max(0.0), 27.0)).collect();
+        let button_width = ((bounds.width - 44.0).max(0.0) / 2.0).min(120.0);
+        let y = bounds.y + bounds.height - 42.0;
+        Self { bounds, fields, history_rows, apply: rect(bounds.x + 16.0, y, button_width, 30.0), cancel: rect(bounds.x + 28.0 + button_width, y, button_width, 30.0) }
+    }
+    fn history_start(&self, selected: usize) -> usize { selected.saturating_sub(self.history_rows.len().saturating_sub(1)) }
+    fn history_hit(&self, point: Point, selected: usize, count: usize) -> Option<usize> {
+        self.history_rows.iter().position(|bounds| bounds.contains(point)).map(|row| self.history_start(selected) + row).filter(|index| *index < count)
+    }
+}
+fn accessible_bounds(bounds: Rect) -> [f64; 4] { [bounds.x as f64, bounds.y as f64, bounds.width as f64, bounds.height as f64] }
+
 pub(super) struct PowerRuntime {
     pub open: bool,
     history_open: bool,
@@ -14,7 +43,7 @@ pub(super) struct PowerRuntime {
     focus: usize,
     selected: usize,
     accessibility_focus: Option<u64>,
-    bounds: Rect,
+    layout: PowerLayout,
     status: String,
     rectangle: Option<Rectangle>,
     target: Option<bareline_document::DocumentSnapshot>,
@@ -26,7 +55,7 @@ pub(super) struct PowerRuntime {
 impl Default for PowerRuntime {
     fn default() -> Self {
         let fields = ["text","","0","1","0","10","1"].into_iter().map(|value| { let mut field = TextField::default(); field.insert(value); field }).collect();
-        Self { open:false,history_open:false,history:ClipboardHistory::default(),history_limits:(20,16<<20,4<<20),fields,focus:0,selected:0,accessibility_focus:None,bounds:Rect::default(),status:String::new(),rectangle:None,target:None,rectangle_drag:None,drag:None,group:None,metric_job:None }
+        Self { open:false,history_open:false,history:ClipboardHistory::default(),history_limits:(20,16<<20,4<<20),fields,focus:0,selected:0,accessibility_focus:None,layout:PowerLayout::default(),status:String::new(),rectangle:None,target:None,rectangle_drag:None,drag:None,group:None,metric_job:None }
     }
 }
 pub(super) fn register(registry: &mut bareline_commands::CommandRegistry) {
@@ -45,25 +74,33 @@ impl PowerRuntime {
     pub(super) fn draw(&mut self, renderer: &mut WindowsRenderer, width: f32, height: f32, ops: &mut Vec<DrawOp>) -> Result<Option<Rect>,LayoutError> {
         if !self.open { return Ok(None); }
         let theme = bareline_ui::theme::UiTheme::default();
-        let b = rect((width - 440.0).max(0.0)/2.0,(height-400.0).max(48.0)/2.0,width.min(440.0),height.min(400.0)); self.bounds=b;
+        self.layout = PowerLayout::new(width, height);
+        let b = self.layout.bounds;
         ops.push(DrawOp::Fill(b,theme.chrome)); ops.push(DrawOp::Stroke(b,theme.border,1.0)); ops.push(DrawOp::PushClip(b));
         text(ops,b.x+16.0,b.y+12.0,if self.history_open { "Paste from History" } else { "Column Editor" },17.0,theme.text);
         let mut caret = None;
         if self.history_open {
-            for (index,entry) in self.history.entries().enumerate().skip(self.selected.saturating_sub(9)).take(10) {
-                let row=index-self.selected.saturating_sub(9); let y=b.y+44.0+row as f32*27.0;
-                if index==self.selected { ops.push(DrawOp::Fill(rect(b.x+10.0,y,b.width-20.0,27.0),theme.interactive)); }
-                let preview: String=entry.chars().map(|c| if c=='\n'||c=='\r' {' '}else{c}).take(52).collect(); text(ops,b.x+16.0,y+5.0,&preview,13.0,theme.text);
+            let start = self.layout.history_start(self.selected);
+            for ((index,entry), bounds) in self.history.entries().enumerate().skip(start).zip(&self.layout.history_rows) {
+                if index==self.selected { ops.push(DrawOp::Fill(*bounds,theme.interactive)); }
+                let preview: String=entry.chars().map(|c| if c=='\n'||c=='\r' {' '}else{c}).take(52).collect(); text(ops,bounds.x+6.0,bounds.y+5.0,&preview,13.0,theme.text);
             }
             if self.history.entries().next().is_none() { text(ops,b.x+16.0,b.y+52.0,"No copied text in this session.",13.0,theme.muted); }
         } else {
             for (index,label) in ["Mode: text / numbers","Repeated text","Initial number","Increment","Zero-padding width","Base: 10 / 16 / 8 / 2","Repeat each number"].iter().enumerate() {
-                let y=b.y+44.0+index as f32*37.0; text(ops,b.x+16.0,y+7.0,*label,12.0,theme.text);
-                let current=self.fields[index].draw(renderer,rect(b.x+190.0,y,b.width-206.0,30.0),self.focus==index,ops)?; if self.focus==index { caret=Some(current); }
+                let bounds = self.layout.fields[index];
+                if bounds.width == 0.0 || bounds.height == 0.0 { continue; }
+                text(ops,b.x+16.0,bounds.y+7.0,*label,12.0,theme.text);
+                let focused = self.accessibility_focus.unwrap_or(34000 + self.focus as u64) == 34000 + index as u64;
+                let current=self.fields[index].draw(renderer,bounds,focused,ops)?; if focused { caret=Some(current); }
             }
         }
         text(ops,b.x+16.0,b.y+b.height-70.0,&self.status,12.0,theme.muted);
-        text(ops,b.x+16.0,b.y+b.height-35.0,"Enter: Apply     Escape: Cancel",13.0,theme.text);
+        for (id, bounds, label) in [(34020, self.layout.apply, "Apply (Enter)"), (34021, self.layout.cancel, "Cancel (Esc)")] {
+            ops.push(DrawOp::Fill(bounds, theme.editor));
+            ops.push(DrawOp::Stroke(bounds, if self.accessibility_focus == Some(id) { theme.interactive } else { theme.border }, 1.0));
+            text(ops, bounds.x + 8.0, bounds.y + 7.0, label, 13.0, theme.text);
+        }
         ops.push(DrawOp::PopClip); Ok(caret)
     }
 }
@@ -133,13 +170,19 @@ impl Shell {
             WindowEvent::KeyboardInput{event,..} if event.state==ElementState::Pressed=>match &event.logical_key {
                 Key::Named(NamedKey::Escape)=>self.power.open=false,
                 Key::Named(NamedKey::Enter)=>{if self.power.accessibility_focus==Some(34021){self.power.open=false;}else{self.power_apply();}},
-                Key::Named(NamedKey::Tab)=>self.power.focus=(self.power.focus+1)%self.power.fields.len(),
-                Key::Named(NamedKey::ArrowUp) if self.power.history_open=>self.power.selected=self.power.selected.saturating_sub(1),
-                Key::Named(NamedKey::ArrowDown) if self.power.history_open=>self.power.selected=(self.power.selected+1).min(self.power.history.entries().count().saturating_sub(1)),
+                Key::Named(NamedKey::Tab)=>{self.power.focus=(self.power.focus+1)%self.power.fields.len();if !self.power.history_open{self.power.accessibility_focus=Some(34000+self.power.focus as u64);}},
+                Key::Named(NamedKey::ArrowUp) if self.power.history_open=>{self.power.selected=self.power.selected.saturating_sub(1);self.power.accessibility_focus=Some(34100+self.power.selected as u64);},
+                Key::Named(NamedKey::ArrowDown) if self.power.history_open=>{self.power.selected=(self.power.selected+1).min(self.power.history.entries().count().saturating_sub(1));self.power.accessibility_focus=Some(34100+self.power.selected as u64);},
                 key if !self.power.history_open=> {let field=&mut self.power.fields[self.power.focus]; match key {Key::Named(NamedKey::Backspace)=>{field.delete(false);},Key::Named(NamedKey::Delete)=>{field.delete(true);},Key::Named(NamedKey::ArrowLeft)=>field.horizontal(false,self.modifiers.shift_key()),Key::Named(NamedKey::ArrowRight)=>field.horizontal(true,self.modifiers.shift_key()),_=>{if !self.modifiers.control_key()&&!self.modifiers.alt_key(){if let Some(text)=&event.text{field.commit(text);}}}}},_=>{}
             },
             WindowEvent::Ime(Ime::Commit(text)) if !self.power.history_open=>{self.power.fields[self.power.focus].commit(text);},
-            WindowEvent::MouseInput{state:ElementState::Pressed,button:MouseButton::Left,..}=> {let y=self.pointer.y-self.power.bounds.y-44.0;if y>=0.0{if self.power.history_open{self.power.selected=(y/27.0)as usize;self.power_apply();}else{self.power.focus=((y/37.0)as usize).min(6);}}},
+            WindowEvent::MouseInput{state:ElementState::Pressed,button:MouseButton::Left,..}=> {
+                if self.power.layout.apply.contains(self.pointer) { self.power.accessibility_focus=Some(34020); self.power_apply(); }
+                else if self.power.layout.cancel.contains(self.pointer) { self.power.accessibility_focus=Some(34021); self.power.open=false; }
+                else if self.power.history_open {
+                    if let Some(index)=self.power.layout.history_hit(self.pointer,self.power.selected,self.power.history.entries().count()) { self.power.selected=index; self.power.accessibility_focus=Some(34100+index as u64); self.power_apply(); }
+                } else if let Some(index)=self.power.layout.fields.iter().position(|bounds|bounds.contains(self.pointer)) { self.power.focus=index; self.power.accessibility_focus=Some(34000+index as u64); }
+            },
             _=>return false,
         }
         if let Some(window)=&self.window{window.request_redraw();}true
@@ -238,13 +281,20 @@ impl PowerRuntime {
         if !self.open{return Vec::new();}
         let mut nodes=Vec::new();
         if !self.history_open {
-            for (index,label) in ["Mode: text or numbers","Repeated text","Initial number","Increment","Zero-padding width","Base","Repeat count"].iter().enumerate(){
-                nodes.push(AccessibilityNode{id:34000+index as u64,parent:1,role:AccessibilityRole::TextField,name:(*label).into(),value:Some(self.fields[index].value().into()),bounds:[(self.bounds.x+190.0)as f64,(self.bounds.y+44.0+index as f32*37.0)as f64,(self.bounds.width-206.0)as f64,30.0],disabled:false,selected:self.accessibility_focus.unwrap_or(34000+self.focus as u64)==34000+index as u64,expanded:None,focusable:true,invokable:false});
+            for ((index,label),bounds) in ["Mode: text or numbers","Repeated text","Initial number","Increment","Zero-padding width","Base","Repeat count"].iter().enumerate().zip(&self.layout.fields) {
+                if bounds.width==0.0||bounds.height==0.0{continue;}
+                nodes.push(AccessibilityNode{id:34000+index as u64,parent:1,role:AccessibilityRole::TextField,name:(*label).into(),value:Some(self.fields[index].value().into()),bounds:accessible_bounds(*bounds),disabled:false,selected:self.accessibility_focus.unwrap_or(34000+self.focus as u64)==34000+index as u64,expanded:None,focusable:true,invokable:false});
             }
         } else {
-            for (index,entry) in self.history.entries().enumerate(){nodes.push(AccessibilityNode{id:34100+index as u64,parent:1,role:AccessibilityRole::ListItem,name:entry.chars().take(80).collect(),value:None,bounds:[self.bounds.x as f64,self.bounds.y as f64,self.bounds.width as f64,27.0],disabled:false,selected:self.accessibility_focus.unwrap_or(34100+self.selected as u64)==34100+index as u64,expanded:None,focusable:true,invokable:true});}
+            let start=self.layout.history_start(self.selected);
+            for ((index,entry),bounds) in self.history.entries().enumerate().skip(start).zip(&self.layout.history_rows) {
+                nodes.push(AccessibilityNode{id:34100+index as u64,parent:1,role:AccessibilityRole::ListItem,name:entry.chars().take(80).collect(),value:None,bounds:accessible_bounds(*bounds),disabled:false,selected:self.accessibility_focus.unwrap_or(34100+self.selected as u64)==34100+index as u64,expanded:None,focusable:true,invokable:true});
+            }
         }
-        for (id,name) in [(34020,"Apply"),(34021,"Cancel")]{nodes.push(AccessibilityNode{id,parent:1,role:AccessibilityRole::Button,name:name.into(),value:None,bounds:[self.bounds.x as f64,(self.bounds.y+self.bounds.height-40.0)as f64,100.0,30.0],disabled:false,selected:self.accessibility_focus==Some(id),expanded:None,focusable:true,invokable:true});}
+        for (id,name,bounds) in [(34020,"Apply",self.layout.apply),(34021,"Cancel",self.layout.cancel)] {
+            if bounds.width==0.0||bounds.height==0.0{continue;}
+            nodes.push(AccessibilityNode{id,parent:1,role:AccessibilityRole::Button,name:name.into(),value:None,bounds:accessible_bounds(bounds),disabled:false,selected:self.accessibility_focus==Some(id),expanded:None,focusable:true,invokable:true});
+        }
         nodes
     }
 }
@@ -307,12 +357,7 @@ pub(super) fn accessibility_test_cases() -> Vec<(
     let width = 1000.0_f32;
     let height = 800.0_f32;
     let mut runtime = PowerRuntime::default();
-    runtime.bounds = rect(
-        (width - 440.0).max(0.0) / 2.0,
-        (height - 400.0).max(48.0) / 2.0,
-        width.min(440.0),
-        height.min(400.0),
-    );
+    runtime.layout = PowerLayout::new(width, height);
     let mut cases = vec![("power.closed", runtime.accessibility_nodes(), None)];
     runtime.open = true;
     cases.push(("power.column", runtime.accessibility_nodes(), Some(34000)));
@@ -339,8 +384,62 @@ pub(super) fn accessibility_test_cases() -> Vec<(
     cases.push(("power.history_focus", runtime.accessibility_nodes(), Some(34101)));
     runtime.accessibility_focus = Some(34021);
     cases.push(("power.history_cancel_focus", runtime.accessibility_nodes(), Some(34021)));
+    for index in 0..20 { runtime.copied(&format!("History entry {index}")); }
+    runtime.selected = 14;
+    runtime.accessibility_focus = Some(34114);
+    cases.push(("power.history_scrolled", runtime.accessibility_nodes(), Some(34114)));
     runtime.configure_history(false, 20, 16 << 20, 4 << 20);
     runtime.accessibility_focus = None;
     cases.push(("power.history_cleared", runtime.accessibility_nodes(), None));
     cases
+}
+
+#[cfg(test)]
+mod power_layout_tests {
+    use super::*;
+
+    #[test]
+    fn scrolled_history_hits_and_semantics_follow_visible_rows() {
+        let mut runtime=PowerRuntime::default();
+        runtime.open=true;runtime.history_open=true;
+        runtime.layout=PowerLayout::new(1000.0,800.0);
+        runtime.configure_history(true,20,16<<20,4<<20);
+        for index in 0..20{runtime.copied(&format!("Entry {index}"));}
+        runtime.selected=14;
+        let nodes=runtime.accessibility_nodes();
+        let rows:Vec<_>=nodes.iter().filter(|node|(34100..34120).contains(&node.id)).collect();
+        assert_eq!(rows.len(),10);
+        assert_eq!(rows.first().unwrap().id,34105);
+        assert_eq!(rows.last().unwrap().id,34114);
+        assert_eq!(rows[0].bounds,[290.0,244.0,420.0,27.0]);
+        assert_eq!(rows[1].bounds,[290.0,271.0,420.0,27.0]);
+        for node in rows{
+            let point=Point{x:node.bounds[0]as f32+1.0,y:node.bounds[1]as f32+1.0};
+            assert_eq!(runtime.layout.history_hit(point,runtime.selected,20),Some((node.id-34100)as usize));
+        }
+        assert_eq!(runtime.layout.history_hit(Point{x:289.0,y:245.0},14,20),None);
+        assert_eq!(runtime.layout.history_hit(Point{x:300.0,y:570.0},14,20),None);
+        assert_eq!(runtime.layout.history_hit(Point{x:291.0,y:245.0},0,0),None);
+    }
+
+    #[test]
+    fn field_and_footer_bounds_match_the_drawn_controls() {
+        let mut runtime=PowerRuntime::default();runtime.open=true;
+        runtime.layout=PowerLayout::new(1000.0,800.0);
+        let nodes=runtime.accessibility_nodes();
+        for (index,bounds) in runtime.layout.fields.iter().enumerate(){
+            let node=nodes.iter().find(|node|node.id==34000+index as u64).unwrap();
+            assert_eq!(node.bounds,accessible_bounds(*bounds));
+            assert!(bounds.y+bounds.height<=runtime.layout.apply.y);
+        }
+        let apply=nodes.iter().find(|node|node.id==34020).unwrap();
+        let cancel=nodes.iter().find(|node|node.id==34021).unwrap();
+        assert_eq!(apply.bounds,[296.0,558.0,120.0,30.0]);
+        assert_eq!(cancel.bounds,[428.0,558.0,120.0,30.0]);
+        let apply_point=Point{x:300.0,y:570.0};let cancel_point=Point{x:432.0,y:570.0};
+        assert!(runtime.layout.apply.contains(apply_point));
+        assert!(!runtime.layout.cancel.contains(apply_point));
+        assert!(runtime.layout.cancel.contains(cancel_point));
+        assert!(!runtime.layout.apply.contains(cancel_point));
+    }
 }

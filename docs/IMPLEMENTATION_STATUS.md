@@ -2,7 +2,7 @@
 
 Updated 2026-09-08. The original blueprint is preserved under `blueprint/`; its NOT_STARTED tables describe the supplied specification. This file tracks the implementation.
 
-Latest [PR closure checkpoint](implementation/INTEGRATION-20260908-BATCH04.md): 354 effective tests, six pure performance-contract tests, architecture guard and default native build pass. Ordinary development gaps and manual/foreign-host acceptance remain open.
+Latest [accessibility closure](implementation/INTEGRATION-20260908-ACCESSIBILITY.md) follows the [extension checkpoint](implementation/INTEGRATION-20260908-BATCH05.md). Reviewed 97-scenario native golden and default build pass; cumulative coverage is 389 distinct passing Rust tests, seven pure performance-contract tests, six source-only journey-runner tests and architecture guard. Other development and manual/external acceptance remain open.
 
 | Package | State | Evidence |
 |---|---|---|
@@ -21,20 +21,20 @@ Latest [PR closure checkpoint](implementation/INTEGRATION-20260908-BATCH04.md): 
 | PR-013 | IN_PROGRESS | Completion/syntax follow-on assigned after the power-edit checkpoint. |
 | PR-014 | IMPLEMENTATION_COMPLETE_PENDING_ACCEPTANCE | [Macro/process closure](implementation/PR-014.md): manager/persistence, ordered acknowledged input/power/search replay, workspace interpolation, output links and accessibility connected; mixed persistence/replay regression and batch03 pass. Manual acceptance pending. |
 | PR-015 | IN_PROGRESS | [Path trust/watch/tail](implementation/PR-015.md) backend active; native behavior and consumer integration pending. |
-| PR-016 | IN_PROGRESS | Extension runtime/protocol/native transport assigned; isolation/package acceptance pending. |
+| PR-016 | IMPLEMENTATION_COMPLETE_PENDING_ACCEPTANCE | [Extension platform closure](implementation/PR-016.md): verified manager, bounded captured readers, authenticated owned host lifecycle and actual four-component gate pass. Native manager/input/visual acceptance and production trust distribution remain pending. |
 | PR-017 | IN_PROGRESS | Compare/utilities assigned after the diff checkpoint. |
 | PR-018 | IMPLEMENTATION_COMPLETE_PENDING_ACCEPTANCE | [Windows distribution closure](implementation/PR-018.md): CLI/IPC, portable roots, shell/tray, reviewed migration, authenticated update/runtime provider and packaging source integrated; batch04 native14/backend40/distribution7 and default build pass. Signed deployment, packaging execution and clean-VM acceptance pending. |
 | PR-019 | IN_PROGRESS | Benchmark tooling assigned; complete-feature workloads and release measurements remain pending. |
 | PR-022 | IMPLEMENTATION_COMPLETE_PENDING_ACCEPTANCE | [Portability closure](implementation/PR-022.md): adapter skeletons, lossless path/modifier contracts, RecordingBackend probes, derived architecture guard and three-OS CI source complete; guard and negative fixtures pass at 021d8cb. Foreign-host execution and probe acceptance remain pending; no native product port claimed. |
 | PR-023 | IMPLEMENTATION_COMPLETE_PENDING_ACCEPTANCE | [Toolkit closure](implementation/PR-023.md): full source audit found no required toolkit gap; batch03 shared controls/focus/theme/virtual-tree tests pass. Native composition, physical input and visual acceptance remain pending. |
-| PR-024 | IN_PROGRESS | [Accessibility adapter](implementation/PR-024.md) active; native assistive-technology acceptance pending. |
+| PR-024 | IMPLEMENTATION_COMPLETE_PENDING_ACCEPTANCE | [Accessibility closure](implementation/PR-024.md): bounded native providers, actual controller hierarchy/focus/actions and independently reviewed 97-scenario JSON baseline pass. Physical assistive-technology, IME and mixed-DPI acceptance remain pending. |
 | PR-025 | IMPLEMENTATION_COMPLETE_PENDING_ACCEPTANCE | [Bounded diff core closure](implementation/PR-025.md): AC-025-01/02/03 passed locally; independent source review found no blocking core gap. Cross-platform compile remains pending; no full acceptance claim. |
 | PR-026 | IN_PROGRESS | Workspace replacement assigned as search lane's next slice; integration evidence pending. |
 | PR-020 | IN_PROGRESS | [Security/recovery source review](implementation/PR-020.md): concrete cache and close findings reviewed with owner regression evidence; whole hardening acceptance remains open. |
 | PR-021 | IN_PROGRESS | [Readiness audit](implementation/PR-021.md) and [native QA evidence](implementation/PR-021-NATIVE-20260906.md); full release gates and acceptance remain open. |
-| PR-027 | IN_PROGRESS | [First-party extension evidence](implementation/PR-027.md): component/formatter harness work active; full integration and acceptance remain open. |
+| PR-027 | IMPLEMENTATION_COMPLETE_PENDING_ACCEPTANCE | [First-party extension closure](implementation/PR-027.md): JSON/XML/Hex source and all four serial actual release-host tests pass, including unchanged 1 GiB JSON and 5 GiB Hex fixtures. Integrated native/manual and signed-release acceptance remain pending. |
 
-Phase count: 27 specified packages; 17 in progress, 10 implementation complete pending acceptance, 0 not started, 0 fully accepted. Assignment means work has started, not that a compiling or verified slice has been delivered. Delivered slices below are usable implementation, not whole-phase completion or a percentage of product readiness.
+Phase count: 27 specified packages; 14 in progress, 13 implementation complete pending acceptance, 0 not started, 0 fully accepted. Assignment means work has started, not that a compiling or verified slice has been delivered. Delivered slices below are usable implementation, not whole-phase completion or a percentage of product readiness.
 
 Owner requirements: work locally; match current mocks; start each PR with its own document; limit reading to necessary references; avoid redundant tests and repeated full builds.
 

@@ -585,6 +585,12 @@ mod tests {
         let mut operations = Vec::new();
         let context = bareline_commands::CommandContext::default();
         let keymap = bareline_commands::Keymap::defaults(&shell.app.commands);
+        // Native layout reserves the toolbar before laying out editor-local
+        // Find/search controls. Keep the headless dimensions in that order.
+        if scenario.starts_with("toolbar") || scenario == "all_app_panels" {
+            shell.toolbar.controller.model.visible = true;
+        }
+        let editor_height=800.0-shell.toolbar.controller.height();
         if scenario.starts_with("find") || scenario == "all_app_panels" {
             let workspace = shell.workspace.as_mut().unwrap();
             workspace.find.show_replace();
@@ -598,7 +604,7 @@ mod tests {
             let workspace = shell.workspace.as_mut().unwrap();
             workspace.search_panel.open = true;
             workspace.search_panel.field.insert("workspace");
-            workspace.search_panel.draw(&mut backend,1000.0,800.0,&[],&mut operations).unwrap();
+            workspace.search_panel.draw(&mut backend,1000.0,editor_height,&[],&mut operations).unwrap();
         }
         if scenario.starts_with("settings") || scenario == "all_app_panels" {
             shell.settings.controller.show();
@@ -608,7 +614,7 @@ mod tests {
         if scenario.starts_with("palette") || scenario == "all_app_panels" {
             shell.palette.show(&shell.app.commands,&context,&keymap);
             shell.palette.draw(&mut backend,1000.0,800.0,&mut operations).unwrap();
-            if scenario == "palette.result_focus" { assert!(shell.palette.accessibility_focus(11001)); }
+            if scenario == "palette.result_selection" { assert!(shell.palette.key(bareline_ui::controls::Key::Down,&shell.app.commands,&context).is_none()); }
         }
         if scenario.starts_with("toolbar") || scenario == "all_app_panels" {
             shell.toolbar.controller.model.visible = true;
@@ -625,11 +631,17 @@ mod tests {
         let mut errors = Vec::new();
         let mut cases = std::collections::BTreeMap::new();
         cases.insert("default".to_owned(), dump(&mut errors,"default",&shell_snapshot(&headless_shell())));
-        for scenario in ["default_document","find.open","find.replace_focus","find.match_case_focus","search.open","settings.open","settings.query_value","palette.open","palette.result_focus","toolbar.open","toolbar.focus","toolbar.customize","all_app_panels"] {
+        for scenario in ["default_document","find.open","find.replace_focus","find.match_case_focus","search.open","settings.open","settings.query_value","palette.open","palette.result_selection","toolbar.open","toolbar.focus","toolbar.customize","all_app_panels"] {
             let snapshot = shell_snapshot(&app_shell(scenario));
             if !snapshot.nodes.iter().any(|n|n.id==2) {errors.push(format!("{scenario}: document fixture must expose editor"));}
             let target=if scenario.starts_with("find") {Some(6000)} else if scenario.starts_with("search") {Some(7000)} else if scenario.starts_with("settings") {Some(90_000_012)} else if scenario.starts_with("palette") {Some(90_000_002)} else if scenario.starts_with("toolbar") {Some(90_000_003)} else {None};
             if let Some(target)=target {if !snapshot.nodes.iter().any(|n|n.id==target) {errors.push(format!("{scenario}: missing actual surface {target}"));}}
+            if scenario=="all_app_panels" && snapshot.nodes.iter().any(|node|(7000..=7003).contains(&node.id)&&node.bounds[1]+node.bounds[3]>800.0) {
+                errors.push("all_app_panels: search layout must reserve toolbar height".into());
+            }
+            if scenario=="palette.result_selection" && (snapshot.focus!=11000 || !snapshot.nodes.iter().any(|node|node.id==11000&&node.focusable&&!node.disabled) || !snapshot.nodes.iter().any(|node|node.id==11002&&node.selected&&node.invokable&&!node.focusable&&!node.disabled)) {
+                errors.push("palette.result_selection: Down must select second invokable row while query retains focus".into());
+            }
             cases.insert(scenario.to_owned(),dump(&mut errors,scenario,&snapshot));
         }
         let setups: &[SetupCases] = &[
@@ -691,8 +703,14 @@ mod tests {
             let mut chrome=Vec::new();
             semantic_group(&mut chrome,90_000_014,"Macro and Run manager",manager.clone());
             semantic_group(&mut chrome,90_000_015,"Command output",output.clone());
-            let layer=(!manager.is_empty()).then_some(90_000_014);
-            cases.insert(name.into(),dump(&mut errors,name,&compose_snapshot("Bareline",1000.0,800.0,None,chrome,focus.unwrap_or(1),layer)));
+            // The shared status (23300) remains present with output alone;
+            // production gates the modal layer on manager.open, not that alert.
+            let layer=manager.iter().any(|node|node.id!=23300).then_some(90_000_014);
+            let snapshot=compose_snapshot("Bareline",1000.0,800.0,None,chrome,focus.unwrap_or(1),layer);
+            if name=="macros_output_link_focus" && (snapshot.focus!=2_000_000 || !snapshot.nodes.iter().any(|node|node.id==2_000_000&&node.focusable&&node.invokable&&!node.disabled)) {
+                errors.push("macros_output_link_focus: actual link must retain focus and actions with manager closed".into());
+            }
+            cases.insert(name.into(),dump(&mut errors,name,&snapshot));
             if manager.len()>macro_manager.len() {macro_manager=manager;}
             if output.len()>macro_output.len() {macro_output=output;}
         }
