@@ -1,13 +1,31 @@
 # SPDX-License-Identifier: MPL-2.0
-[CmdletBinding()]
+[CmdletBinding(DefaultParameterSetName='Package')]
 param(
-    [Parameter(Mandatory)][string]$PayloadDir,
+    [Parameter(Mandatory,ParameterSetName='Package')][string]$PayloadDir,
     [Parameter(Mandatory)][ValidatePattern('^\d+\.\d+\.\d+$')][string]$Version,
     [Parameter(Mandatory)][string]$OutputDir,
     [string]$Iscc,
-    [switch]$Installer
+    [switch]$Installer,
+    [Parameter(Mandatory,ParameterSetName='Inventory')][switch]$FinalInventory
 )
 $ErrorActionPreference = 'Stop'
+if ($FinalInventory) {
+    $output = (Resolve-Path -LiteralPath $OutputDir).Path
+    if ((Get-Item -LiteralPath $output).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Reparse output rejected' }
+    if (Test-Path -LiteralPath (Join-Path $output 'SHA-256SUMS.minisig')) { throw 'Remove the old detached signature explicitly before regenerating inventory' }
+    . (Join-Path $PSScriptRoot 'release-layout.ps1')
+    $files = @(Get-ChildItem -LiteralPath $output -Force | Where-Object Name -ne 'SHA-256SUMS' | Sort-Object Name)
+    foreach ($file in $files) {
+        if ($file.PSIsContainer -or ($file.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $file.Name -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]*$') { throw 'Unsafe release inventory entry' }
+    }
+    foreach ($name in (Get-RequiredReleaseFiles $Version)) { if ($name -notin $files.Name) { throw "Missing final release asset: $name" } }
+    $sumsPath = Join-Path $output 'SHA-256SUMS'
+    if ((Test-Path -LiteralPath $sumsPath) -and ((Get-Item -LiteralPath $sumsPath).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Reparse inventory rejected' }
+    $inventory = @($files | ForEach-Object { '{0}  {1}' -f (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant(), $_.Name })
+    [IO.File]::WriteAllText($sumsPath, (($inventory -join "`n") + "`n"), [Text.UTF8Encoding]::new($false))
+    Write-Output 'Complete final-byte inventory generated; offline signature and verify-release remain required.'
+    return
+}
 $payload = (Resolve-Path -LiteralPath $PayloadDir).Path
 [System.IO.Directory]::CreateDirectory([System.IO.Path]::GetFullPath($OutputDir)) | Out-Null
 $output = (Resolve-Path -LiteralPath $OutputDir).Path

@@ -11,7 +11,8 @@ param(
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path -LiteralPath $ArtifactDir).Path
 if ((Get-Item -LiteralPath $root).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Reparse artifact directory rejected' }
-$required = @("bareline-$Version-windows-x64-setup.exe", "bareline-$Version-windows-x64-portable.zip", 'bareline-exthost-x64.exe', 'SBOM.json', 'LICENSE', 'SDK-LICENSES.md', 'THIRD-PARTY-NOTICES.md', 'RELEASE-NOTES.md', 'MIGRATION-NOTES.md', 'KNOWN-ISSUES.md')
+. (Join-Path $PSScriptRoot 'release-layout.ps1')
+$required = @(Get-RequiredReleaseFiles $Version)
 $sums = Join-Path $root 'SHA-256SUMS'
 & $Minisign -V -P $ReleasePublicKey -m $sums -x (Join-Path $root 'SHA-256SUMS.minisig')
 if ($LASTEXITCODE -ne 0) { throw 'Checksum inventory minisign verification failed' }

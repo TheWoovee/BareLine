@@ -41,14 +41,15 @@ def main():
     fixture_hash = digest(fixture)
     python = str(Path(sys.executable).resolve())
     support = [{"path": str(directory / name), "sha256": digest(directory / name)} for name in
-               ('perf_suite.py', 'bareline_driver.py', 'notepadpp_driver.py', 'windows_process_metrics.py', 'cache_protocol.py')]
+               ('perf_suite.py', 'bareline_driver.py', 'notepadpp_driver.py', 'windows_process_metrics.py', 'cache_protocol.py', 'disk_metrics.py')]
     applications = {}
     for name in names:
         executable = Path(getattr(args, name)).resolve()
         config = Path(getattr(args, name + '_config')).resolve()
         applications[name] = {"executable": str(executable), "sha256": digest(executable),
             "version": getattr(args, name + '_version'), "settings": {
-                "config": str(config), "config_sha256": digest(config), "plugins_disabled": True}}
+                "config": str(config), "config_sha256": digest(config), "plugins_disabled": True,
+                "measurement_profile": "owned Job memory20ms/disk100ms"}}
         support.append({"path": str(config), "sha256": digest(config)})
     scenarios = []
     for scenario in dict.fromkeys(args.scenario):

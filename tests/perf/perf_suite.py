@@ -230,8 +230,9 @@ def run(manifest_path, destination):
                 if output_bytes > 256 * 1024 * 1024:
                     write_new(destination / "interrupted.json", {"status": "run_output_quota", "unexecuted_trials": "See missing pairs in report"})
                     print(destination)
-                    return
+                    return destination
     print(destination)
+    return destination
 
 
 def percentile(values, fraction):
@@ -337,7 +338,10 @@ def regress(candidate_path, baselines, destination):
         if isinstance(current, bool) or not isinstance(current, (int, float)) or not math.isfinite(current) or current < 0:
             raise ValueError("invalid candidate P50")
         # Only time/byte costs have an established lower-is-better meaning here.
-        if not row["metric"].endswith(("_us", "_bytes", "_bytes_point")):
+        metric = row['metric']
+        if metric in ('memory_sample_interval_us', 'owned_disk_sample_interval_us') or metric.endswith('_released_bytes'):
+            continue
+        if not (metric.endswith(("_us", "_bytes", "_bytes_point")) or metric.startswith(('private_bytes_', 'working_set_bytes_'))):
             continue
         if baseline and current is not None and current > baseline * (1 + threshold):
             findings.append({"scenario": row["scenario"], "metric": row["metric"],

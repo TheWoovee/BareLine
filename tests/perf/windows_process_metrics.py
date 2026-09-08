@@ -85,7 +85,7 @@ class MemoryPoint:
 
 class OwnedProcessTree:
     """Create suspended, assign Job before execution, then resume. No breakaway."""
-    def __init__(self, argv, cwd=None):
+    def __init__(self, argv, cwd=None, environment=None):
         if not argv or not Path(argv[0]).is_absolute():
             raise ValueError('absolute executable required')
         self.api = WinApi(); self.job = None; self.process = None; self.pid = None
@@ -97,8 +97,13 @@ class OwnedProcessTree:
             self.api.require(self.api.set_job(self.job, 9, C.byref(limits), C.sizeof(limits)))
             startup = STARTUPINFO(); startup.cb = C.sizeof(startup)
             command = C.create_unicode_buffer(subprocess.list2cmdline([str(a) for a in argv]))
+            environment_block = None
+            if environment is not None:
+                if any(not isinstance(key, str) or not isinstance(value, str) or '\x00' in key + value or '=' in key for key, value in environment.items()):
+                    raise ValueError('invalid explicit process environment')
+                environment_block = C.create_unicode_buffer('\x00'.join(key + '=' + value for key, value in sorted(environment.items(), key=lambda pair: pair[0].upper())) + '\x00\x00')
             self.api.require(self.api.create(str(argv[0]), command, None, None, False,
-                                            0x4 | 0x08000000, None, str(cwd) if cwd else None,
+                                            0x4 | 0x08000000 | (0x400 if environment is not None else 0), environment_block, str(cwd) if cwd else None,
                                             C.byref(startup), C.byref(info)))
             self.process = info.hProcess; self.pid = int(info.dwProcessId)
             self.api.require(self.api.assign(self.job, self.process))
