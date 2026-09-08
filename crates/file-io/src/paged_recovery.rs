@@ -573,7 +573,7 @@ impl PagedRecovery {
     /// Called while the core commit lease holds exclusive actor ownership. The
     /// entire provenance recipe is prepared before the journal becomes durable.
     pub fn append_sources(&mut self, snapshot: &bareline_document::paged::PagedSnapshot, edits: &[bareline_document::paged::SourceEdit], quota: u64) -> Result<(), String> {
-        let result = (|| {
+        let result: Result<(),String> = (|| {
             self.writer.lock().map_err(|_|"Recovery writer stopped")?.prepare_recipe_revision(snapshot.revision.0).map_err(|e|e.to_string())?;
             let root = prepare_root(&self.directory,snapshot,self.platform.as_ref(),&self.cancellation,quota).map_err(|e|e.to_string())?;
             let journal_quota=quota.checked_sub(serde_json::to_vec(&root).map_err(|e|e.to_string())?.len() as u64).ok_or("Recovery pointer quota")?;
@@ -594,7 +594,7 @@ impl PagedRecovery {
 }
 impl PagedRecovery {
     pub fn append_source_history(&mut self,snapshot:&bareline_document::paged::PagedSnapshot,edits:&[bareline_document::paged::HistorySourceEdit],quota:u64)->Result<(),String> {
-        let result=(|| {
+        let result: Result<(),String>=(|| {
             self.writer.lock().map_err(|_|"Recovery writer stopped")?.prepare_recipe_revision(snapshot.revision.0).map_err(|e|e.to_string())?;
             let root=prepare_root(&self.directory,snapshot,self.platform.as_ref(),&self.cancellation,quota).map_err(|e|e.to_string())?;
             let ranges:Vec<_>=edits.iter().map(|edit|(edit.range.start.0 as u64,edit.removed.len() as u64,edit.inserted.len() as u64)).collect();
@@ -636,7 +636,6 @@ struct RecipeQuotaFile<'a>{file:std::fs::File,remaining:std::rc::Rc<std::cell::C
 impl std::ops::Deref for RecipeQuotaFile<'_>{type Target=std::fs::File;fn deref(&self)->&Self::Target{&self.file}}
 impl std::io::Write for RecipeQuotaFile<'_>{
     fn write(&mut self,bytes:&[u8])->std::io::Result<usize>{
-        use std::io::Write;
         self.cancel.check().map_err(|_|std::io::Error::new(std::io::ErrorKind::Interrupted,"Recovery cancelled"))?;
         let length=bytes.len() as u64;
         if length>self.remaining.get()||length>self.limit.saturating_sub(self.written)||length>self.platform.available_space(self.directory)?/5{return Err(std::io::Error::new(std::io::ErrorKind::StorageFull,"Recovery recipe disk quota"));}

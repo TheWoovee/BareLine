@@ -153,6 +153,15 @@ impl<T> HistoryStack<T> {
         if requested <= self.entries.capacity() {
             return Ok(());
         }
+        // Geometric growth avoids copying the entire history for every edit.
+        let requested = requested
+            .max(
+                self.entries
+                    .capacity()
+                    .checked_mul(2)
+                    .ok_or(Error::BudgetExceeded)?,
+            )
+            .max(1);
         // Reserve the entire new allocation while the old allocation remains live.
         // Moving entries and swapping storage cannot fail after this preparation.
         let bytes = requested
@@ -241,6 +250,25 @@ mod capacity_tests {
         assert!(stack.is_empty());
         assert_eq!(stack.capacity_bytes(), retained);
         drop(full);
+        drop(stack);
+        assert_eq!(budget.used(), 0);
+    }
+    #[test]
+    fn sequential_admission_has_logarithmic_capacity_growth() {
+        let budget = crate::Budget::new(8192);
+        let mut stack = HistoryStack::<u64>::new(budget.clone());
+        let mut previous = 0;
+        let mut growths = 0;
+        for value in 0..64 {
+            stack.try_reserve_exact(1).unwrap();
+            if stack.capacity_bytes() != previous {
+                growths += 1;
+                previous = stack.capacity_bytes();
+            }
+            stack.push(value);
+        }
+        assert!(growths <= 7);
+        assert_eq!(stack.len(), 64);
         drop(stack);
         assert_eq!(budget.used(), 0);
     }

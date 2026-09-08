@@ -1046,7 +1046,7 @@ fn rollback_receipt_impl(
                 return Err(io::Error::other("Target changed since replacement"));
             }
             if current.identity.length > regex::SUBJECT_LIMIT as u64
-                || record.original.identity.length > regex::SUBJECT_LIMIT as u64
+                || record.original.length > regex::SUBJECT_LIMIT as u64
             {
                 let platform_arc = paging
                     .as_ref()

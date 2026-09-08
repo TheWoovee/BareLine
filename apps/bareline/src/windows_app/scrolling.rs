@@ -27,9 +27,9 @@ impl Runtime {
                 if self.captured == Some(pane) { self.captured = None; }
                 self.identities[pane] = Some(identity);
             }
-            let body_height=(area.height-bareline_ui::TAB_HEIGHT-editor.top_inset-editor.bottom_inset-if split {0.0}else{bareline_ui::STATUS_HEIGHT}).max(0.0);
+            let body_height=(area.height-bareline_ui::TAB_HEIGHT-editor.surface.top_inset-editor.surface.bottom_inset-if split {0.0}else{bareline_ui::STATUS_HEIGHT}).max(0.0);
             let metrics = editor.paged_scroll_metrics(body_height);
-            let geometry = Rect { x:area.x+area.width-12.0,y:area.y+bareline_ui::TAB_HEIGHT+editor.top_inset,width:12.0,height:body_height };
+            let geometry = Rect { x:area.x+area.width-12.0,y:area.y+bareline_ui::TAB_HEIGHT+editor.surface.top_inset,width:12.0,height:body_height };
             let offset = if self.captured == Some(pane) { self.bars[pane].as_ref().map_or(metrics.offset,|bar|bar.offset) } else { metrics.offset };
             let bar = Scrollbar { bounds:geometry,offset,viewport:metrics.viewport,total:Some(metrics.total) };
             bar.paint_with_theme(workspace.theme,ops);

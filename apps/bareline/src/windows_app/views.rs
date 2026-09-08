@@ -459,11 +459,15 @@ mod tests {
         workspace.editors[0].enqueue(Input::SetCaret(2,false));
         views.secondary.as_mut().unwrap().enqueue(Input::SetCaret(8,false));
         while views.busy(&workspace){assert!(Instant::now()<deadline);workspace.pump();views.pump(&mut workspace);std::thread::yield_now();}
+        assert_eq!(workspace.editors[0].selection.caret,2);
+        assert_eq!(views.secondary.as_ref().unwrap().selection.caret,8);
         let ids=views.loaded_tabs;
         let identity=workspace.editors[0].snapshot().identity_token();
         assert!(!workspace.promote_resident_for_source_edit(0,identity).unwrap());
         loop {
-            assert!(Instant::now()<deadline); workspace.pump();views.pump(&mut workspace);
+            assert!(Instant::now()<deadline, "promotion convergence: message={:?}; primary paged={} busy={} error={:?}; secondary paged={} busy={} error={:?}; restore={:?}; scroll={:?}", workspace.message,workspace.editors[0].paged(),workspace.editors[0].busy(),workspace.editors[0].error,views.secondary.as_ref().is_some_and(WorkspaceEditor::paged),views.secondary.as_ref().is_some_and(WorkspaceEditor::busy),views.secondary.as_ref().and_then(|e|e.error.as_ref()),views.pending_restore.iter().map(Option::is_some).collect::<Vec<_>>(),views.pending_view_scroll.iter().map(Option::is_some).collect::<Vec<_>>());
+            workspace.pump();views.pump(&mut workspace);
+            workspace.promote_resident_for_source_edit(0,identity).unwrap_or_else(|error|panic!("promotion failed before view rebind: {error}"));
             if workspace.editors[0].paged() && views.secondary.as_ref().is_some_and(WorkspaceEditor::paged) && !views.busy(&workspace) && views.pending_restore.iter().all(Option::is_none) && views.pending_view_scroll.iter().all(Option::is_none){break;}
             std::thread::yield_now();
         }
@@ -471,7 +475,7 @@ mod tests {
         let WorkspaceEditor::Paged(primary)=&workspace.editors[0] else {unreachable!()};
         let WorkspaceEditor::Paged(peer)=views.secondary.as_ref().unwrap() else {unreachable!()};
         assert!(primary.snapshot().same_document(peer.snapshot()));
-        assert_eq!(primary.global_selection().1.0,2);
+        assert_eq!(primary.global_selection().1.0,2,"promotion selection error: {:?}, message: {:?}",primary.error,workspace.message);
         assert_eq!(peer.global_selection().1.0,8);
         assert!(primary.can_undo());
         views.secondary.as_mut().unwrap().enqueue(Input::Insert("X".into()));

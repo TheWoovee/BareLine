@@ -44,6 +44,11 @@ fn next_line(input:&mut impl BufRead,max:usize,cancel:&impl Fn()->bool)->io::Res
 /// Streaming row-local transforms share the bounded in-memory command semantics.
 /// Global ordering/duplication commands are dispatched separately by transform_lines.
 fn row_transform(body:&str,action:super::Transform,tab_width:usize,memory:usize)->io::Result<String> {
+    // next_line emitted a real empty row with a terminator. An empty temporary
+    // document has no rows, so the resident helper alone would skip its indent.
+    if body.is_empty() && matches!(action,super::Transform::Indent) {
+        return Ok(" ".repeat(tab_width.min(memory/2)));
+    }
     let document=bareline_document::Document::from_utf8(body,bareline_document::Budget::new(memory),bareline_document::Budget::new(memory)).map_err(|e|io::Error::other(format!("{e:?}")))?;
     let selection=super::SelectionSet{selections:vec![crate::Selection{anchor:0,caret:body.len()}],primary:0};
     let edit=super::transform(&document.snapshot(),&selection,action,super::Limits{max_bytes:memory/2,tab_width,..super::Limits::default()}).map_err(|e|io::Error::other(format!("{e:?}")))?;
@@ -199,6 +204,14 @@ fn flush_run(rows:&mut Vec<Row>,scratch:&mut Scratch,used:&mut u64,quota:u64,opt
 #[cfg(test)]
 mod tests{
     use super::*;
+    #[test]
+    fn streamed_indent_includes_empty_rows_without_inventing_a_trailing_row(){
+        for (input,expected) in [("",""),("\n","    \n"),("\r\n\r\nx\r","    \r\n    \r\n    x\r"),("x\n\n","    x\n    \n")] {
+            let mut output=Vec::new();
+            transform_lines(std::io::Cursor::new(input),&mut output,&std::env::temp_dir(),64*1024,1024,crate::power::Transform::Indent,4,||false).unwrap();
+            assert_eq!(output,expected.as_bytes(),"input={input:?}");
+        }
+    }
     #[test]
     fn streamed_move_preserves_empty_rows_and_final_eol_policy(){
         for (selected,neighbor,down) in [("a\r\n\r\n","b",true),("a\n","b\r\n",false),("a","b\n",false)] {

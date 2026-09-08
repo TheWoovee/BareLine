@@ -121,7 +121,7 @@ pub struct Workspace {
     spill_pending: bool,
     promotion_target: Option<(u64,u64)>,
     spill_paused: bool,
-    spill_selection: Option<(bareline_document::paged::PagedSnapshot, usize, usize)>,
+    spill_selection: Option<(bareline_document::paged::PagedSnapshot, usize, usize, Option<u64>)>,
 }
 enum SearchNavigationSource {
     Resident(bareline_document::DocumentSnapshot),
@@ -542,7 +542,7 @@ impl Workspace {
                                                 paged.set_streaming_quota(self.transcode_quota_bytes);
                                                 self.editors[index].copy_presentation_to(&mut paged.surface);
                                                 if let Some(root) = &self.recovery_root { paged.enable_recovery(root.clone(), self.file_system.clone()); }
-                                                self.spill_selection = Some((paged.snapshot().clone(), selection.anchor, selection.caret));
+                                                self.spill_selection = Some((paged.snapshot().clone(), selection.anchor, selection.caret, None));
                                                 let old = std::mem::replace(&mut self.editors[index], WorkspaceEditor::Paged(paged));
                                                 self.retired.push(old);
                                                 if let Some(file)=self.files[index].as_mut(){file.encoding=None;}
@@ -571,10 +571,26 @@ impl Workspace {
                 }
             }
         }
-        if let Some((snapshot, anchor, caret)) = self.spill_selection.take() {
+        if let Some((snapshot, anchor, caret, token)) = self.spill_selection.take() {
             if let Some(WorkspaceEditor::Paged(editor)) = self.editors.iter_mut().find(|editor| matches!(editor, WorkspaceEditor::Paged(paged) if paged.snapshot().same_document(&snapshot))) {
-                if editor.busy() { self.spill_selection = Some((snapshot, anchor, caret)); }
-                else if let Err(error) = editor.restore_selection(bareline_document::TextOffset(anchor), bareline_document::TextOffset(caret)) { self.message = Some(error); }
+                if editor.snapshot().content_state != snapshot.content_state {
+                    self.message=Some("Document changed before its promoted selection was restored.".into());
+                } else if editor.busy() {
+                    self.spill_selection=Some((snapshot,anchor,caret,token));
+                } else if let Some(token)=token {
+                    use bareline_editor_surface::paged_view::SelectionRestoreStatus;
+                    match editor.selection_restore_status(token) {
+                        SelectionRestoreStatus::Pending=>self.spill_selection=Some((snapshot,anchor,caret,Some(token))),
+                        SelectionRestoreStatus::Applied=>{},
+                        SelectionRestoreStatus::Failed(error)=>self.message=Some(error),
+                        SelectionRestoreStatus::Superseded=>self.message=Some("Promoted selection restoration was superseded.".into()),
+                    }
+                } else {
+                    match editor.restore_global_selection(bareline_document::TextOffset(anchor),bareline_document::TextOffset(caret),false) {
+                        Ok(token)=>self.spill_selection=Some((snapshot,anchor,caret,Some(token))),
+                        Err(error)=>self.message=Some(error),
+                    }
+                }
             }
         }
         // Event-driven pressure handling; failed storage waits for explicit retry.

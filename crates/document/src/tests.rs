@@ -8,18 +8,19 @@ fn read(snapshot: &DocumentSnapshot) -> String {
 #[test]
 fn snapshot_fork_has_independent_identity_and_edits_without_copying_text() {
     let bytes = Budget::new(4096);
-    let source = Document::from_utf8("saved",bytes.clone(),Budget::new(4096)).unwrap();
+    let source = Document::from_utf8("saved", bytes.clone(), Budget::new(4096)).unwrap();
     let before = bytes.used();
-    let mut fork = Document::fork_from_snapshot(&source.snapshot(),bytes.clone(),Budget::new(4096)).unwrap();
-    assert_eq!(before,bytes.used());
+    let mut fork =
+        Document::fork_from_snapshot(&source.snapshot(), bytes.clone(), Budget::new(4096)).unwrap();
+    assert_eq!(before, bytes.used());
     assert!(!fork.snapshot().same_document(&source.snapshot()));
     let initial_token = fork.snapshot().identity_token();
     assert_ne!(initial_token, source.snapshot().identity_token());
-    edit(&mut fork,0,5,"changed").unwrap();
-    assert_eq!(read(&source.snapshot()),"saved");
-    assert_eq!(read(&fork.snapshot()),"changed");
+    edit(&mut fork, 0, 5, "changed").unwrap();
+    assert_eq!(read(&source.snapshot()), "saved");
+    assert_eq!(read(&fork.snapshot()), "changed");
     fork.undo().unwrap();
-    assert_eq!(read(&fork.snapshot()),"saved");
+    assert_eq!(read(&fork.snapshot()), "saved");
     assert_ne!(initial_token, fork.snapshot().identity_token());
 }
 fn edit(document: &mut Document, start: usize, end: usize, text: &str) -> Result<Revision, Error> {
@@ -51,7 +52,10 @@ fn lines(text: &str) -> usize {
 #[test]
 fn random_edit_oracle_covers_newline_boundaries_snapshots_and_undo_redo() {
     let budget = Budget::new(64 << 20);
-    let history = Budget::new(64 << 20);
+    // Payload allowance plus the charged geometric container peak: full undo,
+    // old half-size redo, and replacement redo during the unchanged100k oracle.
+    let slot_peak = (131_072 + 65_536 + 131_072) * std::mem::size_of::<History>();
+    let history = Budget::new((64 << 20) + slot_peak);
     let mut doc = Document::from_utf8("", budget.clone(), history).unwrap();
     let original = doc.snapshot();
     let mut expected = String::new();
@@ -121,7 +125,8 @@ fn random_edit_oracle_covers_newline_boundaries_snapshots_and_undo_redo() {
 #[test]
 fn failed_batch_and_exhausted_shared_budget_do_not_commit() {
     let budget = Budget::new(16);
-    let undo = Budget::new(32);
+    // Keep the payload allowance tiny, while admitting one undo and one redo slot.
+    let undo = Budget::new(32 + 2 * std::mem::size_of::<History>());
     let mut doc = Document::from_utf8("aب\r\n", budget.clone(), undo.clone()).unwrap();
     let saved = doc.snapshot();
     assert_eq!(edit(&mut doc, 2, 2, "x"), Err(Error::InvalidBoundary));

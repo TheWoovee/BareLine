@@ -1345,7 +1345,11 @@ mod tests {
     }
     #[test]
     fn materialized_multi_edit_is_atomic_and_rejects_stale_or_split_boundaries() {
-        let budget = Budget::new(2048);
+        // Two replacements and inverse replay retain leaves plus temporary AVL paths.
+        let node_bytes = std::mem::size_of::<tree::Node>()
+            + std::mem::size_of::<Reservation>()
+            + 4 * std::mem::size_of::<usize>();
+        let budget = Budget::new(2048 + 16 * node_bytes);
         let (source, publisher) =
             MemorySource::new(8, Generation(2), SourceKind::Paged, 8, 8, budget.clone()).unwrap();
         publisher
