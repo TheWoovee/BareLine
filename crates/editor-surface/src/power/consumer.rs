@@ -23,6 +23,7 @@ fn rectangle(args: &Arguments) -> Result<Rectangle, String> {
     Ok(Rectangle { first_line: parameter(args,"first_line")?, last_line: parameter(args,"last_line")?, start_column: parameter(args,"start_column")?, end_column: parameter(args,"end_column")? })
 }
 impl EditorSurface {
+    pub fn configured_tab_width(&self)->usize{self.tab_width}
     pub fn take_ordered_receipts(&mut self) -> Vec<OrderedReceipt> {
         self.acknowledged.clear();self.acknowledged_commands.clear();
         self.ordered_receipts.drain(..).collect()
@@ -123,10 +124,11 @@ impl EditorSurface {
         let limits = self.power_limits();
         if rectangle.first_line > rectangle.last_line || rectangle.last_line.saturating_sub(rectangle.first_line) >= limits.max_selections { return Err("Rectangle exceeds the selection budget.".into()); }
         let mut selections = Vec::new();
+        let maps = self.rectangle_maps(rectangle);
         for number in rectangle.first_line..=rectangle.last_line {
             let (start,text) = line(&self.snapshot,number,limits).map_err(|e|format!("{e:?}"))?;
             let fallback;
-            let map=if let Some(map)=self.rectangle_maps(rectangle).and_then(|maps|maps.get(&number)){map}else{fallback=DisplayColumnMap::new(content(&text),limits.tab_width);&fallback};
+            let map=if let Some(map)=maps.and_then(|maps|maps.get(&number)){map}else{fallback=DisplayColumnMap::new(content(&text),limits.tab_width);&fallback};
             selections.push(Selection { anchor: start + map.at(rectangle.start_column).0, caret: start + map.at(rectangle.end_column).0 });
         }
         self.set_selections(SelectionSet { selections,primary:0 })?;
@@ -138,7 +140,7 @@ impl EditorSurface {
         let row = ((point.y-self.top()) as f64+self.scroll_y)/self.line_height() as f64;
         let number=self.logical_line(row.floor() as usize);
         let layout=self.layouts.get(&number)?;
-        let hit=backend.hit_test(layout.id,bareline_renderer::Point { x:point.x-crate::LEFT+(self.scroll_x-layout.x_origin) as f32,y:((row-(self.visual_line(number)+layout.row_origin) as f64)*self.line_height() as f64) as f32 }).ok()?;
+        let hit=backend.hit_test(layout.id,bareline_renderer::Point { x:point.x-crate::LEFT+(self.scroll_x-layout.x_origin) as f32,y:((row-(self.visual_line(number)+layout.row_origin) as f64)*self.line_height() as f64) as f32+layout.context_y }).ok()?;
         let offset=(layout.start+hit.byte_offset).min(layout.end);
         let (start,text)=line(&self.snapshot,number,self.power_limits()).ok()?;
         let map=DisplayColumnMap::new(content(&text),self.tab_width);

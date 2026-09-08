@@ -175,3 +175,116 @@ pub fn reinterpret_paged(
     result.source.source().retain_owner(Arc::new(store)).map_err(|_| FileError::Budget)?;
     Ok(result)
 }
+
+/// Worker-owned append-only UTF-8 staging. No source is published until its bytes
+/// are flushed and a retained immutable read capability has been acquired.
+pub struct StreamingStoreBuilder {
+    output: Option<std::fs::File>,
+    cleanup: OwnedDirectory,
+    directory_guard: Arc<dyn Send + Sync>,
+    parent_guard: Arc<dyn Send + Sync>,
+    platform: Arc<dyn LocalFileSystem>,
+    options: SourceOptions,
+    budget: Budget,
+    cancel: Cancellation,
+    quota: u64,
+    written: u64,
+    serial: u64,
+    failed: bool,
+    utf8_carry: Vec<u8>,
+    hash: sha2::Sha256,
+}
+impl StreamingStoreBuilder {
+    pub fn new(cache: &Path, quota: u64, platform: Arc<dyn LocalFileSystem>, options: SourceOptions, budget: Budget, cancel: Cancellation) -> io::Result<Self> {
+        cancel.check().map_err(|_| io::Error::new(io::ErrorKind::Interrupted, "owned staging cancelled"))?;
+        fs::create_dir_all(cache)?;
+        let parent_guard = platform.guard_directory(cache)?;
+        static NEXT_STREAM: AtomicU64 = AtomicU64::new(1);
+        let serial = NEXT_STREAM.fetch_add(1, Ordering::Relaxed);
+        let directory = cache.join(format!("owned-stream-{}-{serial}", std::process::id()));
+        fs::create_dir(&directory)?;
+        let cleanup = OwnedDirectory(directory);
+        let directory_guard = platform.guard_directory(&cleanup.0)?;
+        let output = OpenOptions::new().write(true).create_new(true).open(cleanup.0.join("segments.utf8"))?;
+        Ok(Self { output: Some(output), cleanup, directory_guard, parent_guard, platform, options, budget, cancel, quota, written: 0, serial, failed: false, utf8_carry: Vec::with_capacity(4), hash: Default::default() })
+    }
+    pub fn len(&self) -> u64 { self.written }
+    pub fn is_empty(&self) -> bool { self.written == 0 }
+    pub fn append_utf8(&mut self, text: &str) -> io::Result<std::ops::Range<u64>> {
+        if !self.utf8_carry.is_empty(){self.failed=true;return Err(io::Error::new(io::ErrorKind::InvalidData,"cannot append text inside an unfinished UTF-8 scalar"));}
+        let start = self.written;
+        if self.failed { return Err(io::Error::other("owned staging previously failed")); }
+        let result = (|| {
+            for chunk in text.as_bytes().chunks(64 * 1024) {
+                self.cancel.check().map_err(|_| io::Error::new(io::ErrorKind::Interrupted, "owned staging cancelled"))?;
+                let effective = self.quota.min(self.platform.available_space(&self.cleanup.0)?.saturating_add(self.written) / 5);
+                if chunk.len() as u64 > effective.saturating_sub(self.written) { return Err(io::Error::new(io::ErrorKind::StorageFull, "owned staging quota exceeded")); }
+                self.output.as_mut().ok_or_else(|| io::Error::other("owned staging sealed"))?.write_all(chunk)?;
+                sha2::Digest::update(&mut self.hash,chunk);
+                self.written += chunk.len() as u64;
+            }
+            Ok(start..self.written)
+        })();
+        if result.is_err() { self.failed = true; }
+        result
+    }
+    pub fn append_source(&mut self, text: &bareline_document::paged::OwnedTextRange) -> io::Result<std::ops::Range<u64>> {
+        let start = self.written;
+        let cancel = self.cancel.clone();
+        let result = crate::owned_read::visit_utf8::<io::Error>(&text.source, text.range.clone(), &cancel, |chunk| self.append_utf8(chunk).map(|_| ()));
+        if result.is_err() { self.failed = true; }
+        result.map(|_| start..self.written)
+    }
+    pub fn finish(mut self) -> io::Result<bareline_document::source::MemorySource> {
+        use bareline_document::source::{Generation, MemorySource, SourceKind};
+        if self.failed || !self.utf8_carry.is_empty() { return Err(io::Error::other("owned staging failed or incomplete UTF-8")); }
+        self.cancel.check().map_err(|_| io::Error::new(io::ErrorKind::Interrupted, "owned staging cancelled"))?;
+        let file = self.output.take().ok_or_else(|| io::Error::other("owned staging sealed"))?;
+        file.sync_all()?;
+        drop(file);
+        let mut sealed = self.platform.open_sealed_read(&self.cleanup.0.join("segments.utf8"))?;
+        use std::io::Read;
+        let mut actual=sha2::Sha256::default(); let mut buffer=[0u8;65536];
+        loop { self.cancel.check().map_err(|_|io::Error::new(io::ErrorKind::Interrupted,"owned staging cancelled"))?; let count=sealed.read(&mut buffer)?; if count==0 {break;} sha2::Digest::update(&mut actual,&buffer[..count]); }
+        if sha2::Digest::finalize(actual)!=sha2::Digest::finalize(self.hash) {return Err(io::Error::new(io::ErrorKind::InvalidData,"owned staging changed before seal"));}
+        // Distinct namespace from the captured-segment producer.
+        let (source, _) = MemorySource::new(self.written, Generation((3u64 << 62) | self.serial), SourceKind::Paged, self.options.page_size_bytes, self.options.page_cache_bytes, self.budget).map_err(|error| io::Error::other(format!("{error:?}")))?;
+        source.attach_owned_loader(Arc::new(SealedSegments { file: std::sync::Mutex::new(sealed), _directory_guard: self.directory_guard, _parent_guard: self.parent_guard, _cleanup: self.cleanup })).map_err(|error| io::Error::other(format!("{error:?}")))?;
+        Ok(source)
+    }
+}
+impl Write for StreamingStoreBuilder {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        if self.failed { return Err(io::Error::other("owned staging previously failed")); }
+        let result = (|| {
+            let mut cursor = 0;
+            let mut buffer = [0u8; 8196];
+            while cursor < bytes.len() {
+                let prefix = self.utf8_carry.len();
+                buffer[..prefix].copy_from_slice(&self.utf8_carry);
+                let count = (bytes.len() - cursor).min(8192);
+                buffer[prefix..prefix + count].copy_from_slice(&bytes[cursor..cursor + count]);
+                cursor += count;
+                self.utf8_carry.clear();
+                let window = &buffer[..prefix + count];
+                match std::str::from_utf8(window) {
+                    Ok(text) => { self.append_utf8(text)?; }
+                    Err(error) => {
+                        if error.error_len().is_some() { return Err(io::Error::new(io::ErrorKind::InvalidData, "owned staging requires valid UTF-8")); }
+                        let valid = error.valid_up_to();
+                        let text = std::str::from_utf8(&window[..valid]).map_err(io::Error::other)?;
+                        self.append_utf8(text)?;
+                        self.utf8_carry.extend_from_slice(&window[valid..]);
+                    }
+                }
+            }
+            Ok(bytes.len())
+        })();
+        if result.is_err() { self.failed = true; }
+        result
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        if self.failed { return Err(io::Error::other("owned staging previously failed")); }
+        self.output.as_mut().ok_or_else(|| io::Error::other("owned staging sealed"))?.flush()
+    }
+}

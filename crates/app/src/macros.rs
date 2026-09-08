@@ -244,6 +244,8 @@ pub struct MacrosController {
     output_pressed: Option<usize>,
     replay_document: Option<ReplayDocument>,
     pending_search: Option<PendingSearch>,
+    pending_power: Option<PendingPowerReplay>,
+    next_power_id: u64,
     process_status: String,
 }
 struct PendingSearch {
@@ -251,11 +253,32 @@ struct PendingSearch {
     query: bareline_search::SearchQuery,
     source: ReplayDocument,
 }
-enum ReplayDocument {
+#[derive(Clone)]
+pub enum PowerReplayTarget {
     Resident(bareline_document::DocumentSnapshot),
     Paged(bareline_document::paged::PagedSnapshot),
 }
-impl ReplayDocument {
+type ReplayDocument = PowerReplayTarget;
+/// Captured command admission for the native staged transform service.
+pub struct PowerReplayRequest {
+    pub id: u64,
+    pub target_index: usize,
+    pub target: PowerReplayTarget,
+    pub selections: bareline_editor_surface::power::SelectionSet,
+    pub command: String,
+    pub arguments: BTreeMap<String, String>,
+}
+/// The target also accompanies a failed transform after a successful promotion.
+pub struct PowerReplayCompletion {
+    pub target: Option<PowerReplayTarget>,
+    pub result: Result<(), String>,
+}
+struct PendingPowerReplay {
+    id: u64,
+    request: Option<PowerReplayRequest>,
+    terminal: Option<Result<(), String>>,
+}
+impl PowerReplayTarget {
     fn same_state(&self, editor: &crate::workspace::WorkspaceEditor) -> bool {
         match (self, editor) {
             (Self::Resident(source), crate::workspace::WorkspaceEditor::Resident(editor)) => {
@@ -313,6 +336,8 @@ impl Default for MacrosController {
             output_pressed: None,
             replay_document: None,
             pending_search: None,
+            pending_power: None,
+            next_power_id: 0,
             process_status: String::new(),
         }
     }
@@ -599,7 +624,35 @@ impl MacrosController {
         self.playback = Some(Playback::new(definition, repeat, 10_000, registry)?);
         self.replay_document = None;
         self.pending_search = None;
+        self.pending_power = None;
         Ok(())
+    }
+    pub fn take_power_replay(&mut self) -> Option<PowerReplayRequest> {
+        self.pending_power.as_mut()?.request.take()
+    }
+    pub fn power_replay_active(&self, id: u64) -> bool {
+        self.pending_power
+            .as_ref()
+            .is_some_and(|pending| pending.id == id)
+            && self.playback.as_ref().is_some_and(|playback| {
+                matches!(
+                    playback.state(),
+                    PlaybackState::Running | PlaybackState::Waiting(_)
+                )
+            })
+    }
+    pub fn complete_power_replay(&mut self, id: u64, completion: PowerReplayCompletion) {
+        let Some(pending) = self
+            .pending_power
+            .as_mut()
+            .filter(|pending| pending.id == id)
+        else {
+            return;
+        };
+        if let Some(target) = completion.target {
+            self.replay_document = Some(target);
+        }
+        pending.terminal = Some(completion.result);
     }
     pub fn cancel(&mut self) {
         if let Some(playback) = self.playback.as_mut() {
@@ -641,6 +694,8 @@ impl MacrosController {
             active,
             context,
             pending_search: &mut self.pending_search,
+            pending_power: &mut self.pending_power,
+            next_power_id: &mut self.next_power_id,
             notify,
         };
         let state = playback.tick(now, registry, &mut executor);
@@ -883,6 +938,8 @@ struct WorkspaceExecutor<'a> {
     active: usize,
     context: CommandContext,
     pending_search: &'a mut Option<PendingSearch>,
+    pending_power: &'a mut Option<PendingPowerReplay>,
+    next_power_id: &'a mut u64,
     notify: Arc<dyn Fn() + Send + Sync>,
 }
 impl MacroExecutor for WorkspaceExecutor<'_> {
@@ -921,6 +978,13 @@ impl MacroExecutor for WorkspaceExecutor<'_> {
             })
     }
     fn poll_execution(&mut self) -> Result<bool, String> {
+        if let Some(pending) = self.pending_power.as_mut() {
+            let Some(result) = pending.terminal.take() else {
+                return Ok(false);
+            };
+            *self.pending_power = None;
+            result?;
+        }
         if let Some(pending) = self.pending_search.as_ref() {
             if self.workspace.find.query() != pending.query
                 || !self
@@ -1088,6 +1152,45 @@ impl MacroExecutor for WorkspaceExecutor<'_> {
         }
         if command.0.starts_with("editor.") {
             editor.error = None;
+            if bareline_editor_surface::power::transform_for_command(command.0).is_some() {
+                let id = self
+                    .next_power_id
+                    .checked_add(1)
+                    .ok_or("Macro power request limit reached")?;
+                *self.next_power_id = id;
+                *self.pending_power = Some(PendingPowerReplay {
+                    id,
+                    request: Some(PowerReplayRequest {
+                        id,
+                        target_index: self.active,
+                        selections: match &*editor {
+                            crate::workspace::WorkspaceEditor::Resident(view) => {
+                                view.selection_set()
+                            }
+                            crate::workspace::WorkspaceEditor::Paged(view) => {
+                                let (anchor, caret) = view.global_selection();
+                                bareline_editor_surface::Selection {
+                                    anchor: anchor.0,
+                                    caret: caret.0,
+                                }
+                                .into()
+                            }
+                        },
+                        target: PowerReplayTarget::capture(editor),
+                        command: command.0.into(),
+                        arguments: args.clone(),
+                    }),
+                    terminal: None,
+                });
+                (self.notify)();
+                return Ok(());
+            }
+            if matches!(editor, crate::workspace::WorkspaceEditor::Paged(_)) {
+                return Err(format!(
+                    "Recorded command {} has no paged replay adapter",
+                    command.0
+                ));
+            }
             return editor.execute_power_recorded(command.0, args);
         }
         let input = match command.0 {

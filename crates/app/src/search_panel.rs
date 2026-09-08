@@ -53,7 +53,12 @@ pub struct SearchPanel {
     worker: Option<SearchWorker>,
     pending: Option<OpenDocumentTicket>,
     folder_pending: Option<bareline_search::service::FolderSearchTicket>,
-    folder_options: Option<(bareline_search::folders::FolderScope, Arc<dyn bareline_platform::PathTrustProvider + Send + Sync>, Arc<dyn bareline_platform::LocalFileSystem>, Arc<dyn Fn() + Send + Sync>)>,
+    folder_options: Option<(
+        bareline_search::folders::FolderScope,
+        Arc<dyn bareline_platform::PathTrustProvider + Send + Sync>,
+        Arc<dyn bareline_platform::LocalFileSystem>,
+        Arc<dyn Fn() + Send + Sync>,
+    )>,
     folder_results: Option<bareline_search::folders::FolderResults>,
     folder_activation: Option<(
         std::path::PathBuf,
@@ -61,6 +66,7 @@ pub struct SearchPanel {
         Range<TextOffset>,
     )>,
     results: Option<OpenDocumentResults>,
+    paged_activation: Option<(bareline_document::paged::PagedSnapshot, Range<TextOffset>)>,
     query: Option<SearchQuery>,
     status: String,
     offsets: Vec<usize>,
@@ -77,9 +83,17 @@ impl SearchPanel {
     pub fn owns_accessibility_id(&self, id: u64) -> bool {
         self.semantics().iter().any(|node| node.id.0 == id)
     }
-    pub fn folder_receipt(&self) -> Option<&bareline_search::folders::FolderResults> { self.folder_results.as_ref() }
-    pub fn folder_searching(&self) -> bool { self.folder_pending.is_some() }
-    pub fn folder_job(&self) -> Option<bareline_search::SearchJob> { self.folder_pending.as_ref().map(|ticket| ticket.job.clone()) }
+    pub fn folder_receipt(&self) -> Option<&bareline_search::folders::FolderResults> {
+        self.folder_results.as_ref()
+    }
+    pub fn folder_searching(&self) -> bool {
+        self.folder_pending.is_some()
+    }
+    pub fn folder_job(&self) -> Option<bareline_search::SearchJob> {
+        self.folder_pending
+            .as_ref()
+            .map(|ticket| ticket.job.clone())
+    }
     pub fn status(&self) -> &str {
         &self.status
     }
@@ -254,9 +268,24 @@ impl SearchPanel {
     pub fn start(
         &mut self,
         snapshots: Vec<DocumentSnapshot>,
+        query: SearchQuery,
+        notify: Arc<dyn Fn() + Send + Sync>,
+    ) {
+        self.start_mixed(snapshots, Vec::new(), query, notify);
+    }
+    pub fn take_paged_activation(
+        &mut self,
+    ) -> Option<(bareline_document::paged::PagedSnapshot, Range<TextOffset>)> {
+        self.paged_activation.take()
+    }
+    pub fn start_mixed(
+        &mut self,
+        snapshots: Vec<DocumentSnapshot>,
+        paged: Vec<bareline_search::sources::PagedOpenDocument>,
         mut query: SearchQuery,
         notify: Arc<dyn Fn() + Send + Sync>,
     ) {
+        self.paged_activation = None;
         self.open = true;
         self.folder_options = None;
         self.folder_pending = None;
@@ -293,7 +322,7 @@ impl SearchPanel {
             self.worker
                 .as_ref()
                 .unwrap()
-                .submit_open_documents(snapshots, query, notify),
+                .submit_mixed_open_documents(snapshots, paged, query, notify),
         );
     }
     pub fn start_folder(
@@ -304,7 +333,12 @@ impl SearchPanel {
         platform: Arc<dyn bareline_platform::LocalFileSystem>,
         notify: Arc<dyn Fn() + Send + Sync>,
     ) {
-        self.folder_options = Some((scope.clone(), trust.clone(), platform.clone(), notify.clone()));
+        self.folder_options = Some((
+            scope.clone(),
+            trust.clone(),
+            platform.clone(),
+            notify.clone(),
+        ));
         self.open = true;
         self.pending = None;
         self.folder_pending = None;
@@ -396,6 +430,11 @@ impl SearchPanel {
                         "{} matches in {} open documents",
                         results.count(),
                         results.documents().iter().filter(|d| !d.is_empty()).count()
+                            + results
+                                .paged
+                                .iter()
+                                .filter(|d| !d.results.matches.is_empty())
+                                .count()
                     ),
                     Completeness::Cancelled => {
                         format!("Search cancelled · {} partial matches", results.count())
@@ -412,7 +451,7 @@ impl SearchPanel {
                     Completeness::RegexLimit => "Results incomplete · Regex resource limit".into(),
                     Completeness::Unsupported => "Results incomplete · Source unavailable".into(),
                 };
-                self.collapsed = vec![false; results.documents().len()];
+                self.collapsed = vec![false; results.documents().len() + results.paged.len()];
                 self.results = Some(results);
                 self.rebuild_rows();
                 true
@@ -448,6 +487,21 @@ impl SearchPanel {
                     .push(self.offsets.last().copied().unwrap() + rows);
             }
         }
+        if let Some(results) = &self.results {
+            for (index, document) in results.paged.iter().enumerate() {
+                let rows = if document.results.matches.is_empty() {
+                    0
+                } else {
+                    1 + if self.collapsed[results.documents().len() + index] {
+                        0
+                    } else {
+                        document.results.matches.len()
+                    }
+                };
+                self.offsets
+                    .push(self.offsets.last().copied().unwrap() + rows);
+            }
+        }
         if self.selected.is_some_and(|row| row >= self.row_count()) {
             self.selected = None;
         }
@@ -475,6 +529,15 @@ impl SearchPanel {
                     file.path.clone(),
                     file.fingerprint.clone(),
                     file.matches.get(index)?.range.clone(),
+                ));
+                return None;
+            }
+            let results = self.results.as_ref()?;
+            if group >= results.documents().len() {
+                let document = &results.paged[group - results.documents().len()];
+                self.paged_activation = Some((
+                    document.results.source.clone(),
+                    document.results.matches.get(index)?.range.clone(),
                 ));
                 return None;
             }
@@ -700,6 +763,41 @@ impl SearchPanel {
                         if self.collapsed[group] { "›" } else { "⌄" },
                         file.path.display(),
                         file.matches.len()
+                    )
+                };
+                text(
+                    ops,
+                    if matched.is_some() { 52.0 } else { 24.0 },
+                    y + 6.0,
+                    &label,
+                    13.0,
+                    TEXT,
+                );
+                self.visible_names.push((row, label));
+                continue;
+            }
+            let results = self.results.as_ref().unwrap();
+            if group >= results.documents().len() {
+                let document = &results.paged[group - results.documents().len()];
+                let y = self.list_bounds.y + (row as f64 * ROW_HEIGHT as f64 - self.scroll) as f32;
+                if self.selected == Some(row) {
+                    ops.push(DrawOp::Fill(
+                        rect(18.0, y, width - 36.0, ROW_HEIGHT),
+                        EDITOR,
+                    ));
+                }
+                let label = if let Some(index) = matched {
+                    format!(
+                        "Offset {}: {}",
+                        document.results.matches[index].range.start.0,
+                        document.excerpts[index].replace(['\r', '\n', '\t'], " ")
+                    )
+                } else {
+                    format!(
+                        "{} {}   {}",
+                        if self.collapsed[group] { "›" } else { "⌄" },
+                        document.label,
+                        document.results.count
                     )
                 };
                 text(

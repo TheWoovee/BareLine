@@ -181,6 +181,27 @@ pub fn preview_disk_files(
     platform: &dyn LocalFileSystem,
     ram_bytes: usize,
 ) -> io::Result<DiskReplacePreview> {
+    preview_disk_files_options(
+        paths,
+        query,
+        replacement,
+        job,
+        trust,
+        platform,
+        ram_bytes,
+        ReplacementOptions::default(),
+    )
+}
+pub fn preview_disk_files_options(
+    paths: impl IntoIterator<Item = PathBuf>,
+    query: &SearchQuery,
+    replacement: &str,
+    job: &SearchJob,
+    trust: &dyn PathTrustProvider,
+    platform: &dyn LocalFileSystem,
+    ram_bytes: usize,
+    options: ReplacementOptions,
+) -> io::Result<DiskReplacePreview> {
     if query.selection.is_some() || replacement.len() > MAX_PATTERN_BYTES {
         return Err(io::Error::other("invalid folder replacement options"));
     }
@@ -203,10 +224,11 @@ pub fn preview_disk_files(
             return Err(io::Error::other("duplicate file identity"));
         }
         let snapshot = opened.document.snapshot();
-        if snapshot
-            .chunks(TextOffset(0)..TextOffset(snapshot.len()))
-            .unwrap()
-            .any(|c| c.as_bytes().contains(&0))
+        if !options.include_binary
+            && snapshot
+                .chunks(TextOffset(0)..TextOffset(snapshot.len()))
+                .unwrap()
+                .any(|c| c.as_bytes().contains(&0))
         {
             return Err(io::Error::other("binary source excluded"));
         }
@@ -228,7 +250,13 @@ pub fn preview_disk_files(
             .checked_sub(std::mem::size_of::<DiskPreviewFile>() + opened.path.as_os_str().len())
             .ok_or_else(|| io::Error::other("preview budget"))?;
         let mut changes = Vec::new();
-        for edit in transaction.edits {
+        for mut edit in transaction.edits {
+            if options.preserve_case {
+                let original = snapshot
+                    .read(edit.range.clone(), MAX_RESULT_BYTES)
+                    .map_err(|error| io::Error::other(format!("{error:?}")))?;
+                edit.insert = preserve_replacement_case(&original, &edit.insert);
+            }
             let mut end = (edit.range.start.0 + 160).min(edit.range.end.0);
             while !snapshot.is_boundary(TextOffset(end)) {
                 end -= 1;
@@ -290,6 +318,27 @@ pub fn preview_disk_files_with_paging(
     platform: Arc<dyn LocalFileSystem>,
     ram_bytes: usize,
 ) -> io::Result<DiskReplacePreview> {
+    preview_disk_files_with_paging_options(
+        paths,
+        query,
+        replacement,
+        job,
+        trust,
+        platform,
+        ram_bytes,
+        ReplacementOptions::default(),
+    )
+}
+pub fn preview_disk_files_with_paging_options(
+    paths: impl IntoIterator<Item = PathBuf>,
+    query: &SearchQuery,
+    replacement: &str,
+    job: &SearchJob,
+    trust: &dyn PathTrustProvider,
+    platform: Arc<dyn LocalFileSystem>,
+    ram_bytes: usize,
+    options: ReplacementOptions,
+) -> io::Result<DiskReplacePreview> {
     let mut files = Vec::new();
     let mut remaining = ram_bytes.min(MAX_RESULT_BYTES);
     for (index, path) in paths.into_iter().enumerate() {
@@ -298,8 +347,14 @@ pub fn preview_disk_files_with_paging(
         }
         let guard = approved(&path, trust, false)?;
         let identity = platform.identity(&guard.file)?;
+        if files.iter().any(|file: &DiskPreviewFile| {
+            file.fingerprint.identity.volume == identity.volume
+                && file.fingerprint.identity.file == identity.file
+        }) {
+            return Err(io::Error::other("duplicate file identity"));
+        }
         let file = if identity.length <= regex::SUBJECT_LIMIT as u64 {
-            let mut preview = preview_disk_files(
+            let mut preview = preview_disk_files_options(
                 [path],
                 query,
                 replacement,
@@ -307,6 +362,7 @@ pub fn preview_disk_files_with_paging(
                 trust,
                 platform.as_ref(),
                 remaining,
+                options,
             )?;
             if preview.files.is_empty() {
                 continue;
@@ -318,6 +374,19 @@ pub fn preview_disk_files_with_paging(
                 return Err(io::Error::other("Source changed during preview"));
             }
             let snapshot = opened.transcoded.document.snapshot();
+            let mut cursor = 0;
+            while !options.include_binary && cursor < snapshot.len() {
+                let window =
+                    super::disk_source::window(&mut opened, &snapshot, cursor, 1024 * 1024, job)?;
+                if window.text().as_bytes().contains(&0) {
+                    return Err(io::Error::other("binary source excluded"));
+                }
+                let end = window.range().end.0;
+                if end <= cursor {
+                    return Err(io::Error::other("Source made no progress"));
+                }
+                cursor = end;
+            }
             let mut scoped = query.clone();
             scoped.results_ram_bytes = remaining;
             let results = super::paged::scan_paged(
@@ -335,17 +404,33 @@ pub fn preview_disk_files_with_paging(
                 |_| {},
             );
             let transaction = results
-                .prepare_replace(&snapshot, replacement, ReplaceScope::All, job, |ticket| {
-                    opened
-                        .transcoded
-                        .source
-                        .read_page(ticket)
-                        .map(|_| true)
-                        .map_err(|error| format!("{error:?}"))
-                })
+                .prepare_replace_streaming(
+                    &snapshot,
+                    replacement,
+                    ReplaceScope::All,
+                    job,
+                    |ticket| {
+                        opened
+                            .transcoded
+                            .source
+                            .read_page(ticket)
+                            .map(|_| true)
+                            .map_err(|error| format!("{error:?}"))
+                    },
+                )
                 .map_err(|error| io::Error::other(format!("{error:?}")))?;
             let mut changes = Vec::new();
-            for edit in transaction.edits {
+            for mut edit in transaction.edits {
+                if options.preserve_case {
+                    let original = super::disk_source::window(
+                        &mut opened,
+                        &snapshot,
+                        edit.range.start.0,
+                        edit.range.end.0 - edit.range.start.0,
+                        job,
+                    )?;
+                    edit.insert = preserve_replacement_case(original.text(), &edit.insert);
+                }
                 let before = super::disk_source::window(
                     &mut opened,
                     &snapshot,
@@ -684,26 +769,30 @@ fn apply_disk_files_impl(
                     .filter(|change| change.included)
                     .map(|change| change.edit)
                     .collect();
-                let mut windows = Vec::new();
-                for edit in &edits {
-                    windows.push(super::disk_source::window(
-                        &mut opened,
-                        &snapshot,
-                        edit.range.start.0.saturating_sub(4),
-                        edit.range.end.0 - edit.range.start.0 + 8,
-                        job,
-                    )?);
-                }
+                let prepared = super::paged::stage_source_replacement(
+                    &snapshot,
+                    EditTransaction {
+                        base_revision: snapshot.revision,
+                        edits,
+                    },
+                    job,
+                    |ticket| {
+                        opened
+                            .transcoded
+                            .source
+                            .read_page(ticket)
+                            .map(|_| true)
+                            .map_err(|error| format!("{error:?}"))
+                    },
+                    platform_arc.clone(),
+                    &std::env::temp_dir(),
+                    20u64 << 30,
+                )
+                .map_err(io::Error::other)?;
                 opened
                     .transcoded
                     .document
-                    .apply_materialized(
-                        EditTransaction {
-                            base_revision: snapshot.revision,
-                            edits,
-                        },
-                        &windows,
-                    )
+                    .commit_source_transaction(prepared)
                     .map_err(|error| io::Error::other(format!("{error:?}")))?;
                 let after = opened.transcoded.document.snapshot();
                 let policy = bareline_file_io::lifecycle::PagedSavePolicy {
@@ -956,7 +1045,9 @@ fn rollback_receipt_impl(
             if record.after_hash != Some(current.sha256) {
                 return Err(io::Error::other("Target changed since replacement"));
             }
-            if current.identity.length > regex::SUBJECT_LIMIT as u64 {
+            if current.identity.length > regex::SUBJECT_LIMIT as u64
+                || record.original.identity.length > regex::SUBJECT_LIMIT as u64
+            {
                 let platform_arc = paging
                     .as_ref()
                     .ok_or_else(|| io::Error::other("Paged rollback service unavailable"))?;
@@ -1217,6 +1308,49 @@ mod tests {
         .unwrap();
         assert_eq!(conflict.files[0].state, ReceiptState::Conflict);
         assert_eq!(fs::read(&path).unwrap(), b"external");
+    }
+    #[test]
+    fn paged_rollback_restores_large_utf16_original_after_shrinking() {
+        let fixture = Fixture::new();
+        let mut original = vec![0xff, 0xfe];
+        original.extend(std::iter::repeat_n([b'x', 0], 9 * 1024 * 1024).flatten());
+        let path = fixture.file("large-utf16.txt", &original);
+        let job = SearchJob::default();
+        let registry = OpenFileRegistry::default();
+        let mut query = SearchQuery::literal("^x+$");
+        query.mode = SearchMode::Regex;
+        let preview = preview_disk_files_with_paging(
+            [path.clone()],
+            &query,
+            "Y",
+            &job,
+            &WindowsPathTrustProvider,
+            Arc::new(WindowsFileSystem),
+            MAX_RESULT_BYTES,
+        )
+        .unwrap();
+        assert!(preview.files()[0].paged);
+        let summary = apply_disk_files_with_paging(
+            preview,
+            &fixture.options(),
+            &registry,
+            &job,
+            &WindowsPathTrustProvider,
+            Arc::new(WindowsFileSystem),
+        )
+        .unwrap();
+        assert_eq!(summary.changed_files(), 1);
+        assert_eq!(fs::read(&path).unwrap(), b"\xff\xfeY\0");
+        let restored = rollback_receipt_with_paging(
+            &summary.receipt_path,
+            &registry,
+            &job,
+            &WindowsPathTrustProvider,
+            Arc::new(WindowsFileSystem),
+        )
+        .unwrap();
+        assert_eq!(restored.files[0].state, ReceiptState::RolledBack);
+        assert_eq!(fs::read(path).unwrap(), original);
     }
     #[test]
     fn changed_file_and_new_open_document_are_skipped_for_review() {

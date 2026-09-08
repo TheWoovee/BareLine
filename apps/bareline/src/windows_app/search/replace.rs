@@ -8,9 +8,10 @@ use bareline_search::{
     Completeness, MAX_RESULT_BYTES, ReplaceScope, SearchJob,
     replace_disk::{
         DiskApplySummary, DiskReplaceOptions, DiskReplacePreview, ReplaceReceipt,
-        apply_disk_files_with_paging, preview_disk_files_with_paging, rollback_receipt_with_paging,
+        apply_disk_files_with_paging, preview_disk_files_with_paging_options,
+        rollback_receipt_with_paging,
     },
-    replace_files::{OpenReplacePreview, preview_open_documents},
+    replace_files::{OpenReplacePreview, preview_open_documents_options},
     service::{BackgroundTicket, SearchWorker},
 };
 use bareline_ui::{ACCENT, BORDER, CHROME, MUTED, TEXT, rect, text};
@@ -32,6 +33,8 @@ struct Preview {
     labels: Vec<String>,
     paged: Vec<PagedPreview>,
     disk: DiskReplacePreview,
+    skipped: usize,
+    skip_reasons: String,
 }
 #[derive(Clone, Copy)]
 enum Location {
@@ -222,7 +225,7 @@ impl Preview {
 }
 enum PendingOpen {
     Group(SurfaceGroup, Vec<DocumentSnapshot>, usize),
-    Single(DocumentSnapshot, usize),
+    Single(bareline_editor_surface::TrackedEditReceipt, usize),
 }
 struct PagedApply {
     source: PagedSnapshot,
@@ -244,20 +247,50 @@ pub(super) struct ReplaceRuntime {
     preview: Option<Preview>,
     pending_open: Option<PendingOpen>,
     paged_queue: VecDeque<PagedApply>,
-    paged_pending: Option<(PagedSnapshot, usize)>,
+    paged_pending: Option<(bareline_editor_surface::TrackedEditReceipt, usize)>,
+    staging_paged: Option<
+        BackgroundTicket<(
+            PagedSnapshot,
+            bareline_document::paged::PreparedSourceTransaction,
+            usize,
+        )>,
+    >,
     disk_queue: Option<DiskReplacePreview>,
     receipt: Option<PathBuf>,
     status: String,
     changed_open: usize,
+    changed_disk: usize,
+    replaced_disk: usize,
     replaced_open: usize,
     failed_open: usize,
+    skipped_preview: usize,
+    skip_reasons: String,
     row: usize,
     top: usize,
     hits: Vec<(Rect, Hit)>,
     cancel_requested: bool,
+    replacement_options: bareline_search::ReplacementOptions,
+    disable_backup: bool,
+    workspace_scope: bool,
 }
 pub(super) fn register(registry: &mut CommandRegistry) {
     for (id, title) in [
+        (
+            "search.replacePreview.preserveCase",
+            "Toggle Preserve Replacement Case",
+        ),
+        (
+            "search.replacePreview.includeBinary",
+            "Toggle Binary Replacement Inclusion",
+        ),
+        (
+            "search.replacePreview.backups",
+            "Toggle Backups for This Replacement Job",
+        ),
+        (
+            "search.replacePreview.refresh",
+            "Refresh Replacement Preview",
+        ),
         ("search.replaceInFiles", "Replace in Files…"),
         ("search.replaceInWorkspace", "Replace in Workspace…"),
         ("search.replacePreview.apply", "Apply Reviewed Replacements"),
@@ -294,12 +327,16 @@ pub(super) fn register(registry: &mut CommandRegistry) {
     }
 }
 impl ReplaceRuntime {
+    pub(super) fn is_open(&self) -> bool {
+        self.open
+    }
     fn busy(&self) -> bool {
         self.preparing.is_some()
             || self.applying.is_some()
             || self.rolling_back.is_some()
             || self.pending_open.is_some()
             || self.paged_pending.is_some()
+            || self.staging_paged.is_some()
             || !self.paged_queue.is_empty()
             || self.disk_queue.is_some()
     }
@@ -324,14 +361,55 @@ impl ReplaceRuntime {
             15.0,
             TEXT,
         );
+        let mut option_x = 24.0;
+        for (label, id) in [
+            (
+                format!(
+                    "[{}] Preserve case",
+                    if self.replacement_options.preserve_case {
+                        "x"
+                    } else {
+                        " "
+                    }
+                ),
+                "search.replacePreview.preserveCase",
+            ),
+            (
+                format!(
+                    "[{}] Include binary",
+                    if self.replacement_options.include_binary {
+                        "x"
+                    } else {
+                        " "
+                    }
+                ),
+                "search.replacePreview.includeBinary",
+            ),
+            (
+                format!(
+                    "[{}] Backups in receipt folder",
+                    if self.disable_backup { " " } else { "x" }
+                ),
+                "search.replacePreview.backups",
+            ),
+        ] {
+            text(ops, option_x, bounds.y + 35.0, label, 12.0, TEXT);
+            if !self.busy() {
+                self.hits.push((
+                    rect(option_x, bounds.y + 30.0, 180.0, 24.0),
+                    Hit::Command(id),
+                ));
+            }
+            option_x += 190.0;
+        }
         let rows = self.preview.as_ref().map_or(0, Preview::count_rows);
         self.top = self.top.min(rows.saturating_sub(1));
-        for visible in 0..7 {
+        for visible in 0..6 {
             let row = self.top + visible;
             if row >= rows {
                 break;
             }
-            let y = bounds.y + 42.0 + visible as f32 * 28.0;
+            let y = bounds.y + 65.0 + visible as f32 * 28.0;
             let rect = rect(20.0, y, width - 40.0, 27.0);
             if row == self.row {
                 ops.push(DrawOp::Fill(rect, BORDER));
@@ -352,6 +430,12 @@ impl ReplaceRuntime {
         let selected = self.preview.as_ref().map_or(0, Preview::selected);
         let mut x = 24.0;
         for (label, id, enabled, w) in [
+            (
+                "Refresh",
+                "search.replacePreview.refresh",
+                !self.busy(),
+                80.0,
+            ),
             (
                 "Toggle all",
                 "search.replacePreview.toggleAll",
@@ -395,6 +479,37 @@ impl Shell {
         if !id.starts_with("search.replaceIn") && !id.starts_with("search.replacePreview.") {
             return false;
         }
+        if matches!(
+            id,
+            "search.replacePreview.preserveCase"
+                | "search.replacePreview.includeBinary"
+                | "search.replacePreview.backups"
+        ) {
+            if !self.search.replace.busy() {
+                match id {
+                    "search.replacePreview.preserveCase" => {
+                        self.search.replace.replacement_options.preserve_case ^= true
+                    }
+                    "search.replacePreview.includeBinary" => {
+                        self.search.replace.replacement_options.include_binary ^= true
+                    }
+                    _ => self.search.replace.disable_backup ^= true,
+                }
+                self.search.replace.preview = None;
+                self.search.replace.status =
+                    "Options changed. Refresh and review before applying.".into();
+            }
+            return true;
+        }
+        let id = if id == "search.replacePreview.refresh" {
+            if self.search.replace.workspace_scope {
+                "search.replaceInWorkspace"
+            } else {
+                "search.replaceInFiles"
+            }
+        } else {
+            id
+        };
         if id == "search.replacePreview.close" {
             if !self.search.replace.busy() {
                 self.search.replace.open = false;
@@ -408,6 +523,11 @@ impl Shell {
                 self.search
                     .replace
                     .preparing
+                    .as_ref()
+                    .map(|ticket| &ticket.job),
+                self.search
+                    .replace
+                    .staging_paged
                     .as_ref()
                     .map(|ticket| &ticket.job),
                 self.search
@@ -477,6 +597,8 @@ impl Shell {
             }
             return true;
         }
+        self.search.replace.workspace_scope = id == "search.replaceInWorkspace";
+        let replacement_options = self.search.replace.replacement_options;
         let root = match self
             .platform
             .as_ref()
@@ -546,8 +668,10 @@ impl Shell {
                     let platform: Arc<dyn bareline_platform::LocalFileSystem> =
                         Arc::new(bareline_platform_windows::WindowsFileSystem);
                     let trust = bareline_platform_windows::WindowsPathTrustProvider;
+                    let mut folder_scope = FolderScope::user(root);
+                    folder_scope.include_binary = replacement_options.include_binary;
                     let found = bareline_search::folders::collect_folder(
-                        &FolderScope::user(root),
+                        &folder_scope,
                         &query,
                         job,
                         &trust,
@@ -559,6 +683,14 @@ impl Shell {
                             found.summary.completeness, found.summary.skipped_files
                         ));
                     }
+                    let skipped = found.summary.skipped_files;
+                    let skip_reasons = found
+                        .skips
+                        .iter()
+                        .take(4)
+                        .map(|(path, reason)| format!("{}: {reason:?}", path.display()))
+                        .collect::<Vec<_>>()
+                        .join("; ");
                     let paths = found
                         .groups
                         .into_iter()
@@ -569,7 +701,7 @@ impl Shell {
                             })
                         })
                         .map(|group| group.path);
-                    let disk = preview_disk_files_with_paging(
+                    let disk = preview_disk_files_with_paging_options(
                         paths,
                         &query,
                         &replacement,
@@ -577,18 +709,20 @@ impl Shell {
                         &trust,
                         platform,
                         MAX_RESULT_BYTES / 3,
+                        replacement_options,
                     )
                     .map_err(|error| error.to_string())?;
                     let open = if resident.is_empty() {
                         None
                     } else {
                         Some(
-                            preview_open_documents(
+                            preview_open_documents_options(
                                 resident,
                                 &query,
                                 &replacement,
                                 job,
                                 MAX_RESULT_BYTES / 3,
+                                replacement_options,
                             )
                             .map_err(|error| format!("{error:?}"))?,
                         )
@@ -632,8 +766,8 @@ impl Shell {
                         if found.matches.is_empty() {
                             continue;
                         }
-                        let transaction = found
-                            .prepare_replace(
+                        let mut transaction = found
+                            .prepare_replace_streaming(
                                 &source,
                                 &replacement,
                                 ReplaceScope::All,
@@ -641,6 +775,13 @@ impl Shell {
                                 |ticket| handle.resolve_page(ticket),
                             )
                             .map_err(|error| format!("{error:?}"))?;
+                        if replacement_options.preserve_case {
+                            found
+                                .preserve_case(&mut transaction, job, |ticket| {
+                                    handle.resolve_page(ticket)
+                                })
+                                .map_err(|error| format!("{error:?}"))?;
+                        }
                         let mut changes = Vec::new();
                         for edit in transaction.edits {
                             let before = bareline_search::paged::excerpt(
@@ -682,6 +823,8 @@ impl Shell {
                         labels,
                         paged: paged_preview,
                         disk,
+                        skipped,
+                        skip_reasons,
                     })
                 },
                 self.notify.clone(),
@@ -701,7 +844,11 @@ impl Shell {
         let Some(workspace) = &mut self.workspace else {
             return;
         };
+        self.search.replace.skipped_preview = preview.skipped;
+        self.search.replace.skip_reasons = preview.skip_reasons.clone();
         self.search.replace.changed_open = 0;
+        self.search.replace.changed_disk = 0;
+        self.search.replace.replaced_disk = 0;
         self.search.replace.replaced_open = 0;
         self.search.replace.failed_open = 0;
         self.search.replace.cancel_requested = false;
@@ -725,10 +872,12 @@ impl Shell {
                                         }
                                         _ => None,
                                     });
-                            match target.map(|editor| editor.apply_prepared(&source, transaction)) {
-                                Some(Ok(())) => {
+                            match target
+                                .map(|editor| editor.apply_prepared_tracked(&source, transaction))
+                            {
+                                Some(Ok(receipt)) => {
                                     self.search.replace.pending_open =
-                                        Some(PendingOpen::Single(source, count))
+                                        Some(PendingOpen::Single(receipt, count))
                                 }
                                 _ => self.search.replace.failed_open += 1,
                             }
@@ -790,8 +939,10 @@ impl Shell {
                     match result {
                         Ok(Ok(preview)) => {
                             self.search.replace.status = format!(
-                                "{} selected matches. Review before applying.",
-                                preview.selected()
+                                "{} selected matches; {} skipped. {} Review before applying.",
+                                preview.selected(),
+                                preview.skipped,
+                                preview.skip_reasons
                             );
                             self.search.replace.preview = Some(preview);
                         }
@@ -824,54 +975,86 @@ impl Shell {
                         }
                     }
                 }
-                PendingOpen::Single(source, count) => {
-                    let editor = workspace
-                        .editors
-                        .iter()
-                        .find(|editor| editor.snapshot().same_document(&source));
-                    match editor {
-                        Some(editor) if editor.busy() => {
-                            self.search.replace.pending_open =
-                                Some(PendingOpen::Single(source, count))
+                PendingOpen::Single(receipt, count) => match receipt.terminal() {
+                    None => {
+                        self.search.replace.pending_open = Some(PendingOpen::Single(receipt, count))
+                    }
+                    Some(Ok(_)) => {
+                        self.search.replace.changed_open += 1;
+                        self.search.replace.replaced_open += count;
+                        changed = true;
+                    }
+                    Some(Err(error)) => {
+                        self.search.replace.failed_open += 1;
+                        self.search.replace.status = error;
+                        changed = true;
+                    }
+                },
+            }
+        }
+        if let Some(ticket) = &self.search.replace.staging_paged {
+            match ticket.try_recv() {
+                Err(TryRecvError::Empty) => {}
+                result => {
+                    self.search.replace.staging_paged = None;
+                    changed = true;
+                    match result {
+                        Ok(Ok((source, prepared, count)))
+                            if !self.search.replace.cancel_requested =>
+                        {
+                            let target = self.workspace.as_mut().and_then(|workspace| {
+                                workspace
+                                    .editors
+                                    .iter_mut()
+                                    .find_map(|editor| match editor {
+                                        WorkspaceEditor::Paged(editor)
+                                            if source.same_document(editor.snapshot()) =>
+                                        {
+                                            Some(editor)
+                                        }
+                                        _ => None,
+                                    })
+                            });
+                            match target.map(|editor| {
+                                editor.apply_prepared_source_tracked(&source, prepared)
+                            }) {
+                                Some(Ok(receipt)) => {
+                                    self.search.replace.paged_pending = Some((receipt, count))
+                                }
+                                _ => {
+                                    self.search.replace.failed_open += 1;
+                                    self.search.replace.status =
+                                        "Paged replacement source changed before apply".into();
+                                }
+                            }
                         }
-                        Some(editor) if editor.snapshot().revision != source.revision => {
-                            self.search.replace.changed_open += 1;
-                            self.search.replace.replaced_open += count;
-                            changed = true;
-                        }
-                        _ => {
+                        Ok(Err(error)) => {
                             self.search.replace.failed_open += 1;
-                            changed = true;
+                            self.search.replace.status = error;
                         }
+                        _ => {}
                     }
                 }
             }
         }
-        if let Some((source, count)) = self.search.replace.paged_pending.take() {
-            let editor = self.workspace.as_ref().and_then(|workspace| {
-                workspace.editors.iter().find_map(|editor| match editor {
-                    WorkspaceEditor::Paged(editor) if source.same_document(editor.snapshot()) => {
-                        Some(editor)
-                    }
-                    _ => None,
-                })
-            });
-            match editor {
-                Some(editor) if editor.busy() => {
-                    self.search.replace.paged_pending = Some((source, count))
-                }
-                Some(editor) if editor.snapshot().revision != source.revision => {
+        if let Some((receipt, count)) = self.search.replace.paged_pending.take() {
+            match receipt.terminal() {
+                None => self.search.replace.paged_pending = Some((receipt, count)),
+                Some(Ok(_)) => {
                     self.search.replace.changed_open += 1;
                     self.search.replace.replaced_open += count;
                     changed = true;
                 }
-                _ => {
+                Some(Err(error)) => {
                     self.search.replace.failed_open += 1;
+                    self.search.replace.status = error;
                     changed = true;
                 }
             }
         }
-        if self.search.replace.pending_open.is_none() && self.search.replace.paged_pending.is_none()
+        if self.search.replace.pending_open.is_none()
+            && self.search.replace.paged_pending.is_none()
+            && self.search.replace.staging_paged.is_none()
         {
             if let Some(next) = self.search.replace.paged_queue.pop_front() {
                 let target = self.workspace.as_mut().and_then(|workspace| {
@@ -887,11 +1070,30 @@ impl Shell {
                             _ => None,
                         })
                 });
-                match target.map(|editor| editor.apply_prepared(&next.source, next.transaction)) {
-                    Some(Ok(())) => {
-                        self.search.replace.paged_pending = Some((next.source, next.matches))
-                    }
-                    _ => self.search.replace.failed_open += 1,
+                if let Some(editor) = target {
+                    let handle = editor.read_handle();
+                    let cache = self
+                        .recovery_root
+                        .clone()
+                        .unwrap_or_else(std::env::temp_dir);
+                    self.search.replace.staging_paged =
+                        Some(self.search.replace.worker.as_ref().unwrap().operation(
+                            move |job| {
+                                let prepared = bareline_search::paged::stage_source_replacement(
+                                    &next.source,
+                                    next.transaction,
+                                    job,
+                                    |ticket| handle.resolve_page(ticket),
+                                    Arc::new(bareline_platform_windows::WindowsFileSystem),
+                                    &cache,
+                                    20u64 << 30,
+                                )?;
+                                Ok((next.source, prepared, next.matches))
+                            },
+                            self.notify.clone(),
+                        ));
+                } else {
+                    self.search.replace.failed_open += 1;
                 }
                 changed = true;
             } else if let Some(disk) = self.search.replace.disk_queue.take() {
@@ -901,14 +1103,17 @@ impl Shell {
                         .recovery_root
                         .clone()
                         .unwrap_or_else(std::env::temp_dir);
+                    let disable_backup = std::mem::take(&mut self.search.replace.disable_backup);
                     self.search.replace.applying =
                         Some(self.search.replace.worker.as_ref().unwrap().operation(
                             move |job| {
                                 std::fs::create_dir_all(&directory)
                                     .map_err(|error| error.to_string())?;
+                                let mut options = DiskReplaceOptions::new(directory);
+                                if disable_backup { options.backup = bareline_search::replace_disk::BackupPolicy::DisabledForThisJob; }
                                 apply_disk_files_with_paging(
                                     disk,
-                                    &DiskReplaceOptions::new(directory),
+                                    &options,
                                     &registry,
                                     job,
                                     &bareline_platform_windows::WindowsPathTrustProvider,
@@ -930,6 +1135,8 @@ impl Shell {
                     changed = true;
                     match result {
                         Ok(Ok(summary)) => {
+                            self.search.replace.changed_disk = summary.changed_files();
+                            self.search.replace.replaced_disk = summary.replaced_matches();
                             let failed=summary.receipt.files.iter().filter(|file|matches!(file.state,bareline_search::replace_disk::ReceiptState::Failed(_)|bareline_search::replace_disk::ReceiptState::Uncertain(_)|bareline_search::replace_disk::ReceiptState::Conflict)).count();
                             let skipped = summary
                                 .receipt
@@ -947,10 +1154,16 @@ impl Shell {
                                 self.search.replace.changed_open,
                                 summary.changed_files(),
                                 self.search.replace.replaced_open + summary.replaced_matches(),
-                                skipped,
+                                skipped + self.search.replace.skipped_preview,
                                 self.search.replace.failed_open + failed,
                                 summary.receipt_path.display()
                             );
+                            if !self.search.replace.skip_reasons.is_empty() {
+                                self.search.replace.status.push_str(&format!(
+                                    " Skipped examples: {}",
+                                    self.search.replace.skip_reasons
+                                ));
+                            }
                             self.search.replace.receipt = Some(summary.receipt_path);
                         }
                         Ok(Err(error)) => {
@@ -996,9 +1209,13 @@ impl Shell {
             }
         }
         if changed && !self.search.replace.busy() && self.search.replace.cancel_requested {
+            self.search.replace.cancel_requested = false;
             self.search.replace.status = format!(
-                "Cancelled. {} open documents changed; {} matches applied before cancellation.",
-                self.search.replace.changed_open, self.search.replace.replaced_open
+                "Cancelled. {} open documents and {} disk files changed; {} matches applied before cancellation. {}",
+                self.search.replace.changed_open,
+                self.search.replace.changed_disk,
+                self.search.replace.replaced_open + self.search.replace.replaced_disk,
+                self.search.replace.status
             );
         }
         changed
@@ -1068,8 +1285,8 @@ impl Shell {
         }
         if self.search.replace.row < self.search.replace.top {
             self.search.replace.top = self.search.replace.row;
-        } else if self.search.replace.row >= self.search.replace.top + 7 {
-            self.search.replace.top = self.search.replace.row.saturating_sub(6);
+        } else if self.search.replace.row >= self.search.replace.top + 6 {
+            self.search.replace.top = self.search.replace.row.saturating_sub(5);
         }
         true
     }

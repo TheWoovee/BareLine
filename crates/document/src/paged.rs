@@ -2,7 +2,8 @@
 //! Bounded UTF-8 windows over a generation-aware source. Raw legacy bytes must first
 //! pass through a transcoder; byte offsets here address the UTF-8 text view only.
 pub use crate::source_transaction::{
-    OwnedTextRange, PreparedSourceTransaction, SourceEdit, SourceTransactionPoll,
+    HistoryCommitLease, HistorySourceEdit, OwnedTextRange, PreparedSourceHistory,
+    PreparedSourceTransaction, SourceCommitLease, SourceEdit, SourceTransactionPoll,
     SourceTransactionRequest,
 };
 use crate::{
@@ -151,6 +152,45 @@ impl SparseLineIndex {
             self.max_window_bytes,
             budget,
         )
+    }
+    /// Retain a worker lookup's verified prefix without unbounded index growth.
+    pub fn retain_lookup_progress(
+        &mut self,
+        request: &crate::line_lookup::LineLookupRequest,
+    ) -> Result<(), IndexError> {
+        if self.cancelled {
+            return Err(IndexError::Cancelled);
+        }
+        if !request.matches_snapshot(&self.snapshot) {
+            return Err(IndexError::StaleSnapshot);
+        }
+        let checkpoint = request.verified_checkpoint().ok_or(IndexError::Cancelled)?;
+        if checkpoint.offset.0 > self.snapshot.len() {
+            return Err(IndexError::OutOfOrder);
+        }
+        match self
+            .checkpoints
+            .binary_search_by_key(&checkpoint.offset, |value| value.offset)
+        {
+            Ok(index) => {
+                if self.checkpoints[index] != checkpoint {
+                    return Err(IndexError::OutOfOrder);
+                }
+            }
+            Err(_) => {
+                if self.checkpoints.len() == self.capacity {
+                    self.checkpoints.remove(1);
+                }
+                let index = self
+                    .checkpoints
+                    .partition_point(|value| value.offset < checkpoint.offset);
+                self.checkpoints.insert(index, checkpoint);
+            }
+        }
+        if checkpoint.offset > self.progress.offset {
+            self.progress = checkpoint;
+        }
+        Ok(())
     }
     /// At most max_window_bytes are inspected, and no per-line allocations occur.
     pub fn observe(&mut self, window: &TextWindow) -> Result<(), IndexError> {
@@ -348,7 +388,7 @@ impl<'a> Iterator for Pieces<'a> {
                             .map(|(source, range)| (source, range.clone())),
                     });
                 }
-                tree::Node::Source { source, range } => {
+                tree::Node::Source { source, range, .. } => {
                     return Some(PagedPiece::Original {
                         source,
                         range: range.clone(),
@@ -394,6 +434,11 @@ impl TextWindow {
 
 /// Owned bytes for journal consumers; never depends on a live source page.
 pub enum RestoredPiece {
+    OwnedSource {
+        source: MemorySource,
+        range: Range<u64>,
+        original: Option<(MemorySource, Range<u64>)>,
+    },
     Original(Range<u64>),
     Inserted(String),
 }
@@ -422,8 +467,8 @@ pub struct PagedDocument {
     pub(crate) bytes: Budget,
     pub(crate) history: Budget,
     pub(crate) history_policy: crate::history::HistoryPolicy,
-    pub(crate) undo: Vec<PagedHistory>,
-    pub(crate) redo: Vec<PagedHistory>,
+    pub(crate) undo: crate::history::HistoryStack<PagedHistory>,
+    pub(crate) redo: crate::history::HistoryStack<PagedHistory>,
 }
 impl PagedDocument {
     pub fn new(snapshot: PagedSnapshot, bytes: Budget, history: Budget) -> Self {
@@ -431,10 +476,10 @@ impl PagedDocument {
             saved_state: snapshot.content_state,
             current: snapshot,
             bytes,
-            history,
+            history: history.clone(),
             history_policy: crate::history::HistoryPolicy::default(),
-            undo: Vec::new(),
-            redo: Vec::new(),
+            undo: crate::history::HistoryStack::new(history.clone()),
+            redo: crate::history::HistoryStack::new(history.clone()),
         }
     }
     /// Storage owner has sealed an exact copy of `captured`. Refuse dirty/history state
@@ -626,7 +671,7 @@ impl PagedDocument {
         let inserts = transaction
             .edits
             .iter()
-            .map(|edit| tree::from_text(&edit.insert, &self.bytes))
+            .map(|edit| tree::charged_text(&edit.insert, &self.bytes))
             .collect::<Result<Vec<_>, _>>()?;
         let mut after = self.current.root.clone();
         let mut owned_edits = Vec::with_capacity(transaction.edits.len());
@@ -649,7 +694,12 @@ impl PagedDocument {
             after_cursor = end;
         }
         for edit in owned_edits.iter().rev() {
-            after = replace_root(after, edit.before_range.clone(), edit.inserted.clone());
+            after = tree::charged_replace(
+                after,
+                edit.before_range.clone(),
+                edit.inserted.clone(),
+                &self.bytes,
+            )?;
         }
         let state = ContentStateId(crate::unique());
         metadata.validate(self.current.len(), tree::summary(&after).bytes)?;
@@ -684,10 +734,11 @@ impl PagedDocument {
         });
         if merge {
             let last = self.undo.last_mut().expect("checked history");
-            last.edits[0].inserted = tree::concat(
+            last.edits[0].inserted = tree::charged_concat(
                 last.edits[0].inserted.clone(),
                 entry.edits[0].inserted.clone(),
-            );
+                &self.bytes,
+            )?;
             last.edits[0].after_range.end = entry.edits[0].after_range.end;
             last.after_state = entry.after_state;
             last.metadata.after = entry.metadata.after;
@@ -712,26 +763,36 @@ impl PagedDocument {
         revision: Revision,
     ) -> Result<Self, Error> {
         let mut snapshot = PagedSnapshot::utf8(source.clone(), 0)?;
-        snapshot._structure = Some(std::sync::Arc::new(
-            bytes.claim(
-                pieces
-                    .len()
-                    .checked_mul(2 * std::mem::size_of::<tree::Node>())
-                    .ok_or(Error::BudgetExceeded)?,
-            )?,
-        ));
         let mut root = None;
         for piece in pieces {
             let next = match piece {
+                RestoredPiece::OwnedSource {
+                    source,
+                    range,
+                    original,
+                } => {
+                    if !source.has_owned_loader()
+                        || range.start > range.end
+                        || range.end > source.len()
+                        || original.as_ref().is_some_and(|(source, original)| {
+                            original.start > original.end
+                                || original.end > source.len()
+                                || original.end - original.start != range.end - range.start
+                        })
+                    {
+                        return Err(Error::OutOfBounds);
+                    }
+                    tree::charged_owned(source, range, original, &bytes)?
+                }
                 RestoredPiece::Original(range) => {
                     if range.start > range.end || range.end > source.len() {
                         return Err(Error::OutOfBounds);
                     }
-                    tree::from_source(source.clone(), range)
+                    tree::charged_source(source.clone(), range, &bytes)?
                 }
-                RestoredPiece::Inserted(text) => tree::from_text(&text, &bytes)?,
+                RestoredPiece::Inserted(text) => tree::charged_text(&text, &bytes)?,
             };
-            root = tree::concat(root, next);
+            root = tree::charged_concat(root, next, &bytes)?;
         }
         snapshot.root = root;
         snapshot.revision = revision;
@@ -780,9 +841,9 @@ impl PagedDocument {
                 .checked_add(1)
                 .ok_or(Error::RevisionOverflow)?,
         );
-        let (prefix, _) = tree::split(self.current.root.clone(), from.0);
-        let suffix = tree::from_source(source.clone(), 0..source.len());
-        self.current.root = tree::concat(prefix, suffix);
+        let (prefix, _) = tree::charged_split(self.current.root.clone(), from.0, &self.bytes)?;
+        let suffix = tree::charged_source(source.clone(), 0..source.len(), &self.bytes)?;
+        self.current.root = tree::charged_concat(prefix, suffix, &self.bytes)?;
         self.current.revision = revision;
         self.current.content_state = ContentStateId(crate::unique());
         Ok(revision)
@@ -814,6 +875,7 @@ impl PagedDocument {
     }
     pub fn history_stats(&self) -> crate::history::HistoryStats {
         crate::history::HistoryStats {
+            charged_capacity_bytes: self.undo.capacity_bytes() + self.redo.capacity_bytes(),
             undo_changes: self.undo.len(),
             redo_changes: self.redo.len(),
             charged_payload_bytes: self
@@ -917,59 +979,13 @@ impl PagedDocument {
             .collect())
     }
     pub fn undo(&mut self) -> Result<Revision, Error> {
-        let revision = Revision(
-            self.current
-                .revision
-                .0
-                .checked_add(1)
-                .ok_or(Error::RevisionOverflow)?,
-        );
-        let mut entry = self.undo.pop().ok_or(Error::EmptyHistory)?;
-        entry.typing_insert = false;
-        if let Some(previous) = self.undo.last_mut() {
-            previous.typing_insert = false;
-        }
-        for edit in entry.edits.iter().rev() {
-            self.current.root = replace_root(
-                self.current.root.clone(),
-                edit.after_range.clone(),
-                edit.inverse.clone(),
-            );
-        }
-        self.current.metadata = entry.before_metadata.clone();
-        self.current.content_state = entry.before_state;
-        self.current.revision = revision;
-        self.redo.push(entry);
-        Ok(revision)
+        let prepared = self.prepare_source_history(true, &self.bytes)?;
+        Ok(self.lease_source_history(prepared)?.publish())
     }
     pub fn redo(&mut self) -> Result<Revision, Error> {
-        let revision = Revision(
-            self.current
-                .revision
-                .0
-                .checked_add(1)
-                .ok_or(Error::RevisionOverflow)?,
-        );
-        let mut entry = self.redo.pop().ok_or(Error::EmptyHistory)?;
-        entry.typing_insert = false;
-        for edit in entry.edits.iter().rev() {
-            self.current.root = replace_root(
-                self.current.root.clone(),
-                edit.before_range.clone(),
-                edit.inserted.clone(),
-            );
-        }
-        self.current.metadata = entry.after_metadata.clone();
-        self.current.content_state = entry.after_state;
-        self.current.revision = revision;
-        self.undo.push(entry);
-        Ok(revision)
+        let prepared = self.prepare_source_history(false, &self.bytes)?;
+        Ok(self.lease_source_history(prepared)?.publish())
     }
-}
-fn replace_root(root: tree::Root, range: Range<usize>, inserted: tree::Root) -> tree::Root {
-    let (prefix, suffix) = tree::split(root, range.end);
-    let (prefix, _) = tree::split(prefix, range.start);
-    tree::concat(tree::concat(prefix, inserted), suffix)
 }
 /// The payload budget stays charged until the recovery journal consumer releases it.
 pub struct MaterializedHistory {
@@ -1470,5 +1486,71 @@ mod tests {
             .begin_read(TextOffset(0)..TextOffset(1), 1, &budget)
             .unwrap();
         assert!(matches!(request.poll(), WindowPoll::InvalidUtf8));
+    }
+}
+
+#[cfg(test)]
+mod lookup_feedback_tests {
+    use super::*;
+    use crate::{
+        line_lookup::{LineLookupPoll, LineTarget},
+        source::{Generation, SourceKind},
+    };
+    #[test]
+    fn lookup_feedback_retains_cr_boundary_and_rejects_stale_without_growing() {
+        let budget = Budget::new(8192);
+        let (source, publisher) =
+            MemorySource::new(8, Generation(991), SourceKind::Paged, 8, 8, budget.clone()).unwrap();
+        publisher
+            .publish(
+                PageTicket {
+                    generation: Generation(991),
+                    page: 0,
+                },
+                b"abc\r\nx\nz",
+                Generation(991),
+            )
+            .unwrap();
+        let snapshot = PagedSnapshot::utf8(source, 0).unwrap();
+        let mut index = SparseLineIndex::new(snapshot.clone(), 2, 4, &budget).unwrap();
+        let mut request = index
+            .lookup(LineTarget::Byte(TextOffset(8)), budget.clone())
+            .unwrap();
+        assert!(matches!(
+            request.poll(),
+            LineLookupPoll::Progress(TextOffset(4))
+        ));
+        index.retain_lookup_progress(&request).unwrap();
+        let checkpoint = index.checkpoint_before(TextOffset(4)).unwrap();
+        assert!(checkpoint.preceding_cr);
+        assert_eq!(checkpoint.breaks, 1);
+        assert!(matches!(
+            request.poll(),
+            LineLookupPoll::Progress(TextOffset(8))
+        ));
+        index.retain_lookup_progress(&request).unwrap();
+        assert_eq!(index.checkpoints.len(), 2);
+        assert_eq!(index.line_count(), LineCount::Known(3));
+        assert!(matches!(request.poll(), LineLookupPoll::Line(2)));
+        let earlier = index
+            .lookup(LineTarget::Byte(TextOffset(2)), budget.clone())
+            .unwrap();
+        index.retain_lookup_progress(&earlier).unwrap();
+        assert!(
+            index
+                .checkpoints
+                .windows(2)
+                .all(|pair| pair[0].offset < pair[1].offset)
+        );
+        assert_eq!(index.scanned_to(), TextOffset(8));
+        let mut changed = snapshot;
+        changed.content_state = ContentStateId(crate::unique());
+        index.reset(changed);
+        assert_eq!(
+            index.retain_lookup_progress(&request),
+            Err(IndexError::StaleSnapshot)
+        );
+        request.cancel();
+        assert!(request.verified_checkpoint().is_none());
     }
 }

@@ -139,6 +139,23 @@ pub fn preview_open_documents(
     job: &SearchJob,
     ram_bytes: usize,
 ) -> Result<OpenReplacePreview, PreviewError> {
+    preview_open_documents_options(
+        targets,
+        query,
+        replacement,
+        job,
+        ram_bytes,
+        ReplacementOptions::default(),
+    )
+}
+pub fn preview_open_documents_options(
+    targets: impl IntoIterator<Item = (DocumentService, DocumentSnapshot)>,
+    query: &SearchQuery,
+    replacement: &str,
+    job: &SearchJob,
+    ram_bytes: usize,
+    options: ReplacementOptions,
+) -> Result<OpenReplacePreview, PreviewError> {
     let mut remaining = ram_bytes.min(MAX_RESULT_BYTES);
     if replacement.len() > MAX_PATTERN_BYTES {
         return Err(ReplaceError::StagingLimit.into());
@@ -181,7 +198,13 @@ pub fn preview_open_documents(
         remaining = remaining
             .checked_sub(std::mem::size_of::<OpenPreviewDocument>())
             .ok_or(ReplaceError::StagingLimit)?;
-        for edit in transaction.edits {
+        for mut edit in transaction.edits {
+            if options.preserve_case {
+                let original = snapshot
+                    .read(edit.range.clone(), MAX_RESULT_BYTES)
+                    .map_err(|_| ReplaceError::StagingLimit)?;
+                edit.insert = preserve_replacement_case(&original, &edit.insert);
+            }
             if job.is_cancelled() {
                 return Err(ReplaceError::Cancelled.into());
             }

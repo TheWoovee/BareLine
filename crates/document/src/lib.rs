@@ -214,8 +214,8 @@ pub struct Document {
     current: DocumentSnapshot,
     saved_state: ContentStateId,
     history_policy: history::HistoryPolicy,
-    undo: Vec<History>,
-    redo: Vec<History>,
+    undo: history::HistoryStack<History>,
+    redo: history::HistoryStack<History>,
     bytes: Budget,
     history: Budget,
 }
@@ -272,8 +272,8 @@ impl Document {
             },
             saved_state: state,
             history_policy: history::HistoryPolicy::default(),
-            undo: Vec::new(),
-            redo: Vec::new(),
+            undo: crate::history::HistoryStack::new(history.clone()),
+            redo: crate::history::HistoryStack::new(history.clone()),
             bytes,
             history,
         })
@@ -293,8 +293,8 @@ impl Document {
             },
             saved_state: state,
             history_policy: history::HistoryPolicy::default(),
-            undo: Vec::new(),
-            redo: Vec::new(),
+            undo: crate::history::HistoryStack::new(history.clone()),
+            redo: crate::history::HistoryStack::new(history.clone()),
             bytes,
             history,
         })
@@ -458,6 +458,7 @@ impl Document {
     }
     pub fn history_stats(&self) -> history::HistoryStats {
         history::HistoryStats {
+            charged_capacity_bytes: self.undo.capacity_bytes() + self.redo.capacity_bytes(),
             undo_changes: self.undo.len(),
             redo_changes: self.redo.len(),
             charged_payload_bytes: self
@@ -604,6 +605,10 @@ impl Document {
             return Err(Error::LinkedUndoRequired);
         }
         let revision = self.next_revision()?;
+        if self.undo.is_empty() {
+            return Err(Error::EmptyHistory);
+        }
+        self.redo.try_reserve_exact(1)?;
         let mut entry = self.undo.pop().ok_or(Error::EmptyHistory)?;
         entry.typing_insert = false;
         if let Some(previous) = self.undo.last_mut() {
@@ -621,6 +626,10 @@ impl Document {
             return Err(Error::LinkedUndoRequired);
         }
         let revision = self.next_revision()?;
+        if self.redo.is_empty() {
+            return Err(Error::EmptyHistory);
+        }
+        self.undo.try_reserve_exact(1)?;
         let mut entry = self.redo.pop().ok_or(Error::EmptyHistory)?;
         entry.typing_insert = false;
         self.current.metadata = entry.after_metadata.clone();

@@ -550,7 +550,7 @@ mod tests {
             toolbar: Default::default(), compare: Default::default(), instance: Default::default(),
             recovery_root: None, shortcuts: Default::default(), recovery: Default::default(),
             lifecycle: Default::default(), performance: Default::default(), power: Default::default(),
-            utilities: Default::default(), migration: Default::default(), search: Default::default(),
+            utilities: Default::default(), migration: Default::default(), search: Default::default(), scrolling: Default::default(),
             encoding: Default::default(), inventory: Default::default(),
         }
     }

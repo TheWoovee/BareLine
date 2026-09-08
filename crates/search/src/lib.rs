@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Worker-side search over stable snapshots. No file I/O or UI dependencies.
-mod extended;
 mod disk_source;
+mod extended;
 mod fold;
 pub mod folders;
 pub mod paged;
@@ -16,7 +16,7 @@ use std::{
     ops::Range,
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering},
+        atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
     },
 };
 
@@ -45,14 +45,22 @@ impl Default for SearchJob {
     }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SearchTermination { Finished, Cancelled }
+pub enum SearchTermination {
+    Finished,
+    Cancelled,
+}
 impl SearchJob {
     /// Worker acknowledgment, independent from request cancellation and result completeness.
     pub fn termination(&self) -> Option<SearchTermination> {
-        match self.terminal.load(Ordering::Acquire) { 1 => Some(SearchTermination::Finished), 2 => Some(SearchTermination::Cancelled), _ => None }
+        match self.terminal.load(Ordering::Acquire) {
+            1 => Some(SearchTermination::Finished),
+            2 => Some(SearchTermination::Cancelled),
+            _ => None,
+        }
     }
     pub(crate) fn acknowledge_terminal(&self) {
-        self.terminal.store(if self.is_cancelled() { 2 } else { 1 }, Ordering::Release);
+        self.terminal
+            .store(if self.is_cancelled() { 2 } else { 1 }, Ordering::Release);
     }
 
     pub fn is_cancelled(&self) -> bool {
@@ -214,6 +222,17 @@ impl SearchResults {
         scope: ReplaceScope,
         job: &SearchJob,
     ) -> Result<EditTransaction, ReplaceError> {
+        self.prepare_replace_ranges(current, replacement, staging_limit, scope, job, true)
+    }
+    fn prepare_replace_ranges(
+        &self,
+        current: &DocumentSnapshot,
+        replacement: &str,
+        staging_limit: usize,
+        scope: ReplaceScope,
+        job: &SearchJob,
+        include_inverse: bool,
+    ) -> Result<EditTransaction, ReplaceError> {
         if self.completeness != Completeness::Complete {
             return Err(ReplaceError::Incomplete);
         }
@@ -248,7 +267,11 @@ impl SearchResults {
                 return Err(ReplaceError::Cancelled);
             }
             used = used
-                .checked_add(m.range.end.0 - m.range.start.0)
+                .checked_add(if include_inverse {
+                    m.range.end.0 - m.range.start.0
+                } else {
+                    0
+                })
                 .and_then(|n| n.checked_add(std::mem::size_of::<Edit>()))
                 .ok_or(ReplaceError::StagingLimit)?;
             if used > limit {
@@ -768,5 +791,63 @@ mod tests {
             scan(&snapshot, &query, &SearchJob::default(), |_| {}).count(),
             0
         );
+    }
+}
+
+/// Explicit per-job replacement choices; matching semantics remain unchanged.
+#[derive(Clone, Copy, Default)]
+pub struct ReplacementOptions {
+    pub preserve_case: bool,
+    pub include_binary: bool,
+}
+/// Preserve uniform upper/lower case or initial capitalization; mixed case is literal.
+pub fn preserve_replacement_case(original: &str, replacement: &str) -> String {
+    let mut letters = original
+        .chars()
+        .filter(|c| c.is_lowercase() || c.is_uppercase());
+    let Some(first_letter) = letters.next() else {
+        return replacement.into();
+    };
+    let mut all_upper = first_letter.is_uppercase();
+    let mut all_lower = first_letter.is_lowercase();
+    let mut rest_lower = true;
+    for letter in letters {
+        all_upper &= letter.is_uppercase();
+        all_lower &= letter.is_lowercase();
+        rest_lower &= letter.is_lowercase();
+    }
+    if all_upper {
+        return replacement.to_uppercase();
+    }
+    if all_lower {
+        return replacement.to_lowercase();
+    }
+    if first_letter.is_uppercase() && rest_lower {
+        let mut first = true;
+        return replacement
+            .chars()
+            .flat_map(|c| {
+                if first && (c.is_uppercase() || c.is_lowercase()) {
+                    first = false;
+                    c.to_uppercase().collect::<Vec<_>>()
+                } else {
+                    c.to_lowercase().collect::<Vec<_>>()
+                }
+            })
+            .collect();
+    }
+    replacement.into()
+}
+
+#[cfg(test)]
+mod replacement_case_tests {
+    use super::preserve_replacement_case;
+    #[test]
+    fn uniform_and_initial_case_preserve_unicode_without_changing_mixed_case() {
+        assert_eq!(preserve_replacement_case("ABC", "straße"), "STRASSE");
+        assert_eq!(preserve_replacement_case("abc", "DOG"), "dog");
+        assert_eq!(preserve_replacement_case("Abc", "dOG"), "Dog");
+        assert_eq!(preserve_replacement_case("aBc", "Dog"), "Dog");
+        assert_eq!(preserve_replacement_case("123", "Dog"), "Dog");
     }
 }

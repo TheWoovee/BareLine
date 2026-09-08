@@ -161,6 +161,7 @@ pub struct MacrosRuntime {
     output_directory: Option<PathBuf>,
     theme: bareline_ui::theme::UiTheme,
     command_context: bareline_commands::CommandContext,
+    power_replay: Option<u64>,
 }
 impl Default for MacrosRuntime {
     fn default() -> Self {
@@ -182,6 +183,7 @@ impl Default for MacrosRuntime {
             output_directory: None,
             theme: Default::default(),
             command_context: Default::default(),
+            power_replay: None,
         }
     }
 }
@@ -1137,6 +1139,7 @@ impl Shell {
                     format!("Changes not saved: {error}. Use Save Macros to retry.");
             }
         }
+        self.macros_pump_power_replay();
         let context = self.command_context();
         if let Some(workspace) = &mut self.workspace
             && let Some(state) = self.macros.controller.tick(
@@ -1157,6 +1160,7 @@ impl Shell {
                 window.request_redraw();
             }
         }
+        self.macros_pump_power_replay();
         if self.macros.controller.refresh_output()
             && let Some(window) = &self.window
         {
@@ -1399,5 +1403,37 @@ impl Shell {
             return true;
         }
         false
+    }
+}
+
+impl Shell {
+    fn macros_pump_power_replay(&mut self) {
+        if let Some(id) = self.macros.power_replay {
+            if !self.macros.controller.power_replay_active(id) {
+                self.power_replay_cancel(id);
+            }
+            if let Some(completion) = self.power_replay_poll(id) {
+                self.macros.controller.complete_power_replay(id, completion);
+                self.macros.power_replay = None;
+            }
+        }
+        if self.macros.power_replay.is_none()
+            && let Some(request) = self.macros.controller.take_power_replay()
+        {
+            let id = request.id;
+            if !self.macros.controller.power_replay_active(id) {
+                return;
+            }
+            match self.power_replay_start(request) {
+                Ok(()) => self.macros.power_replay = Some(id),
+                Err(error) => self.macros.controller.complete_power_replay(
+                    id,
+                    bareline_app::macros::PowerReplayCompletion {
+                        target: None,
+                        result: Err(error),
+                    },
+                ),
+            }
+        }
     }
 }

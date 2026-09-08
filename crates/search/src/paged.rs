@@ -17,13 +17,65 @@ pub struct PagedResults {
     pub count_complete: bool,
 }
 impl PagedResults {
+    pub fn preserve_case(
+        &self,
+        transaction: &mut EditTransaction,
+        job: &SearchJob,
+        mut resolve: impl FnMut(PageTicket) -> Result<bool, String>,
+    ) -> Result<(), ReplaceError> {
+        let mut used = 0usize;
+        for edit in &mut transaction.edits {
+            let length = edit.range.end.0 - edit.range.start.0;
+            if length > MAX_RESULT_BYTES {
+                return Err(ReplaceError::StagingLimit);
+            }
+            let original = window(&self.source, edit.range.start.0, length, job, &mut resolve)
+                .map_err(|_| {
+                    if job.is_cancelled() {
+                        ReplaceError::Cancelled
+                    } else {
+                        ReplaceError::Stale
+                    }
+                })?;
+            edit.insert = preserve_replacement_case(original.text(), &edit.insert);
+            used = used
+                .saturating_add(length)
+                .saturating_add(edit.insert.len());
+            if used > MAX_RESULT_BYTES {
+                return Err(ReplaceError::StagingLimit);
+            }
+        }
+        Ok(())
+    }
     pub fn prepare_replace(
         &self,
         current: &PagedSnapshot,
         replacement: &str,
         scope: ReplaceScope,
         job: &SearchJob,
+        resolve: impl FnMut(PageTicket) -> Result<bool, String>,
+    ) -> Result<EditTransaction, ReplaceError> {
+        self.prepare_replace_internal(current, replacement, scope, job, resolve, true)
+    }
+    /// Exact reviewed edits for disk-backed inverse staging; payloads remain bounded.
+    pub fn prepare_replace_streaming(
+        &self,
+        current: &PagedSnapshot,
+        replacement: &str,
+        scope: ReplaceScope,
+        job: &SearchJob,
+        resolve: impl FnMut(PageTicket) -> Result<bool, String>,
+    ) -> Result<EditTransaction, ReplaceError> {
+        self.prepare_replace_internal(current, replacement, scope, job, resolve, false)
+    }
+    fn prepare_replace_internal(
+        &self,
+        current: &PagedSnapshot,
+        replacement: &str,
+        scope: ReplaceScope,
+        job: &SearchJob,
         mut resolve: impl FnMut(PageTicket) -> Result<bool, String>,
+        include_inverse: bool,
     ) -> Result<EditTransaction, ReplaceError> {
         if self.completeness != Completeness::Complete {
             return Err(ReplaceError::Incomplete);
@@ -66,8 +118,14 @@ impl PagedResults {
             if found.matches() != self.matches {
                 return Err(ReplaceError::Stale);
             }
-            let mut transaction =
-                found.prepare_replace_scoped(&snapshot, &template, MAX_RESULT_BYTES, scope, job)?;
+            let mut transaction = found.prepare_replace_ranges(
+                &snapshot,
+                &template,
+                MAX_RESULT_BYTES,
+                scope,
+                job,
+                include_inverse,
+            )?;
             transaction.base_revision = current.revision;
             return Ok(transaction);
         }
@@ -83,7 +141,11 @@ impl PagedResults {
                 return Err(ReplaceError::Cancelled);
             }
             used = used
-                .checked_add(found.range.end.0 - found.range.start.0)
+                .checked_add(if include_inverse {
+                    found.range.end.0 - found.range.start.0
+                } else {
+                    0
+                })
                 .and_then(|bytes| bytes.checked_add(template.len() + std::mem::size_of::<Edit>()))
                 .ok_or(ReplaceError::StagingLimit)?;
             if used > MAX_RESULT_BYTES {
@@ -326,5 +388,116 @@ mod tests {
         );
         assert_eq!(result.count, 1);
         assert!(result.count_complete);
+    }
+}
+
+/// Stage reviewed replacement payloads and inverses as immutable disk sources on a worker.
+/// The actor still validates the prepared source and journals before publication.
+pub fn stage_source_replacement(
+    source: &PagedSnapshot,
+    transaction: EditTransaction,
+    job: &SearchJob,
+    mut resolve: impl FnMut(PageTicket) -> Result<bool, String>,
+    platform: Arc<dyn bareline_platform::LocalFileSystem>,
+    cache: &std::path::Path,
+    quota: u64,
+) -> Result<bareline_document::paged::PreparedSourceTransaction, String> {
+    use bareline_document::paged::{OwnedTextRange, SourceEdit, SourceTransactionPoll};
+    if transaction.base_revision != source.revision {
+        return Err("Replacement source changed".into());
+    }
+    let budget = Budget::new(8 * 1024 * 1024);
+    let mut builder = bareline_file_io::owned_store::StreamingStoreBuilder::new(
+        cache,
+        quota,
+        platform,
+        bareline_file_io::source::SourceOptions {
+            resident_max_bytes: 0,
+            page_size_bytes: 65536,
+            page_cache_bytes: 1024 * 1024,
+        },
+        budget.clone(),
+        job.io_cancel.clone(),
+    )
+    .map_err(|error| error.to_string())?;
+    let mut ranges = Vec::new();
+    if transaction.edits.len() > 4096 {
+        return Err("Source transaction edit limit".into());
+    }
+    for edit in transaction.edits {
+        if job.is_cancelled() {
+            return Err("Cancelled".into());
+        }
+        let start = builder.len();
+        let mut cursor = edit.range.start.0;
+        while cursor < edit.range.end.0 {
+            let part = window(
+                source,
+                cursor,
+                WINDOW.min(edit.range.end.0 - cursor),
+                job,
+                &mut resolve,
+            )
+            .map_err(|error| format!("{error:?}"))?;
+            let length = part.text().len().min(edit.range.end.0 - cursor);
+            if length == 0 {
+                return Err("Source made no progress".into());
+            }
+            builder
+                .append_utf8(&part.text()[..length])
+                .map_err(|error| error.to_string())?;
+            cursor += length;
+        }
+        let inverse = start..builder.len();
+        let inserted = builder
+            .append_utf8(&edit.insert)
+            .map_err(|error| error.to_string())?;
+        ranges.push((edit.range, inverse, inserted));
+    }
+    let owned = builder.finish().map_err(|error| error.to_string())?;
+    let edits = ranges
+        .into_iter()
+        .map(|(range, inverse, inserted)| SourceEdit {
+            range,
+            inverse: OwnedTextRange {
+                source: owned.clone(),
+                range: inverse,
+            },
+            inserted: OwnedTextRange {
+                source: owned.clone(),
+                range: inserted,
+            },
+        })
+        .collect();
+    let mut request = source
+        .prepare_source_transaction(
+            edits,
+            bareline_document::history::EditMetadata {
+                origin: bareline_document::history::EditOrigin::ReplaceAll,
+                ..Default::default()
+            },
+            budget,
+        )
+        .map_err(|error| format!("{error:?}"))?;
+    loop {
+        if job.is_cancelled() {
+            request.cancel();
+            return Err("Cancelled".into());
+        }
+        match request.poll() {
+            SourceTransactionPoll::Ready(prepared) => return Ok(prepared),
+            SourceTransactionPoll::Progress => {}
+            SourceTransactionPoll::Pending(ticket) => {
+                if !request
+                    .resolve_owned(ticket)
+                    .map_err(|error| format!("{error:?}"))?
+                    && !resolve(ticket)?
+                {
+                    std::thread::yield_now();
+                }
+            }
+            SourceTransactionPoll::Cancelled => return Err("Cancelled".into()),
+            _ => return Err("Replacement source validation failed".into()),
+        }
     }
 }

@@ -34,6 +34,7 @@ impl CompareInput {
     pub fn len(&self)->usize {match self {Self::Resident(s)=>s.len(),Self::Paged(s)=>s.snapshot().len(),Self::CapturedPaged(s,_)=>s.len()}}
     pub fn is_empty(&self)->bool {self.len()==0}
     pub fn revision(&self)->bareline_document::Revision {match self {Self::Resident(s)=>s.revision,Self::Paged(s)=>s.snapshot().revision,Self::CapturedPaged(s,_)=>s.revision}}
+    pub fn content_state(&self)->bareline_document::ContentStateId {match self {Self::Resident(s)=>s.content_state,Self::Paged(s)=>s.snapshot().content_state,Self::CapturedPaged(s,_)=>s.content_state}}
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -431,6 +432,7 @@ impl PagedResolver {
                 let (source,publisher)=MemorySource::new(snapshot.len() as u64,Generation(1),SourceKind::Paged,64*1024,256*1024,Budget::new(512*1024)).map_err(|_|())?;
                 let mut paged=bareline_document::paged::PagedSnapshot::utf8(source,0).map_err(|_|())?;
                 paged.revision=snapshot.revision;
+                paged.content_state=snapshot.content_state;
                 Ok((paged,Self::Resident(snapshot.clone(),publisher)))
             }
         }
@@ -480,18 +482,20 @@ fn compare_paged_inputs(left:&CompareInput,right:&CompareInput,options:&CompareO
     output.stats.input_bytes=left.len().saturating_add(right.len());output.stats.peak_accounted_bytes=retained;output
 }
 fn input_text(input:&CompareInput,range:std::ops::Range<TextOffset>,cap:usize,cancel:&CancelToken)->Result<String,ApplyError> {
+    input_text_budgeted(input,range,cap,cancel,&bareline_document::Budget::new(cap.saturating_mul(4)))
+}
+fn input_text_budgeted(input:&CompareInput,range:std::ops::Range<TextOffset>,cap:usize,cancel:&CancelToken,budget:&bareline_document::Budget)->Result<String,ApplyError> {
     use bareline_document::paged::WindowPoll;
     if range.end.0.saturating_sub(range.start.0)>cap{return Err(ApplyError::BudgetExceeded);}
     if let CompareInput::Resident(snapshot)=input{return snapshot.read(range,cap).map_err(|_|ApplyError::InvalidRange);}
     let (snapshot,resolver)=PagedResolver::prepare(input).map_err(|_|ApplyError::Unavailable)?;
-    let budget=bareline_document::Budget::new(cap.saturating_mul(4));
-    let mut request=snapshot.begin_read(range,cap,&budget).map_err(|_|ApplyError::BudgetExceeded)?;
+    let mut request=snapshot.begin_read(range,cap,budget).map_err(|_|ApplyError::BudgetExceeded)?;
     loop {if cancel.is_cancelled(){return Err(ApplyError::Unavailable);}match request.poll(){WindowPoll::Ready(window)=>return Ok(window.text().into()),WindowPoll::Pending(ticket)=>{if !resolver.resolve(ticket).map_err(|_|ApplyError::Unavailable)?{std::thread::sleep(std::time::Duration::from_millis(1));}},_=>return Err(ApplyError::Unavailable)}}
 }
 /// Stage a bounded mixed/paged hunk on the worker, then submit its single returned
 /// transaction through the destination actor. Ignored text uses PR-025 policy.
 pub fn prepare_input_merge(left:&CompareInput,right:&CompareInput,hunk:&DiffHunk,direction:Direction,options:&CompareOptions,policy:MergePolicy,cap:usize,cancel:&CancelToken)->Result<EditTransaction,ApplyError> {
-    if left.revision()!=hunk.left_revision||right.revision()!=hunk.right_revision{return Err(ApplyError::Stale);}
+    if !hunk.matches_states(left.revision(),left.content_state(),right.revision(),right.content_state()){return Err(ApplyError::Stale);}
     let a=input_text(left,hunk.left.clone(),cap,cancel)?;let b=input_text(right,hunk.right.clone(),cap,cancel)?;
     let (destination,range,source)=match direction{Direction::LeftToRight=>(right,hunk.right.clone(),&a),Direction::RightToLeft=>(left,hunk.left.clone(),&b)};
     let insert=if matches!(policy,MergePolicy::CopySelectedRange){source.clone()}else{
@@ -507,6 +511,81 @@ pub fn prepare_input_merge(left:&CompareInput,right:&CompareInput,hunk:&DiffHunk
     };
     if cancel.is_cancelled(){return Err(ApplyError::Unavailable);}
     Ok(EditTransaction{base_revision:destination.revision(),edits:vec![bareline_document::Edit{range,insert}]})
+}
+/// Prepare an explicit range copy in bounded windows. The destination actor must
+/// validate the captured snapshot again and durably journal before publishing.
+pub fn prepare_input_range_copy(source:&CompareInput,source_range:std::ops::Range<TextOffset>,destination:&CompareInput,destination_range:std::ops::Range<TextOffset>,cap:usize,cancel:&CancelToken)->Result<EditTransaction,ApplyError>{
+    if destination_range.start>destination_range.end||destination_range.end.0>destination.len(){return Err(ApplyError::InvalidRange);}
+    Ok(EditTransaction{base_revision:destination.revision(),edits:vec![bareline_document::Edit{range:destination_range,insert:input_text(source,source_range,cap,cancel)?}]})
+}
+pub fn prepare_streamed_range_copy(
+    source:&CompareInput, source_range:std::ops::Range<TextOffset>,
+    destination:&CompareInput, destination_range:std::ops::Range<TextOffset>,
+    metadata:bareline_document::history::EditMetadata,
+    budget:bareline_document::Budget,
+    cache:&std::path::Path, quota:u64, platform:Arc<dyn bareline_platform::LocalFileSystem>,
+    cancel:&CancelToken,
+)->Result<bareline_document::paged::PreparedSourceTransaction,ApplyError> {
+    use bareline_document::paged::{OwnedTextRange,SourceEdit,SourceTransactionPoll};
+    use bareline_file_io::{owned_store::StreamingStoreBuilder,source::SourceOptions,cancellation::Cancellation};
+    let captured=destination.paged_snapshot().ok_or(ApplyError::Unavailable)?;
+    let (_,resolver)=PagedResolver::prepare(destination).map_err(|_|ApplyError::Unavailable)?;
+    let io_cancel=Cancellation::default();
+    // Covers the transient copied UTF-8 window and writer carry buffer in addition
+    // to source pages and core request claims on the same workspace budget.
+    let _window_claim=budget.claim(128*1024).map_err(|_|ApplyError::BudgetExceeded)?;
+    let mut store=StreamingStoreBuilder::new(cache,quota,platform,SourceOptions{page_size_bytes:64*1024,page_cache_bytes:256*1024,..Default::default()},budget.clone(),io_cancel.clone()).map_err(|_|ApplyError::BudgetExceeded)?;
+    let mut append=|input:&CompareInput,range:std::ops::Range<TextOffset>|->Result<std::ops::Range<u64>,ApplyError>{
+        if range.start>range.end||range.end.0>input.len(){return Err(ApplyError::InvalidRange);}
+        let begin=store.len();let mut cursor=range.start.0;
+        while cursor<range.end.0 {
+            if cancel.is_cancelled(){io_cancel.cancel();return Err(ApplyError::Unavailable);}
+            let limit=cursor.saturating_add(64*1024).min(range.end.0);
+            let mut end=limit;let text=loop {
+                match input_text_budgeted(input,TextOffset(cursor)..TextOffset(end),64*1024,cancel,&budget){
+                    Ok(text)=>break text,
+                    Err(error)=>{if end==range.end.0||limit-end==3||end<=cursor{return Err(error);}end-=1;}
+                }
+            };
+            store.append_utf8(&text).map_err(|_|ApplyError::BudgetExceeded)?;cursor=end;
+        }
+        Ok(begin..store.len())
+    };
+    let inverse=append(destination,destination_range.clone())?;
+    let inserted=append(source,source_range)?;
+    drop(append);
+    if cancel.is_cancelled(){io_cancel.cancel();return Err(ApplyError::Unavailable);}
+    let backing=store.finish().map_err(|_|ApplyError::Unavailable)?;
+    let edit=SourceEdit{range:destination_range,inverse:OwnedTextRange{source:backing.clone(),range:inverse},inserted:OwnedTextRange{source:backing,range:inserted}};
+    let mut request=captured.prepare_source_transaction(vec![edit],metadata,budget).map_err(|_|ApplyError::InvalidRange)?;
+    loop {
+        if cancel.is_cancelled(){request.cancel();return Err(ApplyError::Unavailable);}
+        match request.poll(){
+            SourceTransactionPoll::Ready(prepared)=>return Ok(prepared),
+            SourceTransactionPoll::Progress=>{},
+            SourceTransactionPoll::Pending(ticket)=>{
+                if !request.resolve_owned(ticket).map_err(|_|ApplyError::Unavailable)?&&!resolver.resolve(ticket).map_err(|_|ApplyError::Unavailable)?{std::thread::sleep(std::time::Duration::from_millis(1));}
+            },
+            _=>return Err(ApplyError::Unavailable),
+        }
+    }
+}
+/// Stream a compared hunk only when its captured policy permits exact copying.
+/// Ignored-content preservation remains a distinct operation; never silently
+/// replace those destination bytes with a coarse full-range copy.
+pub fn prepare_streamed_hunk_merge(
+    left:&CompareInput,right:&CompareInput,hunk:&DiffHunk,direction:Direction,
+    policy:MergePolicy,metadata:bareline_document::history::EditMetadata,budget:bareline_document::Budget,
+    cache:&std::path::Path,quota:u64,platform:Arc<dyn bareline_platform::LocalFileSystem>,cancel:&CancelToken,
+)->Result<bareline_document::paged::PreparedSourceTransaction,ApplyError>{
+    if !hunk.matches_states(left.revision(),left.content_state(),right.revision(),right.content_state()){return Err(ApplyError::Stale);}
+    let options=hunk.options();
+    if policy==MergePolicy::PreserveIgnoredDestination && (options.whitespace!=bareline_diff::Whitespace::Significant||options.ignore_blank_lines||options.ignore_case||options.ignore_eol_style||options.ignore_encoding_bom||options.normalize_tabs){return Err(ApplyError::UnsupportedPreserve);}
+    let (source,source_range,destination,destination_range)=match direction{
+        Direction::LeftToRight=>(left,hunk.left.clone(),right,hunk.right.clone()),
+        Direction::RightToLeft=>(right,hunk.right.clone(),left,hunk.left.clone()),
+    };
+    prepare_streamed_range_copy(source,source_range,destination,destination_range,metadata,budget,cache,quota,platform,cancel)
 }
 fn alignment(
     result: &CompareResult,
@@ -614,6 +693,8 @@ pub fn register_commands(registry: &mut bareline_commands::CommandRegistry) {
         ("compare.options", "Compare options"),
         ("compare.pauseAutomatic", "Pause automatic recompare"),
         ("compare.close", "Close compare"),
+        ("compare.copySelectionLeftToRight", "Copy selected range left to right"),
+        ("compare.copySelectionRightToLeft", "Copy selected range right to left"),
     ] {
         let id = CommandId(id);
         let _ = registry.register(CommandSpec {
@@ -643,6 +724,14 @@ mod tests {
                 origin: CompareOrigin::Disk("right.txt".into()),
             },
         )
+    }
+    #[test]
+    fn worker_merge_rejects_equal_revision_from_other_document() {
+        let left=doc("left\n");let right=doc("right\n");let replacement=doc("right\n");
+        let options=CompareOptions::default();let cancel=CancelToken::default();
+        let result=bareline_diff::compare(&left.snapshot(),&right.snapshot(),&options,&cancel);
+        assert_eq!(right.snapshot().revision,replacement.snapshot().revision);
+        assert!(matches!(prepare_input_merge(&CompareInput::Resident(left.snapshot()),&CompareInput::Resident(replacement.snapshot()),&result.hunks[0],Direction::LeftToRight,&options,MergePolicy::CopySelectedRange,4096,&cancel),Err(ApplyError::Stale)));
     }
     #[test]
     fn paged_worker_reads_beyond_first_window_and_utf8_page_boundaries() {

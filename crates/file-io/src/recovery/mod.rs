@@ -12,6 +12,9 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+mod streaming;
+pub use streaming::{replay_source_transactions, open_retained_owned};
+pub(crate) use streaming::{disk_usage,admit_disk};
 const VERSION: u32 = 2;
 const MAX_RECORD: usize = 1024 * 1024;
 const MAX_TRANSACTION: usize = 16 * 1024 * 1024;
@@ -620,14 +623,14 @@ fn scan(directory: &Path, cancel: &Cancellation) -> io::Result<Scan> {
         let sum = record.edits.iter().try_fold(0u64, |n, e| {
             n.checked_add(e.removed)?.checked_add(e.inserted)
         });
-        if !matches!(record.version, 1 | VERSION)
+        if !matches!(record.version, 1 | VERSION | 3)
             || (record.version == 1 && record.metadata.is_some())
             || (record.edits.is_empty() && record.metadata.is_none())
             || record.metadata.as_ref().is_some_and(|metadata| {
                 bareline_document::DocumentMetadata::new(metadata.clone()).is_err()
             })
             || record.edits.len() > 4096
-            || record.segment.len > MAX_TRANSACTION as u64
+            || (record.version != 3 && record.segment.len > MAX_TRANSACTION as u64)
             || sum != Some(record.segment.len)
             || record.segment.name != format!("segment-{}.bin", record.receipt.revision)
             || records
@@ -735,6 +738,7 @@ pub fn replay_transactions(
     for record in &scanned.records {
         cancelled(cancel)?;
         let mut segment = File::open(directory.join(&record.segment.name))?;
+        if record.segment.len > MAX_TRANSACTION as u64 { return Err(invalid("streaming transaction requires source-range replay")); }
         let mut bytes = vec![0; record.segment.len as usize];
         segment.read_exact(&mut bytes)?;
         if <[u8; 32]>::from(Sha256::digest(&bytes)) != record.segment.sha256 {

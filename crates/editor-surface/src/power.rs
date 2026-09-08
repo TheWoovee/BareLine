@@ -2,6 +2,7 @@
 //! Revision-bound power edits. Offsets address UTF-8 text, never original bytes.
 pub mod consumer;
 pub mod streaming;
+pub mod captured;
 use crate::Selection;
 use bareline_document::{DocumentSnapshot, Edit, EditTransaction, Error, TextOffset};
 use std::ops::Range;

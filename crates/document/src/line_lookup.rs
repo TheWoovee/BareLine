@@ -24,6 +24,7 @@ pub enum LineLookupPoll {
 }
 pub struct LineLookupRequest {
     snapshot: PagedSnapshot,
+    verified: LineCheckpoint,
     target: LineTarget,
     cursor: usize,
     breaks: usize,
@@ -53,6 +54,7 @@ impl LineLookupRequest {
         }
         Ok(Self {
             snapshot,
+            verified: checkpoint,
             target,
             cursor: checkpoint.offset.0,
             breaks: checkpoint.breaks,
@@ -68,6 +70,10 @@ impl LineLookupRequest {
     pub fn matches_snapshot(&self, snapshot: &PagedSnapshot) -> bool {
         self.snapshot.same_document(snapshot)
             && self.snapshot.content_state == snapshot.content_state
+    }
+    /// Last verified UTF-8 boundary; includes CR state across window boundaries.
+    pub fn verified_checkpoint(&self) -> Option<LineCheckpoint> {
+        (!self.cancelled).then_some(self.verified)
     }
     pub fn cancel(&mut self) {
         self.cancelled = true;
@@ -168,6 +174,13 @@ impl LineLookupRequest {
             }
             self.preceding_cr = byte == b'\r';
             self.cursor += 1;
+            if window.text().is_char_boundary(local + 1) {
+                self.verified = LineCheckpoint {
+                    offset: TextOffset(self.cursor),
+                    breaks: self.breaks,
+                    preceding_cr: self.preceding_cr,
+                };
+            }
         }
         LineLookupPoll::Progress(TextOffset(self.cursor))
     }

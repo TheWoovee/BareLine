@@ -13,6 +13,7 @@ pub(crate) struct Segment {
 #[derive(Clone)]
 pub(crate) struct Piece {
     pub(crate) segment: Arc<Segment>,
+    _node_charge: Option<Arc<Reservation>>,
     pub(crate) range: Range<usize>,
     pub(crate) summary: Summary,
 }
@@ -29,6 +30,7 @@ impl Piece {
         let summary = Summary::scan(&segment.text[range.clone()]);
         Self {
             segment,
+            _node_charge: None,
             range,
             summary,
         }
@@ -107,16 +109,19 @@ impl Summary {
 pub(crate) enum Node {
     Leaf(Piece),
     Source {
+        _charge: Option<Arc<Reservation>>,
         source: MemorySource,
         range: Range<u64>,
     },
     OwnedSource {
+        _charge: Option<Arc<Reservation>>,
         source: MemorySource,
         range: Range<u64>,
         original: Option<(MemorySource, Range<u64>)>,
         summary: Summary,
     },
     Branch {
+        _charge: Option<Arc<Reservation>>,
         left: Arc<Node>,
         right: Arc<Node>,
         height: u16,
@@ -150,6 +155,7 @@ fn branch(left: Arc<Node>, right: Arc<Node>) -> Arc<Node> {
     let summary = left.summary().combine(right.summary());
     let height = 1 + left.height().max(right.height());
     Arc::new(Node::Branch {
+        _charge: None,
         left,
         right,
         height,
@@ -257,7 +263,7 @@ pub(crate) fn split(root: Root, offset: usize) -> (Root, Root) {
                 from_owned_source(source.clone(), middle..range.end, right_origin),
             )
         }
-        Node::Source { source, range } => {
+        Node::Source { source, range, .. } => {
             let middle = range.start + offset as u64;
             (
                 from_source(source.clone(), range.start..middle),
@@ -351,19 +357,28 @@ pub(crate) fn own_inverse(
                 _reservation: reservation,
                 origin: Some(origin),
             });
-            Some(Arc::new(Node::Leaf(Piece::new(segment, 0..count))))
+            Some(charged_node(
+                Node::Leaf(Piece::new(segment, 0..count)),
+                budget,
+            )?)
         } else {
             // Preserve any existing owned provenance by reusing the immutable subroot.
-            let (prefix, _) = split(root.clone(), cursor + count);
-            split(prefix, cursor).1
+            let (prefix, _) = charged_split(root.clone(), cursor + count, budget)?;
+            charged_split(prefix, cursor, budget)?.1
         };
-        output = concat(output, owned);
+        output = charged_concat(output, owned, budget)?;
         cursor += count;
     }
     Ok(output)
 }
 pub(crate) fn from_source(source: MemorySource, range: Range<u64>) -> Root {
-    (!range.is_empty()).then(|| Arc::new(Node::Source { source, range }))
+    (!range.is_empty()).then(|| {
+        Arc::new(Node::Source {
+            source,
+            range,
+            _charge: None,
+        })
+    })
 }
 pub(crate) fn from_owned_source(
     source: MemorySource,
@@ -372,6 +387,7 @@ pub(crate) fn from_owned_source(
 ) -> Root {
     (!range.is_empty()).then(|| {
         Arc::new(Node::OwnedSource {
+            _charge: None,
             source,
             summary: Summary {
                 bytes: (range.end - range.start) as usize,
@@ -400,7 +416,7 @@ pub(crate) fn span_at(root: &Root, mut offset: usize) -> Option<Span<'_>> {
                     range.start + offset as u64..range.end,
                 ));
             }
-            Node::Source { source, range } => {
+            Node::Source { source, range, .. } => {
                 return Some(Span::Source(source, range.start + offset as u64..range.end));
             }
             Node::Branch { left, right, .. } => {
@@ -585,4 +601,280 @@ pub(crate) fn has_source(root: &Root) -> bool {
         }
     }
     false
+}
+
+/// Every node created on the paged mutation path owns its reservation. Shared
+/// children retain their existing claims; abandoned temporary paths release theirs.
+pub(crate) fn charged_node(mut node: Node, budget: &Budget) -> Result<Arc<Node>, Error> {
+    let bytes = std::mem::size_of::<Node>()
+        + std::mem::size_of::<Reservation>()
+        + 4 * std::mem::size_of::<usize>();
+    let charge = Some(Arc::new(budget.reserve(bytes)?));
+    match &mut node {
+        Node::Leaf(piece) => piece._node_charge = charge,
+        Node::Source { _charge, .. }
+        | Node::OwnedSource { _charge, .. }
+        | Node::Branch { _charge, .. } => *_charge = charge,
+    }
+    Ok(Arc::new(node))
+}
+fn charged_branch(left: Arc<Node>, right: Arc<Node>, budget: &Budget) -> Result<Arc<Node>, Error> {
+    let summary = left.summary().combine(right.summary());
+    let height = 1 + left.height().max(right.height());
+    charged_node(
+        Node::Branch {
+            left,
+            right,
+            height,
+            summary,
+            _charge: None,
+        },
+        budget,
+    )
+}
+fn charged_balance(left: Arc<Node>, right: Arc<Node>, budget: &Budget) -> Result<Arc<Node>, Error> {
+    if left.height() > right.height() + 1 {
+        let Node::Branch {
+            left: a, right: b, ..
+        } = left.as_ref()
+        else {
+            unreachable!()
+        };
+        if a.height() >= b.height() {
+            return charged_branch(a.clone(), charged_branch(b.clone(), right, budget)?, budget);
+        }
+        let Node::Branch {
+            left: c, right: d, ..
+        } = b.as_ref()
+        else {
+            unreachable!()
+        };
+        return charged_branch(
+            charged_branch(a.clone(), c.clone(), budget)?,
+            charged_branch(d.clone(), right, budget)?,
+            budget,
+        );
+    }
+    if right.height() > left.height() + 1 {
+        let Node::Branch {
+            left: a, right: b, ..
+        } = right.as_ref()
+        else {
+            unreachable!()
+        };
+        if b.height() >= a.height() {
+            return charged_branch(charged_branch(left, a.clone(), budget)?, b.clone(), budget);
+        }
+        let Node::Branch {
+            left: c, right: d, ..
+        } = a.as_ref()
+        else {
+            unreachable!()
+        };
+        return charged_branch(
+            charged_branch(left, c.clone(), budget)?,
+            charged_branch(d.clone(), b.clone(), budget)?,
+            budget,
+        );
+    }
+    charged_branch(left, right, budget)
+}
+pub(crate) fn charged_concat(left: Root, right: Root, budget: &Budget) -> Result<Root, Error> {
+    match (left, right) {
+        (None, r) => Ok(r),
+        (l, None) => Ok(l),
+        (Some(l), Some(r)) => {
+            if l.height() > r.height() + 1 {
+                let Node::Branch {
+                    left: a, right: b, ..
+                } = l.as_ref()
+                else {
+                    unreachable!()
+                };
+                return Ok(Some(charged_balance(
+                    a.clone(),
+                    charged_concat(Some(b.clone()), Some(r), budget)?.unwrap(),
+                    budget,
+                )?));
+            }
+            if r.height() > l.height() + 1 {
+                let Node::Branch {
+                    left: a, right: b, ..
+                } = r.as_ref()
+                else {
+                    unreachable!()
+                };
+                return Ok(Some(charged_balance(
+                    charged_concat(Some(l), Some(a.clone()), budget)?.unwrap(),
+                    b.clone(),
+                    budget,
+                )?));
+            }
+            Ok(Some(charged_branch(l, r, budget)?))
+        }
+    }
+}
+pub(crate) fn charged_source(
+    source: MemorySource,
+    range: Range<u64>,
+    budget: &Budget,
+) -> Result<Root, Error> {
+    if range.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(charged_node(
+        Node::Source {
+            source,
+            range,
+            _charge: None,
+        },
+        budget,
+    )?))
+}
+pub(crate) fn charged_owned(
+    source: MemorySource,
+    range: Range<u64>,
+    original: Option<(MemorySource, Range<u64>)>,
+    budget: &Budget,
+) -> Result<Root, Error> {
+    if range.is_empty() {
+        return Ok(None);
+    }
+    let summary = Summary {
+        bytes: (range.end - range.start) as usize,
+        unknown: true,
+        ..Summary::default()
+    };
+    Ok(Some(charged_node(
+        Node::OwnedSource {
+            source,
+            range,
+            original,
+            summary,
+            _charge: None,
+        },
+        budget,
+    )?))
+}
+pub(crate) fn charged_split(
+    root: Root,
+    offset: usize,
+    budget: &Budget,
+) -> Result<(Root, Root), Error> {
+    let Some(node) = root else {
+        return Ok((None, None));
+    };
+    if offset == 0 {
+        return Ok((None, Some(node)));
+    }
+    if offset >= node.summary().bytes {
+        return Ok((Some(node), None));
+    }
+    match node.as_ref() {
+        Node::Leaf(piece) => {
+            let middle = piece.range.start + offset;
+            Ok((
+                Some(charged_node(
+                    Node::Leaf(Piece::new(piece.segment.clone(), piece.range.start..middle)),
+                    budget,
+                )?),
+                Some(charged_node(
+                    Node::Leaf(Piece::new(piece.segment.clone(), middle..piece.range.end)),
+                    budget,
+                )?),
+            ))
+        }
+        Node::Source { source, range, .. } => {
+            let middle = range.start + offset as u64;
+            Ok((
+                charged_source(source.clone(), range.start..middle, budget)?,
+                charged_source(source.clone(), middle..range.end, budget)?,
+            ))
+        }
+        Node::OwnedSource {
+            source,
+            range,
+            original,
+            ..
+        } => {
+            let middle = range.start + offset as u64;
+            let left_original = original
+                .as_ref()
+                .map(|(source, range)| (source.clone(), range.start..range.start + offset as u64));
+            let right_original = original
+                .as_ref()
+                .map(|(source, range)| (source.clone(), range.start + offset as u64..range.end));
+            Ok((
+                charged_owned(source.clone(), range.start..middle, left_original, budget)?,
+                charged_owned(source.clone(), middle..range.end, right_original, budget)?,
+            ))
+        }
+        Node::Branch { left, right, .. } => {
+            let size = left.summary().bytes;
+            if offset < size {
+                let (a, b) = charged_split(Some(left.clone()), offset, budget)?;
+                Ok((a, charged_concat(b, Some(right.clone()), budget)?))
+            } else {
+                let (a, b) = charged_split(Some(right.clone()), offset - size, budget)?;
+                Ok((charged_concat(Some(left.clone()), a, budget)?, b))
+            }
+        }
+    }
+}
+pub(crate) fn charged_replace(
+    root: Root,
+    range: Range<usize>,
+    inserted: Root,
+    budget: &Budget,
+) -> Result<Root, Error> {
+    let (prefix, suffix) = charged_split(root, range.end, budget)?;
+    let (prefix, _) = charged_split(prefix, range.start, budget)?;
+    charged_concat(charged_concat(prefix, inserted, budget)?, suffix, budget)
+}
+
+pub(crate) fn charged_text(text: &str, budget: &Budget) -> Result<Root, Error> {
+    let mut root = None;
+    let mut start = 0;
+    while start < text.len() {
+        let mut end = (start + CHUNK).min(text.len());
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        let reservation = budget.reserve(end - start)?;
+        let segment = Arc::new(Segment {
+            text: text[start..end].into(),
+            _reservation: reservation,
+            origin: None,
+        });
+        let node = charged_node(Node::Leaf(Piece::new(segment, 0..end - start)), budget)?;
+        root = charged_concat(root, Some(node), budget)?;
+        start = end;
+    }
+    Ok(root)
+}
+
+#[cfg(test)]
+mod charged_tree_tests {
+    use super::*;
+    #[test]
+    fn shared_nodes_keep_charges_and_failed_paths_release_temporary_allocations() {
+        let budget = Budget::new(128 * 1024);
+        let root = charged_text("abcdef", &budget).unwrap();
+        let retained = root.clone();
+        let initial = budget.used();
+        let full = budget.claim(budget.limit() - budget.used()).unwrap();
+        assert!(matches!(
+            charged_split(root.clone(), 3, &budget),
+            Err(Error::BudgetExceeded)
+        ));
+        drop(full);
+        assert_eq!(budget.used(), initial);
+        let (left, right) = charged_split(root, 3, &budget).unwrap();
+        assert!(budget.used() > initial);
+        drop(left);
+        drop(right);
+        assert_eq!(budget.used(), initial);
+        drop(retained);
+        assert_eq!(budget.used(), 0);
+    }
 }

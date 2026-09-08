@@ -107,8 +107,16 @@ pub(super) struct CompareRuntime {
     pending_source: Option<PendingSource>,
     overview: [Option<Rect>;2],
     pending_merge: Option<PendingMerge>,
+    merge_receipt: Option<bareline_editor_surface::TrackedEditReceipt>,
+    merge_promotion: Option<MergePromotion>,
 }
-struct PendingMerge {source:CompareInput,cancel:bareline_diff::CancelToken,result:std::sync::mpsc::Receiver<Result<bareline_document::EditTransaction,bareline_diff::ApplyError>>}
+enum PreparedMerge { Text(bareline_document::EditTransaction), Source(bareline_document::paged::PreparedSourceTransaction) }
+struct MergePromotion {indices:[usize;2],inputs:[CompareInput;2],side:usize,ranges:[std::ops::Range<bareline_document::TextOffset>;2],hunk:Option<bareline_diff::DiffHunk>,metadata:bareline_document::history::EditMetadata}
+fn merge_metadata(before:bareline_editor_surface::Selection,start:usize,inserted:usize)->bareline_document::history::EditMetadata {
+    use bareline_document::{TextOffset,history::{EditMetadata,Selection}};
+    EditMetadata{before:vec![Selection{anchor:TextOffset(before.anchor),caret:TextOffset(before.caret)}],after:vec![Selection{anchor:TextOffset(start),caret:TextOffset(start.saturating_add(inserted))}],..Default::default()}
+}
+struct PendingMerge {source:CompareInput,inputs:[CompareInput;2],cancel:bareline_diff::CancelToken,result:std::sync::mpsc::Receiver<Result<PreparedMerge,bareline_diff::ApplyError>>}
 impl Drop for PendingMerge{fn drop(&mut self){self.cancel.cancel();}}
 struct PendingSource {
     left: CompareInput,
@@ -194,6 +202,8 @@ impl CompareRuntime {
             "compare.cancel",
             "compare.copyLeftToRight",
             "compare.copyRightToLeft",
+            "compare.copySelectionLeftToRight",
+            "compare.copySelectionRightToLeft",
             "compare.options",
             "compare.pauseAutomatic",
             "compare.close",
@@ -240,6 +250,8 @@ impl CompareRuntime {
             for (id, side) in [
                 ("compare.copyLeftToRight", 1),
                 ("compare.copyRightToLeft", 0),
+                ("compare.copySelectionLeftToRight", 1),
+                ("compare.copySelectionRightToLeft", 0),
             ] {
                 if workspace.editors[indices[side]].busy()
                     || workspace.editors[indices[side]].read_only()
@@ -272,8 +284,10 @@ impl Shell {
     /// Compare chrome has at most two occurrences of any command; reserve sixteen.
     fn compare_accessibility_hit_id(&self,hit:usize)->Option<u64> {
         let (_,id)=self.compare.hits.get(hit)?;
-        let command=self.app.commands.entries().filter(|command|command.id.0.starts_with("compare.")).position(|command|command.id.0==*id)?;
         let occurrence=self.compare.hits[..hit].iter().filter(|(_,candidate)|candidate==id).count();
+        if *id=="compare.copySelectionLeftToRight"{return Some(59_000+occurrence as u64);}
+        if *id=="compare.copySelectionRightToLeft"{return Some(59_016+occurrence as u64);}
+        let command=self.app.commands.entries().filter(|command|command.id.0.starts_with("compare.")&&!command.id.0.starts_with("compare.copySelection")).position(|command|command.id.0==*id)?;
         Some(50_000+command as u64*16+occurrence as u64)
     }
     pub(super) fn compare_accessibility_nodes(&self)->Vec<bareline_platform::accessibility::AccessibilityNode> {
@@ -627,10 +641,40 @@ impl Shell {
         };
         let snapshots = indices.map(|i| workspace.editors[i].snapshot().clone());
         let inputs = indices.map(|i| compare_input(&workspace.editors[i]));
+        let selections=self.views.compare_selections(workspace);
         let Some(controller) = &mut self.compare.controller else {
             return true;
         };
         match id {
+            "compare.copySelectionLeftToRight"|"compare.copySelectionRightToLeft"=>{
+                if self.compare.pending_merge.is_some()||self.compare.merge_receipt.is_some()||self.compare.merge_promotion.is_some(){return true;}
+                let side=usize::from(id=="compare.copySelectionLeftToRight");
+                let Some(selections)=selections else{return true;};
+                let ranges=selections.map(|s|bareline_document::TextOffset(s.anchor.min(s.caret))..bareline_document::TextOffset(s.anchor.max(s.caret)));
+                if ranges[1-side].is_empty(){workspace.message=Some("Select source text to copy first".into());return true;}
+                if workspace.editors[indices[side]].read_only()||workspace.editors[indices[side]].busy(){workspace.message=Some("Destination is busy or read-only".into());return true;}
+                let captured=inputs[side].clone();let quota=workspace.transcode_quota_bytes;let budget=workspace.source_edit_budget();
+                let metadata=merge_metadata(selections[side],ranges[side].start.0,ranges[1-side].end.0-ranges[1-side].start.0);
+                if let CompareInput::Resident(snapshot)=&inputs[side] {
+                    if ranges[1-side].end.0-ranges[1-side].start.0>1024*1024||ranges[side].end.0-ranges[side].start.0>1024*1024 {
+                        match workspace.promote_resident_for_source_edit(indices[side],snapshot.identity_token()){
+                            Ok(_)=>{self.compare.merge_promotion=Some(MergePromotion{indices,inputs,side,ranges,hunk:None,metadata});controller.invalidate();controller.state=CompareState::Running;workspace.message=Some("Preparing destination storage for selected-range copy…".into());},
+                            Err(error)=>workspace.message=Some(error),
+                        }
+                        return true;
+                    }
+                }
+                let cancel=bareline_diff::CancelToken::default();let worker_cancel=cancel.clone();let notify=self.notify.clone();let (send,result)=std::sync::mpsc::sync_channel(1);
+                let captured_inputs=inputs.clone();
+                let spawned=std::thread::Builder::new().name("compare-selected-copy".into()).spawn(move||{
+                    let result=if matches!(inputs[side],CompareInput::Resident(_)){
+                        bareline_app::compare::prepare_input_range_copy(&inputs[1-side],ranges[1-side].clone(),&inputs[side],ranges[side].clone(),1024*1024,&worker_cancel).map(PreparedMerge::Text)
+                    }else{
+                        bareline_app::compare::prepare_streamed_range_copy(&inputs[1-side],ranges[1-side].clone(),&inputs[side],ranges[side].clone(),metadata,budget,&std::env::temp_dir().join("Bareline-compare-staging"),quota,std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),&worker_cancel).map(PreparedMerge::Source)
+                    };let _=send.send(result);notify();
+                });
+                if spawned.is_ok(){controller.invalidate();controller.state=CompareState::Running;self.compare.pending_merge=Some(PendingMerge{source:captured,inputs:captured_inputs,cancel,result});workspace.message=Some("Preparing explicit selected-range copy · Cancel stops staging".into());}else{workspace.message=Some("Could not start copy worker; retry".into());}
+            },
             "compare.next" | "compare.previous" => {
                 if let Some(hunk) = controller.navigate(id == "compare.previous") {
                     self.views
@@ -644,7 +688,7 @@ impl Shell {
                     self.notify.clone(),
                 );
             }
-            "compare.cancel" => {controller.cancel();self.compare.pending_merge=None;},
+            "compare.cancel" => {controller.cancel();self.compare.pending_merge=None;self.compare.merge_promotion=None;},
             "compare.options" => {
                 self.compare.options_open = !self.compare.options_open;
                 if !self.compare.options_open
@@ -659,19 +703,42 @@ impl Shell {
             "compare.syncHorizontal" => controller.sync_horizontal = !controller.sync_horizontal,
             "compare.copyLeftToRight" | "compare.copyRightToLeft" => {
                 let side = usize::from(id == "compare.copyLeftToRight");
+                if self.compare.pending_merge.is_some()||self.compare.merge_promotion.is_some()||self.compare.merge_receipt.is_some(){return true;}
+                if workspace.editors[indices[side]].read_only()||workspace.editors[indices[side]].busy(){workspace.message=Some("Destination is busy or read-only".into());return true;}
                 let direction = if side == 1 {
                     Direction::LeftToRight
                 } else {
                     Direction::RightToLeft
                 };
+                controller.visible_input_hunks(&inputs[0],&inputs[1]);
+                if let (CompareInput::Resident(snapshot),Some(hunk))=(&inputs[side],controller.current_hunk().cloned()) {
+                    if hunk.left.end.0-hunk.left.start.0>1024*1024||hunk.right.end.0-hunk.right.start.0>1024*1024 {
+                        let ranges=[hunk.left.clone(),hunk.right.clone()];
+                        let metadata=merge_metadata(selections.map(|s|s[side]).unwrap_or_default(),ranges[side].start.0,ranges[1-side].end.0-ranges[1-side].start.0);
+                        match workspace.promote_resident_for_source_edit(indices[side],snapshot.identity_token()){
+                            Ok(_)=>{self.compare.merge_promotion=Some(MergePromotion{indices,inputs,side,ranges,hunk:Some(hunk),metadata});controller.invalidate();controller.state=CompareState::Running;workspace.message=Some("Preparing destination storage for large difference…".into());},Err(error)=>workspace.message=Some(error),
+                        }
+                        return true;
+                    }
+                }
                 if inputs.iter().any(|input|!matches!(input,CompareInput::Resident(_))) {
                     if self.compare.pending_merge.is_some(){return true;}
                     controller.visible_input_hunks(&inputs[0],&inputs[1]);
                     let Some(hunk)=controller.current_hunk().cloned()else{return true;};
                     if workspace.editors[indices[side]].read_only()||workspace.editors[indices[side]].busy(){workspace.message=Some("Destination is read-only or busy".into());return true;}
                     let options=controller.options().clone();let cancel=bareline_diff::CancelToken::default();let worker_cancel=cancel.clone();let captured=inputs[side].clone();let notify=self.notify.clone();let (send,result)=std::sync::mpsc::sync_channel(1);
-                    let spawned=std::thread::Builder::new().name("compare-merge".into()).spawn(move||{let result=bareline_app::compare::prepare_input_merge(&inputs[0],&inputs[1],&hunk,direction,&options,MergePolicy::PreserveIgnoredDestination,1024*1024,&worker_cancel);let _=send.send(result);notify();});
-                    if spawned.is_ok(){controller.invalidate();controller.state=CompareState::Running;self.compare.pending_merge=Some(PendingMerge{source:captured,cancel,result});workspace.message=Some("Preparing difference · Cancel stops staging".into());}else{workspace.message=Some("Could not start merge worker; retry".into());}
+                    let quota=workspace.transcode_quota_bytes;let budget=workspace.source_edit_budget();
+                    let (destination_range,source_range)=if side==1{(&hunk.right,&hunk.left)}else{(&hunk.left,&hunk.right)};
+                    let metadata=merge_metadata(selections.map(|s|s[side]).unwrap_or_default(),destination_range.start.0,source_range.end.0-source_range.start.0);
+                    let captured_inputs=inputs.clone();
+                    let spawned=std::thread::Builder::new().name("compare-merge".into()).spawn(move||{
+                        let large=hunk.left.end.0.saturating_sub(hunk.left.start.0)>1024*1024||hunk.right.end.0.saturating_sub(hunk.right.start.0)>1024*1024;
+                        let result=if large {
+                            bareline_app::compare::prepare_streamed_hunk_merge(&inputs[0],&inputs[1],&hunk,direction,MergePolicy::PreserveIgnoredDestination,metadata,budget,&std::env::temp_dir().join("Bareline-compare-staging"),quota,std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),&worker_cancel).map(PreparedMerge::Source)
+                        } else {bareline_app::compare::prepare_input_merge(&inputs[0],&inputs[1],&hunk,direction,&options,MergePolicy::PreserveIgnoredDestination,1024*1024,&worker_cancel).map(PreparedMerge::Text)};
+                        let _=send.send(result);notify();
+                    });
+                    if spawned.is_ok(){controller.invalidate();controller.state=CompareState::Running;self.compare.pending_merge=Some(PendingMerge{source:captured,inputs:captured_inputs,cancel,result});workspace.message=Some("Preparing difference · Cancel stops staging".into());}else{workspace.message=Some("Could not start merge worker; retry".into());}
                     return true;
                 }
                 match controller.merge(
@@ -754,18 +821,62 @@ impl Shell {
         let Some(workspace) = &mut self.workspace else {
             return;
         };
+        if let Some(promotion)=&self.compare.merge_promotion {
+            let identity=match &promotion.inputs[promotion.side]{CompareInput::Resident(snapshot)=>snapshot.identity_token(),_=>unreachable!()};
+            match workspace.promote_resident_for_source_edit(promotion.indices[promotion.side],identity){
+                Ok(false)=>return,
+                Err(error)=>{self.compare.merge_promotion=None;workspace.message=Some(format!("Merge was not applied: {error}"));if let Some(controller)=&mut self.compare.controller{controller.invalidate();}return;},
+                Ok(true)=>{},
+            }
+            let Some(other)=workspace.editors.get(promotion.indices[1-promotion.side])else{self.compare.merge_promotion=None;workspace.message=Some("Source closed; merge was not applied".into());if let Some(controller)=&mut self.compare.controller{controller.invalidate();}return;};
+            if promotion.indices[0]!=promotion.indices[1]&&!promotion.inputs[1-promotion.side].current(&compare_input(other)){
+                self.compare.merge_promotion=None;workspace.message=Some("Source changed while preparing destination; merge was not applied".into());if let Some(controller)=&mut self.compare.controller{controller.invalidate();}return;
+            }
+            if !self.views.compare_pair(workspace,promotion.indices[0],promotion.indices[1]){return;}
+            let mut promotion=self.compare.merge_promotion.take().unwrap();
+            promotion.inputs=promotion.indices.map(|i|compare_input(&workspace.editors[i]));
+            self.compare.documents=Some(promotion.inputs.clone());
+            let captured=promotion.inputs[promotion.side].clone();let quota=workspace.transcode_quota_bytes;let budget=workspace.source_edit_budget();
+            let cancel=bareline_diff::CancelToken::default();let worker_cancel=cancel.clone();let notify=self.notify.clone();let (send,result)=std::sync::mpsc::sync_channel(1);
+            let captured_inputs=promotion.inputs.clone();
+            let spawned=std::thread::Builder::new().name("compare-promoted-merge".into()).spawn(move||{
+                let cache=std::env::temp_dir().join("Bareline-compare-staging");let platform=std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem);
+                let result=if let Some(hunk)=promotion.hunk{
+                    bareline_app::compare::prepare_streamed_hunk_merge(&promotion.inputs[0],&promotion.inputs[1],&hunk,if promotion.side==1{Direction::LeftToRight}else{Direction::RightToLeft},MergePolicy::PreserveIgnoredDestination,promotion.metadata,budget,&cache,quota,platform,&worker_cancel)
+                }else{bareline_app::compare::prepare_streamed_range_copy(&promotion.inputs[1-promotion.side],promotion.ranges[1-promotion.side].clone(),&promotion.inputs[promotion.side],promotion.ranges[promotion.side].clone(),promotion.metadata,budget,&cache,quota,platform,&worker_cancel)};
+                let _=send.send(result.map(PreparedMerge::Source));notify();
+            });
+            if spawned.is_ok(){self.compare.pending_merge=Some(PendingMerge{source:captured,inputs:captured_inputs,cancel,result});workspace.message=Some("Preparing streamed merge · Cancel stops staging".into());}else{workspace.message=Some("Could not start merge worker; retry".into());if let Some(controller)=&mut self.compare.controller{controller.invalidate();}}
+        }
         if let Some(pending)=&self.compare.pending_merge {
             let received=match pending.result.try_recv(){Ok(result)=>Some(result),Err(std::sync::mpsc::TryRecvError::Empty)=>None,Err(_)=>Some(Err(bareline_diff::ApplyError::Unavailable))};
             if let Some(received)=received {
                 let pending=self.compare.pending_merge.take().unwrap();
-                let result=received.map_err(|e|format!("Merge could not be staged: {e:?}. Select a difference below 1 MiB or retry."));
+                let received=if pending.inputs.iter().all(|input|workspace.editors.iter().any(|editor|input.current(&compare_input(editor)))){received}else{Err(bareline_diff::ApplyError::Stale)};
+                let result=received.map_err(|e|format!("Merge could not be staged: {e:?}. Ignored-content preservation requires an exact supported range; explicit selected-range copy uses the selected bytes."));
                 let message=match result {
-                    Ok(transaction)=>match workspace.editors.iter_mut().find(|e|compare_input(e).same_document(&pending.source)) {
+                    Ok(PreparedMerge::Source(prepared))=>match workspace.editors.iter_mut().find(|e|compare_input(e).same_document(&pending.source)) {
+                        Some(bareline_app::workspace::WorkspaceEditor::Paged(editor))=>{
+                            editor.set_streaming_quota(workspace.transcode_quota_bytes);
+                            let source=match &pending.source {CompareInput::Paged(handle)=>Some(handle.snapshot()),CompareInput::CapturedPaged(snapshot,_)=>Some(snapshot),_=>None};
+                            match source.ok_or_else(||"Destination changed".to_string()).and_then(|source|editor.apply_prepared_source_tracked(source,prepared)){
+                                Ok(receipt)=>{self.compare.merge_receipt=Some(receipt);"Applying difference and recording recovery…".into()},Err(error)=>error,
+                            }
+                        },_=>"Destination changed; difference was not applied".into(),
+                    },
+                    Ok(PreparedMerge::Text(transaction))=>match workspace.editors.iter_mut().find(|e|compare_input(e).same_document(&pending.source)) {
                         Some(editor)=>match (editor,&pending.source){(bareline_app::workspace::WorkspaceEditor::Resident(editor),CompareInput::Resident(source))=>editor.apply_prepared(source,transaction).map_err(String::from),(bareline_app::workspace::WorkspaceEditor::Paged(editor),CompareInput::Paged(source))=>editor.apply_prepared(source.snapshot(),transaction),(bareline_app::workspace::WorkspaceEditor::Paged(editor),CompareInput::CapturedPaged(source,_))=>editor.apply_prepared(source,transaction),_=>Err("Destination changed".into())}.map_or_else(|e|e,|()|"Difference queued as one undoable edit; destination remains unsaved".into()),
                         None=>"Destination closed; difference was not applied".into(),
                     },Err(e)=>e,
                 };
                 workspace.message=Some(message);if let Some(controller)=&mut self.compare.controller{controller.invalidate();}
+            }
+        }
+        if let Some(receipt)=&self.compare.merge_receipt {
+            if let Some(result)=receipt.terminal(){
+                workspace.message=Some(result.map_or_else(|error|format!("Merge was not applied: {error}"),|_|"Difference applied as one undoable edit with recovery recorded; destination remains unsaved".into()));
+                self.compare.merge_receipt=None;
+                if let Some(controller)=&mut self.compare.controller{controller.invalidate();}
             }
         }
         self.compare.saved_paged.retain(|(saved,_)|workspace.editors.iter().any(|e|match e{bareline_app::workspace::WorkspaceEditor::Paged(p)=>p.snapshot().same_document(saved.snapshot()),_=>false}));
@@ -1493,6 +1604,35 @@ pub(super) fn accessibility_test_setup(shell:&mut Shell,scenario:&str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn large_selected_copy_promotes_exact_destination_and_waits_for_durable_actor() {
+        use bareline_document::{Budget,Document,TextOffset,paged::WindowPoll};
+        let platform=std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem);
+        let mut workspace=Workspace::new(std::sync::Arc::new(||{}),platform.clone()).unwrap();
+        workspace.new_document().unwrap();workspace.editors[0].enqueue(Input::Insert("old\n".into()));
+        let deadline=Instant::now()+Duration::from_secs(30);
+        while workspace.editors[0].busy(){assert!(Instant::now()<deadline);workspace.pump();std::thread::yield_now();}
+        let identity=workspace.editors[0].snapshot().identity_token();
+        while !workspace.promote_resident_for_source_edit(0,identity).unwrap(){assert!(Instant::now()<deadline);workspace.pump();std::thread::yield_now();}
+        let text=format!("{}tail\n","αβγ\n".repeat(170000));
+        assert!(text.len()>1024*1024);
+        let source=Document::from_utf8(&text,Budget::new(8*1024*1024),Budget::new(0)).unwrap();
+        let captured=compare_input(&workspace.editors[0]);
+        let prepared=bareline_app::compare::prepare_streamed_range_copy(&CompareInput::Resident(source.snapshot()),TextOffset(0)..TextOffset(text.len()),&captured,TextOffset(0)..TextOffset(4),Default::default(),workspace.source_edit_budget(),&std::env::temp_dir().join("Bareline-compare-test-staging"),64*1024*1024,platform,&bareline_diff::CancelToken::default()).unwrap();
+        let bareline_app::workspace::WorkspaceEditor::Paged(editor)=&mut workspace.editors[0]else{panic!("target was not promoted")};
+        let snapshot=editor.snapshot().clone();let receipt=editor.apply_prepared_source_tracked(&snapshot,prepared).unwrap();
+        while receipt.terminal().is_none(){assert!(Instant::now()<deadline);workspace.pump();std::thread::yield_now();}
+        assert!(receipt.terminal().unwrap().is_ok());
+        let bareline_app::workspace::WorkspaceEditor::Paged(editor)=&workspace.editors[0]else{unreachable!()};
+        assert_eq!(editor.snapshot().len(),text.len());
+        let handle=editor.read_handle();
+        let mut request=handle.snapshot().begin_read(TextOffset(text.len()-5)..TextOffset(text.len()),16,&Budget::new(1024*1024)).unwrap();
+        loop{match request.poll(){WindowPoll::Ready(window)=>{assert_eq!(window.text(),"tail\n");break;},WindowPoll::Pending(ticket)=>{handle.resolve_page(ticket).unwrap();},_=>panic!("merged source unavailable")}}
+        workspace.editors[0].enqueue(Input::Undo);
+        while workspace.editors[0].busy(){assert!(Instant::now()<deadline);workspace.pump();std::thread::yield_now();}
+        let bareline_app::workspace::WorkspaceEditor::Paged(editor)=&workspace.editors[0]else{unreachable!()};
+        assert_eq!(editor.snapshot().len(),4);
+    }
     #[test]
     fn native_compare_merges_through_document_actor_and_undo() {
         let notify = std::sync::Arc::new(|| {});

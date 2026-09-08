@@ -251,6 +251,9 @@ mod tests {
             target.global_logical_scroll(),
             GlobalScrollPosition::Pending
         );
+        let mut pending_ops = Vec::new();
+        assert!(bareline_app::workspace::paint_paged_pending(views.secondary.as_ref().unwrap(),1000.0,800.0,workspace.theme,&mut pending_ops));
+        assert!(!pending_ops.iter().any(|op|matches!(op,DrawOp::Layout {..})));
         let expected = workspace_view_state(views.secondary.as_ref().unwrap());
         assert_eq!(expected.scroll_byte, Some(saved_byte.0 as u64));
         assert_eq!(expected.folds, vec![8004..8011]);
@@ -446,6 +449,47 @@ mod tests {
     }
 
     #[test]
+    fn promotion_rebinds_linked_views_without_replacing_tabs_or_history() {
+        let mut workspace=Workspace::new(std::sync::Arc::new(||{}),std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem)).unwrap();
+        workspace.new_document().unwrap();
+        workspace.editors[0].enqueue(Input::Insert("alpha\nbeta\n".into()));
+        let deadline=Instant::now()+Duration::from_secs(30);
+        while workspace.editors[0].busy(){assert!(Instant::now()<deadline);workspace.pump();std::thread::yield_now();}
+        let mut views=ViewsRuntime::default(); views.split(&mut workspace,0,Orientation::Vertical);
+        workspace.editors[0].enqueue(Input::SetCaret(2,false));
+        views.secondary.as_mut().unwrap().enqueue(Input::SetCaret(8,false));
+        while views.busy(&workspace){assert!(Instant::now()<deadline);workspace.pump();views.pump(&mut workspace);std::thread::yield_now();}
+        let ids=views.loaded_tabs;
+        let identity=workspace.editors[0].snapshot().identity_token();
+        assert!(!workspace.promote_resident_for_source_edit(0,identity).unwrap());
+        loop {
+            assert!(Instant::now()<deadline); workspace.pump();views.pump(&mut workspace);
+            if workspace.editors[0].paged() && views.secondary.as_ref().is_some_and(WorkspaceEditor::paged) && !views.busy(&workspace) && views.pending_restore.iter().all(Option::is_none) && views.pending_view_scroll.iter().all(Option::is_none){break;}
+            std::thread::yield_now();
+        }
+        assert_eq!(views.loaded_tabs,ids);
+        let WorkspaceEditor::Paged(primary)=&workspace.editors[0] else {unreachable!()};
+        let WorkspaceEditor::Paged(peer)=views.secondary.as_ref().unwrap() else {unreachable!()};
+        assert!(primary.snapshot().same_document(peer.snapshot()));
+        assert_eq!(primary.global_selection().1.0,2);
+        assert_eq!(peer.global_selection().1.0,8);
+        assert!(primary.can_undo());
+        views.secondary.as_mut().unwrap().enqueue(Input::Insert("X".into()));
+        loop {
+            assert!(Instant::now()<deadline);workspace.pump();views.pump(&mut workspace);
+            if !views.busy(&workspace){break;} std::thread::yield_now();
+        }
+        let WorkspaceEditor::Paged(primary)=&workspace.editors[0] else {unreachable!()};
+        let WorkspaceEditor::Paged(peer)=views.secondary.as_ref().unwrap() else {unreachable!()};
+        assert_eq!(primary.snapshot().revision,peer.snapshot().revision);
+        assert_eq!(primary.snapshot().len(),12);
+        workspace.editors[0].enqueue(Input::Undo);
+        loop {assert!(Instant::now()<deadline);workspace.pump();views.pump(&mut workspace);if !views.busy(&workspace){break;}std::thread::yield_now();}
+        let WorkspaceEditor::Paged(primary)=&workspace.editors[0] else {unreachable!()};
+        assert_eq!(primary.snapshot().len(),11);
+    }
+
+    #[test]
     fn queued_edits_in_both_native_panes_share_the_document() {
         let mut workspace = Workspace::new(
             std::sync::Arc::new(|| {}),
@@ -627,6 +671,7 @@ impl DocumentBinding {
             (Self::Paged(_, snapshot), bareline_app::workspace::WorkspaceEditor::Paged(editor)) => {
                 snapshot.same_document(editor.snapshot())
             }
+            (Self::Resident(_, snapshot), WorkspaceEditor::Paged(editor)) => snapshot.identity_token().0 == editor.snapshot().identity_token().0,
             _ => false,
         }
     }
@@ -871,6 +916,32 @@ impl ViewsRuntime {
         self.document_index(workspace, self.controller.as_ref()?.tab(id)?.document_id)
     }
     fn sync_documents(&mut self, workspace: &Workspace) {
+        // Promotion preserves logical identity but changes the actor facade. Rebind
+        // existing linked panes even though their stable tab IDs did not change.
+        for binding in &mut self.documents {
+            let DocumentBinding::Resident(id, source) = binding else { continue; };
+            let Some(WorkspaceEditor::Paged(promoted)) = workspace.editors.iter().find(|editor| matches!(editor,WorkspaceEditor::Paged(paged) if paged.snapshot().identity_token().0 == source.identity_token().0)) else { continue; };
+            if self.secondary.as_ref().is_some_and(|peer| matches!(peer,WorkspaceEditor::Resident(resident) if resident.snapshot().same_document(source))) {
+                let old=self.secondary.as_ref().unwrap();
+                let state=workspace_view_state(old);
+                match promoted.clone_view() {
+                    Ok(mut peer) => {
+                        old.copy_presentation_to(&mut peer.surface);
+                        let old=self.secondary.replace(WorkspaceEditor::Paged(peer)).unwrap();
+                        self.retired.push(old);
+                        self.pending_restore[1]=Some(state);
+                        self.pending_view_scroll[1]=None;
+                        self.applied_spacers[1]=None;
+                    }
+                    Err(_) => continue, // Retry without discarding the linked view.
+                }
+            }
+            if self.primary.as_ref().is_some_and(|primary|primary.same_document(source)) {
+                self.primary=Some(promoted.surface.snapshot().clone());
+                self.applied_spacers[0]=None;
+            }
+            *binding=DocumentBinding::Paged(*id,promoted.snapshot().clone());
+        }
         if self.controller.is_some()
             && self.documents.len() == workspace.editors.len()
             && self
@@ -1315,6 +1386,15 @@ impl ViewsRuntime {
             self.secondary.as_ref()?.snapshot().clone(),
         ])
     }
+    pub(super) fn compare_selections(&self, workspace: &Workspace) -> Option<[bareline_editor_surface::Selection;2]> {
+        let primary = workspace.editors.get(self.primary_index(workspace)?)?;
+        let secondary = self.secondary.as_ref()?;
+        let selection = |editor:&WorkspaceEditor| match editor {
+            WorkspaceEditor::Paged(paged) => { let (anchor,caret)=paged.global_selection(); bareline_editor_surface::Selection {anchor:anchor.0,caret:caret.0} },
+            editor => editor.selection,
+        };
+        Some([selection(primary),selection(secondary)])
+    }
     pub(super) fn compare_layout_range(
         &self,
         workspace: &Workspace,
@@ -1555,7 +1635,7 @@ impl ViewsRuntime {
             .iter()
             .position(|e| e.snapshot().same_document(document))
     }
-    fn primary_index(&self, workspace: &Workspace) -> Option<usize> {
+    pub(super) fn primary_index(&self, workspace: &Workspace) -> Option<usize> {
         if let Some(index) = self.loaded_tabs[0].and_then(|id| self.tab_index(workspace, id)) {
             return Some(index);
         }
@@ -2113,12 +2193,23 @@ impl ViewsRuntime {
             // EditorSurface already reserves TAB_HEIGHT for this pane's header.
             editor.top_inset = 0.0;
             editor.bottom_inset = 0.0;
+            let paged = editor.paged();
+            editor.set_external_scrollbar(paged);
             let mut local = Vec::new();
             let local_height = bounds.height + 24.0;
             self.styling[side].prepare_view(editor, paths[side].as_deref(), notify.clone());
             let syntax = self.styling[side].syntax_view(editor);
-            let mut caret =
-                editor.draw_styled(renderer, bounds.width, local_height, &mut local, syntax)?;
+            let mut caret = if bareline_app::workspace::paint_paged_pending(editor, bounds.width, local_height, workspace.theme, &mut local) {
+                None
+            } else { editor.draw_styled(renderer, bounds.width, local_height, &mut local, syntax)? };
+            if let WorkspaceEditor::Paged(paged) = &mut *editor {
+                if let Err(error)=paged.refine_horizontal_viewport(renderer,bounds.width) {paged.error=Some(error);}
+            }
+            if matches!(&*editor, WorkspaceEditor::Paged(paged) if !paged.paged_frame_state().ready) {
+                local.clear();
+                bareline_app::workspace::paint_paged_pending(editor,bounds.width,local_height,workspace.theme,&mut local);
+                caret=None;
+            }
             if matches!(&*editor, WorkspaceEditor::Paged(paged) if !paged.caret_in_viewport()) {
                 if let Some(rect) = caret.take() { local.retain(|op| !matches!(op, DrawOp::Fill(bounds, _) if *bounds == rect)); }
             }
@@ -3202,14 +3293,15 @@ impl Shell {
                     self.views.activate(workspace, &mut self.app, pane as u32);
                     let bounds = self.views.bounds[pane].unwrap();
                     let editor = if pane == 1 {
-                        self.views.secondary.as_mut().map(|editor| &mut **editor)
+                        self.views.secondary.as_mut()
                     } else {
                         self.views
                             .primary_index(workspace)
                             .and_then(|i| workspace.editors.get_mut(i))
-                            .map(|editor| &mut **editor)
+                            
                     };
                     if let (Some(editor), Some(renderer)) = (editor, &self.renderer) {
+                        if matches!(&*editor, WorkspaceEditor::Paged(paged) if !paged.paged_frame_state().ready) { return true; }
                         let _ = editor.click(
                             renderer,
                             Point {

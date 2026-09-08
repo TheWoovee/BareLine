@@ -95,6 +95,14 @@ pub struct DiffHunk {
     right_state: ContentStateId,
     options: CompareOptions,
 }
+impl DiffHunk {
+    /// Verify the captured text generations before worker-side source splicing.
+    /// Content states are globally unique; equal revision numbers alone are insufficient.
+    pub fn matches_states(&self,left_revision:Revision,left_state:ContentStateId,right_revision:Revision,right_state:ContentStateId)->bool {
+        self.left_revision==left_revision&&self.right_revision==right_revision&&self.left_state==left_state&&self.right_state==right_state
+    }
+    pub fn options(&self)->&CompareOptions {&self.options}
+}
 #[derive(Clone, Debug, Default)]
 pub struct DiffStats {
     pub input_bytes: usize,

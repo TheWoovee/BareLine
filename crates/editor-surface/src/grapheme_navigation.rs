@@ -95,6 +95,10 @@ mod tests {
         let snapshot=document.snapshot();
         assert_eq!(boundary(&snapshot,0,true,&AtomicBool::new(false)).unwrap(),text.len()-1);
         assert_eq!(boundary(&snapshot,text.len()-1,false,&AtomicBool::new(false)).unwrap(),0);
+        // Hit positions from a bounded shape can lie deep inside a cluster whose
+        // true beginning is outside retained layout context. Never accept them.
+        assert_eq!(floor_boundary(&snapshot,8193,&AtomicBool::new(false)).unwrap(),0);
+        assert_eq!(floor_boundary(&snapshot,text.len()-1,&AtomicBool::new(false)).unwrap(),text.len()-1);
         assert!(boundary(&snapshot,0,true,&AtomicBool::new(true)).is_err());
     }
 }

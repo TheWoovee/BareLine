@@ -5,7 +5,10 @@ pub mod search_marks;
 pub mod paged_view;
 pub mod paged_navigation;
 pub mod power;
+mod tracked_edit;
+pub use tracked_edit::TrackedEditReceipt;
 mod view_geometry;
+pub use view_geometry::HorizontalAnchor;
 mod grapheme_navigation;
 mod virtual_layout;
 use bareline_document::{
@@ -69,6 +72,7 @@ enum HistoryMove {
     Redo,
 }
 struct Pending {
+    tracked: Option<tracked_edit::TrackedEditCompletion>,
     folds_before: Vec<std::ops::Range<usize>>,
     folds_after: Vec<std::ops::Range<usize>>,
     input: Option<Input>,
@@ -99,6 +103,7 @@ struct LineLayout {
     end: usize,
     x_origin: f64,
     row_origin: usize,
+    context_y: f32,
 }
 pub struct EditorSurface {
     blink: view_geometry::CaretBlink,
@@ -129,6 +134,9 @@ pub struct EditorSurface {
     pending_command: Option<(String, BTreeMap<String, String>)>,
     manual_hidden: Vec<std::ops::RangeInclusive<usize>>,
     scroll_x: f64,
+    external_scrollbar: bool,
+    horizontal_intent: i8,
+    pending_horizontal_anchor: Option<(usize,f32,f64)>,
     power_rectangle: Option<power::Rectangle>,
     column_maps: BTreeMap<usize,power::DisplayColumnMap>,
     column_maps_revision: Option<bareline_document::Revision>,
@@ -163,6 +171,8 @@ pub struct EditorSurface {
     occurrence_history: power::OccurrenceHistory,
     group_pending: bool,
     font_pixels: f32,
+    base_font_pixels: f32,
+    zoom_offset: f32,
     font_family: String,
     view_spacers: Vec<(usize,usize)>,
     tab_width: usize,
@@ -222,6 +232,9 @@ impl EditorSurface {
             pending_command: None,
             manual_hidden: Vec::new(),
             scroll_x: 0.0,
+            external_scrollbar: false,
+            horizontal_intent: 0,
+            pending_horizontal_anchor: None,
             power_rectangle: None,
             column_maps: BTreeMap::new(),
             column_maps_revision: None,
@@ -256,6 +269,8 @@ impl EditorSurface {
             occurrence_history: power::OccurrenceHistory::default(),
             group_pending: false,
             font_pixels: 16.0,
+            base_font_pixels: 16.0,
+            zoom_offset: 0.0,
             font_family: "Cascadia Mono".into(),
             view_spacers: Vec::new(),
             tab_width: 4,
@@ -271,6 +286,10 @@ impl EditorSurface {
     }
     pub fn snapshot(&self) -> &DocumentSnapshot {
         &self.snapshot
+    }
+    /// The containing paged view paints the full-document scrollbar in the same gutter.
+    pub fn set_external_scrollbar(&mut self, external: bool) {
+        self.external_scrollbar = external;
     }
     pub fn layout_range(&self, id: LayoutId) -> Option<std::ops::Range<TextOffset>> {
         self.layouts.values().find(|layout| layout.id == id).map(|layout| TextOffset(layout.start)..TextOffset(layout.end))
@@ -419,7 +438,8 @@ impl EditorSurface {
         highlight_current_line: bool,
         whitespace: &str,
     ) {
-        let next_font=(font_size_pt.clamp(6.0,72.0)*96.0/72.0)as f32;
+        self.base_font_pixels=(font_size_pt.clamp(6.0,72.0)*96.0/72.0)as f32;
+        let next_font=(self.base_font_pixels+self.zoom_offset).clamp(8.0,96.0);
         let changed=self.font_pixels!=next_font||self.tab_width!=usize::from(tab_width.clamp(1,16))||self.line_numbers!=line_numbers||self.highlight_current_line!=highlight_current_line||self.whitespace!=whitespace;
         if self.font_pixels!=next_font||self.tab_width!=usize::from(tab_width.clamp(1,16)){self.clear_column_metrics();}
         self.font_pixels = next_font;
@@ -456,6 +476,7 @@ impl EditorSurface {
         view.smart_indent = self.smart_indent;
         view.manual_hidden = self.manual_hidden.clone();
         view.scroll_x = self.scroll_x;
+        view.external_scrollbar = self.external_scrollbar;
         view.wrap = self.wrap;
         view.wrap_rows = self.wrap_rows.clone();
         view.known_folds = self.known_folds.clone();
@@ -467,6 +488,8 @@ impl EditorSurface {
         view.encoding_label = self.encoding_label.clone();
         view.eol_status_override = self.eol_status_override.clone();
         view.font_pixels = self.font_pixels;
+        view.base_font_pixels = self.base_font_pixels;
+        view.zoom_offset = self.zoom_offset;
         view.font_family = self.font_family.clone();
         view.tab_width = self.tab_width;
         view.line_numbers = self.line_numbers;
@@ -647,6 +670,7 @@ impl EditorSurface {
             )
             .map_err(|_| "Document worker is busy.")?;
         self.pending = Some(Pending {
+            tracked: None,
             folds_before,
             folds_after,
             input: None,
@@ -664,7 +688,7 @@ impl EditorSurface {
     pub fn apply_document_metadata(&mut self, metadata: bareline_document::DocumentMetadata) -> Result<(), String> {
         if self.read_only() || self.busy() { return Err("Document is busy or read only".into()); }
         let receiver=self.service.as_ref().ok_or("Document unavailable")?.submit_metadata(self.snapshot.revision,metadata,Some(self.notify.clone())).map_err(|_|"Document worker is busy")?;
-        self.pending=Some(Pending {folds_before:self.fold_anchors(),folds_after:self.fold_anchors(),input:None,receiver,before:self.selection_set(),after:self.selection_set(),bookmarks_before:self.bookmarks.clone(),bookmarks_after:self.bookmarks.clone(),marks_before:self.search_marks.clone(),marks_after:self.search_marks.clone(),history:HistoryMove::Edit});
+        self.pending=Some(Pending {tracked:None,folds_before:self.fold_anchors(),folds_after:self.fold_anchors(),input:None,receiver,before:self.selection_set(),after:self.selection_set(),bookmarks_before:self.bookmarks.clone(),bookmarks_after:self.bookmarks.clone(),marks_before:self.search_marks.clone(),marks_after:self.search_marks.clone(),history:HistoryMove::Edit});
         Ok(())
     }
     pub fn apply_power(&mut self, prepared: power::PowerEdit) -> Result<(), String> {
@@ -720,7 +744,7 @@ impl EditorSurface {
         }
     }
     pub fn busy(&self) -> bool {
-        self.column_measurement_pending || self.group_pending || self.pending.is_some() || !self.queue.is_empty()
+        self.virtual_navigation_pending() || self.column_measurement_pending || self.group_pending || self.pending.is_some() || !self.queue.is_empty()
     }
     /// Accept worker-prepared edits only against their original document and revision.
     pub fn apply_prepared(
@@ -761,6 +785,7 @@ impl EditorSurface {
             .submit_with_notify(Mutation::Apply(transaction), Some(self.notify.clone()))
             .map_err(|_| "Document worker is busy; replacement was not applied.")?;
         self.pending = Some(Pending {
+            tracked: None,
             folds_before,
             folds_after,
             input: None,
@@ -834,6 +859,7 @@ impl EditorSurface {
     }
     pub fn pump(&mut self) -> bool {
         let navigation_changed = self.pump_virtual_navigation();
+        if self.virtual_navigation_pending() { return navigation_changed; }
         if self.column_measurement_pending { return navigation_changed; }
         if self.group_pending {
             return navigation_changed;
@@ -843,6 +869,9 @@ impl EditorSurface {
             match pending.receiver.try_recv() {
                 Ok(completion) => {
                     let pending = self.pending.take().unwrap();
+                    if let Some(tracked) = &pending.tracked {
+                        tracked.complete_once(completion.result.as_ref().map(|_|completion.snapshot.revision).map_err(|error|format!("Edit was not applied: {error:?}")));
+                    }
                     self.snapshot = completion.snapshot;
                     match completion.result {
                         Ok(_) => {
@@ -907,7 +936,7 @@ impl EditorSurface {
                 }
             }
         }
-        while self.pending.is_none() {
+        while self.pending.is_none() && !self.virtual_navigation_pending() {
             let Some(input) = self.queue.pop_front() else {
                 break;
             };
@@ -1015,6 +1044,7 @@ impl EditorSurface {
                 {
                     Ok(receiver) => {
                         self.pending = Some(Pending {
+                            tracked: None,
                             folds_before,
                             folds_after,
                             input: Some(input.clone()),
@@ -1114,7 +1144,7 @@ impl EditorSurface {
     }
     fn navigate(&mut self, input: Input) {
         self.reset_caret_blink();
-        if matches!(input, Input::Up(_) | Input::Down(_)) {
+        if matches!(input, Input::Up(_) | Input::Down(_)) || (matches!(input,Input::Left(_)|Input::Right(_)) && self.snapshot.line_at(TextOffset(self.selection.caret)).ok().is_some_and(|line|self.layouts.get(&line).is_some_and(|layout|(layout.start..=layout.end).contains(&self.selection.caret)))) {
             if self.visual_navigation.len() < MAX_QUEUED_INPUTS { self.visual_navigation.push_back(input); (self.notify)(); }
             return;
         }
@@ -1209,7 +1239,7 @@ impl EditorSurface {
                 id
             } else { layout.id };
             let shift = if !composed && start >= caret { composition.map_or(0,str::len) } else { 0 };
-            let origin_y = self.top() + ((self.visual_line(*line)+layout.row_origin) as f64 * self.line_height() as f64-self.scroll_y) as f32;
+            let origin_y = self.top() + ((self.visual_line(*line)+layout.row_origin) as f64 * self.line_height() as f64-self.scroll_y) as f32-layout.context_y;
             for (offset, grapheme) in text.grapheme_indices(true) {
                 if result.len() >= 4096 { return result; }
                 let a = start+shift+offset;
@@ -1284,7 +1314,7 @@ impl EditorSurface {
                 layout.id,
                 Point {
                     x: p.x - LEFT + (self.scroll_x-layout.x_origin) as f32,
-                    y: ((line-(self.visual_line(number)+layout.row_origin) as f64) * self.line_height() as f64) as f32,
+                    y: ((line-(self.visual_line(number)+layout.row_origin) as f64) * self.line_height() as f64) as f32+layout.context_y,
                 },
             )?;
             let offset = (layout.start + hit.byte_offset).min(layout.end);
@@ -1367,7 +1397,7 @@ impl EditorSurface {
                 }
                 self.refresh_hidden_lines();
             }
-            let caret_y = self.layouts.get(&caret_line).filter(|layout| (layout.start..=layout.end).contains(&self.selection.caret)).and_then(|layout| backend.caret(layout.id, self.selection.caret-layout.start).ok()).map_or(0.0, |rect|rect.y);
+            let caret_y = self.layouts.get(&caret_line).filter(|layout| (layout.start..=layout.end).contains(&self.selection.caret)).and_then(|layout| backend.caret(layout.id, self.selection.caret-layout.start).ok().map(|rect|rect.y+layout.row_origin as f32*self.line_height()-layout.context_y)).unwrap_or(0.0);
             let top = self.visual_line(caret_line) as f64 * self.line_height() as f64 + f64::from(caret_y);
             if top < self.scroll_y {
                 self.scroll_y = top;
@@ -1420,7 +1450,7 @@ impl EditorSurface {
             if self.hidden_lines.iter().any(|range| range.contains(&number)) { continue; }
             let y = self.top() + (row as f64 * self.line_height() as f64 - self.scroll_y) as f32;
             let range = self.content_range(number).unwrap();
-            let long=range.end-range.start>MAX_LAYOUT_BYTES;
+            let long=range.end-range.start>4096;
             let mut fragment=None;
             if long {
                 if self.virtual_lines.get(&number).is_none_or(|state|!state.matches(&self.snapshot,&range)) {
@@ -1428,14 +1458,15 @@ impl EditorSurface {
                 }
                 let target_row=(self.scroll_y/self.line_height() as f64).floor() as usize;
                 let state=self.virtual_lines.get_mut(&number).unwrap();
-                state.seek(self.scroll_x,target_row.saturating_sub(row),(number==caret_line&&reveal_requested).then_some(self.selection.caret),self.wrap);
+                let anchor=self.pending_horizontal_anchor.map(|(offset,_,_)|offset).filter(|offset|range.contains(offset)||*offset==range.end);
+                state.seek(self.scroll_x,target_row.saturating_sub(row),anchor.or((number==caret_line&&reveal_requested).then_some(self.selection.caret)),self.wrap);
                 if !state.prepare(&self.snapshot,self.notify.clone()).map_err(|_|LayoutError::BackendFailure)? {
                     text(ops,LEFT,y,"Preparing line…",self.font_pixels,self.theme.gutter);
                     if reveal_requested {self.reveal_caret=true;}
                     continue;
                 }
                 let (start,x,rows)=state.origin();
-                fragment=Some((start,state.end,state.text.as_ref().unwrap().clone(),x,rows));
+                fragment=Some((state.context_start,state.end,state.text.as_ref().unwrap().clone(),x,rows,start));
             }
             let mut start = range.start;
             if !long && number == caret_line && self.selection.caret > start + MAX_LAYOUT_BYTES / 2 {
@@ -1452,8 +1483,8 @@ impl EditorSurface {
             while !self.snapshot.is_boundary(TextOffset(end)) {
                 end -= 1;
             }
-            let (x_origin,row_origin)=if let Some((a,b,_,x,rows))=&fragment {start=*a;end=*b;(*x,*rows)}else{(0.0,0)};
-            let y=y+row_origin as f32*self.line_height();
+            let (mut x_origin,row_origin)=if let Some((a,_,value,x,rows,_))=&fragment {start=*a;end=*a+value.len();(*x,*rows)}else{(0.0,0)};
+            let mut y=y+row_origin as f32*self.line_height();
             if self
                 .layouts
                 .get(&number)
@@ -1462,7 +1493,7 @@ impl EditorSurface {
                 backend.release_layout(self.layouts.remove(&number).unwrap().id);
             }
             if !self.layouts.contains_key(&number) {
-                let value = if let Some((_,_,value,_,_))=&fragment {value.clone()}else{ self
+                let value = if let Some((_,_,value,_,_,_))=&fragment {value.clone()}else{ self
                     .snapshot
                     .read(TextOffset(start)..TextOffset(end), MAX_LAYOUT_BYTES)
                     .map_err(|_| LayoutError::InvalidOffset)? };
@@ -1481,20 +1512,43 @@ impl EditorSurface {
                         end,
                         x_origin,
                         row_origin,
+                        context_y: 0.0,
                     },
                 );
             }
+            let mut measured=backend.layout_size(self.layouts[&number].id)?;
+            let core_end=fragment.as_ref().map_or(end,|fragment|fragment.1);
+            if let Some((_,core_end,_,base_x,_,core_start))=&fragment {
+                let rects=backend.range_rects(self.layouts[&number].id,core_start-start..core_end-start)?;
+                let left=rects.iter().map(|r|r.x).reduce(f32::min).unwrap_or(0.0);
+                let top=rects.iter().map(|r|r.y).reduce(f32::min).unwrap_or(0.0);
+                let right=rects.iter().map(|r|r.x+r.width).reduce(f32::max).unwrap_or(left);
+                let bottom=rects.iter().map(|r|r.y+r.height).reduce(f32::max).unwrap_or(top+self.line_height());
+                x_origin=if self.wrap {0.0}else{base_x-f64::from(left)};
+                y-=top;
+                let layout=self.layouts.get_mut(&number).unwrap();layout.x_origin=x_origin;layout.context_y=top;
+                measured=(right-left,bottom-top);
+            }
             if self.wrap {
-                let rows = (backend.layout_size(self.layouts[&number].id)?.1/self.line_height()).ceil().max(1.0) as usize;
-                let total=row_origin.saturating_add(rows).saturating_add(usize::from(end<range.end));
+                let rows = (measured.1/self.line_height()).ceil().max(1.0) as usize;
+                let total=row_origin.saturating_add(rows).saturating_add(usize::from(core_end<range.end));
                 if self.wrap_rows.insert(number, total) != Some(total) { (self.notify)(); }
             }
             if long {
-                let (width,height)=backend.layout_size(self.layouts[&number].id)?;
+                let (width,height)=measured;
                 let line_height=self.line_height();
                 if self.virtual_lines.get_mut(&number).unwrap().measured(width,height,line_height,self.wrap) {if reveal_requested {self.reveal_caret=true;}(self.notify)();}
             }
             let layout = &self.layouts[&number];
+            if let Some((offset,screen_x,delta))=self.pending_horizontal_anchor {
+                if (layout.start..=layout.end).contains(&offset) {
+                    let caret=backend.caret(layout.id,offset-layout.start)?;
+                    self.scroll_x=(layout.x_origin+f64::from(caret.x-screen_x)+delta).max(0.0);
+                    self.pending_horizontal_anchor=None;
+                    (self.notify)();
+                }
+            }
+            if long&&self.wrap {ops.push(DrawOp::PushClip(rect(LEFT,y+layout.context_y,(width-LEFT).max(0.0),measured.1)));}
             if number == caret_line && self.highlight_current_line {
                 ops.push(DrawOp::Fill(
                     rect(49.0, y, width - 65.0, self.line_height()),
@@ -1646,19 +1700,20 @@ impl EditorSurface {
             if start > range.start || end < range.end {
                 text(ops, width - 34.0, y, "…", 13.0, self.theme.gutter);
             }
+            if long&&self.wrap {ops.push(DrawOp::PopClip);}
         }
         self.resolve_visual_navigation(backend)?;
         ops.push(DrawOp::Fill(
             rect(48.0, self.top(), 1.0, body_height),
             self.theme.ui.border,
         ));
-        Scrollbar {
+        if !self.external_scrollbar { Scrollbar {
             bounds: rect(width - 12.0, self.top(), 12.0, body_height),
             offset: self.scroll_y,
             viewport: body_height as f64,
-            total: Some(self.visual_line(self.snapshot.line_count()) as f64 * self.line_height() as f64),
+            total: if self.wrap&&self.wrap_rows.len()<self.snapshot.line_count() {None}else{Some(self.visual_line(self.snapshot.line_count()) as f64 * self.line_height() as f64)},
         }
-        .paint_with_theme(self.theme.ui, ops);
+        .paint_with_theme(self.theme.ui, ops); }
         ops.push(DrawOp::PopClip);
         let status_y = height - STATUS_HEIGHT;
         ops.push(DrawOp::Fill(
@@ -2019,5 +2074,48 @@ mod tests {
                 .is_some()
         );
         assert_eq!(backend.render(&ops).unwrap(), FrameStatus::Presented);
+    }
+
+    #[test]
+    fn visual_navigation_settles_before_following_insert() {
+        let scheduler = Scheduler::new(1, 16).unwrap();
+        let document = Document::from_utf8("abc", Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+        let snapshot = document.snapshot();
+        let mut view = EditorSurface::new(scheduler.document(document, 16), snapshot, Arc::new(|| {}));
+        let mut backend = RecordingBackend::default();
+        let mut ops = Vec::new();
+        view.enqueue(Input::SetCaret(1, false));
+        view.draw(&mut backend, 1000.0, 800.0, &mut ops).unwrap();
+
+        // Queue both together to cover navigation starting inside the same pump
+        // that would otherwise dequeue and submit the following insertion.
+        view.queue.push_back(Input::Right(false));
+        view.queue.push_back(Input::Insert("X".into()));
+        view.pump();
+        assert!(view.virtual_navigation_pending());
+        assert!(view.busy());
+        assert!(view.pending.is_none());
+        assert_eq!(view.queue.len(), 1);
+        assert_eq!(view.snapshot.read(TextOffset(0)..TextOffset(3), 3).unwrap(), "abc");
+        view.pump();
+        assert!(view.pending.is_none());
+        assert_eq!(view.queue.len(), 1);
+
+        let drain = |view: &mut EditorSurface, backend: &mut RecordingBackend, ops: &mut Vec<DrawOp>| {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            while view.busy() {
+                view.pump();
+                ops.clear();
+                view.draw(backend, 1000.0, 800.0, ops).unwrap();
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::yield_now();
+            }
+        };
+        drain(&mut view, &mut backend, &mut ops);
+        assert_eq!(view.snapshot.read(TextOffset(0)..TextOffset(4), 4).unwrap(), "abXc");
+        assert_eq!(view.undo_selection.len(), 1);
+        view.enqueue(Input::Undo);
+        drain(&mut view, &mut backend, &mut ops);
+        assert_eq!(view.snapshot.read(TextOffset(0)..TextOffset(3), 3).unwrap(), "abc");
     }
 }

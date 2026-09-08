@@ -50,7 +50,20 @@ pub(super) fn register(registry: &mut CommandRegistry) {
         );
     }
 }
+impl SearchRuntime {
+    pub(super) fn draw(
+        &mut self,
+        width: f32,
+        height: f32,
+        ops: &mut Vec<bareline_renderer::DrawOp>,
+    ) {
+        self.replace.draw(width, height, ops);
+    }
+}
 impl Shell {
+    pub(super) fn search_modal(&self) -> bool {
+        self.search.replace.is_open()
+    }
     pub(super) fn search_draw(
         &mut self,
         width: f32,
@@ -162,7 +175,15 @@ impl Shell {
         false
     }
     pub(super) fn search_pump(&mut self) -> bool {
-        let replacement_changed = self.search_replace_pump();
+        let mut replacement_changed = self.search_replace_pump();
+        if let Some(index) = self
+            .workspace
+            .as_mut()
+            .and_then(|workspace| workspace.take_paged_search_activation())
+        {
+            self.app.active = index;
+            replacement_changed = true;
+        }
         let Some(workspace) = &mut self.workspace else {
             return false;
         };

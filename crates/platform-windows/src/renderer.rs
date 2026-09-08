@@ -773,6 +773,23 @@ impl HardwareSurface {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn retained_context_keeps_arabic_joining_and_combining_cluster_metrics() {
+        let mut renderer=WindowsRenderer::new(HWND::default(),true).unwrap();
+        let text=format!("{}مرحبا a\u{301} 👩🏽‍💻 தமிழ்{}","x".repeat(4088),"z".repeat(100));
+        let full=renderer.shape_with_font_family(&text,16.0,1.0e6,"Segoe UI").unwrap();
+        let start=2048;
+        let retained=renderer.shape_with_font_family(&text[start..],16.0,1.0e6,"Segoe UI").unwrap();
+        let word=text.find("مرحبا").unwrap();
+        let a=renderer.range_rects(full,word..word+"مرحبا".len()).unwrap();
+        let b=renderer.range_rects(retained,word-start..word-start+"مرحبا".len()).unwrap();
+        assert_eq!(a.len(),b.len());
+        for (a,b) in a.iter().zip(&b){assert!((a.width-b.width).abs()<0.1);}
+        let mark=text.find("a\u{301}").unwrap();
+        assert!(renderer.range_rects(retained,mark-start..mark-start+"a\u{301}".len()).unwrap().iter().all(|r|r.width>=0.0));
+        let leading=renderer.caret(full,word).unwrap();let next=renderer.caret(full,word+"م".len()).unwrap();
+        assert!(leading.x>next.x,"RTL visual-left follows the next logical Arabic cluster");
+    }
     #[cfg(feature = "offscreen")]
     #[test]
     fn offscreen_styles_color_utf8_ranges_without_changing_geometry() {

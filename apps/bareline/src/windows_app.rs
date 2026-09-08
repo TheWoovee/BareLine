@@ -13,6 +13,7 @@ mod migration;
 mod performance;
 mod power;
 mod recovery;
+mod scrolling;
 mod search;
 mod session;
 mod settings;
@@ -99,6 +100,7 @@ struct Shell {
     utilities: utilities::UtilitiesRuntime,
     migration: migration::MigrationRuntime,
     search: search::SearchRuntime,
+    scrolling: scrolling::Runtime,
     encoding: encoding::EncodingRuntime,
     inventory: inventory::InventoryRuntime,
 }
@@ -216,6 +218,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         utilities: Default::default(),
         migration: Default::default(),
         search: Default::default(),
+        scrolling: Default::default(),
         encoding: encoding::EncodingRuntime::default(),
         inventory: inventory::InventoryRuntime::default(),
     };
@@ -495,6 +498,7 @@ impl Shell {
     fn editor_has_input_focus(&self) -> bool {
         self.window.as_ref().is_some_and(Window::has_focus)
             && !self.palette.open
+            && !self.search_modal()
             && !self.settings.controller.open
             && !self.shortcuts.open
             && !self.macros.controller.manager.open
@@ -508,6 +512,55 @@ impl Shell {
                 .workspace
                 .as_ref()
                 .is_some_and(|workspace| !workspace.find.has_focus() && !workspace.search_focus)
+    }
+    fn search_overlay_event(&mut self, event: &WindowEvent) -> bool {
+        if !self.search_modal() || self.palette.open {
+            return false;
+        }
+        match event {
+            WindowEvent::KeyboardInput { event, .. } => {
+                if event.state == ElementState::Pressed {
+                    let key = match &event.logical_key {
+                        Key::Named(NamedKey::Escape) => Some(bareline_ui::controls::Key::Escape),
+                        Key::Named(NamedKey::ArrowUp) => Some(bareline_ui::controls::Key::Up),
+                        Key::Named(NamedKey::ArrowDown) => Some(bareline_ui::controls::Key::Down),
+                        Key::Named(NamedKey::Home) => Some(bareline_ui::controls::Key::Home),
+                        Key::Named(NamedKey::End) => Some(bareline_ui::controls::Key::End),
+                        Key::Named(NamedKey::Enter) => Some(bareline_ui::controls::Key::Enter),
+                        Key::Named(NamedKey::Space) => Some(bareline_ui::controls::Key::Space),
+                        Key::Character(value) if value == " " => {
+                            Some(bareline_ui::controls::Key::Space)
+                        }
+                        _ => None,
+                    };
+                    if let Some(key) = key {
+                        self.search_key(key);
+                    }
+                }
+            }
+            WindowEvent::CursorMoved { position, .. } => {
+                let scale = self.window.as_ref().map_or(1.0, Window::scale_factor) as f32;
+                self.pointer = Point {
+                    x: position.x as f32 / scale,
+                    y: position.y as f32 / scale,
+                };
+            }
+            WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                button: MouseButton::Left,
+                ..
+            } => {
+                self.search_pointer(self.pointer);
+            }
+            WindowEvent::MouseInput { .. }
+            | WindowEvent::MouseWheel { .. }
+            | WindowEvent::Ime(_) => {}
+            _ => return false,
+        }
+        if let Some(window) = &self.window {
+            window.request_redraw();
+        }
+        true
     }
     fn caret_timer(&mut self, now: Instant) -> Option<Instant> {
         let focused = self.editor_has_input_focus();
@@ -1548,13 +1601,16 @@ impl ApplicationHandler for Shell {
             || self.settings_keymap_event(el, &event)
             || self.utilities_event(el, &event)
             || self.encoding_event(el, &event)
-            || self.power_event(el, &event)
+            || (self.power.open && self.power_event(el, &event))
             || self.shortcuts_event(el, &event)
             || self.toolbar_event(el, &event)
             || self.settings_event(el, &event)
             || self.extensions_event(el, &event)
             || self.language_event(el, &event)
             || self.compare_event(el, &event)
+            || self.search_overlay_event(&event)
+            || self.scrolling_event(&event)
+            || (!self.power.open && self.power_event(el, &event))
             || self.panels_event(el, &event)
             || self.views_event(el, &event)
         {
@@ -1679,6 +1735,10 @@ impl ApplicationHandler for Shell {
                         &self.renderer,
                     )
                 {
+                    if matches!(editor, bareline_app::workspace::WorkspaceEditor::Paged(paged) if !paged.paged_frame_state().ready)
+                    {
+                        return;
+                    }
                     if let Err(error) =
                         editor.click(renderer, editor_pointer, self.modifiers.shift_key())
                     {
@@ -2243,7 +2303,18 @@ impl ApplicationHandler for Shell {
                         editor.zoom_by(zoom);
                     } else {
                         editor.scroll_horizontal(horizontal);
-                        editor.scroll(vertical, editor_bounds.height);
+                        match editor {
+                            bareline_app::workspace::WorkspaceEditor::Paged(paged) => {
+                                if let Err(error) =
+                                    paged.scroll_viewport(vertical, editor_bounds.height)
+                                {
+                                    paged.surface.error = Some(error);
+                                }
+                            }
+                            bareline_app::workspace::WorkspaceEditor::Resident(editor) => {
+                                editor.scroll(vertical, editor_bounds.height)
+                            }
+                        }
                     }
                     window.request_redraw();
                 }
@@ -2429,6 +2500,20 @@ impl ApplicationHandler for Shell {
                     self.fail(el, format!("panel layout: {error:?}"));
                     return;
                 }
+                if let Some(workspace) = &self.workspace {
+                    self.scrolling.draw(
+                        workspace,
+                        &self.views,
+                        self.app.active,
+                        editor_bounds,
+                        &mut operations,
+                    );
+                }
+                self.search.draw(
+                    size.width as f32 / scale,
+                    size.height as f32 / scale,
+                    &mut operations,
+                );
                 self.extensions.draw(
                     renderer,
                     size.width as f32 / scale,

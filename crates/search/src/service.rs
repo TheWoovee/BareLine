@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 //! One lazy search worker with a coalescing mailbox: one running and one pending query.
-use super::sources::{OpenDocumentResults, scan_open_documents};
+use super::sources::{OpenDocumentResults, PagedOpenDocument, scan_mixed_open_documents};
 use super::{ReplaceError, ReplaceScope, SearchJob, SearchQuery, SearchResults, scan};
 use bareline_document::{DocumentSnapshot, EditTransaction};
 use std::sync::{
@@ -49,6 +49,7 @@ enum Work {
         reply: SyncSender<Result<super::paged::PagedResults, SearchError>>,
     },
     OpenDocuments {
+        paged: Vec<PagedOpenDocument>,
         snapshots: Vec<DocumentSnapshot>,
         query: SearchQuery,
         reply: SyncSender<Result<OpenDocumentResults, SearchError>>,
@@ -151,15 +152,13 @@ impl Request {
                 )));
             }
             Work::OpenDocuments {
+                paged,
                 snapshots,
                 query,
                 reply,
             } => {
-                let _ = reply.try_send(Ok(scan_open_documents(
-                    snapshots,
-                    &query,
-                    &self.job,
-                    |_| {},
+                let _ = reply.try_send(Ok(scan_mixed_open_documents(
+                    snapshots, paged, &query, &self.job,
                 )));
             }
             Work::Search {
@@ -411,10 +410,20 @@ impl SearchWorker {
         query: SearchQuery,
         notify: Notify,
     ) -> OpenDocumentTicket {
+        self.submit_mixed_open_documents(snapshots, Vec::new(), query, notify)
+    }
+    pub fn submit_mixed_open_documents(
+        &self,
+        snapshots: Vec<DocumentSnapshot>,
+        paged: Vec<PagedOpenDocument>,
+        query: SearchQuery,
+        notify: Notify,
+    ) -> OpenDocumentTicket {
         let job = SearchJob::default();
         let (reply, receiver) = mpsc::sync_channel(1);
         self.enqueue(Request {
             work: Work::OpenDocuments {
+                paged,
                 snapshots,
                 query,
                 reply,

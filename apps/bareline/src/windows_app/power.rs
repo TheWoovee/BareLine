@@ -4,6 +4,8 @@ use super::*;
 use bareline_editor_surface::power::{self, Rectangle, ClipboardHistory, consumer::Arguments};
 use bareline_renderer::{DrawOp, Rect, LayoutError};
 use bareline_ui::{rect, text, text_field::TextField};
+#[path="power_stream.rs"]
+mod stream;
 
 #[derive(Clone, Debug, Default)]
 struct PowerLayout {
@@ -35,6 +37,7 @@ impl PowerLayout {
 fn accessible_bounds(bounds: Rect) -> [f64; 4] { [bounds.x as f64, bounds.y as f64, bounds.width as f64, bounds.height as f64] }
 
 pub(super) struct PowerRuntime {
+    stream: stream::StreamRuntime,
     pub open: bool,
     history_open: bool,
     pub history: ClipboardHistory,
@@ -55,7 +58,7 @@ pub(super) struct PowerRuntime {
 impl Default for PowerRuntime {
     fn default() -> Self {
         let fields = ["text","","0","1","0","10","1"].into_iter().map(|value| { let mut field = TextField::default(); field.insert(value); field }).collect();
-        Self { open:false,history_open:false,history:ClipboardHistory::default(),history_limits:(20,16<<20,4<<20),fields,focus:0,selected:0,accessibility_focus:None,layout:PowerLayout::default(),status:String::new(),rectangle:None,target:None,rectangle_drag:None,drag:None,group:None,metric_job:None }
+        Self { stream:stream::StreamRuntime::default(),open:false,history_open:false,history:ClipboardHistory::default(),history_limits:(20,16<<20,4<<20),fields,focus:0,selected:0,accessibility_focus:None,layout:PowerLayout::default(),status:String::new(),rectangle:None,target:None,rectangle_drag:None,drag:None,group:None,metric_job:None }
     }
 }
 pub(super) fn register(registry: &mut bareline_commands::CommandRegistry) {
@@ -106,6 +109,7 @@ impl PowerRuntime {
 }
 impl Shell {
     pub(super) fn power_dispatch(&mut self, _el:&ActiveEventLoop,id:&str)->bool {
+        if self.power_stream_dispatch(id) {if !self.power.status.is_empty(){if let Some(workspace)=self.workspace.as_mut(){workspace.message=Some(self.power.status.clone());}}if let Some(window)=&self.window{window.request_redraw();}return true;}
         if id=="editor.clipboard.toggleHistory" {
             let enabled=!self.settings.controller.effective().clipboard_history_enabled;
             let scope=self.settings.controller.scope;self.settings.controller.scope=bareline_settings::Scope::User;
@@ -164,6 +168,7 @@ impl Shell {
         match action {Action::Paste=>{if let Ok(text)=self.platform.as_ref().unwrap().clipboard_text(){field.commit(&text);}},Action::Copy|Action::Cut=>{if self.platform.as_ref().unwrap().set_clipboard_text(field.selected()).is_ok()&&action==Action::Cut{field.insert("");}},Action::SelectAll=>field.select_all(),Action::Undo=>field.undo(false),Action::Redo=>field.undo(true),_=>return false} true
     }
     pub(super) fn power_event(&mut self,_el:&ActiveEventLoop,event:&WindowEvent)->bool {
+        if matches!(event,WindowEvent::KeyboardInput{event,..} if event.state==ElementState::Pressed&&event.logical_key==Key::Named(NamedKey::Escape))&&self.power_stream_cancel(){return true;}
         if self.palette.open{return false;}
         if !self.power.open { return self.power_gesture(event); }
         match event {
@@ -200,6 +205,8 @@ impl Shell {
         }if let Some(window)=&self.window{window.request_redraw();}true
     }
     pub(super) fn power_pump(&mut self)->bool {
+        let streaming_changed=self.power_stream_pump();
+        if streaming_changed&&!self.power.status.is_empty(){if let Some(workspace)=self.workspace.as_mut(){workspace.message=Some(self.power.status.clone());}}
         if let Some((snapshot,args,mut next,last,selection))=self.power.metric_job.take() {
             let Some(workspace)=self.workspace.as_mut()else{return true;};
             let same=self.views.active_editor(workspace,self.app.active).is_some_and(|editor|snapshot.same_document(editor.snapshot())&&snapshot.revision==editor.snapshot().revision);
@@ -219,7 +226,7 @@ impl Shell {
             }
             if let Some(window)=&self.window{window.request_redraw();}return true;
         }
-        let Some((mut group,index))=self.power.group.take() else{return false;};
+        let Some((mut group,index))=self.power.group.take() else{return streaming_changed;};
         let Some(workspace)=self.workspace.as_mut() else{self.power.group=Some((group,index));return false;};
         let Some(primary)=workspace.editors.get_mut(index) else{self.power.group=Some((group,index));return false;};
         let Some(secondary)=self.views.secondary.as_mut() else{self.power.group=Some((group,index));return false;};
@@ -320,6 +327,7 @@ impl Shell {
     /// One atomic clipboard read/write per editor action, including optional rectangle metadata.
     pub(super) fn power_clipboard_action(&mut self,action:Action)->bool {
         if !matches!(action,Action::Copy|Action::Cut|Action::Paste)||self.palette.open{return false;}
+        if matches!(action,Action::Copy|Action::Cut)&&self.power_global_clipboard(action==Action::Cut){if !self.power.status.is_empty(){if let Some(workspace)=self.workspace.as_mut(){workspace.message=Some(self.power.status.clone());}}return true;}
         let Some(workspace)=self.workspace.as_mut()else{return false;};let Some(platform)=self.platform.as_ref()else{return false;};
         let secondary=self.views.pane()==1;
         let editor=if secondary {self.views.secondary.as_ref()} else {workspace.editors.get(self.app.active)};

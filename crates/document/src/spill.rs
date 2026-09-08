@@ -102,8 +102,8 @@ impl SpillPlan {
             document.current.clone(),
             document.saved_state,
             document.history_policy,
-            document.undo.clone(),
-            document.redo.clone(),
+            document.undo.to_vec(),
+            document.redo.to_vec(),
             document.bytes.clone(),
             document.history.clone(),
         )
@@ -198,9 +198,10 @@ impl SpillPlan {
             root: &tree::Root,
             source: &MemorySource,
             map: &BTreeMap<u64, StoredSegment>,
-        ) -> tree::Root {
+            budget: &Budget,
+        ) -> Result<tree::Root, Error> {
             let Some(node) = root else {
-                return None;
+                return Ok(None);
             };
             match node.as_ref() {
                 tree::Node::Leaf(piece) => {
@@ -217,19 +218,26 @@ impl SpillPlan {
                                 )
                             })
                         });
-                    Some(Arc::new(tree::Node::OwnedSource {
-                        source: source.clone(),
-                        range: stored.range.start + piece.range.start as u64
-                            ..stored.range.start + piece.range.end as u64,
-                        original,
-                        summary: piece.summary,
-                    }))
+                    Ok(Some(tree::charged_node(
+                        tree::Node::OwnedSource {
+                            _charge: None,
+                            source: source.clone(),
+                            range: stored.range.start + piece.range.start as u64
+                                ..stored.range.start + piece.range.end as u64,
+                            original,
+                            summary: piece.summary,
+                        },
+                        budget,
+                    )?))
                 }
-                tree::Node::Branch { left, right, .. } => tree::concat(
-                    convert(&Some(left.clone()), source, map),
-                    convert(&Some(right.clone()), source, map),
+                tree::Node::Branch { left, right, .. } => tree::charged_concat(
+                    convert(&Some(left.clone()), source, map, budget)?,
+                    convert(&Some(right.clone()), source, map, budget)?,
+                    budget,
                 ),
-                tree::Node::Source { .. } | tree::Node::OwnedSource { .. } => Some(node.clone()),
+                tree::Node::Source { .. } | tree::Node::OwnedSource { .. } => {
+                    Ok(Some(node.clone()))
+                }
             }
         }
         let stamp = Stamp {
@@ -241,7 +249,7 @@ impl SpillPlan {
             redo: self.redo.len(),
         };
         let mut snapshot = self.snapshot.clone();
-        snapshot.root = convert(&snapshot.root, &source, &map);
+        snapshot.root = convert(&snapshot.root, &source, &map, &self.bytes)?;
         let mut document = PagedDocument::new(snapshot, self.bytes.clone(), self.history.clone());
         document.saved_state = self.saved;
         document.history_policy = self.policy;
@@ -250,15 +258,17 @@ impl SpillPlan {
                 .into_iter()
                 .map(|mut entry| {
                     for edit in &mut entry.edits {
-                        edit.inverse = convert(&edit.inverse, &source, &map);
-                        edit.inserted = convert(&edit.inserted, &source, &map);
+                        edit.inverse = convert(&edit.inverse, &source, &map, &self.bytes)?;
+                        edit.inserted = convert(&edit.inserted, &source, &map, &self.bytes)?;
                     }
-                    entry
+                    Ok(entry)
                 })
-                .collect()
+                .collect::<Result<Vec<_>, Error>>()
         };
-        document.undo = history(self.undo);
-        document.redo = history(self.redo);
+        document.undo =
+            crate::history::HistoryStack::from_vec(history(self.undo)?, self.history.clone())?;
+        document.redo =
+            crate::history::HistoryStack::from_vec(history(self.redo)?, self.history.clone())?;
         Ok(PreparedSpill { stamp, document })
     }
 }
