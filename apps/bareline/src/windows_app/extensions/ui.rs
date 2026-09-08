@@ -1000,9 +1000,10 @@ pub(super) fn accessibility_test_cases() -> Vec<(&'static str, Vec<Accessibility
         Catalog, CatalogPolicy, OfflinePackageSource, PackageRequest, VerifiedPackageSource,
     };
     use bareline_renderer::RenderBackend;
-    let capture = |name, runtime: &mut ExtensionsRuntime| {
-        let mut backend = bareline_renderer_recording::RecordingBackend::default();
-        backend.resize(1000, 800, 1.0).unwrap();
+    // TextFields retain backend-owned LayoutIds across frames, as in production.
+    let mut backend = bareline_renderer_recording::RecordingBackend::default();
+    backend.resize(1000, 800, 1.0).unwrap();
+    let mut capture = |name, runtime: &mut ExtensionsRuntime| {
         let mut ops = vec![];
         runtime.draw_manager(&mut backend, 1000.0, 800.0, &mut ops);
         backend.render(&ops).unwrap();

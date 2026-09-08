@@ -27,31 +27,9 @@ pub struct PaletteController {
 }
 impl PaletteController {
     pub fn accessibility_focus(&mut self, id: u64) -> bool {
-        if !self.open {
-            return false;
-        }
-        if id == 11000 {
-            return true;
-        }
-        let Some(index) = id
-            .checked_sub(11001)
-            .and_then(|index| usize::try_from(index).ok())
-        else {
-            return false;
-        };
-        if index >= self.first
-            && index < self.first + self.visible_rows
-            && self
-                .entries
-                .get(index)
-                .is_some_and(|entry| entry.state.enabled)
-        {
-            self.selected = index;
-            self.reveal();
-            true
-        } else {
-            false
-        }
+        // Keyboard/IME focus stays in the query; arrows select results and
+        // result nodes expose Invoke. Do not report selection as a Focus action.
+        self.open && id == 11000
     }
     pub fn take_dynamic_activation(&mut self) -> Option<bareline_commands::DynamicCommandIdentity> {
         self.dynamic_activation.take()
@@ -526,6 +504,28 @@ mod tests {
             palette.click(&backend, point, &registry, &context).unwrap(),
             Some(CommandId("search.find"))
         );
+        palette.release(&mut backend);
+    }
+    #[test]
+    fn result_focus_is_rejected_without_changing_keyboard_selection() {
+        let registry = shell_commands();
+        let context = CommandContext::default();
+        let keymap = Keymap::defaults(&registry);
+        let mut palette = PaletteController::default();
+        palette.show(&registry, &context, &keymap);
+        let mut backend = bareline_renderer_recording::RecordingBackend::default();
+        palette.draw(&mut backend, 1120.0, 630.0, &mut Vec::new()).unwrap();
+        assert!(palette.results().len() > 1);
+        palette.key(Key::Down, &registry, &context);
+        let selected = palette.selected();
+        assert!(!palette.accessibility_focus(11001));
+        assert_eq!(palette.selected(), selected);
+        assert!(palette.accessibility_focus(11000));
+        let nodes = palette.semantics();
+        assert_eq!(nodes.iter().filter(|node| node.focused).map(|node| node.id).collect::<Vec<_>>(), vec![ViewId(11000)]);
+        assert!(nodes.iter().skip(1).all(|node| !node.actions.contains(&SemanticAction::Focus)));
+        palette.dismiss();
+        assert!(!palette.accessibility_focus(11000));
         palette.release(&mut backend);
     }
     #[test]
