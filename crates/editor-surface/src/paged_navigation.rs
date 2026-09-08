@@ -46,7 +46,7 @@ impl Drop for ViewportPrefetch { fn drop(&mut self) { self.cancel(); } }
 /// grapheme whose combining context extends beyond the displayed window.
 pub(crate) fn snap_grapheme(handle: &PagedReadHandle, offset: usize, budget: &Budget, cancellation: &bareline_file_io::cancellation::Cancellation) -> Result<usize, String> {
     use unicode_segmentation::{GraphemeCursor, GraphemeIncomplete};
-    let _context_budget = budget.reserve(8192).map_err(|e| format!("Grapheme context: {e:?}"))?;
+    let _context_budget = budget.claim(8192).map_err(|e| format!("Grapheme context: {e:?}"))?;
     fn chunk(handle: &PagedReadHandle, at: usize, backwards: bool, budget: &Budget, cancellation: &bareline_file_io::cancellation::Cancellation) -> Result<(usize, String), String> {
         let start = if backwards { at.saturating_sub(4096) } else { at };
         let size = if backwards { at - start } else { 4096 };

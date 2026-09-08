@@ -14,7 +14,9 @@ use std::{
 
 mod streaming;
 pub use streaming::{replay_source_transactions, open_retained_owned};
-pub(crate) use streaming::{disk_usage,admit_disk};
+pub(crate) use streaming::admit_disk;
+#[cfg(test)]
+pub(crate) use streaming::disk_usage;
 const VERSION: u32 = 2;
 const MAX_RECORD: usize = 1024 * 1024;
 const MAX_TRANSACTION: usize = 16 * 1024 * 1024;

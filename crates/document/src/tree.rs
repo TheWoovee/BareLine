@@ -574,6 +574,7 @@ pub(crate) fn assert_balanced(root: &Root) {
             right,
             height,
             summary,
+            ..
         } = node
         {
             assert!(left.height().abs_diff(right.height()) <= 1);

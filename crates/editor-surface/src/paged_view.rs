@@ -39,6 +39,7 @@ struct SelectionValidation {
     selection: Selection,
     preserve_viewport: bool,
     result: Receiver<Result<Selection, String>>,
+    completed: Option<Result<Selection, String>>,
 }
 impl Drop for SelectionValidation { fn drop(&mut self) { self.cancellation.cancel(); } }
 #[derive(Clone, Copy)]
@@ -884,7 +885,16 @@ impl PagedEditorSurface {
         let (sender, result) = mpsc::sync_channel(1);
         worker().try_send(Box::new(move || {
             let validation = (|| {
-                if !historical { let _ = handle.original_store()?; }
+                if !historical {
+                    loop {
+                        cancellation.check().map_err(|e|format!("Selection validation: {e:?}"))?;
+                        match handle.original_store() {
+                            Ok(_) => break,
+                            Err(error) if error == "Paged source is busy" => std::thread::yield_now(),
+                            Err(error) => return Err(error),
+                        }
+                    }
+                }
                 for offset in [anchor, caret] {
                     let mut request = handle.snapshot().begin_viewport(TextOffset(offset.0.saturating_sub(4)), 12, &budget).map_err(|e| format!("Selection validation: {e:?}"))?;
                     loop {
@@ -900,7 +910,16 @@ impl PagedEditorSurface {
                         }
                     }
                 }
-                if !historical { let _ = handle.original_store()?; }
+                if !historical {
+                    loop {
+                        cancellation.check().map_err(|e|format!("Selection validation: {e:?}"))?;
+                        match handle.original_store() {
+                            Ok(_) => break,
+                            Err(error) if error == "Paged source is busy" => std::thread::yield_now(),
+                            Err(error) => return Err(error),
+                        }
+                    }
+                }
                 let snapped = if snap_hit { crate::paged_navigation::snap_grapheme(&handle, caret.0, &budget, &cancellation)? } else { caret.0 };
                 Ok(Selection { anchor: if snap_hit && !extend_hit { snapped } else { anchor.0 }, caret: snapped })
             })();
@@ -908,15 +927,26 @@ impl PagedEditorSurface {
         })).map_err(|_| "Paged worker queue is full; retry.".to_owned())?;
         self.selection_token = self.selection_token.wrapping_add(1);
         self.selection_status = SelectionRestoreStatus::Pending;
-        self.selection_validation = Some(SelectionValidation { cancellation: request_cancellation, snapshot, selection: Selection { anchor: anchor.0, caret: caret.0 }, preserve_viewport, result });
+        self.selection_validation = Some(SelectionValidation { cancellation: request_cancellation, snapshot, selection: Selection { anchor: anchor.0, caret: caret.0 }, preserve_viewport, result, completed: None });
         Ok(self.selection_token)
     }
     fn pump_selection_validation(&mut self) -> bool {
-        let Some(pending) = &self.selection_validation else { return false; };
-        let result = match pending.result.try_recv() { Ok(result) => result, Err(TryRecvError::Empty) => return false, Err(TryRecvError::Disconnected) => Err("Selection validation worker stopped".into()) };
-        let pending = self.selection_validation.take().unwrap();
-        let result = if !pending.snapshot.same_document(&self.snapshot) || pending.snapshot.content_state != self.snapshot.content_state { Err("Document changed while validating selection".into()) }
-            else if self.captured.is_none() { result.and_then(|selection| self.read_handle().original_store().map(|_| selection)) } else { result };
+        let Some(pending) = &mut self.selection_validation else { return false; };
+        if pending.completed.is_none() {
+            pending.completed = Some(match pending.result.try_recv() { Ok(result) => result, Err(TryRecvError::Empty) => return false, Err(TryRecvError::Disconnected) => Err("Selection validation worker stopped".into()) });
+        }
+        let same = pending.snapshot.same_document(&self.snapshot) && pending.snapshot.content_state == self.snapshot.content_state;
+        // A peer may own the actor briefly. Retain the received validation and
+        // token instead of converting temporary contention into a lost restore.
+        if same && self.captured.is_none() && pending.completed.as_ref().is_some_and(Result::is_ok) {
+            match self.read_handle().original_store() {
+                Err(error) if error == "Paged source is busy" => { (self.notify)(); return false; }
+                Err(error) => { self.selection_validation.as_mut().unwrap().completed=Some(Err(error)); }
+                Ok(_) => {}
+            }
+        }
+        let mut pending = self.selection_validation.take().unwrap();
+        let result = if same { pending.completed.take().unwrap() } else { Err("Document changed while validating selection".into()) };
         match result {
             Err(error) => { self.deferred_input = None; self.selection_status = SelectionRestoreStatus::Failed(error.clone()); self.error = Some(error); }
             Ok(selection) => {
@@ -1771,8 +1801,22 @@ mod peer_tests {
         view.request_byte_scroll_in_view(1.0, 400.0).unwrap(); drain(&mut view);
         assert_eq!(view.viewport_start().0 + view.surface.snapshot().len(), view.snapshot().len());
         assert!(view.surface.scroll_y > 0.0);
+        let scroll_source = view.snapshot().identity_token();
         view.request_global_scroll(30000, 0.25, 17.0).unwrap();
-        assert_eq!(view.global_logical_scroll(), GlobalScrollPosition::Pending);
+        match view.global_logical_scroll() {
+            GlobalScrollPosition::Pending => assert!(view.requested_scroll.is_some() || view.busy() || view.pending_scroll_mapping.is_some()),
+            GlobalScrollPosition::Ready(line, fraction, x) => {
+                // The validated current window may already contain the requested line.
+                assert_eq!((line, fraction, x), (30000, 0.25, 17.0));
+                assert!(view.paged_frame_state().ready);
+                assert_eq!(view.snapshot().identity_token(), scroll_source);
+                let first = view.viewport_first_global_line().unwrap();
+                assert!(first <= 30000);
+                let local = view.surface.snapshot().line_range((30000 - first) as usize).unwrap();
+                assert_eq!(view.viewport_start().0 + local.start.0, 120000);
+                assert_eq!(view.global_selection(), initial_selection);
+            }
+        }
         drain(&mut view);
         assert_eq!(view.global_logical_scroll(), GlobalScrollPosition::Ready(30000, 0.25, 17.0));
         view.request_viewport(TextOffset(120002)).unwrap();

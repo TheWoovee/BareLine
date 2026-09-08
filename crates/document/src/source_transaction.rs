@@ -7,7 +7,7 @@ use crate::{
     source::{MemorySource, PageTicket, Unavailable},
     tree,
 };
-use std::{ops::Range, sync::Arc};
+use std::ops::Range;
 #[derive(Clone)]
 pub struct OwnedTextRange {
     pub source: MemorySource,
@@ -727,6 +727,7 @@ mod lease_tests {
         paged::RestoredPiece,
         source::{Generation, OwnedPageLoader, SourceKind},
     };
+    use std::sync::Arc;
     struct Repeat(u8);
     impl OwnedPageLoader for Repeat {
         fn read(&self, _: u64, output: &mut [u8]) -> std::io::Result<()> {
@@ -736,7 +737,7 @@ mod lease_tests {
     }
     fn source(length: u64, byte: u8, budget: &Budget) -> MemorySource {
         let generation = Generation(crate::unique());
-        let (source, publisher) = MemorySource::new(
+        let (source, _publisher) = MemorySource::new(
             length,
             generation,
             SourceKind::Paged,
@@ -746,7 +747,7 @@ mod lease_tests {
         )
         .unwrap();
         source.attach_owned_loader(Arc::new(Repeat(byte))).unwrap();
-        publisher.seal(generation).unwrap();
+        // Paged ownership is the immutable loader; Resident sealing requires every page.
         source
     }
     fn document(length: u64, bytes: &Budget, history: &Budget) -> PagedDocument {

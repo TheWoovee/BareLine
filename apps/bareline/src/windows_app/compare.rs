@@ -849,6 +849,10 @@ impl Shell {
             if spawned.is_ok(){self.compare.pending_merge=Some(PendingMerge{source:captured,inputs:captured_inputs,cancel,result});workspace.message=Some("Preparing streamed merge · Cancel stops staging".into());}else{workspace.message=Some("Could not start merge worker; retry".into());if let Some(controller)=&mut self.compare.controller{controller.invalidate();}}
         }
         if let Some(pending)=&self.compare.pending_merge {
+            // Promotion and viewport changes may leave a read or selection check
+            // pending. Keep the prepared token in its channel until admission is
+            // available, then perform the existing captured-source validation.
+            if workspace.editors.iter().any(|editor|pending.source.same_document(&compare_input(editor))&&editor.busy()){return;}
             let received=match pending.result.try_recv(){Ok(result)=>Some(result),Err(std::sync::mpsc::TryRecvError::Empty)=>None,Err(_)=>Some(Err(bareline_diff::ApplyError::Unavailable))};
             if let Some(received)=received {
                 let pending=self.compare.pending_merge.take().unwrap();
@@ -874,6 +878,12 @@ impl Shell {
         }
         if let Some(receipt)=&self.compare.merge_receipt {
             if let Some(result)=receipt.terminal(){
+                // Durable worker completion precedes delivery of its new snapshot
+                // to the UI surface. Let that reply settle before reporting it.
+                if workspace.editors.iter().any(|editor|{
+                    let identity=match editor{bareline_app::workspace::WorkspaceEditor::Resident(editor)=>editor.snapshot().identity_token(),bareline_app::workspace::WorkspaceEditor::Paged(editor)=>editor.snapshot().identity_token()};
+                    identity.0==receipt.captured_identity_token.0&&editor.busy()
+                }){return;}
                 workspace.message=Some(result.map_or_else(|error|format!("Merge was not applied: {error}"),|_|"Difference applied as one undoable edit with recovery recorded; destination remains unsaved".into()));
                 self.compare.merge_receipt=None;
                 if let Some(controller)=&mut self.compare.controller{controller.invalidate();}
@@ -1612,6 +1622,8 @@ mod tests {
         while workspace.editors[0].busy(){assert!(Instant::now()<deadline);workspace.pump();std::thread::yield_now();}
         let identity=workspace.editors[0].snapshot().identity_token();
         while !workspace.promote_resident_for_source_edit(0,identity).unwrap(){assert!(Instant::now()<deadline);workspace.pump();std::thread::yield_now();}
+        // Promotion attaches the actor before its initial viewport read completes.
+        while workspace.editors[0].busy(){assert!(Instant::now()<deadline);workspace.pump();std::thread::yield_now();}
         let text=format!("{}tail\n","αβγ\n".repeat(170000));
         assert!(text.len()>1024*1024);
         let source=Document::from_utf8(&text,Budget::new(8*1024*1024),Budget::new(0)).unwrap();
@@ -1621,6 +1633,8 @@ mod tests {
         let snapshot=editor.snapshot().clone();let receipt=editor.apply_prepared_source_tracked(&snapshot,prepared).unwrap();
         while receipt.terminal().is_none(){assert!(Instant::now()<deadline);workspace.pump();std::thread::yield_now();}
         assert!(receipt.terminal().unwrap().is_ok());
+        // Receipt means durable actor publication; pump its UI snapshot reply too.
+        while workspace.editors[0].busy(){assert!(Instant::now()<deadline);workspace.pump();std::thread::yield_now();}
         let bareline_app::workspace::WorkspaceEditor::Paged(editor)=&workspace.editors[0]else{unreachable!()};
         assert_eq!(editor.snapshot().len(),text.len());
         let handle=editor.read_handle();
