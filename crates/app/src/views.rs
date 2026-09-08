@@ -817,7 +817,17 @@ mod tests {
         .unwrap();
         assert_eq!(map.spacers_in_window(0, 4, 4), vec![(1, 2)]);
         assert_eq!(map.spacers_in_window(0, 6, 4), Vec::<(u64, u64)>::new());
-        let adjacent = AlignmentMap::new(vec![AlignmentBlock { left: 0..0, right: 0..2 }, AlignmentBlock { left: 0..0, right: 2..3 }]).unwrap();
+        let adjacent = AlignmentMap::new(vec![
+            AlignmentBlock {
+                left: 0..0,
+                right: 0..2,
+            },
+            AlignmentBlock {
+                left: 0..0,
+                right: 2..3,
+            },
+        ])
+        .unwrap();
         assert_eq!(adjacent.spacers(0), vec![(0, 3)]);
         assert_eq!(map.document_line(0, 5), None);
         assert_eq!(map.document_line(0, 6), None);
@@ -896,18 +906,33 @@ impl AlignmentMap {
         self.spacers_in_window(side, 0, u64::MAX)
     }
     /// Project global alignment rows into a paged viewport's logical line domain.
-    pub fn spacers_in_window(&self, side: usize, first_line: u64, line_count: u64) -> Vec<(u64, u64)> {
+    pub fn spacers_in_window(
+        &self,
+        side: usize,
+        first_line: u64,
+        line_count: u64,
+    ) -> Vec<(u64, u64)> {
         let end = first_line.saturating_add(line_count);
         let mut rows: Vec<(u64, u64)> = Vec::new();
         for entry in &self.blocks {
-            let range = if side == 0 { &entry.block.left } else { &entry.block.right };
+            let range = if side == 0 {
+                &entry.block.left
+            } else {
+                &entry.block.right
+            };
             let count = entry.height - (range.end - range.start);
-            if count == 0 || range.end < first_line || range.end > end { continue; }
+            if count == 0 || range.end < first_line || range.end > end {
+                continue;
+            }
             let line = range.end - first_line;
-            if let Some((previous, total)) = rows.last_mut().filter(|(previous, _)| *previous == line) {
+            if let Some((previous, total)) =
+                rows.last_mut().filter(|(previous, _)| *previous == line)
+            {
                 let _ = previous;
                 *total = total.saturating_add(count);
-            } else { rows.push((line, count)); }
+            } else {
+                rows.push((line, count));
+            }
         }
         rows
     }

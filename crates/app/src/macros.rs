@@ -715,8 +715,24 @@ impl MacrosController {
             output.discarded_bytes
         );
         let changed = fingerprint != self.output_fingerprint || self.process_status != status;
+        if !changed {
+            return false;
+        }
+        let value = (fingerprint != self.output_fingerprint).then(|| output.text());
+        drop(output);
+        self.update_output_snapshot(value.as_deref(), fingerprint, &status)
+    }
+    /// Apply a captured bounded process-output snapshot without retaining its lock.
+    /// A status-only update omits text and preserves the existing visible rows.
+    pub fn update_output_snapshot(
+        &mut self,
+        text: Option<&str>,
+        fingerprint: (usize, u64),
+        status: &str,
+    ) -> bool {
+        let changed = fingerprint != self.output_fingerprint || self.process_status != status;
         if fingerprint != self.output_fingerprint {
-            let value = output.text();
+            let Some(value) = text else { return false };
             self.rows.0 = value
                 .split('\n')
                 .take(20_000)
@@ -724,7 +740,7 @@ impl MacrosController {
                 .collect();
             self.output_fingerprint = fingerprint;
         }
-        self.process_status = status;
+        self.process_status = status.to_owned();
         changed
     }
     pub fn output_event(&mut self, event: UiEvent) -> Option<process::OutputLink> {

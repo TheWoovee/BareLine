@@ -10,6 +10,30 @@ use std::{
 
 type Registration = Result<Option<WindowsWatchService>, String>;
 type Checked = (PathBuf, FileIdentity, Result<bool, String>);
+pub(super) fn draw_banner(editor: &bareline_app::workspace::WorkspaceEditor, bounds: bareline_renderer::Rect, ops: &mut Vec<bareline_renderer::DrawOp>) -> Vec<(bareline_renderer::Rect, bareline_commands::CommandId)> {
+    use bareline_renderer::DrawOp;
+    use bareline_ui::{rect, text, ACCENT, CHROME, TEXT};
+    let bareline_app::workspace::WorkspaceEditor::Paged(editor) = editor else { return Vec::new(); };
+    let Some((paused, changed)) = editor.follow_status() else { return Vec::new(); };
+    let banner = rect(bounds.x + 8.0, bounds.y + 4.0, bounds.width - 16.0, 34.0);
+    ops.push(DrawOp::FillRounded(banner, CHROME, 4.0));
+    ops.push(DrawOp::StrokeRounded(banner, ACCENT, 4.0, 1.0));
+    let actions = if changed { vec![("Reopen and follow", "file.monitor.reopen"), ("Unlock captured content", "file.monitor.unlock")] }
+        else { vec![(if paused { "Resume ↓" } else { "Pause" }, if paused { "file.monitor.resume" } else { "file.monitor.pause" }), ("Unlock to edit", "file.monitor.unlock")] };
+    let action_width = if changed { 175.0 } else { 135.0 };
+    let actions_x = (banner.x + banner.width - action_width * 2.0 - 8.0).max(banner.x + 8.0);
+    ops.push(DrawOp::PushClip(rect(banner.x + 12.0, banner.y, (actions_x - banner.x - 20.0).max(0.0), banner.height)));
+    let name = editor.path.file_name().unwrap_or_default().to_string_lossy();
+    let label = if changed { format!("{name} · Source changed") } else { format!("Following {name} · {}", if paused { "Paused (scrolled up)" } else { "Following new content" }) };
+    text(ops, banner.x + 12.0, banner.y + 8.0, label, 14.0, TEXT); ops.push(DrawOp::PopClip);
+    let mut hits = Vec::new();
+    for (index, (label, command)) in actions.into_iter().enumerate() {
+        let bounds = rect(actions_x + index as f32 * action_width, banner.y, action_width, banner.height);
+        ops.push(DrawOp::PushClip(bounds)); text(ops, bounds.x + 6.0, bounds.y + 8.0, label, 14.0, ACCENT); ops.push(DrawOp::PopClip);
+        hits.push((bounds, bareline_commands::CommandId(command)));
+    }
+    hits
+}
 #[derive(Default)]
 pub(super) struct WatchRuntime {
     service: Option<WindowsWatchService>,
@@ -233,7 +257,6 @@ impl Shell {
         if let Some(w) = &mut self.workspace {
             for editor in &mut w.editors {
                 if let bareline_app::workspace::WorkspaceEditor::Paged(editor) = editor {
-                    if editor.follow_status().is_some() && editor.surface.scroll_y > 0.0 { editor.set_follow_paused(true); }
                     if let Err(error) = editor.follow_tick(std::sync::Arc::new(WindowsFileSystem), self.watch.requested) { editor.error = Some(error); }
                 }
             }

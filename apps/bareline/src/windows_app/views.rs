@@ -11,24 +11,87 @@ use bareline_renderer::{DrawOp, LayoutError, Rect, TextBackend};
 use bareline_ui::{ACCENT, BORDER, CHROME, MUTED, TAB_HEIGHT, TEXT, rect, text};
 use std::collections::VecDeque;
 
+/// Populate the production tab controller and retained hit geometry for the host
+/// accessibility golden. No native window, renderer, dialog or synthetic IDs.
+#[cfg(test)]
+pub(super) fn accessibility_test_setup(shell: &mut Shell, scenario: &str) {
+    shell.views = ViewsRuntime::default();
+    shell.workspace = None;
+    shell.app.active = 0;
+    shell.app.tabs.clear();
+    if scenario == "closed" { return; }
+    assert!(matches!(scenario, "open" | "populated" | "focus_close" | "focus_overflow" | "mru" | "vertical"), "unknown views accessibility fixture");
+    let mut workspace = Workspace::new(shell.notify.clone(), std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem)).unwrap();
+    let count = if scenario == "open" { 2 } else { 14 };
+    for _ in 0..count { workspace.new_document().unwrap(); }
+    shell.views.sync_documents(&workspace);
+    let first = shell.views.controller.as_ref().unwrap().tabs()[0].id;
+    {
+        let controller = shell.views.controller.as_mut().unwrap();
+        controller.pin(first, true).unwrap();
+        controller.color(first, Some(0x36c9c6)).unwrap();
+        controller.activate(first).unwrap();
+    }
+    shell.views.install_views(&mut workspace);
+    shell.app.tabs = workspace.titles();
+    shell.workspace = Some(workspace);
+    if scenario == "vertical" { assert!(shell.tabs_dispatch("view.tabs.vertical")); }
+    if scenario == "mru" { assert!(shell.tabs_dispatch("view.tabs.mru")); }
+    let workspace = shell.workspace.as_ref().unwrap();
+    let vertical = shell.views.controller.as_ref().unwrap().vertical_tabs;
+    let mut operations = Vec::new();
+    shell.views.draw_tab_strip(workspace, 0, if vertical { rect(0.0, 0.0, 176.0, 776.0) } else { rect(0.0, 0.0, 1000.0, TAB_HEIGHT) }, vertical, &mut operations);
+    shell.views.draw_mru(workspace, 1000.0, 800.0, &mut operations);
+    assert!(!operations.is_empty(), "fixture must retain production layout");
+    if scenario == "focus_close" {
+        let hit = shell.views.tab_hits.iter().find(|hit| hit.id == first).unwrap();
+        shell.views.accessibility_focus = access_tab_id(hit.id).map(|id| id + 1);
+    } else if scenario == "focus_overflow" {
+        let (pane, forward, _) = shell.views.tab_nav.first().unwrap();
+        shell.views.accessibility_focus = Some(ACCESS_NAV_BASE + *pane as u64 * 2 + u64::from(*forward));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn session_capture_preserves_unavailable_tab_when_temporary_id_collides() {
-        let mut workspace = Workspace::new(std::sync::Arc::new(|| {}), std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem)).unwrap();
+        let mut workspace = Workspace::new(
+            std::sync::Arc::new(|| {}),
+            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+        )
+        .unwrap();
         workspace.new_document().unwrap();
         let mut views = ViewsRuntime::default();
         views.sync_documents(&workspace);
         let mut manifest = bareline_file_io::session::SessionManifest {
             documents: vec![
-                bareline_file_io::session::SessionDocument { id: 1, path: None, title: "Live".into() },
-                bareline_file_io::session::SessionDocument { id: 2, path: None, title: "Awaiting recovery".into() },
+                bareline_file_io::session::SessionDocument {
+                    id: 1,
+                    path: None,
+                    title: "Live".into(),
+                },
+                bareline_file_io::session::SessionDocument {
+                    id: 2,
+                    path: None,
+                    title: "Awaiting recovery".into(),
+                },
             ],
             tabs: vec![
-                SessionTab { id: 7, document_id: 1, pinned: false, view: ViewState::default() },
-                SessionTab { id: 1, document_id: 2, pinned: false, view: ViewState::default() },
+                SessionTab {
+                    id: 7,
+                    document_id: 1,
+                    pinned: false,
+                    view: ViewState::default(),
+                },
+                SessionTab {
+                    id: 1,
+                    document_id: 2,
+                    pinned: false,
+                    view: ViewState::default(),
+                },
             ],
             active_tab: Some(7),
             ..Default::default()
@@ -38,6 +101,95 @@ mod tests {
         assert_eq!(manifest.tabs.len(), 2);
         assert!(manifest.tabs.iter().any(|tab| tab.document_id == 2));
         assert_ne!(manifest.tabs[0].id, manifest.tabs[1].id);
+    }
+
+    #[test]
+    fn paged_split_synchronizes_global_lines_after_pending_lookup() {
+        use bareline_editor_surface::paged_view::GlobalScrollPosition;
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let root = std::env::temp_dir().join(format!(
+            "bareline-native-global-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("lines.txt");
+        std::fs::write(
+            &path,
+            (0..20_000)
+                .map(|line| format!("line {line:05} content\n"))
+                .collect::<String>(),
+        )
+        .unwrap();
+        let mut workspace = Workspace::new(
+            std::sync::Arc::new(|| {}),
+            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+        )
+        .unwrap();
+        workspace.resident_max_bytes = 1;
+        workspace.open(path.clone());
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            assert!(
+                Instant::now() < deadline,
+                "paged open timed out: {:?}",
+                workspace.message
+            );
+            workspace.pump();
+            if workspace.editors.first().is_some_and(|editor| matches!(editor, WorkspaceEditor::Paged(paged) if paged.viewport_ready() && paged.viewport_first_global_line().is_some())) { break; }
+            std::thread::yield_now();
+        }
+        let mut views = ViewsRuntime::default();
+        views.split(&mut workspace, 0, Orientation::Vertical);
+        loop {
+            assert!(Instant::now() < deadline, "paged clone timed out");
+            workspace.pump();
+            views.pump(&mut workspace);
+            if views.pending_restore.iter().all(Option::is_none) && views.pending_view_scroll.iter().all(Option::is_none)
+                && views.secondary.as_ref().is_some_and(|editor| matches!(editor, WorkspaceEditor::Paged(paged) if paged.viewport_ready() && paged.viewport_first_global_line().is_some())) { break; }
+            std::thread::yield_now();
+        }
+        views.controller.as_mut().unwrap().sync_vertical = true;
+        views.controller.as_mut().unwrap().sync_horizontal = true;
+        views.secondary.as_mut().unwrap().zoom_by(4.0);
+        views.set_compare_alignment(Some(
+            bareline_app::views::AlignmentMap::new(vec![bareline_app::views::AlignmentBlock {
+                left: 7000..7000,
+                right: 7000..7003,
+            }])
+            .unwrap(),
+        ));
+        let WorkspaceEditor::Paged(source) = &mut workspace.editors[0] else {
+            panic!("expected paged source")
+        };
+        source.request_global_scroll(8000, 0.25, 37.0).unwrap();
+        views.sync_scroll(&mut workspace, 0);
+        assert!(
+            views.pending_sync.is_some(),
+            "an in-flight source navigation must not publish its old line"
+        );
+        loop {
+            assert!(
+                Instant::now() < deadline,
+                "global synchronized navigation timed out"
+            );
+            workspace.pump();
+            views.pump(&mut workspace);
+            let Some(WorkspaceEditor::Paged(target)) = &mut views.secondary else {
+                panic!("expected paged clone")
+            };
+            if matches!(target.global_logical_scroll(), GlobalScrollPosition::Ready(8003, fraction, x) if (fraction - 0.25).abs() < 0.00001 && x == 37.0)
+            {
+                break;
+            }
+            std::thread::yield_now();
+        }
+        assert!(views.pending_sync.is_none());
+        assert!(views.queued.is_empty());
+        drop(views);
+        drop(workspace);
+        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_dir(root);
     }
 
     #[test]
@@ -258,6 +410,7 @@ pub(super) struct ViewsRuntime {
     compare: bool,
     alignment: Option<bareline_app::views::AlignmentMap>,
     applied_spacers: [Option<Vec<(u64, u64)>>; 2],
+    pending_sync: Option<(u32, u64)>,
 }
 impl ViewsRuntime {
     fn draw_tab_strip(
@@ -542,11 +695,19 @@ impl ViewsRuntime {
                     .map(|index| &workspace.editors[index])
             };
             if let Some(editor) = editor {
-                let state = self.pending_restore[pane]
+                let mut state = self.pending_restore[pane]
                     .as_ref()
                     .or(self.pending_view_scroll[pane].as_ref())
                     .cloned()
                     .unwrap_or_else(|| workspace_view_state(editor));
+                if self.pending_restore[pane].is_none()
+                    && self.pending_view_scroll[pane].is_none()
+                    && matches!(editor, WorkspaceEditor::Paged(paged) if paged.viewport_first_global_line().is_none())
+                {
+                    if let Some(previous) = controller.tab(id) {
+                        state.scroll_line = previous.view.scroll_line;
+                    }
+                }
                 let _ = controller.set_view_state(id, state);
             }
         }
@@ -799,6 +960,21 @@ impl ViewsRuntime {
             self.secondary.as_ref()?.snapshot().clone(),
         ])
     }
+    pub(super) fn compare_layout_range(
+        &self,
+        workspace: &Workspace,
+        side: usize,
+        layout: bareline_renderer::LayoutId,
+    ) -> Option<std::ops::Range<bareline_document::TextOffset>> {
+        let editor = if side == 0 {
+            &**workspace.editors.get(self.primary_index(workspace)?)?
+        } else if side == 1 {
+            &**self.secondary.as_ref()?
+        } else {
+            return None;
+        };
+        editor.layout_range(layout)
+    }
     pub(super) fn compare_viewport_starts(&self, workspace: &Workspace) -> [usize; 2] {
         let start = |editor: &WorkspaceEditor| match editor {
             WorkspaceEditor::Paged(editor) => editor.viewport_start().0,
@@ -965,6 +1141,26 @@ impl ViewsRuntime {
         }
         manifest.tabs.sort_by_key(|tab| !tab.pinned);
     }
+    pub(super) fn set_secondary_focused(&mut self, focused: bool) {
+        if let Some(editor) = &mut self.secondary {
+            editor.set_focused(focused);
+        }
+    }
+    pub(super) fn reset_secondary_caret_blink(&mut self) {
+        if let Some(editor) = &mut self.secondary {
+            editor.reset_caret_blink();
+        }
+    }
+    pub(super) fn secondary_blink_deadline(&self) -> Option<Instant> {
+        self.secondary
+            .as_ref()
+            .and_then(|editor| editor.blink_deadline())
+    }
+    pub(super) fn tick_secondary_caret_blink(&mut self, now: Instant) -> bool {
+        self.secondary
+            .as_mut()
+            .is_some_and(|editor| editor.tick_caret_blink(now))
+    }
     pub(super) fn pending_edits(&self) -> bool {
         !self.queued.is_empty() || self.secondary.as_ref().is_some_and(WorkspaceEditor::busy)
     }
@@ -1057,9 +1253,32 @@ impl ViewsRuntime {
             if let Some(editor) = editor {
                 if !editor.busy() {
                     if let Some(state) = self.pending_view_scroll[pane].take() {
-                        editor.set_logical_scroll(state.scroll_line, 0.0, state.scroll_x as f64);
-                        editor.scroll_y = f64::from_bits(state.scroll_y_bits);
-                        changed = true;
+                        match &mut *editor {
+                            WorkspaceEditor::Paged(paged) => {
+                                if paged.viewport_first_global_line().is_none() {
+                                    let _ = paged.global_logical_scroll();
+                                    self.pending_view_scroll[pane] = Some(state);
+                                } else {
+                                    if let Err(error) = paged.request_global_scroll(
+                                        state.scroll_line,
+                                        0.0,
+                                        state.scroll_x as f64,
+                                    ) {
+                                        paged.error = Some(error);
+                                    }
+                                    changed = true;
+                                }
+                            }
+                            editor => {
+                                editor.set_logical_scroll(
+                                    state.scroll_line,
+                                    0.0,
+                                    state.scroll_x as f64,
+                                );
+                                editor.scroll_y = f64::from_bits(state.scroll_y_bits);
+                                changed = true;
+                            }
+                        }
                     }
                     if let Some(state) = self.pending_restore[pane].take() {
                         if editor.paged() {
@@ -1103,6 +1322,7 @@ impl ViewsRuntime {
             }
             changed = true;
         }
+        changed |= self.flush_sync_scroll(workspace);
         changed
     }
     fn input(&mut self, workspace: &mut Workspace, pane: u32, input: Input) {
@@ -1169,7 +1389,17 @@ impl ViewsRuntime {
         self.install_views(workspace);
     }
     fn collapse(&mut self, workspace: &mut Workspace, keep_secondary: bool) {
-        for editor in &mut workspace.editors { let _ = editor.set_view_spacers(&[]); }
+        for editor in &mut workspace.editors {
+            match editor {
+                WorkspaceEditor::Paged(editor) => {
+                    let _ = editor.set_global_spacers(&[]);
+                }
+                editor => {
+                    let _ = editor.set_view_spacers(&[]);
+                }
+            }
+        }
+        self.pending_sync = None;
         self.applied_spacers = [None, None];
         self.save_current(workspace);
         if let Some(controller) = &mut self.controller {
@@ -1291,69 +1521,87 @@ impl ViewsRuntime {
         }
     }
     fn sync_scroll(&mut self, workspace: &mut Workspace, pane: u32) {
-        let position = if pane == 1 {
-            self.secondary
-                .as_ref()
-                .map(|editor| editor.logical_scroll())
+        self.pending_sync = self.loaded_tabs[pane as usize].map(|tab| (pane, tab));
+        self.flush_sync_scroll(workspace);
+    }
+    fn flush_sync_scroll(&mut self, workspace: &mut Workspace) -> bool {
+        let Some((pane, tab)) = self.pending_sync.take() else {
+            return false;
+        };
+        if self.loaded_tabs[pane as usize] != Some(tab) {
+            return false;
+        }
+        let Some(controller) = &self.controller else {
+            return false;
+        };
+        let vertical = controller.sync_vertical;
+        let horizontal = controller.sync_horizontal;
+        if !self.open() || (!vertical && !horizontal) {
+            return false;
+        }
+        let primary = self.primary_index(workspace);
+        let source = if pane == 1 {
+            self.secondary.as_mut()
         } else {
-            self.primary_index(workspace)
-                .map(|index| workspace.editors[index].logical_scroll())
+            primary.and_then(|index| workspace.editors.get_mut(index))
         };
-        let Some((line, fraction, x)) = position else {
-            return;
+        let Some(source) = source else {
+            return false;
         };
-        let Some(controller) = &mut self.controller else {
-            return;
-        };
-        let sync_vertical = controller.sync_vertical;
-        let sync_horizontal = controller.sync_horizontal;
-        if let Ok(Some(update)) = controller.begin_scroll(
-            pane,
-            ScrollPosition { line, fraction, x },
-            self.alignment.as_ref(),
-        ) {
-            if update.pane == 1 {
-                if let Some(peer) = &mut self.secondary {
-                    let old = peer.logical_scroll();
-                    peer.set_logical_scroll(
-                        if sync_vertical {
-                            update.position.line
-                        } else {
-                            old.0
-                        },
-                        if sync_vertical {
-                            update.position.fraction
-                        } else {
-                            old.1
-                        },
-                        if sync_horizontal {
-                            update.position.x
-                        } else {
-                            old.2
-                        },
-                    );
+        let position = match source {
+            WorkspaceEditor::Paged(editor) if vertical => match editor.global_logical_scroll() {
+                bareline_editor_surface::paged_view::GlobalScrollPosition::Ready(
+                    line,
+                    fraction,
+                    x,
+                ) => (line, fraction, x),
+                bareline_editor_surface::paged_view::GlobalScrollPosition::Pending => {
+                    self.pending_sync = Some((pane, tab));
+                    return false;
                 }
-            } else if let Some(index) = self.primary_index(workspace) {
-                let old = workspace.editors[index].logical_scroll();
-                workspace.editors[index].set_logical_scroll(
-                    if sync_vertical {
-                        update.position.line
-                    } else {
-                        old.0
-                    },
-                    if sync_vertical {
-                        update.position.fraction
-                    } else {
-                        old.1
-                    },
-                    if sync_horizontal {
-                        update.position.x
-                    } else {
-                        old.2
-                    },
-                );
+            },
+            editor => editor.logical_scroll(),
+        };
+        let update = self.controller.as_mut().unwrap().begin_scroll(
+            pane,
+            ScrollPosition {
+                line: position.0,
+                fraction: position.1,
+                x: position.2,
+            },
+            self.alignment.as_ref(),
+        );
+        let Ok(Some(update)) = update else {
+            return false;
+        };
+        let target = if update.pane == 1 {
+            self.secondary.as_mut()
+        } else {
+            primary.and_then(|index| workspace.editors.get_mut(index))
+        };
+        if let Some(target) = target {
+            let old = target.logical_scroll();
+            let x = if horizontal { update.position.x } else { old.2 };
+            if vertical {
+                match target {
+                    WorkspaceEditor::Paged(editor) => {
+                        if let Err(error) = editor.request_global_scroll(
+                            update.position.line,
+                            update.position.fraction,
+                            x,
+                        ) {
+                            editor.error = Some(error);
+                        }
+                    }
+                    editor => {
+                        editor.set_logical_scroll(update.position.line, update.position.fraction, x)
+                    }
+                }
+            } else {
+                target.scroll_horizontal(x - old.2);
             }
         }
+        true
     }
     pub(super) fn draw(
         &mut self,
@@ -1486,16 +1734,19 @@ impl ViewsRuntime {
             } else {
                 self.secondary.as_mut().unwrap()
             };
-            let spacers = if editor.paged() {
-                Vec::new()
-            } else {
-                self.alignment
-                    .as_ref()
-                    .map(|alignment| alignment.spacers(side))
-                    .unwrap_or_default()
-            };
+            let spacers = self
+                .alignment
+                .as_ref()
+                .map(|alignment| alignment.spacers(side))
+                .unwrap_or_default();
             if self.applied_spacers[side].as_ref() != Some(&spacers) {
-                if let Err(error) = editor.set_view_spacers(&spacers) { editor.error = Some(error); }
+                let result = match &mut *editor {
+                    WorkspaceEditor::Paged(editor) => editor.set_global_spacers(&spacers),
+                    editor => editor.set_view_spacers(&spacers),
+                };
+                if let Err(error) = result {
+                    editor.error = Some(error);
+                }
                 self.applied_spacers[side] = Some(spacers);
             }
             // EditorSurface already reserves TAB_HEIGHT for this pane's header.
@@ -1663,9 +1914,22 @@ fn translate(op: DrawOp, x: f32, y: f32) -> DrawOp {
     }
 }
 
+fn scroll_workspace_view(editor: &mut WorkspaceEditor, delta: f64, height: f32) {
+    match editor {
+        WorkspaceEditor::Paged(editor) => {
+            if let Err(error) = editor.scroll_viewport(delta, height) {
+                editor.error = Some(error);
+            }
+        }
+        editor => editor.scroll(delta, height),
+    }
+}
 fn workspace_view_state(editor: &WorkspaceEditor) -> ViewState {
     let mut state = view_state(editor);
     if let WorkspaceEditor::Paged(paged) = editor {
+        state.scroll_line = paged
+            .viewport_first_global_line()
+            .map_or(0, |first| first.saturating_add(state.scroll_line));
         state.anchor = state.anchor.saturating_add(paged.viewport_start().0 as u64);
         state.caret = state.caret.saturating_add(paged.viewport_start().0 as u64);
     }
@@ -2564,8 +2828,28 @@ impl Shell {
                     .iter()
                     .position(|r| r.is_some_and(|r| r.contains(pointer)))
                 {
+                    if self.modifiers.control_key() {
+                        let steps = match delta {
+                            MouseScrollDelta::LineDelta(_, y) => *y,
+                            MouseScrollDelta::PixelDelta(point) => {
+                                (point.y / window.scale_factor() / 48.0) as f32
+                            }
+                        };
+                        let index = self.views.primary_index(workspace);
+                        let editor = if pane == 1 {
+                            self.views.secondary.as_mut()
+                        } else {
+                            index.and_then(|index| workspace.editors.get_mut(index))
+                        };
+                        if let Some(editor) = editor {
+                            editor.zoom_by(steps);
+                        }
+                        window.request_redraw();
+                        return true;
+                    }
                     let horizontal = self.modifiers.shift_key()
-                        || matches!(delta,MouseScrollDelta::LineDelta(x,y) if x.abs()>y.abs());
+                        || matches!(delta,MouseScrollDelta::LineDelta(x,y) if x.abs()>y.abs())
+                        || matches!(delta,MouseScrollDelta::PixelDelta(point) if point.x.abs()>point.y.abs());
                     let amount = match delta {
                         MouseScrollDelta::LineDelta(x, _)
                             if horizontal && !self.modifiers.shift_key() =>
@@ -2584,19 +2868,19 @@ impl Shell {
                     if pane == 1 {
                         if let Some(peer) = &mut self.views.secondary {
                             if horizontal {
-                                peer.horizontal_scroll(amount);
+                                peer.scroll_horizontal(amount);
                             } else {
                                 if amount < 0.0 {
                                     if let WorkspaceEditor::Paged(editor) = peer {
                                         editor.set_follow_paused(true);
                                     }
                                 }
-                                peer.scroll(amount, height);
+                                scroll_workspace_view(peer, amount, height);
                             }
                         }
                     } else if let Some(index) = self.views.primary_index(workspace) {
                         if horizontal {
-                            workspace.editors[index].horizontal_scroll(amount);
+                            workspace.editors[index].scroll_horizontal(amount);
                         } else {
                             if amount < 0.0 {
                                 if let WorkspaceEditor::Paged(editor) =
@@ -2605,7 +2889,7 @@ impl Shell {
                                     editor.set_follow_paused(true);
                                 }
                             }
-                            workspace.editors[index].scroll(amount, height);
+                            scroll_workspace_view(&mut workspace.editors[index], amount, height);
                         }
                     }
                     self.views.sync_scroll(workspace, pane as u32);
@@ -2660,16 +2944,15 @@ impl Shell {
                                     paged.set_follow_paused(true);
                                 }
                             }
-                            if !editor.page_by(forward) {
-                                editor.scroll(
-                                    if forward {
-                                        height as f64 * 0.8
-                                    } else {
-                                        -height as f64 * 0.8
-                                    },
-                                    height,
-                                );
-                            }
+                            scroll_workspace_view(
+                                editor,
+                                if forward {
+                                    height as f64 * 0.8
+                                } else {
+                                    -height as f64 * 0.8
+                                },
+                                height,
+                            );
                         }
                     }
                     self.views.sync_scroll(workspace, pane);

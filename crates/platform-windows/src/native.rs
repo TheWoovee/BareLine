@@ -23,7 +23,50 @@ pub struct WindowsPlatform {
     submenu_labels: Vec<(HMENU, u32, String)>,
     localized_commands: std::cell::RefCell<std::collections::BTreeMap<&'static str, String>>,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AboutAction {
+    License,
+    ThirdPartyNotices,
+    CopyDiagnostics,
+}
 impl WindowsPlatform {
+    /// Displays metadata supplied by the application, never document contents.
+    /// Buttons return an action so file opening stays in the normal workspace pipeline.
+    pub fn about_details(&self, details: &str) -> windows::core::Result<Option<AboutAction>> {
+        use windows::Win32::UI::Controls::*;
+        if details.len() > 16 * 1024 || details.contains('\0') {
+            return Err(windows::core::Error::new(E_INVALIDARG, "Invalid About metadata"));
+        }
+        let content = wide(details);
+        let buttons = [
+            TASKDIALOG_BUTTON { nButtonID: 1001, pszButtonText: w!("License") },
+            TASKDIALOG_BUTTON { nButtonID: 1002, pszButtonText: w!("Third-party notices") },
+            TASKDIALOG_BUTTON { nButtonID: 1003, pszButtonText: w!("Copy diagnostics") },
+        ];
+        let config = TASKDIALOGCONFIG {
+            cbSize: std::mem::size_of::<TASKDIALOGCONFIG>() as u32,
+            hwndParent: self.hwnd,
+            dwFlags: TDF_ALLOW_DIALOG_CANCELLATION | TDF_SIZE_TO_CONTENT,
+            dwCommonButtons: TDCBF_CLOSE_BUTTON,
+            pszWindowTitle: w!("About Bareline"),
+            pszMainInstruction: w!("Bareline"),
+            pszContent: PCWSTR(content.as_ptr()),
+            cButtons: buttons.len() as u32,
+            pButtons: buttons.as_ptr(),
+            nDefaultButton: IDCLOSE.0,
+            pszFooter: w!("Plain text. Full power. No weight.\nCore: MPL-2.0 · Extension SDK: MIT OR Apache-2.0"),
+            ..Default::default()
+        };
+        let mut selected = 0;
+        // SAFETY: all strings and button records remain live for the synchronous modal call.
+        unsafe { TaskDialogIndirect(&config, Some(&mut selected), None, None)?; }
+        Ok(match selected {
+            1001 => Some(AboutAction::License),
+            1002 => Some(AboutAction::ThirdPartyNotices),
+            1003 => Some(AboutAction::CopyDiagnostics),
+            _ => None,
+        })
+    }
     fn append_model(
         &mut self,
         menu: HMENU,
@@ -159,6 +202,14 @@ impl WindowsPlatform {
                 w!("Bareline"),
                 MB_YESNO | MB_DEFBUTTON2 | MB_ICONWARNING,
             ) == IDYES
+        }
+    }
+    /// Reinterpretation reloads original bytes and therefore discards unsaved edits.
+    pub fn confirm_encoding_reinterpret(&self, name: &str, target: &str) -> bool {
+        let display = |value: &str| value.chars().filter(|c| !c.is_control()).take(256).collect::<String>();
+        let message = wide(&format!("Reopen {} using {}?\n\nUnsaved changes in this document will be discarded. The file on disk will not be changed.\n\nChoose No to keep the current document and its edits.", display(name), display(target)));
+        unsafe {
+            MessageBoxW(Some(self.hwnd), PCWSTR(message.as_ptr()), w!("Reopen with encoding"), MB_YESNO | MB_DEFBUTTON2 | MB_ICONWARNING) == IDYES
         }
     }
     pub fn operation_failed(&self, details: &str) {
@@ -448,12 +499,11 @@ impl PlatformServices for WindowsPlatform {
         WindowsPlatform::clipboard_text_with_metadata(self, format, max_bytes).map_err(|e| e.to_string())
     }
     fn about(&self) {
+        let message = wide(&format!("Bareline {}\nPlain text. Full power. No weight.\n\nCore: MPL-2.0\nExtension SDK: MIT OR Apache-2.0", env!("CARGO_PKG_VERSION")));
         unsafe {
             MessageBoxW(
                 Some(self.hwnd),
-                w!(
-                    "Bareline 0.1.0\nPlain text. Full power. No weight.\n\nLocal foundation preview — editing is under development."
-                ),
+                PCWSTR(message.as_ptr()),
                 w!("About Bareline"),
                 MB_OK,
             );

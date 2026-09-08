@@ -44,7 +44,9 @@ impl Default for ManagerUi {
     }
 }
 impl ExtensionsRuntime {
-    pub fn ime_caret(&self) -> Option<Rect> { self.open.then_some(self.ui.caret).flatten() }
+    pub fn ime_caret(&self) -> Option<Rect> {
+        self.open.then_some(self.ui.caret).flatten()
+    }
     pub(super) fn argument_text(&self) -> Result<String, String> {
         let value = self
             .ui
@@ -137,7 +139,7 @@ impl ExtensionsRuntime {
     }
     pub(super) fn draw_manager(
         &mut self,
-        renderer: &mut super::super::WindowsRenderer,
+        renderer: &mut impl bareline_renderer::TextBackend,
         width: f32,
         height: f32,
         ops: &mut Vec<DrawOp>,
@@ -147,7 +149,7 @@ impl ExtensionsRuntime {
         }
         self.bounds = rect(0.0, 82.0, width, (height - 112.0).max(0.0));
         self.ui.controls.clear();
-        self.ui.caret=None;
+        self.ui.caret = None;
         ops.push(DrawOp::Fill(self.bounds, CHROME));
         let sidebar = (width * 0.186).clamp(140.0, 296.0);
         let x = sidebar + 24.0;
@@ -359,9 +361,9 @@ impl ExtensionsRuntime {
                 ));
                 let focused = self.ui.focus == FIELD + index as u64;
                 match self.ui.fields[index].draw(renderer, bounds, focused, ops) {
-                    Ok(caret) if focused => self.ui.caret=Some(caret),
-                    Ok(_) => {},
-                    Err(error) => self.message=Some(format!("Argument layout: {error:?}")),
+                    Ok(caret) if focused => self.ui.caret = Some(caret),
+                    Ok(_) => {}
+                    Err(error) => self.message = Some(format!("Argument layout: {error:?}")),
                 }
                 self.ui.controls.push(Control {
                     id: FIELD + index as u64,
@@ -811,10 +813,52 @@ impl super::super::Shell {
         true
     }
     pub(crate) fn extensions_accessibility_nodes(&self) -> Vec<AccessibilityNode> {
+        self.extensions.accessibility_nodes()
+    }
+    pub(crate) fn extensions_accessibility_focus(&self) -> Option<u64> {
+        self.extensions.accessibility_focus()
+    }
+    pub(crate) fn extensions_accessibility(
+        &mut self,
+        el: &super::super::ActiveEventLoop,
+        action: &AccessibilityAction,
+    ) -> bool {
         if !self.extensions.open {
+            return false;
+        }
+        if let Some(handled) = self.extensions.accessibility_edit(action) {
+            if handled && let Some(window) = &self.window {
+                window.request_redraw();
+            }
+            return handled;
+        }
+        match action {
+            AccessibilityAction::Invoke(id) => self.extension_control(el, *id),
+            _ => false,
+        }
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn structured_arguments_are_separate_bounded_committed_fields() {
+        let mut runtime = ExtensionsRuntime::default();
+        runtime.ui.fields[0].insert("//p:item");
+        runtime.ui.fields[1].insert("p=urn:fixture");
+        runtime.ui.fields[2].preedit("pending".into(), Some((0, 7)));
+        assert_eq!(runtime.argument_text().unwrap(), "//p:item\np=urn:fixture");
+        runtime.ui.fields[3].insert(&"x".repeat(4096));
+        assert!(runtime.argument_text().is_err());
+    }
+}
+
+impl ExtensionsRuntime {
+    fn accessibility_nodes(&self) -> Vec<AccessibilityNode> {
+        if !self.open {
             return vec![];
         }
-        let bounds = self.extensions.bounds;
+        let bounds = self.bounds;
         let mut nodes = vec![AccessibilityNode {
             id: ROOT,
             parent: 1,
@@ -833,7 +877,7 @@ impl super::super::Shell {
             focusable: true,
             invokable: false,
         }];
-        nodes.extend(self.extensions.ui.controls.iter().map(|control| {
+        nodes.extend(self.ui.controls.iter().map(|control| {
             AccessibilityNode {
                 id: control.id,
                 parent: ROOT,
@@ -843,7 +887,7 @@ impl super::super::Shell {
                     .id
                     .checked_sub(FIELD)
                     .filter(|index| *index < 65)
-                    .map(|index| self.extensions.ui.fields[index as usize].value().to_owned()),
+                    .map(|index| self.ui.fields[index as usize].value().to_owned()),
                 bounds: [
                     control.bounds.x as f64,
                     control.bounds.y as f64,
@@ -857,7 +901,7 @@ impl super::super::Shell {
                 invokable: !control.disabled && control.role != AccessibilityRole::TextField,
             }
         }));
-        if let Some(message) = &self.extensions.message {
+        if let Some(message) = &self.message {
             nodes.push(AccessibilityNode {
                 id: 62001,
                 parent: ROOT,
@@ -872,13 +916,13 @@ impl super::super::Shell {
                 invokable: false,
             });
         }
-        if !self.extensions.panel_output.is_empty() {
+        if !self.panel_output.is_empty() {
             nodes.push(AccessibilityNode {
                 id: 62000,
                 parent: ROOT,
                 role: AccessibilityRole::Group,
                 name: "Extension result".into(),
-                value: Some(self.extensions.panel_output.clone()),
+                value: Some(self.panel_output.clone()),
                 bounds: [bounds.x as f64, bounds.y as f64, bounds.width as f64, 0.0],
                 disabled: false,
                 selected: false,
@@ -889,83 +933,182 @@ impl super::super::Shell {
         }
         nodes
     }
-    pub(crate) fn extensions_accessibility_focus(&self) -> Option<u64> {
-        self.extensions.open.then_some(
+    fn accessibility_focus(&self) -> Option<u64> {
+        self.open.then_some(
             if self
-                .extensions
                 .ui
                 .controls
                 .iter()
-                .any(|control| control.id == self.extensions.ui.focus && !control.disabled)
+                .any(|control| control.id == self.ui.focus && !control.disabled)
             {
-                self.extensions.ui.focus
+                self.ui.focus
             } else {
                 ROOT
             },
         )
     }
-    pub(crate) fn extensions_accessibility(
-        &mut self,
-        el: &super::super::ActiveEventLoop,
-        action: &AccessibilityAction,
-    ) -> bool {
-        if !self.extensions.open {
-            return false;
+}
+
+impl ExtensionsRuntime {
+    fn accessibility_edit(&mut self, action: &AccessibilityAction) -> Option<bool> {
+        if !self.open {
+            return Some(false);
         }
         match action {
-            AccessibilityAction::Focus(id) => {
+            AccessibilityAction::Focus(id) => Some(
                 if *id == ROOT
                     || self
-                        .extensions
                         .ui
                         .controls
                         .iter()
                         .any(|control| control.id == *id && !control.disabled)
                 {
-                    self.extensions.ui.focus = *id;
+                    self.ui.focus = *id;
                     true
                 } else {
                     false
-                }
-            }
-            AccessibilityAction::Invoke(id) => self.extension_control(el, *id),
-            AccessibilityAction::SetValue { id, value } => {
+                },
+            ),
+            AccessibilityAction::SetValue { id, value } => Some(
                 if let Some(index) = id.checked_sub(FIELD).filter(|index| *index < 65)
-                    && self
-                        .extensions
-                        .ui
-                        .controls
-                        .iter()
-                        .any(|control| control.id == *id)
+                    && self.ui.controls.iter().any(|control| control.id == *id)
                     && value.len() <= 4096
                     && !value.chars().any(char::is_control)
                 {
-                    let field = &mut self.extensions.ui.fields[index as usize];
+                    let field = &mut self.ui.fields[index as usize];
                     field.select_all();
                     field.commit(value);
-                    if let Some(window) = &self.window {
-                        window.request_redraw();
-                    }
                     true
                 } else {
                     false
-                }
-            }
-            _ => false,
+                },
+            ),
+            _ => None,
         }
     }
 }
+/// Real manager layout/projection fixtures. The package is signed with the same
+/// deterministic TEST-ONLY seed used by protocol fixtures and is never executed.
 #[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn structured_arguments_are_separate_bounded_committed_fields() {
-        let mut runtime=ExtensionsRuntime::default();
-        runtime.ui.fields[0].insert("//p:item");
-        runtime.ui.fields[1].insert("p=urn:fixture");
-        runtime.ui.fields[2].preedit("pending".into(),Some((0,7)));
-        assert_eq!(runtime.argument_text().unwrap(),"//p:item\np=urn:fixture");
-        runtime.ui.fields[3].insert(&"x".repeat(4096));
-        assert!(runtime.argument_text().is_err());
-    }
+pub(super) fn accessibility_test_cases() -> Vec<(&'static str, Vec<AccessibilityNode>, Option<u64>)>
+{
+    use bareline_extensions_protocol::{
+        Catalog, CatalogPolicy, OfflinePackageSource, PackageRequest, VerifiedPackageSource,
+    };
+    use bareline_renderer::RenderBackend;
+    let capture = |name, runtime: &mut ExtensionsRuntime| {
+        let mut backend = bareline_renderer_recording::RecordingBackend::default();
+        backend.resize(1000, 800, 1.0).unwrap();
+        let mut ops = vec![];
+        runtime.draw_manager(&mut backend, 1000.0, 800.0, &mut ops);
+        backend.render(&ops).unwrap();
+        (
+            name,
+            runtime.accessibility_nodes(),
+            runtime.accessibility_focus(),
+        )
+    };
+    let mut runtime = ExtensionsRuntime::default();
+    let mut cases = vec![capture("extensions-closed", &mut runtime)];
+    runtime.open = true;
+    cases.push(capture("extensions-open-runtime-absent", &mut runtime));
+    let root = std::env::temp_dir().join(format!(
+        "bareline-semantic-package-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir(&root).unwrap();
+    let metadata = include_bytes!("fixtures/catalog.json");
+    let catalog: Catalog = serde_json::from_slice(metadata).unwrap();
+    let digest = catalog.entries[0].sha256.clone();
+    let archive = root.join(format!("{digest}.blex"));
+    std::fs::write(&archive, include_bytes!("fixtures/manager.blex")).unwrap();
+    let policy = CatalogPolicy {
+        public_key: include_str!("fixtures/public-key.txt"),
+        publisher: "fixture",
+        channel: "stable",
+        platform: "windows-x64",
+        artifact_type: "extension",
+        highest_metadata_version: 0,
+        now_unix: 100,
+    };
+    let source = OfflinePackageSource::open(
+        root.clone(),
+        metadata,
+        include_str!("fixtures/catalog.minisig"),
+        &policy,
+    )
+    .unwrap();
+    let verified = source
+        .fetch(&PackageRequest {
+            id: "fixture.tools".into(),
+            version: "1".into(),
+        })
+        .unwrap();
+    let package = verified.install(&root, &AtomicBool::new(false)).unwrap();
+    runtime.installed.push(InstalledRow {
+        state: InstalledState {
+            id: package.id.clone(),
+            digest,
+            version: package.version.clone(),
+            approved: package.manifest.capabilities.clone(),
+            enabled: true,
+            generation: 1,
+            command_count: package.manifest.commands.len(),
+        },
+        package,
+    });
+    cases.push(capture(
+        "extensions-installed-package-runtime-absent",
+        &mut runtime,
+    ));
+    runtime.installed[0].state.enabled = false;
+    runtime.tab = 3;
+    cases.push(capture("extensions-disabled-package", &mut runtime));
+    runtime.tab = 0;
+    runtime.ui.arguments_open = true;
+    cases.push(capture("extensions-arguments", &mut runtime));
+    assert_eq!(
+        runtime.accessibility_edit(&AccessibilityAction::Focus(FIELD)),
+        Some(true)
+    );
+    cases.push(capture("extensions-argument-focus", &mut runtime));
+    assert_eq!(
+        runtime.accessibility_edit(&AccessibilityAction::SetValue {
+            id: FIELD,
+            value: "//p:item".into()
+        }),
+        Some(true)
+    );
+    assert_eq!(
+        runtime.accessibility_edit(&AccessibilityAction::SetValue {
+            id: FIELD + 1,
+            value: "p=urn:fixture".into()
+        }),
+        Some(true)
+    );
+    assert_eq!(
+        runtime.accessibility_edit(&AccessibilityAction::SetValue {
+            id: FIELD,
+            value: "forbidden\nline".into()
+        }),
+        Some(false)
+    );
+    cases.push(capture("extensions-argument-value", &mut runtime));
+    runtime.ui.results_open = true;
+    runtime.ui.arguments_open = false;
+    runtime.panel_output = "fixture.result\nValidated fixture".into();
+    cases.push(capture("extensions-result", &mut runtime));
+    runtime
+        .installed
+        .pop()
+        .unwrap()
+        .package
+        .remove_cached()
+        .unwrap();
+    std::fs::remove_dir(root).unwrap();
+    cases
 }

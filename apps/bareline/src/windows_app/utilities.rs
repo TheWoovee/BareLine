@@ -36,11 +36,33 @@ pub(super) fn register(registry:&mut bareline_commands::CommandRegistry) {
     }
 }
 impl Shell {
+    pub(super) fn utilities_accessibility_nodes(&self)->Vec<bareline_platform::accessibility::AccessibilityNode> {
+        use bareline_platform::accessibility::{AccessibilityNode,AccessibilityRole};
+        if !self.utilities.open{return Vec::new();}
+        let mut nodes:Vec<_>=self.utilities.hits.iter().filter_map(|(bounds,id)|{
+            let (index,command)=self.app.commands.entries().enumerate().find(|(_,command)|command.id.0==*id)?;
+            let checked=match *id{"utilities.printHeader"=>Some(self.utilities.print_options.header),"utilities.printFooter"=>Some(self.utilities.print_options.footer),"utilities.printNumbers"=>Some(self.utilities.print_options.line_numbers),"utilities.printSyntax"=>Some(self.utilities.print_options.syntax_colors),"utilities.printRange"=>Some(self.utilities.selection_only),_=>None};
+            let value=match *id{"utilities.printFont"=>Some(self.utilities.print_options.font_family.clone()),"utilities.printSize"=>Some(format!("{} pt",self.utilities.print_options.font_size_pt)),"utilities.printMargins"=>Some(format!("{} mm",self.utilities.print_options.margin_mm)),_=>checked.map(|v|if v{"On"}else{"Off"}.into())};
+            Some(AccessibilityNode{id:85_000+index as u64,parent:1,role:if checked.is_some(){AccessibilityRole::Checkbox}else{AccessibilityRole::Button},name:command.title.into(),value,bounds:[bounds.x as f64,bounds.y as f64,bounds.width as f64,bounds.height as f64],disabled:false,selected:checked.unwrap_or(false),expanded:None,focusable:true,invokable:true})
+        }).collect();
+        if !self.utilities.options_open{nodes.push(AccessibilityNode{id:89_999,parent:1,role:AccessibilityRole::Status,name:"Utility result and progress".into(),value:Some(if self.utilities.pending.is_some(){format!("{} of {} bytes processed",self.utilities.progress.load(Ordering::Acquire),self.utilities.total)}else{self.utilities.result.clone().unwrap_or_default()}),bounds:[0.0;4],disabled:false,selected:false,expanded:None,focusable:false,invokable:false});}nodes
+    }
+    pub(super) fn utilities_accessibility_focus(&self)->Option<u64> {
+        if !self.utilities.open{return None;}let (_,id)=self.utilities.hits.get(self.utilities.focus)?;self.app.commands.entries().position(|command|command.id.0==*id).map(|index|85_000+index as u64)
+    }
+    pub(super) fn utilities_accessibility(&mut self,el:&ActiveEventLoop,action:&bareline_platform::accessibility::AccessibilityAction)->bool {
+        use bareline_platform::accessibility::AccessibilityAction;
+        let (id,invoke)=match action{AccessibilityAction::Focus(id)=>(*id,false),AccessibilityAction::Invoke(id)=>(*id,true),_=>return false};
+        if !self.utilities_accessibility_nodes().iter().any(|node|node.id==id&&node.focusable){return false;}
+        let Some(command)=self.app.commands.entries().nth((id-85_000) as usize).map(|command|command.id.0)else{return false;};
+        if let Some(index)=self.utilities.hits.iter().position(|(_,candidate)|*candidate==command){self.utilities.focus=index;}
+        if invoke{self.utilities_dispatch(el,command);}self.utilities_redraw();true
+    }
     pub(super) fn utilities_dispatch(&mut self,el:&ActiveEventLoop,id:&str)->bool {
         if !id.starts_with("utilities.") {return false;}
         if id=="utilities.dismiss" {self.utilities.open=false;self.utilities.options_open=false;self.utilities_redraw();return true;}
         if id=="utilities.retry" {let command=self.utilities.last_command.clone();return self.utilities_dispatch(el,&command);}
-        if matches!(id,"utilities.print"|"utilities.printSelection") {self.utilities.open=true;self.utilities.options_open=true;self.utilities.selection_only=id=="utilities.printSelection";self.utilities.focus=0;self.utilities_redraw();return true;}
+        if matches!(id,"utilities.print"|"utilities.printSelection") {self.utilities.open=true;self.utilities.options_open=self.utilities.pending.is_none();self.utilities.selection_only=id=="utilities.printSelection";self.utilities.focus=0;self.utilities_redraw();return true;}
         let options=&mut self.utilities.print_options;
         match id {
             "utilities.printHeader"=>options.header=!options.header,"utilities.printFooter"=>options.footer=!options.footer,"utilities.printNumbers"=>options.line_numbers=!options.line_numbers,"utilities.printSyntax"=>options.syntax_colors=!options.syntax_colors,
@@ -73,9 +95,10 @@ impl Shell {
         let print_selection=self.utilities.selection_only;
         if printing&&print_selection&&!selected {workspace.message=Some("Select text before printing a selection".into());self.utilities.result=workspace.message.clone();return true;}
         let destination=if export.is_some(){match self.platform.as_ref().map(|p|p.save_file()){Some(Ok(Some(path)))=>Some(path),Some(Err(e))=>{workspace.message=Some(e);return true;},_=>return true}}else{None};
-        let printer=if printing {match bareline_platform_windows::printing::choose_printer(){Ok(Some(p))=>Some(p),Ok(None)=>return true,Err(e)=>{workspace.message=Some(format!("Print unavailable: {e:?}. Retry Print to choose another printer."));return true;}}}else{None};
+        let printer=if printing {match bareline_platform_windows::printing::choose_printer(){Ok(Some(p))=>Some(p),Ok(None)=>return true,Err(e)=>{workspace.message=Some(format!("Print unavailable: {e:?}. Retry Print to choose another printer."));self.utilities.result=workspace.message.clone();self.utilities.open=true;self.utilities.options_open=false;self.utilities.last_command="utilities.print".into();return true;}}}else{None};
         if algorithm.is_none()&&transform.is_none()&&export.is_none()&&!printing&&id!="utilities.statistics" {return false;}
         let mut print_options=self.utilities.print_options.clone();print_options.title=title;
+        print_options.tab_width=self.settings.effective().tab_width.clamp(1,16) as u8;
         let colors=["syntax.keyword","syntax.string","syntax.number","syntax.comment","syntax.operator"].map(|key|{let c=self.settings.theme_color(key).unwrap_or(self.settings.ui_theme().text);Rgb((c.0>>16) as u8,(c.0>>8) as u8,c.0 as u8)});
         let background={let c=self.settings.theme_color("surface.editor").unwrap_or(self.settings.ui_theme().chrome);Rgb((c.0>>16) as u8,(c.0>>8) as u8,c.0 as u8)};
         let foreground={let c=self.settings.ui_theme().text;Rgb((c.0>>16) as u8,(c.0>>8) as u8,c.0 as u8)};
@@ -111,9 +134,10 @@ impl Shell {
                     return Ok(UtilityResult::Text(format!("Exported {}",path.display())));
                 }
                 if let Some(printer)=printer {
+                    let print_language=if print_options.syntax_colors{language}else{bareline_syntax::Language::PlainText};
                     let job=bareline_platform_windows::printing::WindowsPrintJob::start(printer,print_options).map_err(|e|format!("{e:?}"))?;
                     let range=if print_selection {range}else{TextOffset(0)..TextOffset(length)};
-                    let summary=if let Some((source,_))=paged {let reader=core::PagedTextReader::new(source,TextOffset(0)..TextOffset(length),cancel.clone()).map_err(|e|format!("{e:?}"))?;core::print_reader(reader,range,language,colors,Box::new(job),&cancel,&print_cancel,&mut report)?}else{core::print_snapshot(&snapshot,range,language,colors,Box::new(job),&print_cancel).map_err(|e|format!("{e:?}"))?};
+                    let summary=if let Some((source,_))=paged {let reader=core::PagedTextReader::new(source,TextOffset(0)..TextOffset(length),cancel.clone()).map_err(|e|format!("{e:?}"))?;core::print_reader(reader,range,print_language,colors,Box::new(job),&cancel,&print_cancel,&mut report)?}else{core::print_snapshot(&snapshot,range,print_language,colors,Box::new(job),&print_cancel).map_err(|e|format!("{e:?}"))?};
                     return Ok(UtilityResult::Text(format!("Sent {} pages / {} lines to the printer",summary.pages,summary.lines)));
                 }
                 let s=if let Some((source,_))=paged {let revision=source.snapshot().revision;let reader=core::PagedTextReader::new(source,TextOffset(0)..TextOffset(length),cancel.clone()).map_err(|e|format!("{e:?}"))?;core::statistics_reader(reader,revision,&cancel,&mut report)}else{core::statistics(&snapshot,256*1024,&cancel,|bytes|{report(bytes);true})}.map_err(|e|format!("{e:?}"))?;
@@ -157,6 +181,7 @@ impl Shell {
     }
 }
 impl UtilitiesRuntime {
+    pub(super) fn has_input_focus(&self)->bool {self.open||self.options_open}
     /// Window coordinates; draw after editor operation translation and before palette.
     pub(super) fn draw(&mut self,settings:&settings::SettingsRuntime,width:f32,height:f32,ops:&mut Vec<bareline_renderer::DrawOp>) {
         use bareline_renderer::DrawOp;use bareline_ui::{rect,text};
@@ -200,4 +225,21 @@ fn publish_export(path:&std::path::Path,write:impl FnOnce(&mut std::fs::File)->R
     let mut owned=false;
     let result=(|| {let mut file=std::fs::OpenOptions::new().create_new(true).write(true).open(&stage).map_err(|e|e.to_string())?;owned=true;write(&mut file).map_err(|e|format!("{e:?}"))?;file.flush().and_then(|_|file.sync_all()).map_err(|e|e.to_string())?;drop(file);platform.commit(&stage,path,existed).map_err(|e|e.to_string())})();
     if result.is_err()&&owned{let _=std::fs::remove_file(&stage);}result
+}
+
+#[cfg(test)]
+pub(super) fn accessibility_test_setup(shell:&mut Shell,scenario:&str) {
+    register(&mut shell.app.commands);shell.utilities=UtilitiesRuntime::default();
+    match scenario {
+        "closed"=>{},
+        "open"=>shell.utilities.open=true,
+        "populated"=>{
+            let snapshot=bareline_document::Document::from_utf8("fixture 🙂",bareline_document::Budget::new(4096),bareline_document::Budget::new(0)).unwrap().snapshot();
+            let hash=core::hash_snapshot(&snapshot,TextOffset(0)..TextOffset(snapshot.len()),HashAlgorithm::Sha256,&CancelToken::default()).unwrap();
+            shell.utilities.open=true;shell.utilities.result=Some(format!("{} · {} bytes\n{}",HashAlgorithm::Sha256.label(),hash.bytes,hash.hexadecimal));
+        },
+        "options"|"focus"|"value"=>{shell.utilities.open=true;shell.utilities.options_open=true;if scenario=="focus"{shell.utilities.focus=2;}if scenario=="value"{shell.utilities.print_options.font_size_pt=12.0;shell.utilities.print_options.font_family="Cascadia Mono".into();shell.utilities.selection_only=true;}},
+        _=>panic!("unknown utilities accessibility fixture: {scenario}"),
+    }
+    let mut ops=Vec::new();shell.utilities.draw(&shell.settings,1000.0,800.0,&mut ops);
 }

@@ -3,11 +3,14 @@
 pub mod group;
 pub mod history;
 pub mod line_lookup;
+pub mod metadata;
 pub mod paged;
 pub mod service;
 pub mod source;
+pub mod source_transaction;
 pub mod spill;
 mod tree;
+pub use metadata::DocumentMetadata;
 use std::{
     ops::Range,
     sync::{
@@ -96,6 +99,7 @@ fn unique() -> u64 {
 
 #[derive(Clone)]
 pub struct DocumentSnapshot {
+    metadata: DocumentMetadata,
     root: tree::Root,
     pub revision: Revision,
     pub content_state: ContentStateId,
@@ -103,6 +107,9 @@ pub struct DocumentSnapshot {
     complete: bool,
 }
 impl DocumentSnapshot {
+    pub fn metadata(&self) -> &DocumentMetadata {
+        &self.metadata
+    }
     /// Opaque source token for validating queued external actions; forks have distinct identities.
     pub fn identity_token(&self) -> (u64, u64) {
         (self.document_id, self.revision.0)
@@ -184,6 +191,8 @@ pub struct EditTransaction {
     pub edits: Vec<Edit>,
 }
 struct History {
+    before_metadata: DocumentMetadata,
+    after_metadata: DocumentMetadata,
     before: tree::Root,
     after: tree::Root,
     before_state: ContentStateId,
@@ -254,6 +263,7 @@ impl Document {
         let state = ContentStateId(unique());
         Ok(Self {
             current: DocumentSnapshot {
+                metadata: snapshot.metadata.clone(),
                 root: snapshot.root.clone(),
                 revision: Revision(0),
                 content_state: state,
@@ -274,6 +284,7 @@ impl Document {
         let state = ContentStateId(unique());
         Ok(Self {
             current: DocumentSnapshot {
+                metadata: DocumentMetadata::default(),
                 root,
                 revision: Revision(0),
                 content_state: state,
@@ -287,6 +298,55 @@ impl Document {
             bytes,
             history,
         })
+    }
+    /// Initialize opening policy before publishing this actor; does not create a user edit.
+    pub fn initialize_metadata(&mut self, metadata: DocumentMetadata) -> Result<(), Error> {
+        if self.dirty() || !self.undo.is_empty() || !self.redo.is_empty() {
+            return Err(Error::ActorBusy);
+        }
+        self.current.metadata = metadata;
+        Ok(())
+    }
+    pub fn apply_metadata(
+        &mut self,
+        base_revision: Revision,
+        metadata: DocumentMetadata,
+    ) -> Result<Revision, Error> {
+        if base_revision != self.current.revision {
+            return Err(Error::StaleRevision);
+        }
+        if metadata == self.current.metadata {
+            return Ok(base_revision);
+        }
+        let revision = self.next_revision()?;
+        let charge = history::Charge::new(
+            self.history
+                .reserve(metadata.charge().saturating_add(128))?,
+        );
+        self.undo
+            .try_reserve(1)
+            .map_err(|_| Error::BudgetExceeded)?;
+        let state = ContentStateId(unique());
+        let entry = History {
+            before_metadata: self.current.metadata.clone(),
+            after_metadata: metadata.clone(),
+            before: self.current.root.clone(),
+            after: self.current.root.clone(),
+            before_state: self.current.content_state,
+            after_state: state,
+            _undo_reservation: charge,
+            edits: Vec::new(),
+            group: None,
+            metadata: history::EditMetadata::default(),
+            typing_insert: false,
+        };
+        self.undo.push(entry);
+        self.redo.clear();
+        self.current.metadata = metadata;
+        self.current.revision = revision;
+        self.current.content_state = state;
+        self.trim_history();
+        Ok(revision)
     }
     pub fn snapshot(&self) -> DocumentSnapshot {
         self.current.clone()
@@ -473,6 +533,8 @@ impl Document {
             base_revision: self.current.revision,
             revision,
             entry: History {
+                before_metadata: self.current.metadata.clone(),
+                after_metadata: self.current.metadata.clone(),
                 before: self.current.root.clone(),
                 after: root.clone(),
                 before_state: self.current.content_state,
@@ -547,6 +609,7 @@ impl Document {
         if let Some(previous) = self.undo.last_mut() {
             previous.typing_insert = false;
         }
+        self.current.metadata = entry.before_metadata.clone();
         self.current.root = entry.before.clone();
         self.current.content_state = entry.before_state;
         self.current.revision = revision;
@@ -560,6 +623,7 @@ impl Document {
         let revision = self.next_revision()?;
         let mut entry = self.redo.pop().ok_or(Error::EmptyHistory)?;
         entry.typing_insert = false;
+        self.current.metadata = entry.after_metadata.clone();
         self.current.root = entry.after.clone();
         self.current.content_state = entry.after_state;
         self.current.revision = revision;

@@ -50,6 +50,7 @@ impl EditorSurface {
                 let rectangle=self.power_rectangle.unwrap();
                 self.apply_power(rectangle_indent(&self.snapshot,rectangle,id=="editor.unindent",limits).map_err(err)?)?;
             }
+            "editor.rectangle.select" => {self.select_rectangle(rectangle(args)?)?;}
             "editor.column.insert" => {
                 let insert = match args.get("mode").map(String::as_str) {
                     Some("text") => ColumnInsert::Text(args.get("text").cloned().ok_or("Missing text.")?),
@@ -60,11 +61,11 @@ impl EditorSurface {
             }
             "editor.rectangle.paste" | "editor.rectangle.delete" => {
                 let text = if id.ends_with("delete") { "" } else { args.get("text").ok_or("Missing text.")? };
-                self.apply_power(rectangle_paste(&self.snapshot,rectangle(args)?,text,limits).map_err(err)?)?;
+                self.apply_power(self.prepare_rectangle_paste(rectangle(args)?,text).map_err(err)?)?;
             }
             "editor.paste.plainText" | "editor.paste.fromHistory" => {
                 let text = args.get("text").ok_or("Missing plain text.")?;
-                let prepared=if let Some(rectangle)=self.power_rectangle {rectangle_paste(&self.snapshot,rectangle,text,limits)}else{replace(&self.snapshot,&self.selection_set(),text,limits)};
+                let prepared=if let Some(rectangle)=self.power_rectangle {self.prepare_rectangle_paste(rectangle,text)}else{replace(&self.snapshot,&self.selection_set(),text,limits)};
                 self.apply_power(prepared.map_err(err)?)?;
             }
             "editor.lines.hide" => {
@@ -124,7 +125,8 @@ impl EditorSurface {
         let mut selections = Vec::new();
         for number in rectangle.first_line..=rectangle.last_line {
             let (start,text) = line(&self.snapshot,number,limits).map_err(|e|format!("{e:?}"))?;
-            let map = DisplayColumnMap::new(content(&text),limits.tab_width);
+            let fallback;
+            let map=if let Some(map)=self.rectangle_maps(rectangle).and_then(|maps|maps.get(&number)){map}else{fallback=DisplayColumnMap::new(content(&text),limits.tab_width);&fallback};
             selections.push(Selection { anchor: start + map.at(rectangle.start_column).0, caret: start + map.at(rectangle.end_column).0 });
         }
         self.set_selections(SelectionSet { selections,primary:0 })?;
@@ -136,7 +138,7 @@ impl EditorSurface {
         let row = ((point.y-self.top()) as f64+self.scroll_y)/self.line_height() as f64;
         let number=self.logical_line(row.floor() as usize);
         let layout=self.layouts.get(&number)?;
-        let hit=backend.hit_test(layout.id,bareline_renderer::Point { x:point.x-crate::LEFT+self.scroll_x as f32,y:(row.fract()*self.line_height() as f64) as f32 }).ok()?;
+        let hit=backend.hit_test(layout.id,bareline_renderer::Point { x:point.x-crate::LEFT+(self.scroll_x-layout.x_origin) as f32,y:((row-(self.visual_line(number)+layout.row_origin) as f64)*self.line_height() as f64) as f32 }).ok()?;
         let offset=(layout.start+hit.byte_offset).min(layout.end);
         let (start,text)=line(&self.snapshot,number,self.power_limits()).ok()?;
         let map=DisplayColumnMap::new(content(&text),self.tab_width);
@@ -250,6 +252,7 @@ impl EditorSurface {
         view.language=self.language;view.language_override=self.language_override;
         view.detected_language=self.detected_language;view.syntax_preference=self.syntax_preference;
         view.udl=self.udl.clone();view.smart_typing=self.smart_typing;view.smart_pairs=self.smart_pairs;view.smart_indent=self.smart_indent;
+        view.search_marks=self.search_marks.clone();
         view.manual_hidden=self.manual_hidden.clone();view.known_folds=self.known_folds.clone();view.fold_state=self.fold_state.clone();view.hidden_lines=self.hidden_lines.clone();view.fold_revision=self.fold_revision;view.folds_incomplete=self.folds_incomplete;view.pending_folds=self.pending_folds.clone();
         view.encoding_label=self.encoding_label.clone();view.font_pixels=self.font_pixels;view.font_family=self.font_family.clone();view.tab_width=self.tab_width;view.line_numbers=self.line_numbers;view.highlight_current_line=self.highlight_current_line;view.whitespace=self.whitespace.clone();
         view.scroll_y=self.scroll_y;view.scroll_x=self.scroll_x;view.top_inset=self.top_inset;view.bottom_inset=self.bottom_inset;view.view_spacers=self.view_spacers.clone();view.layout_revision=None;
@@ -301,7 +304,7 @@ pub struct RectangleClipboardMetadata { pub row_widths:Vec<u32> }
 impl RectangleClipboardMetadata {
     pub const FORMAT: &'static str = "Bareline.Rectangle.v1";
     pub fn encode(&self,text:&str)->Result<Vec<u8>,Error> {
-        if self.row_widths.len()>65_531 || self.row_widths.len()!=split_rows(text).len() || text.len()>4<<20 {return Err(Error::BudgetExceeded);}
+        if self.row_widths.len()>65_531 || self.row_widths.len()!=clipboard_rows(text).len() || text.len()>4<<20 {return Err(Error::BudgetExceeded);}
         let mut bytes=b"BLRC\x01\0\0\0".to_vec();
         bytes.extend_from_slice(&(self.row_widths.len() as u32).to_le_bytes());
         bytes.extend_from_slice(&clipboard_fingerprint(text).to_le_bytes());
@@ -311,7 +314,7 @@ impl RectangleClipboardMetadata {
     pub fn decode(bytes:&[u8],text:&str)->Option<Self> {
         if bytes.len()<20 || bytes.len()>262_144 || &bytes[..8]!=b"BLRC\x01\0\0\0" || text.len()>4<<20{return None;}
         let count=u32::from_le_bytes(bytes[8..12].try_into().ok()?) as usize;
-        if count>65_531 || bytes.len()!=20+count*4 || count!=split_rows(text).len() || u64::from_le_bytes(bytes[12..20].try_into().ok()?)!=clipboard_fingerprint(text){return None;}
+        if count>65_531 || bytes.len()!=20+count*4 || count!=clipboard_rows(text).len() || u64::from_le_bytes(bytes[12..20].try_into().ok()?)!=clipboard_fingerprint(text){return None;}
         Some(Self {row_widths:bytes[20..].chunks_exact(4).map(|chunk|u32::from_le_bytes(chunk.try_into().unwrap())).collect()})
     }
 }
@@ -404,4 +407,31 @@ mod typing_metadata_tests {
         assert!(RectangleClipboardMetadata::decode(&bytes,"xy\nab").is_none());
         let mut corrupt=bytes;corrupt[4]=2;assert!(RectangleClipboardMetadata::decode(&corrupt,"界\nab").is_none());
     }
+}
+impl EditorSurface {
+    /// Clone the owning actor handle for revision-checked coordinated jobs.
+    pub fn document_service(&self)->Option<bareline_document::service::DocumentService>{self.service.clone()}
+}
+
+impl EditorSurface {
+    fn rectangle_maps(&self,rectangle:Rectangle)->Option<&BTreeMap<usize,DisplayColumnMap>> {
+        let maps=self.current_column_maps()?;
+        (rectangle.first_line..=rectangle.last_line).all(|number|maps.contains_key(&number)).then_some(maps)
+    }
+    pub(crate) fn prepare_rectangle_paste(&self,rectangle:Rectangle,text:&str)->Result<PowerEdit,Error>{
+        rectangle_paste_mapped(&self.snapshot,rectangle,text,self.power_limits(),self.rectangle_maps(rectangle))
+    }
+    pub(crate) fn copy_rectangle(&self,rectangle:Rectangle,limit:usize)->Result<String,Error>{
+        rectangle_copy_mapped(&self.snapshot,rectangle,Limits{max_bytes:limit,..self.power_limits()},self.rectangle_maps(rectangle))
+    }
+}
+impl EditorSurface {
+    pub fn saved_content_state(&self)->bareline_document::ContentStateId{self.initial_state}
+}
+impl EditorSurface {
+    pub fn begin_column_measurement(&mut self)->Result<(),String>{
+        if self.pending.is_some()||self.group_pending||self.composition.is_some(){return Err("Wait for the current edit before measuring columns.".into());}
+        self.column_measurement_pending=true;Ok(())
+    }
+    pub fn finish_column_measurement(&mut self){self.column_measurement_pending=false;}
 }

@@ -9,7 +9,6 @@ use crate::{
     },
     lifecycle::FileInput,
     paged_recovery::{PagedRecovery, PagedRecoveryStatus},
-    recovery::RecoveryEdit,
 };
 use bareline_document::{Budget, DocumentSnapshot, TextOffset};
 use bareline_platform::LocalFileSystem;
@@ -292,7 +291,7 @@ impl ResidentRecovery {
                             })
                             .collect(),
                     };
-                    let document = bareline_document::paged::PagedDocument::restore_pieces(
+                    let mut document = bareline_document::paged::PagedDocument::restore_pieces(
                         source.source.source(),
                         pieces,
                         bytes,
@@ -300,6 +299,7 @@ impl ResidentRecovery {
                         snapshot.revision,
                     )
                     .map_err(|e| format!("{e:?}"))?;
+                    document.restore_metadata(snapshot.metadata().clone()).map_err(|e|format!("{e:?}"))?;
                     let snapshot = document.snapshot();
                     let mut recovery = PagedRecovery::create(
                         &root,
@@ -310,14 +310,7 @@ impl ResidentRecovery {
                         status,
                         notify.clone(),
                     )?;
-                    recovery.append(
-                        &snapshot,
-                        &[RecoveryEdit {
-                            offset: 0,
-                            removed: Vec::new(),
-                            inserted: Vec::new(),
-                        }],
-                    )?;
+                    recovery.append(&snapshot, &[])?;
                     Ok(recovery)
                 })();
                 let _ = std::fs::remove_file(raw_path);

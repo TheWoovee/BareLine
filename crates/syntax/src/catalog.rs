@@ -360,3 +360,79 @@ mod tests {
         );
     }
 }
+
+/// Bounded filename glob associations. Explicit names take precedence over
+/// wildcard patterns; malformed/oversized data never broadens a match.
+pub fn association(
+    path: &Path,
+    associations: &std::collections::BTreeMap<String, String>,
+) -> Option<Language> {
+    let name = path.file_name()?.to_str()?;
+    if name.len() > 1024 {
+        return None;
+    }
+    if let Some(language) = associations.iter().take(512).find_map(|(pattern, id)| {
+        pattern
+            .eq_ignore_ascii_case(name)
+            .then(|| Language::from_id(id))
+            .flatten()
+    }) {
+        return Some(language);
+    }
+    associations.iter().take(512).find_map(|(pattern, id)| {
+        if pattern.len() > 256 || pattern.contains(['/', '\\']) {
+            return None;
+        }
+        glob(pattern.as_bytes(), name.as_bytes())
+            .then(|| Language::from_id(id))
+            .flatten()
+    })
+}
+fn glob(pattern: &[u8], name: &[u8]) -> bool {
+    let (mut p, mut n, mut star, mut retry) = (0, 0, None, 0);
+    while n < name.len() {
+        if p < pattern.len() && (pattern[p] == b'?' || pattern[p].eq_ignore_ascii_case(&name[n])) {
+            p += 1;
+            n += 1;
+        } else if p < pattern.len() && pattern[p] == b'*' {
+            star = Some(p);
+            p += 1;
+            retry = n;
+        } else if let Some(at) = star {
+            retry += 1;
+            n = retry;
+            p = at + 1;
+        } else {
+            return false;
+        }
+    }
+    while p < pattern.len() && pattern[p] == b'*' {
+        p += 1;
+    }
+    p == pattern.len()
+}
+
+#[cfg(test)]
+mod association_tests {
+    use super::*;
+    #[test]
+    fn bounded_globs_and_exact_names_have_deterministic_precedence() {
+        let mut map = std::collections::BTreeMap::new();
+        map.insert("*.test.??".into(), "rust".into());
+        map.insert("*.txt".into(), "python".into());
+        map.insert("special.txt".into(), "json".into());
+        assert_eq!(
+            association(Path::new("thing.test.RS"), &map),
+            Some(Language::Rust)
+        );
+        assert_eq!(
+            association(Path::new("SPECIAL.TXT"), &map),
+            Some(Language::Json)
+        );
+        assert_eq!(
+            association(Path::new("other.txt"), &map),
+            Some(Language::Python)
+        );
+        assert_eq!(association(Path::new("unmatched"), &map), None);
+    }
+}

@@ -4,7 +4,7 @@ Current source handoff (2026-09-08): the commands below are deferred until the
 integration coordinator releases the benchmark phase. No new measurements, app
 launches or manual QA were performed for this tooling update.
 
-The paired entry points are `make_manifest.py`, `perf_suite.py run`, and
+The native/paired entry points are `make_manifest.py`, `perf_suite.py run`, and
 `perf_suite.py report`. Manifest preparation hashes the selected Python executable,
 driver/support sources, application binaries, configurations and fixture. It does
 not launch applications. Both applications require exact four-part PE versions;
@@ -25,42 +25,75 @@ Manifest preparation requires `--bareline`, `--bareline-version`,
 Bareline renderer; repeat the series separately for software and hardware. The
 configuration identity must describe OS/build, CPU, display/DPI, theme/font,
 wrapping, syntax and power settings. Exact copied configuration hashes are also
-retained. The generated manifest uses uncontrolled/warmed cache labels and never
-claims a cold-cache protocol. Fixtures of different sizes need separate manifests.
+retained. Use `--native-only` for all native scenarios; Notepad++ pins are then
+omitted. Fixtures of different sizes need separate manifests. `make_fixture.py
+<new-path> --bytes <count> [--long-line]` creates an exclusive 64 KiB-buffered ASCII
+fixture plus hash/byte-length receipt; use 10485760, 104857600, 1073741824 and
+5368709120 for the size series, and `.rs` for the syntax scenario. It refuses
+existing files and insufficient disk headroom. Result-jump fixtures contain
+PERF_NEEDLE; search/cancel use the absent PERF_ABSENT_TOKEN for complete scans.
 
 The orchestrator alternates application order within every pair, drains bounded
 stdout/stderr concurrently, enforces per-trial deadlines, retains failed/missing
 trials and writes create-new raw artifacts. Reports preserve independent
 application observations. Ratios require an explicit reviewed `comparable_metrics`
-list and complete matched pairs; the generated list is empty. A matching metric
+list and complete matched pairs. Only Save includes a shared default endpoint,
+`save_to_clean_ack_us`: dispatch Save after the same PERF_SAVE insertion, through
+the editor acknowledging clean state. This is neither flush durability nor paint
+completion. Other generated comparison lists are empty. A matching metric
 name is insufficient: Bareline present receipts and Notepad++ Scintilla message
 roundtrips have different endpoints. Search primitives and termination boundaries
 also differ. No report automatically becomes eligible for marketing claims.
 
 `bareline_driver.py` launches only its suspended/Job-contained process, with
-session/extensions disabled and all state under the temporary performance root.
+session disabled and all state under the temporary performance root. Extensions
+are disabled except for the explicit signed-fixture extension scenario.
 It reads the native create-new result receipt after successful process exit and
 adds the same process-tree sampler used by the Notepad++ adapter. The marker file
 `.bareline-perf` is required; ordinary launches never enable this workload path.
 Native deadlines are bounded to 120 seconds. Save As uses a new file within the
 owned root. The wrappers never operate on the supplied original fixture.
 
-Native source workloads: open/long-line viewport, 120 bounded scroll steps,
-edit-to-present, resident literal/regex completed Find, result jump, Save As and
-100/500 populated tabs. The paired manifest builder exposes only scenarios both
-adapters accept. Native paged search fails closed rather than measuring a preview.
-Notepad++ supports additional isolated Save and launch/idle adapters; see
-README-WINDOWS-ADAPTERS.md for exact receipt semantics and configuration constraints.
+Native source workloads cover launch, ten-second empty idle, size/long-line open,
+120 alternating scroll steps with real movement, edit-to-present, syntax completion
+for the current real document identity/range followed by presentation, full
+resident/paged Find, tracked worker-terminal cancellation, result jump, Save/Save
+As, full folder-scan completion, committed tail append followed by presentation,
+100/500 populated tabs, and an actual extension invocation through its Drained
+lifecycle receipt plus successful broker outcome for the same generation. Cleanup
+alone never counts as invocation success. Cancel races that finish before cancellation are excluded.
+Incomplete/capped/failed search results are not converted to successful timings.
+Native first-present uses process-independent QPC from the adapter launch origin;
+`source_ready_us` and `resident_full_load_us` are separate milestones. Paged full
+materialization is deliberately inapplicable and omitted. See
+README-WINDOWS-ADAPTERS.md for the Notepad++ endpoint semantics and constraints.
 Memory peaks are maxima of complete sampled live Job totals, not OS lifetime peaks.
 Missing process samples fail the measurement; sampling can miss short-lived peaks.
 
-Still unsupported by the native paired driver: controlled cold launch/cache
-preparation, comparable full-load milestone, syntax-ready acknowledgement, full
-paged Find/cancellation, workspace scan, tail append, extension-runtime totals and
-comparable Save/Save As completion. Notepad++ also lacks paint completion,
-Find-dialog cancellation, workspace/tail and populated-tab adapters. These remain
-explicit source/evidence gaps, not zero measurements. Source/product harness
-measurements below are distinct and cannot fill native endpoint gaps.
+Warm launch completes one unmeasured application launch first. Cold launch requires
+`--cache-plan <plan.json>`: a separately pinned preparation executable/argv,
+support-file hashes and 1..120 second deadline. It runs after copies/hash checks,
+before measured launch, with `{application}`, `{fixture}` and `{output}` paths.
+It must emit one `cache_prepared` JSON event with state `cold`, method,
+evidence_path and evidence_sha256; the evidence must be bounded UTF-8 text in the
+owned root and is embedded in retained raw output. This is an explicit external
+environment contract, not an implemented OS-cache reset. No cold label is accepted
+without that receipt; the release reviewer must validate the pinned method.
+
+Extension runs require `--extension-inventory` and `--extension-command owner/id`.
+The inventory pins each relative installed file under its own directory; the
+wrapper copies at most 4096 files/512 MiB into the isolated extensions root.
+Normal production trust, enabled-command and runtime authentication checks remain
+in force. A build with no compiled owner trust correctly cannot measure extensions.
+The sampler must observe a child process; otherwise no total is published. Fixture
+disk bytes are measured; acquisition/download cost is outside this offline driver.
+
+Notepad++ lacks presentation, Find-dialog cancellation, workspace/tail, populated
+tabs and extension-runtime adapters. These cannot become cross-application ratios;
+use native-only evidence and explicitly preserve missing comparator signals. Cold
+protocol validation, trusted signed extension artifacts, actual runtime receipts,
+same-machine paired runs and default-policy decisions remain external acceptance
+work. Source/product harness measurements cannot replace native evidence.
 
 The opt-in nightly series remains Bareline-only hosted evidence. Regression
 reporting requires a separate repository opt-in and exactly the previous seven

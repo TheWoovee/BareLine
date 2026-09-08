@@ -20,6 +20,7 @@ import time
 import xml.etree.ElementTree as ET
 from windows_process_metrics import OwnedProcessTree, MemorySampler, WinApi
 from cache_protocol import prepare as prepare_cache
+from perf_suite import validate_fixture_size
 
 SCENARIOS = ('cold_launch', 'warm_launch', 'empty_idle', 'open_10mb', 'open_100mb',
              'open_1gb', 'open_5gb', 'long_line', 'scroll', 'edit_to_paint',
@@ -197,6 +198,7 @@ def run(args):
         (settings / 'config.xml').write_bytes(config_bytes)
         fixture = None; fixture_bytes = 0
         if args.fixture:
+            validate_fixture_size(args.fixture, args.scenario)
             fixture = root / 'fixture.txt'; digest = hashlib.sha256()
             with Path(args.fixture).open('rb') as source, fixture.open('xb') as target:
                 for chunk in iter(lambda: source.read(65536), b''):
@@ -278,11 +280,17 @@ def run(args):
                         raise RuntimeError('result jump did not reach the requested text position')
                     metrics['result_jump_roundtrip_us'] = elapsed
                 elif args.scenario == 'save':
-                    driver.with_bytes(b'x', lambda pointer: driver.scintilla(2001, 1, pointer))
+                    driver.scintilla(2025, 0)
+                    payload = b'PERF_SAVE'
+                    driver.with_bytes(payload, lambda pointer: driver.scintilla(2001, len(payload), pointer))
+                    if driver.scintilla(2006) != expected + len(payload) or driver.scintilla(2159) == 0:
+                        raise RuntimeError('save fixture edit was not acknowledged as dirty')
+                    save_started = time.perf_counter_ns()
                     elapsed, _ = timed(lambda: driver.message(driver.main, 0x0111, 41006))
                     if driver.scintilla(2159) != 0:
                         raise RuntimeError('save did not clear modified state')
                     metrics['save_command_roundtrip_us'] = elapsed
+                    metrics['save_to_clean_ack_us'] = (time.perf_counter_ns() - save_started) / 1000
                 sampler.stop(); metrics.update(sampler.metrics())
                 metrics.update(owned_fixture_disk_bytes=fixture_bytes, downloaded_bytes=0)
                 print(json.dumps({'event':'measurement','metrics':metrics,
@@ -305,7 +313,7 @@ def main():
     parser.add_argument('--scenario', choices=SCENARIOS, required=True)
     parser.add_argument('--fixture'); parser.add_argument('--fixture-sha256', default='')
     parser.add_argument('--expected-text-bytes', type=int); parser.add_argument('--timeout', type=float, default=60)
-    parser.add_argument('--samples', type=int, default=100); parser.add_argument('--idle-seconds', type=float, default=2)
+    parser.add_argument('--samples', type=int, default=120); parser.add_argument('--idle-seconds', type=float, default=10)
     parser.add_argument('--pattern', default='bareline-benchmark-absent-token'); parser.add_argument('--position', type=int, default=0)
     parser.add_argument('--cache-plan'); parser.add_argument('--cache-plan-sha256', default='')
     try:

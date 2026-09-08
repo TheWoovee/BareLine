@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: MPL-2.0
 mod accessibility;
 mod compare;
+mod encoding;
 mod extensions;
 mod instance;
+mod inventory;
 mod language;
 mod launch;
 mod lifecycle;
@@ -67,6 +69,7 @@ struct Shell {
     workspace: Option<Workspace>,
     notify: std::sync::Arc<dyn Fn() + Send + Sync>,
     pointer: Point,
+    editor_caret: Option<bareline_renderer::Rect>,
     perf: bool,
     idle_at: Option<Instant>,
     frames: u64,
@@ -96,14 +99,20 @@ struct Shell {
     utilities: utilities::UtilitiesRuntime,
     migration: migration::MigrationRuntime,
     search: search::SearchRuntime,
+    encoding: encoding::EncodingRuntime,
+    inventory: inventory::InventoryRuntime,
 }
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut ledger = StartupLedger::default();
     let args: Vec<_> = std::env::args_os().skip(1).collect();
+    let (args, inventory_request) = inventory::parse(args)?;
     let mut launch = {
         let _phase = bareline_diagnostics::startup_span(StartupAction::ParseCli);
         launch::parse(&args, &mut ledger)?
     };
+    if inventory_request.is_some() && !launch.paths.is_empty() {
+        return Err("Command inventory export does not open documents".into());
+    }
     if launch.help {
         println!(
             "Bareline [--line N] [--column N] [--read-only] [--monitor] [--no-session] [--no-extensions] [--new-instance] [--] [files...]"
@@ -177,6 +186,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         workspace: None,
         notify,
         pointer: Point::default(),
+        editor_caret: None,
         perf,
         idle_at: None,
         frames: 0,
@@ -206,6 +216,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         utilities: Default::default(),
         migration: Default::default(),
         search: Default::default(),
+        encoding: encoding::EncodingRuntime::default(),
+        inventory: inventory::InventoryRuntime::default(),
     };
     shell.shell_integration.portable = launch.portable;
     shell.performance.configure(launch.performance.clone());
@@ -286,7 +298,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     lifecycle::register(&mut shell.app.commands);
     power::register(&mut shell.app.commands);
     utilities::register(&mut shell.app.commands);
+    shell.inventory.configure(inventory_request);
     search::register(&mut shell.app.commands);
+    bareline_app::encoding::register(&mut shell.app.commands);
     compare::register(&mut shell.app.commands);
     views::register(&mut shell.app.commands);
     bareline_app::macros::register_commands(&mut shell.app.commands);
@@ -339,6 +353,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             self.shell.session_pump(el);
             self.shell.recovery_pump(el);
             self.shell.lifecycle_pump(el);
+            self.shell.encoding_pump(el);
             self.shell.migration_pump(el);
             self.shell.shell_recent_pump();
             self.shell.performance_pump(el);
@@ -350,6 +365,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             self.shell.language_pump(el);
             self.shell.extensions_pump(el);
             self.shell.sync_contributions();
+            self.shell.inventory_pump(el);
             self.shell.compare_pump(el);
             let update_status = self.shell.update.status.clone();
             self.shell.update.poll();
@@ -386,6 +402,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             self.shell.window_event(el, id, event);
         }
         fn about_to_wait(&mut self, el: &ActiveEventLoop) {
+            self.shell.inventory_pump(el);
+            let caret_deadline = self.shell.caret_timer(Instant::now());
             if self.shell.search_pump() {
                 if let Some(window) = &self.shell.window {
                     window.request_redraw();
@@ -426,6 +444,12 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     self.shell.dispatch(el, action);
                 }
             }
+            let deadline = caret_deadline
+                .into_iter()
+                .chain(self.shell.idle_at)
+                .chain(self.shell.inventory.deadline())
+                .min();
+            el.set_control_flow(deadline.map_or(ControlFlow::Wait, ControlFlow::WaitUntil));
             if let Some(deadline) = self.shell.idle_at {
                 if Instant::now() >= deadline {
                     match bareline_platform_windows::private_bytes() {
@@ -448,8 +472,6 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     self.shell.idle_at = None;
                     el.exit();
-                } else {
-                    el.set_control_flow(ControlFlow::WaitUntil(deadline));
                 }
             }
         }
@@ -470,6 +492,83 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 impl Shell {
+    fn editor_has_input_focus(&self) -> bool {
+        self.window.as_ref().is_some_and(Window::has_focus)
+            && !self.palette.open
+            && !self.settings.controller.open
+            && !self.shortcuts.open
+            && !self.macros.controller.manager.open
+            && !self.extensions.open
+            && !self.power.open
+            && !self.recovery.has_input_focus()
+            && !self.utilities.has_input_focus()
+            && self.panels_accessibility_focus().is_none()
+            && self.views_accessibility_focus().is_none()
+            && self
+                .workspace
+                .as_ref()
+                .is_some_and(|workspace| !workspace.find.has_focus() && !workspace.search_focus)
+    }
+    fn caret_timer(&mut self, now: Instant) -> Option<Instant> {
+        let focused = self.editor_has_input_focus();
+        let secondary = self.views.pane() == 1;
+        let mut deadline = None;
+        let mut redraw = false;
+        if let Some(workspace) = &mut self.workspace {
+            for (index, editor) in workspace.editors.iter_mut().enumerate() {
+                editor.set_focused(focused && !secondary && index == self.app.active);
+                redraw |= editor.tick_caret_blink(now);
+                deadline = deadline.into_iter().chain(editor.blink_deadline()).min();
+            }
+        }
+        self.views.set_secondary_focused(focused && secondary);
+        redraw |= self.views.tick_secondary_caret_blink(now);
+        deadline = deadline
+            .into_iter()
+            .chain(self.views.secondary_blink_deadline())
+            .min();
+        if redraw {
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+        }
+        deadline
+    }
+    fn editor_context_menu(&mut self, el: &ActiveEventLoop) {
+        let Some(window) = self.window.as_ref() else {
+            return;
+        };
+        let Ok(origin) = window.inner_position() else {
+            return;
+        };
+        let caret = self
+            .editor_caret
+            .unwrap_or_else(|| bareline_ui::rect(40.0, 60.0, 1.0, 20.0));
+        let scale = window.scale_factor();
+        let commands = [
+            "edit.undo",
+            "edit.redo",
+            "edit.cut",
+            "edit.copy",
+            "edit.paste",
+            "edit.select_all",
+            "search.find",
+        ]
+        .map(bareline_commands::CommandId);
+        let result = self.platform.as_ref().unwrap().context_menu_in(
+            origin.x + (caret.x as f64 * scale) as i32,
+            origin.y + ((caret.y + caret.height) as f64 * scale) as i32,
+            &self.app.commands,
+            &self.command_context(),
+            &self.settings.keymap.keymap,
+            &commands,
+        );
+        match result {
+            Ok(Some(action)) => self.dispatch(el, action),
+            Ok(None) => {}
+            Err(error) => self.fail(el, error),
+        }
+    }
     fn record_acknowledged_inputs(&mut self) {
         let mut receipts = self.views.take_ordered_receipts();
         if let Some(workspace) = &mut self.workspace {
@@ -741,6 +840,7 @@ impl Shell {
                 .unwrap_or(true),
         );
         self.macros.annotate_context(&mut context);
+        self.encoding_context(&mut context);
         context
     }
     fn ensure_workspace(&mut self, el: &ActiveEventLoop) -> bool {
@@ -892,6 +992,9 @@ impl Shell {
         match action {
             Action::Contributed(id) => {
                 if id.0 == "search.folder" && !self.ensure_workspace(el) {
+                    return;
+                }
+                if self.encoding_dispatch(el, id.0) {
                     return;
                 }
                 if self.search_command(id.0) {
@@ -1131,8 +1234,72 @@ impl Shell {
             }
             Action::Quit => self.request_close(el),
             Action::About => {
-                if let Some(p) = &self.platform {
-                    p.about();
+                let renderer = self
+                    .renderer
+                    .as_ref()
+                    .map(|r| if r.software { "Software" } else { "Hardware" })
+                    .unwrap_or("Not initialized");
+                let details = format!(
+                    "Version: {}\nBuild: {}\nArchitecture: {}\nRenderer: {}\nMode: {}\nLocal diagnostics: {}",
+                    env!("CARGO_PKG_VERSION"),
+                    option_env!("BARELINE_BUILD_HASH").unwrap_or("unknown"),
+                    std::env::consts::ARCH,
+                    renderer,
+                    if self.shell_integration.portable {
+                        "Portable"
+                    } else {
+                        "Installed profile"
+                    },
+                    if self.log.is_some() {
+                        "Enabled"
+                    } else {
+                        "Unavailable"
+                    }
+                );
+                let result = self.platform.as_ref().map(|p| p.about_details(&details));
+                match result {
+                    Some(Ok(Some(bareline_platform_windows::AboutAction::CopyDiagnostics))) => {
+                        if let Some(platform) = &self.platform {
+                            if let Err(error) = platform.set_clipboard_text(&details) {
+                                platform.operation_failed(&error.to_string());
+                            }
+                        }
+                    }
+                    Some(Ok(Some(action))) => {
+                        let name = match action {
+                            bareline_platform_windows::AboutAction::License => "LICENSE",
+                            bareline_platform_windows::AboutAction::ThirdPartyNotices => {
+                                "THIRD-PARTY-NOTICES.md"
+                            }
+                            bareline_platform_windows::AboutAction::CopyDiagnostics => {
+                                unreachable!()
+                            }
+                        };
+                        match std::env::current_exe().and_then(|path| {
+                            path.parent()
+                                .map(|parent| parent.join(name))
+                                .ok_or_else(|| {
+                                    std::io::Error::other("Executable directory unavailable")
+                                })
+                        }) {
+                            Ok(path) => {
+                                if self.ensure_workspace(el) {
+                                    self.workspace.as_mut().unwrap().open(path);
+                                }
+                            }
+                            Err(error) => {
+                                if let Some(platform) = &self.platform {
+                                    platform.operation_failed(&error.to_string());
+                                }
+                            }
+                        }
+                    }
+                    Some(Err(error)) => {
+                        if let Some(platform) = &self.platform {
+                            platform.operation_failed(&error.to_string());
+                        }
+                    }
+                    _ => {}
                 }
             }
             Action::New if self.prototype.is_none() => {
@@ -1349,6 +1516,27 @@ impl ApplicationHandler for Shell {
         ) {
             self.applied_settings = None;
         }
+        if self.editor_has_input_focus()
+            && matches!(
+                &event,
+                WindowEvent::KeyboardInput { .. }
+                    | WindowEvent::Ime(_)
+                    | WindowEvent::MouseInput {
+                        state: ElementState::Pressed,
+                        ..
+                    }
+            )
+        {
+            if self.views.pane() == 1 {
+                self.views.reset_secondary_caret_blink();
+            } else if let Some(editor) = self
+                .workspace
+                .as_mut()
+                .and_then(|workspace| workspace.editors.get_mut(self.app.active))
+            {
+                editor.reset_caret_blink();
+            }
+        }
         if self.settings.language_change.take().is_some() {
             self.applied_settings = None;
         }
@@ -1359,6 +1547,7 @@ impl ApplicationHandler for Shell {
             || self.macros_event(el, &event)
             || self.settings_keymap_event(el, &event)
             || self.utilities_event(el, &event)
+            || self.encoding_event(el, &event)
             || self.power_event(el, &event)
             || self.shortcuts_event(el, &event)
             || self.toolbar_event(el, &event)
@@ -1682,6 +1871,20 @@ impl ApplicationHandler for Shell {
                 self.window.as_ref().unwrap().request_redraw();
             }
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
+                let editor_focused = !self.palette.open
+                    && self.workspace.as_ref().is_some_and(|workspace| {
+                        !workspace.find.has_focus() && !workspace.search_focus
+                    });
+                if editor_focused
+                    && (event.logical_key == Key::Named(NamedKey::ContextMenu)
+                        || (event.logical_key == Key::Named(NamedKey::F10)
+                            && self.modifiers.shift_key()
+                            && !self.modifiers.control_key()
+                            && !self.modifiers.alt_key()))
+                {
+                    self.editor_context_menu(el);
+                    return;
+                }
                 if self.palette.open {
                     let context = self.command_context();
                     let keymap = self.settings.keymap.keymap.clone();
@@ -2026,11 +2229,22 @@ impl ApplicationHandler for Shell {
                     .as_mut()
                     .and_then(|w| w.editors.get_mut(self.app.active))
                 {
-                    let amount = match delta {
-                        MouseScrollDelta::LineDelta(_, y) => -y as f64 * 72.0,
-                        MouseScrollDelta::PixelDelta(p) => -p.y / window.scale_factor(),
+                    let (horizontal, vertical, zoom) = match delta {
+                        MouseScrollDelta::LineDelta(x, y) => {
+                            (-x as f64 * 72.0, -y as f64 * 72.0, y)
+                        }
+                        MouseScrollDelta::PixelDelta(p) => (
+                            -p.x / window.scale_factor(),
+                            -p.y / window.scale_factor(),
+                            (p.y / window.scale_factor() / 72.0) as f32,
+                        ),
                     };
-                    editor.scroll(amount, editor_bounds.height);
+                    if self.modifiers.control_key() && !self.modifiers.alt_key() {
+                        editor.zoom_by(zoom);
+                    } else {
+                        editor.scroll_horizontal(horizontal);
+                        editor.scroll(vertical, editor_bounds.height);
+                    }
                     window.request_redraw();
                 }
             }
@@ -2125,6 +2339,7 @@ impl ApplicationHandler for Shell {
                         let editor_theme = self.settings.editor_theme();
                         for editor in &mut workspace.editors {
                             editor.theme = editor_theme;
+                            editor.set_wrap(effective.word_wrap);
                             if let Err(error) =
                                 editor.set_font_family(&effective.editor_font_family)
                             {
@@ -2137,6 +2352,9 @@ impl ApplicationHandler for Shell {
                                 effective.highlight_current_line,
                                 &effective.whitespace,
                             );
+                        }
+                        if let Some(editor) = &mut self.views.secondary {
+                            editor.set_wrap(effective.word_wrap);
                         }
                         self.applied_settings = Some((effective, workspace.editors.len()));
                     }
@@ -2158,12 +2376,15 @@ impl ApplicationHandler for Shell {
                         Ok(Some(mut caret)) => {
                             caret.x += editor_bounds.x;
                             caret.y += editor_bounds.y;
+                            self.editor_caret = Some(caret);
                             window.set_ime_cursor_area(
                                 LogicalPosition::new(caret.x as f64, caret.y as f64),
                                 LogicalSize::new(caret.width as f64, caret.height as f64),
                             );
                         }
-                        Ok(None) => {}
+                        Ok(None) => {
+                            self.editor_caret = None;
+                        }
                         Err(error) => {
                             self.fail(el, format!("editor layout: {error:?}"));
                             return;

@@ -266,6 +266,14 @@ impl OpenReplaceTicket {
     }
 }
 impl PreparedOpenReplace {
+    /// Transfers already-reviewed edits to a view-aware group coordinator.
+    pub fn into_transactions(self) -> Vec<(DocumentSnapshot, EditTransaction)> {
+        self.edits
+            .into_iter()
+            .map(|edit| (edit.participant.snapshot, edit.transaction))
+            .collect()
+    }
+
     /// Submission is the explicit phase-two boundary. Once accepted, the coordinator
     /// commits the complete group or none; dropping the ticket does not undo a commit.
     pub fn submit(

@@ -86,39 +86,47 @@ pub fn collect_folder(
     query: &SearchQuery,
     job: &SearchJob,
     trust: &dyn PathTrustProvider,
-    platform: &dyn LocalFileSystem,
+    platform: Arc<dyn LocalFileSystem>,
 ) -> FolderResults {
     let mut groups: Vec<FolderGroup> = Vec::new();
     let mut skips = Vec::new();
-    let summary = scan_folder(scope, query, job, trust, platform, |event| match event {
-        FolderEvent::Batch {
-            path,
-            fingerprint,
-            matches,
-        } => {
-            if groups.last().is_none_or(|group| group.path != path) {
-                groups.push(FolderGroup {
-                    path: path.into(),
-                    fingerprint: fingerprint.clone(),
-                    matches: Vec::new(),
-                });
+    let summary = scan_folder_impl(
+        scope,
+        query,
+        job,
+        trust,
+        platform.as_ref(),
+        Some(platform.clone()),
+        |event| match event {
+            FolderEvent::Batch {
+                path,
+                fingerprint,
+                matches,
+            } => {
+                if groups.last().is_none_or(|group| group.path != path) {
+                    groups.push(FolderGroup {
+                        path: path.into(),
+                        fingerprint: fingerprint.clone(),
+                        matches: Vec::new(),
+                    });
+                }
+                let group = groups.last_mut().unwrap();
+                group
+                    .matches
+                    .extend(matches.iter().map(|matched| FolderMatch {
+                        range: matched.range.clone(),
+                        excerpt_start: matched.excerpt_start,
+                        excerpt: matched.excerpt.clone(),
+                    }));
             }
-            let group = groups.last_mut().unwrap();
-            group
-                .matches
-                .extend(matches.iter().map(|matched| FolderMatch {
-                    range: matched.range.clone(),
-                    excerpt_start: matched.excerpt_start,
-                    excerpt: matched.excerpt.clone(),
-                }));
-        }
-        FolderEvent::Skipped { path, reason } => {
-            // Diagnostics have an independent finite cap; terminal summary retains total skips.
-            if skips.len() < 256 {
-                skips.push((path.into(), reason));
+            FolderEvent::Skipped { path, reason } => {
+                // Diagnostics have an independent finite cap; terminal summary retains total skips.
+                if skips.len() < 256 {
+                    skips.push((path.into(), reason));
+                }
             }
-        }
-    });
+        },
+    );
     FolderResults {
         groups,
         skips,
@@ -177,6 +185,17 @@ pub fn scan_folder(
     job: &SearchJob,
     trust: &dyn PathTrustProvider,
     platform: &dyn LocalFileSystem,
+    emit: impl FnMut(FolderEvent<'_>),
+) -> FolderSummary {
+    scan_folder_impl(scope, query, job, trust, platform, None, emit)
+}
+fn scan_folder_impl(
+    scope: &FolderScope,
+    query: &SearchQuery,
+    job: &SearchJob,
+    trust: &dyn PathTrustProvider,
+    platform: &dyn LocalFileSystem,
+    paging: Option<Arc<dyn LocalFileSystem>>,
     mut emit: impl FnMut(FolderEvent<'_>),
 ) -> FolderSummary {
     let mut summary = FolderSummary {
@@ -293,6 +312,31 @@ pub fn scan_folder(
                 continue;
             }
         };
+        if expected_identity.length > regex::SUBJECT_LIMIT as u64
+            && let Some(platform) = &paging
+        {
+            let outcome = scan_large_file(
+                &path,
+                scope,
+                query,
+                job,
+                trust,
+                platform.clone(),
+                &mut remaining,
+                &mut summary,
+                &mut emit,
+            );
+            if let Err(reason) = outcome {
+                skip(&mut summary, &path, reason, &mut emit);
+            }
+            if matches!(
+                summary.completeness,
+                Completeness::Cancelled | Completeness::ResultLimit
+            ) {
+                break;
+            }
+            continue;
+        }
         let opened = match open_encoded_streaming(
             &path,
             platform,
@@ -393,6 +437,85 @@ pub fn scan_folder(
         summary.completeness = Completeness::Cancelled;
     }
     summary
+}
+
+fn scan_large_file(
+    path: &Path,
+    scope: &FolderScope,
+    query: &SearchQuery,
+    job: &SearchJob,
+    trust: &dyn PathTrustProvider,
+    platform: Arc<dyn LocalFileSystem>,
+    remaining: &mut usize,
+    summary: &mut FolderSummary,
+    emit: &mut impl FnMut(FolderEvent<'_>),
+) -> Result<(), FolderSkip> {
+    let mut opened =
+        super::disk_source::open(path, trust, platform, job).map_err(|_| FolderSkip::Io)?;
+    let snapshot = opened.transcoded.document.snapshot();
+    if !scope.include_binary {
+        let mut at = 0;
+        while at < snapshot.len() {
+            let window = super::disk_source::window(&mut opened, &snapshot, at, 1024 * 1024, job)
+                .map_err(|_| FolderSkip::Io)?;
+            if window.text().as_bytes().contains(&0) {
+                return Err(FolderSkip::Binary);
+            }
+            if window.range().end.0 <= at {
+                return Err(FolderSkip::Io);
+            }
+            at = window.range().end.0;
+        }
+    }
+    let mut query = query.clone();
+    query.results_ram_bytes = *remaining;
+    let result = super::paged::scan_paged(
+        &snapshot,
+        &query,
+        job,
+        |ticket| {
+            opened
+                .transcoded
+                .source
+                .read_page(ticket)
+                .map(|_| true)
+                .map_err(|error| format!("{error:?}"))
+        },
+        |_| {},
+    );
+    summary.searched_files += 1;
+    for found in &result.matches {
+        let excerpt = super::disk_source::window(
+            &mut opened,
+            &snapshot,
+            found.range.start.0.saturating_sub(60),
+            EXCERPT_BYTES,
+            job,
+        )
+        .map_err(|_| FolderSkip::Io)?;
+        let used =
+            std::mem::size_of::<FolderMatch>() + excerpt.text().len() + path.as_os_str().len();
+        if used > *remaining {
+            summary.completeness = Completeness::ResultLimit;
+            break;
+        }
+        *remaining -= used;
+        let batch = [FolderMatch {
+            range: found.range.clone(),
+            excerpt_start: excerpt.range().start,
+            excerpt: excerpt.text().into(),
+        }];
+        emit(FolderEvent::Batch {
+            path,
+            fingerprint: &opened.fingerprint,
+            matches: &batch,
+        });
+        summary.count += 1;
+    }
+    if result.completeness != Completeness::Complete {
+        summary.completeness = result.completeness;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

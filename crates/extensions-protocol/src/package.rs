@@ -53,7 +53,10 @@ impl VerifiedPackage {
             Ok(mut file) => {
                 let result = file.write_all(&self.bytes).and_then(|_| file.sync_all());
                 drop(file);
-                if result.is_err() { let _ = fs::remove_file(&archive); return Err(PackageError::Io); }
+                if result.is_err() {
+                    let _ = fs::remove_file(&archive);
+                    return Err(PackageError::Io);
+                }
             }
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                 let mut bytes = Vec::new();
@@ -286,6 +289,36 @@ impl InstalledPackage {
     pub fn directory(&self) -> &Path {
         &self.directory
     }
+    /// Uninstall the verified version and its two fixed retained cache records.
+    /// No directory scan or recursive deletion is used; unrelated files survive.
+    pub fn remove_cached(self) -> Result<(), PackageError> {
+        let root = self.directory.parent().ok_or(PackageError::UnsafeArchive)?;
+        let digest = self
+            .directory
+            .file_name()
+            .and_then(|value| value.to_str())
+            .ok_or(PackageError::UnsafeArchive)?;
+        let paths = [
+            root.join(format!("{digest}.blex")),
+            root.join(format!("{digest}.receipt.json")),
+        ];
+        for path in &paths {
+            match fs::symlink_metadata(path) {
+                Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                _ => return Err(PackageError::UnsafeArchive),
+            }
+        }
+        self.remove()?;
+        for path in paths {
+            match fs::remove_file(path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(_) => return Err(PackageError::Io),
+            }
+        }
+        Ok(())
+    }
     /// Only the previously enumerated verified files are removed. Added files keep
     /// the directory nonempty. Refuse links rather than following a substituted root.
     pub fn remove(self) -> Result<(), PackageError> {
@@ -499,9 +532,24 @@ impl VerifiedPackage {
             || manifest.commands.iter().any(|c| !valid_id(c))
             || manifest.panels.iter().any(|p| !valid_id(p))
             || manifest.commands.len() > 256
-            || manifest.commands.iter().collect::<std::collections::BTreeSet<_>>().len() != manifest.commands.len()
-            || manifest.panels.iter().collect::<std::collections::BTreeSet<_>>().len() != manifest.panels.len()
-            || manifest.background_commands.iter().collect::<std::collections::BTreeSet<_>>().len() != manifest.background_commands.len()
+            || manifest
+                .commands
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len()
+                != manifest.commands.len()
+            || manifest
+                .panels
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len()
+                != manifest.panels.len()
+            || manifest
+                .background_commands
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len()
+                != manifest.background_commands.len()
             || manifest
                 .background_commands
                 .iter()
@@ -804,17 +852,50 @@ mod signed_tests {
         );
         // Retained receipts restore the exact accepted package offline after
         // metadata expiry; a new install still requires fresh metadata.
-        assert!(matches!(verified.cache(&root), Err(PackageError::HashMismatch)));
+        assert!(matches!(
+            verified.cache(&root),
+            Err(PackageError::HashMismatch)
+        ));
         fs::write(&package_file, &bytes).unwrap();
         verified.cache(&root).unwrap();
         let mut later = policy(&key);
         later.now_unix = 300;
-        let restored = restore_cached(&root, &catalog.entries[0].sha256, &later, &std::sync::atomic::AtomicBool::new(false)).unwrap();
+        let restored = restore_cached(
+            &root,
+            &catalog.entries[0].sha256,
+            &later,
+            &std::sync::atomic::AtomicBool::new(false),
+        )
+        .unwrap();
         assert_eq!(restored.component_sha256, installed.component_sha256);
-        fs::write(installed.directory().join("entry.wasm"), b"tampered extracted component").unwrap();
-        assert!(restore_cached(&root, &catalog.entries[0].sha256, &later, &std::sync::atomic::AtomicBool::new(false)).is_err());
-        fs::write(installed.directory().join("entry.wasm"), b"safe nonexecuted fixture").unwrap();
-        assert!(restore_cached(&root, &catalog.entries[0].sha256, &later, &std::sync::atomic::AtomicBool::new(true)).is_err());
+        fs::write(
+            installed.directory().join("entry.wasm"),
+            b"tampered extracted component",
+        )
+        .unwrap();
+        assert!(
+            restore_cached(
+                &root,
+                &catalog.entries[0].sha256,
+                &later,
+                &std::sync::atomic::AtomicBool::new(false)
+            )
+            .is_err()
+        );
+        fs::write(
+            installed.directory().join("entry.wasm"),
+            b"safe nonexecuted fixture",
+        )
+        .unwrap();
+        assert!(
+            restore_cached(
+                &root,
+                &catalog.entries[0].sha256,
+                &later,
+                &std::sync::atomic::AtomicBool::new(true)
+            )
+            .is_err()
+        );
         let retained = installed.directory().to_owned();
         assert!(retained.exists());
         installed.remove().unwrap();
@@ -847,8 +928,22 @@ mod signed_tests {
             source.fetch(&request),
             Err(PackageError::WrongIdentity)
         ));
-        fs::remove_file(package_file).unwrap();
-        fs::remove_file(root.join(format!("{}.receipt.json",catalog.entries[0].sha256))).unwrap();
+        fs::write(&package_file, &bytes).unwrap();
+        verified.cache(&root).unwrap();
+        let again = verified
+            .install(&root, &std::sync::atomic::AtomicBool::new(false))
+            .unwrap();
+        let unrelated = root.join("unrelated-owner-file");
+        fs::write(&unrelated, b"keep").unwrap();
+        again.remove_cached().unwrap();
+        assert!(!package_file.exists());
+        assert!(
+            !root
+                .join(format!("{}.receipt.json", catalog.entries[0].sha256))
+                .exists()
+        );
+        assert_eq!(fs::read(&unrelated).unwrap(), b"keep");
+        fs::remove_file(unrelated).unwrap();
         fs::remove_dir(root).unwrap();
     }
 }

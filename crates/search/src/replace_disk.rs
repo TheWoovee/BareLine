@@ -80,6 +80,7 @@ pub struct DiskChange {
 pub struct DiskPreviewFile {
     pub path: PathBuf,
     pub fingerprint: Fingerprint,
+    pub paged: bool,
     pub bom: bool,
     pub encoding: bareline_file_io::codecs::Encoding,
     pub eol: bareline_file_io::codecs::state::EolState,
@@ -260,6 +261,7 @@ pub fn preview_disk_files(
         files.push(DiskPreviewFile {
             path: opened.path,
             fingerprint: opened.fingerprint,
+            paged: false,
             bom: opened.bom,
             encoding: opened
                 .encoding
@@ -278,6 +280,121 @@ pub fn preview_disk_files(
     Ok(DiskReplacePreview { files })
 }
 
+/// Full-source preview. Larger files use private disk-backed decoded storage and bounded pages.
+pub fn preview_disk_files_with_paging(
+    paths: impl IntoIterator<Item = PathBuf>,
+    query: &SearchQuery,
+    replacement: &str,
+    job: &SearchJob,
+    trust: &dyn PathTrustProvider,
+    platform: Arc<dyn LocalFileSystem>,
+    ram_bytes: usize,
+) -> io::Result<DiskReplacePreview> {
+    let mut files = Vec::new();
+    let mut remaining = ram_bytes.min(MAX_RESULT_BYTES);
+    for (index, path) in paths.into_iter().enumerate() {
+        if index >= MAX_FILES {
+            return Err(io::Error::other("File count limit"));
+        }
+        let guard = approved(&path, trust, false)?;
+        let identity = platform.identity(&guard.file)?;
+        let file = if identity.length <= regex::SUBJECT_LIMIT as u64 {
+            let mut preview = preview_disk_files(
+                [path],
+                query,
+                replacement,
+                job,
+                trust,
+                platform.as_ref(),
+                remaining,
+            )?;
+            if preview.files.is_empty() {
+                continue;
+            }
+            preview.files.remove(0)
+        } else {
+            let mut opened = super::disk_source::open(&path, trust, platform.clone(), job)?;
+            if opened.fingerprint.identity != identity {
+                return Err(io::Error::other("Source changed during preview"));
+            }
+            let snapshot = opened.transcoded.document.snapshot();
+            let mut scoped = query.clone();
+            scoped.results_ram_bytes = remaining;
+            let results = super::paged::scan_paged(
+                &snapshot,
+                &scoped,
+                job,
+                |ticket| {
+                    opened
+                        .transcoded
+                        .source
+                        .read_page(ticket)
+                        .map(|_| true)
+                        .map_err(|error| format!("{error:?}"))
+                },
+                |_| {},
+            );
+            let transaction = results
+                .prepare_replace(&snapshot, replacement, ReplaceScope::All, job, |ticket| {
+                    opened
+                        .transcoded
+                        .source
+                        .read_page(ticket)
+                        .map(|_| true)
+                        .map_err(|error| format!("{error:?}"))
+                })
+                .map_err(|error| io::Error::other(format!("{error:?}")))?;
+            let mut changes = Vec::new();
+            for edit in transaction.edits {
+                let before = super::disk_source::window(
+                    &mut opened,
+                    &snapshot,
+                    edit.range.start.0,
+                    160,
+                    job,
+                )?;
+                let mut end = edit.insert.len().min(160);
+                while !edit.insert.is_char_boundary(end) {
+                    end -= 1;
+                }
+                changes.push(DiskChange {
+                    range: edit.range.clone(),
+                    before: before.text().into(),
+                    after: edit.insert[..end].into(),
+                    included: true,
+                    edit,
+                });
+            }
+            DiskPreviewFile {
+                path,
+                fingerprint: opened.fingerprint.clone(),
+                paged: true,
+                bom: opened.transcoded.store.state.bom,
+                encoding: opened.transcoded.store.state.save_target,
+                eol: opened.transcoded.store.eol,
+                included: true,
+                changes,
+            }
+        };
+        let used = std::mem::size_of::<DiskPreviewFile>()
+            + file.path.as_os_str().len()
+            + file
+                .changes
+                .iter()
+                .map(|change| {
+                    std::mem::size_of::<DiskChange>()
+                        + change.before.len()
+                        + change.after.len()
+                        + change.edit.insert.len()
+                })
+                .sum::<usize>();
+        remaining = remaining
+            .checked_sub(used)
+            .ok_or_else(|| io::Error::other("Preview budget"))?;
+        files.push(file);
+    }
+    Ok(DiskReplacePreview { files })
+}
 struct OpenEntry {
     active: Arc<AtomicBool>,
     path: PathBuf,
@@ -448,8 +565,8 @@ fn backup(
             break;
         }
         total += n;
-        if total > regex::SUBJECT_LIMIT {
-            return Err(io::Error::other("backup budget"));
+        if total as u64 > expected.identity.length {
+            return Err(io::Error::other("Backup source grew"));
         }
         hash.update(&buffer[..n]);
         output.write_all(&buffer[..n])?;
@@ -471,6 +588,35 @@ pub fn apply_disk_files(
     job: &SearchJob,
     trust: &dyn PathTrustProvider,
     platform: &dyn LocalFileSystem,
+) -> io::Result<DiskApplySummary> {
+    apply_disk_files_impl(preview, options, open_files, job, trust, platform, None)
+}
+pub fn apply_disk_files_with_paging(
+    preview: DiskReplacePreview,
+    options: &DiskReplaceOptions,
+    open_files: &OpenFileRegistry,
+    job: &SearchJob,
+    trust: &dyn PathTrustProvider,
+    platform: Arc<dyn LocalFileSystem>,
+) -> io::Result<DiskApplySummary> {
+    apply_disk_files_impl(
+        preview,
+        options,
+        open_files,
+        job,
+        trust,
+        platform.as_ref(),
+        Some(platform.clone()),
+    )
+}
+fn apply_disk_files_impl(
+    preview: DiskReplacePreview,
+    options: &DiskReplaceOptions,
+    open_files: &OpenFileRegistry,
+    job: &SearchJob,
+    trust: &dyn PathTrustProvider,
+    platform: &dyn LocalFileSystem,
+    paging: Option<Arc<dyn LocalFileSystem>>,
 ) -> io::Result<DiskApplySummary> {
     let directory_guard = approved(&options.receipt_directory, trust, true)?;
     let directory = new_job_directory(&directory_guard.trust.canonical)?;
@@ -521,6 +667,93 @@ pub fn apply_disk_files(
         let mut attempted_commit = false;
         let mut review_changed = false;
         let outcome = (|| -> io::Result<()> {
+            if file.paged {
+                let platform_arc = paging
+                    .as_ref()
+                    .ok_or_else(|| io::Error::other("Paged save service unavailable"))?;
+                let mut opened =
+                    super::disk_source::open(&file.path, trust, platform_arc.clone(), job)?;
+                if opened.fingerprint != file.fingerprint {
+                    review_changed = true;
+                    return Err(io::Error::other("Source changed; review again"));
+                }
+                let snapshot = opened.transcoded.document.snapshot();
+                let edits: Vec<_> = file
+                    .changes
+                    .into_iter()
+                    .filter(|change| change.included)
+                    .map(|change| change.edit)
+                    .collect();
+                let mut windows = Vec::new();
+                for edit in &edits {
+                    windows.push(super::disk_source::window(
+                        &mut opened,
+                        &snapshot,
+                        edit.range.start.0.saturating_sub(4),
+                        edit.range.end.0 - edit.range.start.0 + 8,
+                        job,
+                    )?);
+                }
+                opened
+                    .transcoded
+                    .document
+                    .apply_materialized(
+                        EditTransaction {
+                            base_revision: snapshot.revision,
+                            edits,
+                        },
+                        &windows,
+                    )
+                    .map_err(|error| io::Error::other(format!("{error:?}")))?;
+                let after = opened.transcoded.document.snapshot();
+                let policy = bareline_file_io::lifecycle::PagedSavePolicy {
+                    store: opened.transcoded.store.clone(),
+                    generation: opened.transcoded.source.source().generation(),
+                    encoding: file.encoding,
+                    bom: file.bom,
+                };
+                struct HashOutput(Sha256);
+                impl Write for HashOutput {
+                    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+                        self.0.update(bytes);
+                        Ok(bytes.len())
+                    }
+                    fn flush(&mut self) -> io::Result<()> {
+                        Ok(())
+                    }
+                }
+                let mut output = HashOutput(Sha256::new());
+                policy
+                    .store
+                    .write_snapshot(
+                        &after,
+                        policy.generation,
+                        policy.encoding,
+                        policy.bom,
+                        &mut output,
+                        &job.io_cancel,
+                    )
+                    .map_err(|error| io::Error::other(format!("{error:?}")))?;
+                receipt.files[index].after_hash = Some(output.0.finalize().into());
+                if matches!(options.backup, BackupPolicy::Required) {
+                    let target = directory.join(format!("original-{index}.bak"));
+                    backup(&file.path, &target, &file.fingerprint, trust, platform, job)?;
+                    receipt.files[index].backup = Some(SerializedPath::from_native(&target));
+                }
+                receipt.files[index].state = ReceiptState::Staged;
+                persist(&receipt_path, &receipt, platform)?;
+                attempted_commit = true;
+                bareline_file_io::lifecycle::save_paged_cancellable(
+                    after,
+                    &file.path,
+                    Some(&file.fingerprint),
+                    &policy,
+                    platform,
+                    &job.io_cancel,
+                )
+                .map_err(|error| io::Error::other(format!("{error:?}")))?;
+                return Ok(());
+            }
             let (mut opened, _ancestors) = open(approved(&file.path, trust, true)?, platform, job)?;
             if opened.fingerprint != file.fingerprint {
                 review_changed = true;
@@ -612,6 +845,35 @@ pub fn apply_disk_files(
         receipt,
     })
 }
+fn current_fingerprint(
+    path: &Path,
+    trust: &dyn PathTrustProvider,
+    platform: &dyn LocalFileSystem,
+    job: &SearchJob,
+) -> io::Result<Fingerprint> {
+    let guard = approved(path, trust, false)?;
+    let mut file = guard.file;
+    let identity = platform.identity(&file)?;
+    let mut hash = Sha256::new();
+    let mut buffer = [0; 65536];
+    loop {
+        if job.is_cancelled() {
+            return Err(io::Error::other("Cancelled"));
+        }
+        let count = file.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        hash.update(&buffer[..count]);
+    }
+    if platform.identity(&file)? != identity || platform.identity(&File::open(path)?)? != identity {
+        return Err(io::Error::other("Source changed during fingerprint"));
+    }
+    Ok(Fingerprint {
+        identity,
+        sha256: hash.finalize().into(),
+    })
+}
 /// Restore only committed targets whose current full hash still equals this job's output.
 /// A modified target or backup is a conflict, never an overwrite. Each rollback is atomic.
 pub fn rollback_receipt(
@@ -620,6 +882,32 @@ pub fn rollback_receipt(
     job: &SearchJob,
     trust: &dyn PathTrustProvider,
     platform: &dyn LocalFileSystem,
+) -> io::Result<ReplaceReceipt> {
+    rollback_receipt_impl(path, open_files, job, trust, platform, None)
+}
+pub fn rollback_receipt_with_paging(
+    path: &Path,
+    open_files: &OpenFileRegistry,
+    job: &SearchJob,
+    trust: &dyn PathTrustProvider,
+    platform: Arc<dyn LocalFileSystem>,
+) -> io::Result<ReplaceReceipt> {
+    rollback_receipt_impl(
+        path,
+        open_files,
+        job,
+        trust,
+        platform.as_ref(),
+        Some(platform.clone()),
+    )
+}
+fn rollback_receipt_impl(
+    path: &Path,
+    open_files: &OpenFileRegistry,
+    job: &SearchJob,
+    trust: &dyn PathTrustProvider,
+    platform: &dyn LocalFileSystem,
+    paging: Option<Arc<dyn LocalFileSystem>>,
 ) -> io::Result<ReplaceReceipt> {
     let mut receipt = reconcile_receipt(path, job, trust, platform)?;
     for index in 0..receipt.files.len() {
@@ -648,18 +936,53 @@ pub fn rollback_receipt(
             .lock()
             .map_err(|_| io::Error::other("open-file registry unavailable"))?;
         let outcome = (|| -> io::Result<()> {
-            let (current, _target_ancestors) =
-                open(approved(&target, trust, true)?, platform, job)?;
+            let target_guard = approved(&target, trust, true)?;
+            let current = current_fingerprint(&target, trust, platform, job)?;
+            if platform.identity(&target_guard.file)? != current.identity {
+                return Err(io::Error::other("Target changed during rollback approval"));
+            }
+            // Retain ancestor protection, but release the sealed leaf before atomic
+            // replacement. The save revalidates the full expected fingerprint.
+            let _target_ancestors = target_guard.ancestors;
+            drop(target_guard.file);
             if admission.iter().any(|entry| {
                 entry.active.load(Ordering::Acquire)
                     && (entry.path == target
-                        || (entry.volume == current.fingerprint.identity.volume
-                            && entry.file == current.fingerprint.identity.file))
+                        || (entry.volume == current.identity.volume
+                            && entry.file == current.identity.file))
             }) {
                 return Err(io::Error::other("Target is open; close it before rollback"));
             }
-            if record.after_hash != Some(current.fingerprint.sha256) {
+            if record.after_hash != Some(current.sha256) {
                 return Err(io::Error::other("Target changed since replacement"));
+            }
+            if current.identity.length > regex::SUBJECT_LIMIT as u64 {
+                let platform_arc = paging
+                    .as_ref()
+                    .ok_or_else(|| io::Error::other("Paged rollback service unavailable"))?;
+                let original =
+                    super::disk_source::open(&backup_path, trust, platform_arc.clone(), job)?;
+                if original.fingerprint.sha256 != record.original.sha256 {
+                    return Err(io::Error::other("Backup fingerprint changed"));
+                }
+                receipt.files[index].state = ReceiptState::RollbackStaged;
+                persist(path, &receipt, platform)?;
+                let policy = bareline_file_io::lifecycle::PagedSavePolicy {
+                    store: original.transcoded.store.clone(),
+                    generation: original.transcoded.source.source().generation(),
+                    encoding: original.transcoded.store.state.save_target,
+                    bom: original.transcoded.store.state.bom,
+                };
+                bareline_file_io::lifecycle::save_paged_cancellable(
+                    original.transcoded.document.snapshot(),
+                    &target,
+                    Some(&current),
+                    &policy,
+                    platform,
+                    &job.io_cancel,
+                )
+                .map_err(|error| io::Error::other(format!("{error:?}")))?;
+                return Ok(());
             }
             let (original, _backup_ancestors) =
                 open(approved(&backup_path, trust, false)?, platform, job)?;
@@ -672,7 +995,7 @@ pub fn rollback_receipt(
                 save_encoded_cancellable(
                     original.document.snapshot(),
                     &target,
-                    Some(&current.fingerprint),
+                    Some(&current),
                     original.bom,
                     platform,
                     &job.io_cancel,
@@ -682,7 +1005,7 @@ pub fn rollback_receipt(
                 save_utf8_cancellable(
                     original.document.snapshot(),
                     &target,
-                    Some(&current.fingerprint),
+                    Some(&current),
                     original.bom,
                     platform,
                     &job.io_cancel,
@@ -743,16 +1066,14 @@ pub fn reconcile_receipt(
             .to_native()
             .map_err(|e| io::Error::other(format!("{e:?}")))?;
         let rolling_back = record.state == ReceiptState::RollbackStaged;
-        match approved(&target, trust, false).and_then(|guard| open(guard, platform, job)) {
-            Ok((opened, _guards))
-                if rolling_back && record.original.sha256 == opened.fingerprint.sha256 =>
-            {
+        match current_fingerprint(&target, trust, platform, job) {
+            Ok(fingerprint) if rolling_back && record.original.sha256 == fingerprint.sha256 => {
                 record.state = ReceiptState::RolledBack
             }
-            Ok((opened, _guards)) if record.after_hash == Some(opened.fingerprint.sha256) => {
+            Ok(fingerprint) if record.after_hash == Some(fingerprint.sha256) => {
                 record.state = ReceiptState::ReconciledCommitted
             }
-            Ok((opened, _guards)) if record.original.sha256 == opened.fingerprint.sha256 => {
+            Ok(fingerprint) if record.original.sha256 == fingerprint.sha256 => {
                 record.state =
                     ReceiptState::Skipped("Interrupted before commit; no automatic retry".into())
             }

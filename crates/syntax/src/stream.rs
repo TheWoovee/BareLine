@@ -106,6 +106,7 @@ impl StreamLexer {
             cancel,
             None,
             LexOptions {
+                line_origin: self.line,
                 preference: LexerPreference::Native,
                 definition: self.definition.clone(),
             },
@@ -297,6 +298,29 @@ mod tests {
                     &Cancellation::default()
                 )
                 .is_err()
+        );
+    }
+    #[test]
+    fn sparse_checkpoints_follow_global_lines_across_windows() {
+        let mut lexer = StreamLexer::new(Language::Rust, LexerPreference::Native, None);
+        let first = "x\n".repeat(200);
+        lexer
+            .advance(&first, TextOffset(0), false, &Cancellation::default())
+            .unwrap();
+        let second = lexer
+            .advance(
+                &"x\n".repeat(100),
+                TextOffset(first.len()),
+                true,
+                &Cancellation::default(),
+            )
+            .unwrap();
+        assert!(
+            second
+                .syntax
+                .checkpoints
+                .iter()
+                .any(|checkpoint| checkpoint.offset() == TextOffset(112))
         );
     }
     #[test]

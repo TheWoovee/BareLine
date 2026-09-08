@@ -7,6 +7,9 @@ use bareline_ui::controls::{Key as UiKey, UiEvent};
 #[derive(Default)]
 pub(super) struct LanguageRuntime {
     pub controller: LanguageController,
+    detection_seen: Option<((u64, u64), std::path::PathBuf)>,
+    detection_associations: std::collections::BTreeMap<String, String>,
+    last_hint: Option<((u64, u64), usize)>,
     completion_source: Option<((u64, u64), usize)>,
     restored: Option<bareline_document::DocumentSnapshot>,
     restored_language: Option<bareline_syntax::Language>,
@@ -108,10 +111,22 @@ impl Shell {
                 }
             }
             "language.signatures.import" => match self.platform.as_ref().unwrap().open_file() {
-                Ok(Some(path)) => self
-                    .language
-                    .controller
-                    .import_signatures(path, self.notify.clone()),
+                Ok(Some(path)) => self.language.controller.import_signatures(
+                    path,
+                    self.workspace
+                        .as_ref()
+                        .and_then(|workspace| workspace.editors.get(self.app.active))
+                        .map_or_else(
+                            || "plain".into(),
+                            |editor| {
+                                editor.udl.as_ref().map_or_else(
+                                    || editor.language.metadata().id.into(),
+                                    |definition| definition.id.clone(),
+                                )
+                            },
+                        ),
+                    self.notify.clone(),
+                ),
                 Ok(None) => (),
                 Err(error) => self.language.controller.status = error.to_string(),
             },
@@ -172,7 +187,21 @@ impl Shell {
                     .as_mut()
                     .and_then(|w| w.editors.get_mut(self.app.active))
                 {
-                    if id == "view.fold.unfoldAll" {
+                    if let bareline_app::workspace::WorkspaceEditor::Paged(paged) = editor {
+                        if id == "view.fold.unfoldAll" {
+                            paged.unfold_all_known();
+                        } else if id == "view.fold.toggleCurrent" {
+                            if let Err(error) = paged.toggle_current_known() {
+                                self.language.controller.status = error;
+                            }
+                        } else {
+                            let level = id
+                                .strip_prefix("view.fold.level")
+                                .and_then(|value| value.parse::<usize>().ok())
+                                .unwrap_or(1);
+                            paged.fold_all_known(level);
+                        }
+                    } else if id == "view.fold.unfoldAll" {
                         editor.unfold_all();
                     } else if id == "view.fold.toggleCurrent" {
                         editor.toggle_current_fold();
@@ -213,6 +242,31 @@ impl Shell {
         true
     }
     pub(super) fn language_pump(&mut self, _el: &ActiveEventLoop) {
+        let active = self.workspace.as_ref().and_then(|workspace| {
+            workspace.editors.get(self.app.active).map(|editor| {
+                (
+                    bareline_app::accessibility::source_identity(editor),
+                    workspace
+                        .path(self.app.active)
+                        .map_or_else(std::path::PathBuf::new, std::path::Path::to_path_buf),
+                )
+            })
+        });
+        let associations = &self.settings.effective().language_associations;
+        if active != self.language.detection_seen
+            || associations != &self.language.detection_associations
+        {
+            self.language.detection_seen = active;
+            self.language.detection_associations = associations.clone();
+            self.language.detection = None;
+            if let Some(editor) = self
+                .workspace
+                .as_mut()
+                .and_then(|workspace| workspace.editors.get_mut(self.app.active))
+            {
+                editor.detected_language = None;
+            }
+        }
         if let Some(result) = self
             .language
             .detection
@@ -256,20 +310,8 @@ impl Shell {
                 .name("bareline-language-detect".into())
                 .spawn(move || {
                     let result = (|| {
-                        let association = associations.iter().find_map(|(pattern, id)| {
-                            let name = path.file_name()?.to_str()?;
-                            let matched = pattern.eq_ignore_ascii_case(name)
-                                || pattern.strip_prefix("*.").is_some_and(|extension| {
-                                    path.extension()
-                                        .and_then(|value| value.to_str())
-                                        .is_some_and(|actual| {
-                                            actual.eq_ignore_ascii_case(extension)
-                                        })
-                                });
-                            matched
-                                .then(|| bareline_syntax::Language::from_id(id))
-                                .flatten()
-                        });
+                        let association =
+                            bareline_syntax::catalog::association(&path, &associations);
                         if let Some(handle) = paged {
                             let prefix = read_detection_window(&handle, 0)?;
                             let suffix = read_detection_window(
@@ -380,6 +422,85 @@ impl Shell {
                     definition: editor.udl.clone(),
                 },
             );
+        }
+        if !self.language.controller.open
+            && !self.language.controller.busy()
+            && let Some(workspace) = &self.workspace
+            && let Some(editor) = workspace.editors.get(self.app.active)
+        {
+            let identity = bareline_app::accessibility::source_identity(editor);
+            let caret = editor.selection.caret;
+            let id = editor
+                .udl
+                .as_ref()
+                .map_or(editor.language.metadata().id, |definition| {
+                    definition.id.as_str()
+                });
+            let policy = self.settings.effective().language_policy(id);
+            if policy.parameter_hints
+                && self.language.controller.has_signatures(id)
+                && self.language.last_hint != Some((identity, caret))
+                && let Some(syntax) = workspace
+                    .syntax_result()
+                    .filter(|syntax| syntax.is_current(editor.snapshot()))
+            {
+                let mut start = caret.saturating_sub(4);
+                while !editor
+                    .snapshot()
+                    .is_boundary(bareline_document::TextOffset(start))
+                {
+                    start += 1;
+                }
+                if editor
+                    .snapshot()
+                    .read(
+                        bareline_document::TextOffset(start)..bareline_document::TextOffset(caret),
+                        4,
+                    )
+                    .is_ok_and(|text| text.ends_with(['(', ',']))
+                {
+                    self.language.last_hint = Some((identity, caret));
+                    self.language.completion_source = Some((
+                        identity,
+                        match editor {
+                            bareline_app::workspace::WorkspaceEditor::Paged(paged) => {
+                                paged.viewport_start().0
+                            }
+                            _ => 0,
+                        },
+                    ));
+                    self.language.controller.request_parameter_hint(
+                        editor.snapshot().clone(),
+                        bareline_document::TextOffset(caret),
+                        syntax.clone(),
+                        id,
+                        self.notify.clone(),
+                    );
+                }
+            }
+        }
+        if self.language.controller.open
+            && matches!(
+                self.language.controller.title.as_str(),
+                "Completion" | "Parameter Hint"
+            )
+            && let Some(editor) = self
+                .workspace
+                .as_ref()
+                .and_then(|workspace| workspace.editors.get(self.app.active))
+        {
+            let current = (
+                bareline_app::accessibility::source_identity(editor),
+                match editor {
+                    bareline_app::workspace::WorkspaceEditor::Paged(paged) => {
+                        paged.viewport_start().0
+                    }
+                    _ => 0,
+                },
+            );
+            if self.language.completion_source != Some(current) {
+                self.language.controller.close();
+            }
         }
         let definition_snapshot = self
             .language
@@ -624,4 +745,143 @@ fn read_detection_window(
         }
     }
     Err("Language detection source busy".into())
+}
+
+/// Golden fixtures exercise the real controller, worker results and list layout.
+#[cfg(test)]
+#[allow(clippy::type_complexity)]
+pub(super) fn accessibility_test_cases() -> Vec<(
+    &'static str,
+    Vec<bareline_platform::accessibility::AccessibilityNode>,
+    Option<u64>,
+)> {
+    use bareline_document::{Budget, Document, TextOffset};
+    use std::sync::{Arc, mpsc};
+    fn capture(
+        name: &'static str,
+        runtime: &mut LanguageRuntime,
+    ) -> (
+        &'static str,
+        Vec<bareline_platform::accessibility::AccessibilityNode>,
+        Option<u64>,
+    ) {
+        runtime.controller.draw(1000.0, 800.0, &mut Vec::new());
+        (
+            name,
+            runtime.controller.accessibility_nodes(),
+            runtime.controller.accessibility_focus(),
+        )
+    }
+    fn finish(runtime: &mut LanguageRuntime, receiver: &mpsc::Receiver<()>) {
+        receiver
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("language fixture worker completed");
+        assert!(runtime.controller.poll());
+    }
+    let mut runtime = LanguageRuntime::default();
+    let mut cases = vec![capture("language.closed", &mut runtime)];
+    runtime.controller.choose_language();
+    cases.push(capture("language.open", &mut runtime));
+    assert!(
+        runtime
+            .controller
+            .accessibility_select(70_002, false)
+            .is_none()
+    );
+    cases.push(capture("language.focus", &mut runtime));
+    runtime.controller.close();
+    let (sender, receiver) = mpsc::channel();
+    let notify: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+        let _ = sender.send(());
+    });
+    let source = Document::from_utf8("foobar foo", Budget::new(1 << 20), Budget::new(1 << 20))
+        .unwrap()
+        .snapshot();
+    runtime.controller.request_completion(
+        source.clone(),
+        source.len(),
+        bareline_syntax::Language::Rust,
+        notify.clone(),
+    );
+    cases.push(capture("completion.open", &mut runtime));
+    finish(&mut runtime, &receiver);
+    assert!(
+        runtime
+            .controller
+            .completion
+            .as_ref()
+            .is_some_and(|result| !result.items.is_empty())
+    );
+    cases.push(capture("completion.populated", &mut runtime));
+    assert!(
+        runtime
+            .controller
+            .accessibility_select(70_001, false)
+            .is_none()
+    );
+    cases.push(capture("completion.focus", &mut runtime));
+    runtime.controller.close();
+    struct SignatureFile(std::path::PathBuf);
+    impl Drop for SignatureFile {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let path = std::env::temp_dir().join(format!(
+        "bareline-language-uia-{}-{}.tsv",
+        std::process::id(),
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    let signature_file = SignatureFile(path);
+    {
+        use std::io::Write;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&signature_file.0)
+            .unwrap();
+        file.write_all(b"f\tf(value)\n").unwrap();
+    }
+    runtime
+        .controller
+        .import_signatures(signature_file.0.clone(), "rust".into(), notify.clone());
+    finish(&mut runtime, &receiver);
+    assert!(runtime.controller.has_signatures("rust"));
+    runtime.controller.close();
+    let source = Document::from_utf8("f(", Budget::new(1 << 20), Budget::new(1 << 20))
+        .unwrap()
+        .snapshot();
+    let syntax = bareline_syntax::lex(
+        source.clone(),
+        bareline_syntax::Language::Rust,
+        TextOffset(0)..TextOffset(2),
+        None,
+        &bareline_syntax::Cancellation::default(),
+    )
+    .unwrap();
+    runtime.controller.request_parameter_hint(
+        source,
+        TextOffset(2),
+        syntax,
+        "rust",
+        notify.clone(),
+    );
+    finish(&mut runtime, &receiver);
+    assert!(runtime.controller.signature_hint.is_some());
+    cases.push(capture("signature.populated", &mut runtime));
+    runtime.controller.close();
+    let xml=br#"<NotepadPlus><UserLang name="Fixture UDL" ext="udlf"><KeywordLists><Keywords name="Keywords1">fixture</Keywords><Keywords name="Operators1">+</Keywords></KeywordLists></UserLang></NotepadPlus>"#;
+    runtime.controller.import_udl_bytes(xml.to_vec(), notify);
+    finish(&mut runtime, &receiver);
+    assert!(runtime.controller.definition.is_some());
+    cases.push(capture("udl.populated", &mut runtime));
+    assert!(
+        runtime
+            .controller
+            .accessibility_select(70_001, false)
+            .is_none()
+    );
+    cases.push(capture("udl.focus", &mut runtime));
+    cases
 }

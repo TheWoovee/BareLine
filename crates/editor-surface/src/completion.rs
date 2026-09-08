@@ -147,20 +147,7 @@ impl CompletionProvider for WordIndex {
             .next()
             .unwrap_or("");
         let replacement = TextOffset(caret.0 - prefix.len())..caret;
-        let supported = syntax
-            .filter(|s| {
-                s.is_current(snapshot)
-                    && s.status == bareline_syntax::Status::Complete
-                    && s.range.start <= replacement.start
-                    && caret <= s.range.end
-            })
-            .is_some_and(|s| {
-                !s.spans.iter().any(|span| {
-                    span.range.start <= caret
-                        && caret < span.range.end
-                        && matches!(span.kind, StyleKind::String | StyleKind::Comment)
-                })
-            });
+        let supported = semantic_completion_supported(snapshot, caret, syntax);
         let mut items = BTreeMap::<String, CompletionItem>::new();
         let mut bytes = 0;
         if supported {
@@ -211,6 +198,25 @@ impl CompletionProvider for WordIndex {
             partial: self.partial || !self.current(snapshot),
         })
     }
+}
+/// Unknown context and a literal ending at the insertion point do not enable
+/// semantic suggestions. Document words remain useful in prose/comments.
+pub fn semantic_completion_supported(
+    snapshot: &DocumentSnapshot,
+    caret: TextOffset,
+    syntax: Option<&SyntaxResult>,
+) -> bool {
+    syntax.is_some_and(|syntax| {
+        syntax.is_current(snapshot)
+            && syntax.status == bareline_syntax::Status::Complete
+            && syntax.range.start <= caret
+            && caret <= syntax.range.end
+            && !syntax.spans.iter().any(|span| {
+                span.range.start.0 <= caret.0.saturating_sub(1)
+                    && caret.0.saturating_sub(1) < span.range.end.0
+                    && matches!(span.kind, StyleKind::String | StyleKind::Comment)
+            })
+    })
 }
 /// Add bounded catalog/open-document words to a revisioned completion result.
 pub fn extend_result(
@@ -410,29 +416,46 @@ pub fn smart_pair(
     syntax: Option<&SyntaxResult>,
     limits: Limits,
 ) -> Result<PowerEdit, Error> {
+    smart_pair_configured(snapshot, set, typed, language, syntax, limits, None)
+}
+pub fn smart_pair_configured(
+    snapshot: &DocumentSnapshot,
+    set: &SelectionSet,
+    typed: char,
+    language: Language,
+    syntax: Option<&SyntaxResult>,
+    limits: Limits,
+    definition: Option<&bareline_syntax::udl::Definition>,
+) -> Result<PowerEdit, Error> {
     let set = power::normalize(snapshot, set, limits)?;
-    let close = match typed {
-        '(' => ')',
-        '[' => ']',
-        '{' => '}',
-        '"' => '"',
-        '\'' => '\'',
-        _ => return power::replace(snapshot, &set, &typed.to_string(), limits),
+    let close = if let Some(close) = definition.and_then(|definition| {
+        definition
+            .fold_pairs
+            .iter()
+            .find_map(|(open, close)| (*open == typed).then_some(*close))
+            .or_else(|| definition.strings.contains(&typed).then_some(typed))
+    }) {
+        close
+    } else {
+        match typed {
+            '(' => ')',
+            '[' => ']',
+            '{' => '}',
+            '"' => '"',
+            '\'' => '\'',
+            _ => return power::replace(snapshot, &set, &typed.to_string(), limits),
+        }
     };
-    if language == Language::PlainText {
+    if language == Language::PlainText && definition.is_none() {
         return power::replace(snapshot, &set, &typed.to_string(), limits);
     }
     let mut edits = Vec::new();
     let mut paired = Vec::new();
     for s in &set.selections {
         let suppressed = syntax
-            .filter(|s| s.is_current(snapshot))
+            .filter(|syntax| syntax.is_current(snapshot))
             .is_some_and(|syntax| {
-                syntax.spans.iter().any(|span| {
-                    span.range.start.0 <= s.caret
-                        && s.caret < span.range.end.0
-                        && matches!(span.kind, StyleKind::String | StyleKind::Comment)
-                })
+                !semantic_completion_supported(snapshot, TextOffset(s.caret), Some(syntax))
             });
         let range = TextOffset(s.anchor)..TextOffset(s.caret);
         let original = snapshot.read(range.clone(), limits.max_bytes)?;
@@ -730,6 +753,36 @@ mod tests {
         d.undo().unwrap();
         assert_eq!(text(&d), "a\nb");
         assert_eq!(d.undo(), Err(Error::EmptyHistory));
+    }
+    #[test]
+    fn literal_end_does_not_enable_semantic_keywords() {
+        for value in ["// ret", "\"ret"] {
+            let document = doc(value);
+            let source = document.snapshot();
+            let syntax = bareline_syntax::lex(
+                source.clone(),
+                Language::Rust,
+                TextOffset(0)..TextOffset(source.len()),
+                None,
+                &bareline_syntax::Cancellation::default(),
+            )
+            .unwrap();
+            assert!(!semantic_completion_supported(
+                &source,
+                TextOffset(source.len()),
+                Some(&syntax)
+            ));
+            let result = WordIndex::default()
+                .complete(
+                    &source,
+                    TextOffset(source.len()),
+                    Language::Rust,
+                    Some(&syntax),
+                    CompletionLimits::default(),
+                )
+                .unwrap();
+            assert!(result.items.is_empty());
+        }
     }
     #[test]
     fn popup_does_not_accept_without_active_selection_and_loader_bounds() {

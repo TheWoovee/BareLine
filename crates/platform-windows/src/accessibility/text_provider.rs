@@ -184,30 +184,31 @@ impl View {
 #[implement(ITextProvider, ITextProvider2, ITextEditProvider)]
 struct Provider { life: Weak<Life>, enclosing: IRawElementProviderSimple }
 impl Provider {
-    fn range(&self, start: usize, end: usize) -> Result<ITextRangeProvider> {
-        let life = self.life.upgrade().ok_or_else(unavailable)?;
-        let view = life.view()?;
+    fn range(&self, start: usize, end: usize, view: &View) -> Result<ITextRangeProvider> {
+        // Offsets and identity must come from the same captured view, even if
+        // publication changes between this method and the preceding point read.
+        self.life.upgrade().ok_or_else(unavailable)?;
         if start > end || end > view.len() { return Err(invalid()); }
-        Ok(TextRange { life: self.life.clone(), enclosing: self.enclosing.clone(), source_token: view.source.identity(), overlay: view.overlay, endpoints: Mutex::new((start,end)) }.into())
+        Ok(TextRange { life: self.life.clone(), enclosing: self.enclosing.clone(), source_token: view.source.identity(), overlay: view.overlay.clone(), endpoints: Mutex::new((start,end)) }.into())
     }
 }
 impl ITextProvider_Impl for Provider_Impl {
     fn GetSelection(&self) -> Result<*mut SAFEARRAY> {
         let view = self.life.upgrade().ok_or_else(unavailable)?.view()?;
         let (a,c) = view.selection;
-        let range = self.range(view.virtual_offset(a.min(c)), view.virtual_offset(a.max(c)))?;
+        let range = self.range(view.virtual_offset(a.min(c)), view.virtual_offset(a.max(c)), &view)?;
         array(&[range.cast()?])
     }
     fn GetVisibleRanges(&self) -> Result<*mut SAFEARRAY> {
         let view = self.life.upgrade().ok_or_else(unavailable)?.view()?;
-        array(&[self.range(view.virtual_offset(view.visible.0), view.virtual_offset(view.visible.1).min(view.len()))?.cast()?])
+        array(&[self.range(view.virtual_offset(view.visible.0), view.virtual_offset(view.visible.1).min(view.len()), &view)?.cast()?])
     }
     fn RangeFromChild(&self, _child: Ref<IRawElementProviderSimple>) -> Result<ITextRangeProvider> { Err(invalid()) }
     fn RangeFromPoint(&self, point: &UiaPoint) -> Result<ITextRangeProvider> {
         if !point.x.is_finite() || !point.y.is_finite() { return Err(invalid()); }
         let life = self.life.upgrade().ok_or_else(unavailable)?;
         let view = life.view()?;
-        if view.len() == 0 { return self.range(0,0); }
+        if view.len() == 0 { return self.range(0,0,&view); }
         let boxes = life.geometry(&view, &self.enclosing)?;
         let closest = boxes.iter().min_by(|a,b| {
             let distance = |r: &AccessibilityTextBox| {
@@ -218,11 +219,11 @@ impl ITextProvider_Impl for Provider_Impl {
             };
             distance(a).total_cmp(&distance(b))
         }).ok_or_else(unavailable)?;
-        self.range(closest.start,closest.start)
+        self.range(closest.start,closest.start,&view)
     }
     fn DocumentRange(&self) -> Result<ITextRangeProvider> {
         let view = self.life.upgrade().ok_or_else(unavailable)?.view()?;
-        self.range(0, view.len())
+        self.range(0, view.len(), &view)
     }
     fn SupportedTextSelection(&self) -> Result<SupportedTextSelection> { Ok(SupportedTextSelection_Single) }
 }
@@ -236,14 +237,14 @@ impl ITextProvider2_Impl for Provider_Impl {
         // SAFETY: COM out pointer was checked and is valid for this call.
         unsafe { *active = focused.into(); }
         let caret = view.overlay.as_ref().map_or(view.virtual_offset(view.selection.1), |o| o.start+o.text.len());
-        self.range(caret,caret)
+        self.range(caret,caret,&view)
     }
 }
 impl ITextEditProvider_Impl for Provider_Impl {
     fn GetActiveComposition(&self) -> Result<ITextRangeProvider> {
         let view = self.life.upgrade().ok_or_else(unavailable)?.view()?;
-        let Some(o) = view.overlay else { return Err(Error::empty()); };
-        self.range(o.start, o.start+o.text.len())
+        let Some(o) = &view.overlay else { return Err(Error::empty()); };
+        self.range(o.start, o.start+o.text.len(), &view)
     }
     fn GetConversionTarget(&self) -> Result<ITextRangeProvider> {
         // A preedit cursor is not a conversion target. winit does not expose the
@@ -291,7 +292,11 @@ fn positions(view: &View, at: usize, unit: TextUnit) -> Result<Vec<usize>> {
     let start = at.saturating_sub(view.page/2);
     let (start,text) = view.read(start,view.page)?;
     if matches!(unit,TextUnit_Character|TextUnit_Format) {
-        if at<start || at>start+text.len() || !text.is_char_boundary(at-start) {return Err(unsupported());}
+        if at<start || at>start+text.len() {return Err(unsupported());}
+        // Page targets are byte estimates. Start cursor analysis at the next
+        // scalar boundary, then choose a proven grapheme boundary below.
+        let mut at=at;
+        while at<start+text.len() && !text.is_char_boundary(at-start) {at+=1;}
         let mut offsets=Vec::new();
         let mut cursor=unicode_segmentation::GraphemeCursor::new(at,view.len(),true);
         match cursor.is_boundary(&text,start) {
@@ -317,6 +322,12 @@ fn positions(view: &View, at: usize, unit: TextUnit) -> Result<Vec<usize>> {
     if start+text.len() == view.len() { positions.push(view.len()); }
     positions.sort_unstable(); positions.dedup();
     Ok(positions)
+}
+fn page_position(view: &View, at: usize, forward: bool) -> Result<usize> {
+    let target=if forward {at.saturating_add(view.page).min(view.len())} else {at.saturating_sub(view.page)};
+    if target==0 || target==view.len() {return Ok(target);}
+    let boundaries=positions(view,target,TextUnit_Character)?;
+    (if forward {boundaries.into_iter().find(|p|*p>=target)} else {boundaries.into_iter().rev().find(|p|*p<=target)}).ok_or_else(unsupported)
 }
 /// Fold a bounded window while retaining original UTF-8 scalar boundaries.
 /// Expanded folds (ß→ss, ligatures) never produce half-scalar endpoints.
@@ -371,7 +382,12 @@ impl ITextRangeProvider_Impl for TextRange_Impl {
     fn ExpandToEnclosingUnit(&self, unit: TextUnit) -> Result<()> {
         let view=self.view()?; let at=self.endpoints().0;
         if unit==TextUnit_Document { *self.endpoints.lock().unwrap_or_else(|e|e.into_inner())=(0,view.len()); return Ok(()); }
-        if unit==TextUnit_Page { let a=view.virtual_offset(view.visible.0); let b=view.virtual_offset(view.visible.1).min(view.len()); *self.endpoints.lock().unwrap_or_else(|e|e.into_inner())=(a,b); return Ok(()); }
+        if unit==TextUnit_Page {
+            let boundaries=positions(&view,at,TextUnit_Character)?;
+            let a=*boundaries.first().ok_or_else(unsupported)?;
+            let b=*boundaries.last().ok_or_else(unsupported)?;
+            *self.endpoints.lock().unwrap_or_else(|e|e.into_inner())=(a,b);return Ok(());
+        }
         if at==view.len() { return Ok(()); }
         let positions=positions(&view,at,unit)?;
         let a=positions.iter().rev().copied().find(|p|*p<=at).ok_or_else(unsupported)?;
@@ -415,8 +431,15 @@ impl ITextRangeProvider_Impl for TextRange_Impl {
     }
     fn Move(&self, unit: TextUnit, count: i32) -> Result<i32> {
         let before=self.endpoints();
-        let moved=self.MoveEndpointByUnit(TextPatternRangeEndpoint_Start,unit,count)?;
-        if moved!=0 { let at=self.endpoints().0; *self.endpoints.lock().unwrap_or_else(|e|e.into_inner())=(at,at); if before.0!=before.1 {self.ExpandToEnclosingUnit(unit)?;} }
+        let temporary=self.new_range(before.0,before.1);
+        let moved=unsafe {temporary.MoveEndpointByUnit(TextPatternRangeEndpoint_Start,unit,count)}?;
+        if moved!=0 {
+            let state=temporary.cast_object_ref::<TextRange>()?;
+            let at=state.endpoints().0;
+            *state.endpoints.lock().unwrap_or_else(|e|e.into_inner())=(at,at);
+            if before.0!=before.1 {unsafe {temporary.ExpandToEnclosingUnit(unit)}?;}
+            *self.endpoints.lock().unwrap_or_else(|e|e.into_inner())=state.endpoints();
+        }
         Ok(moved)
     }
     fn MoveEndpointByUnit(&self, e: TextPatternRangeEndpoint, unit: TextUnit, count: i32) -> Result<i32> {
@@ -424,8 +447,8 @@ impl ITextRangeProvider_Impl for TextRange_Impl {
         if count==0 {return Ok(0);}
         if unit==TextUnit_Document {let next=if count>0 {view.len()} else {0}; self.set(e,next)?;return Ok(if next==at {0} else {count.signum()});}
         if unit==TextUnit_Page {
-            let candidate=if count>0 {at.saturating_add(view.page).min(view.len())} else {at.saturating_sub(view.page)};
-            let (actual,_)=view.read(candidate,4)?; self.set(e,actual)?; return Ok(if actual==at {0} else {count.signum()});
+            let actual=page_position(&view,at,count>0)?;
+            self.set(e,actual)?;return Ok(if actual==at {0} else {count.signum()});
         }
         let values=positions(&view,at,unit)?;
         let candidates:Vec<_>=if count>0 {values.into_iter().filter(|p|*p>at).collect()} else {values.into_iter().rev().filter(|p|*p<at).collect()};
@@ -444,6 +467,57 @@ impl ITextRangeProvider_Impl for TextRange_Impl {
 #[cfg(test)]
 mod identity_tests {
     use super::*;
+    #[implement(IRawElementProviderSimple)]
+    struct Enclosing;
+    impl IRawElementProviderSimple_Impl for Enclosing_Impl {
+        fn ProviderOptions(&self)->Result<ProviderOptions>{Ok(ProviderOptions_ServerSideProvider)}
+        fn GetPatternProvider(&self,_:UIA_PATTERN_ID)->Result<IUnknown>{Err(Error::empty())}
+        fn GetPropertyValue(&self,_:UIA_PROPERTY_ID)->Result<VARIANT>{Ok(VARIANT::default())}
+        fn HostRawElementProvider(&self)->Result<IRawElementProviderSimple>{Err(Error::empty())}
+    }
+    fn provider(text:&'static str,composition:Option<&str>)->(Arc<Life>,ITextEditProvider){
+        let life=Arc::new(life());
+        *life.source.write().unwrap()=Some(Arc::new(Text(text)));
+        *life.shared.lock().unwrap().snapshot.text_context.as_mut().unwrap()=AccessibilityTextContext {
+            source_identity:(90,1),selection:(1,1),composition:composition.map(str::to_owned),
+        };
+        let provider=Provider{life:Arc::downgrade(&life),enclosing:Enclosing.into()}.into();
+        (life,provider)
+    }
+    #[test]
+    fn com_ranges_clone_move_select_and_reject_stale_or_foreign_sources(){
+        let (life,provider)=provider("aé👩‍💻z",None);
+        let pattern:ITextProvider=provider.cast().unwrap();
+        // Calls are in-process COM with live fixture interfaces and valid out
+        // parameters generated by windows-rs; no native window or UIA client.
+        let range=unsafe{pattern.DocumentRange()}.unwrap();
+        let clone=unsafe{range.Clone()}.unwrap();
+        assert!(unsafe{range.Compare(&clone)}.unwrap().as_bool());
+        assert_eq!(unsafe{range.GetText(2)}.unwrap().to_string(),"aé");
+        assert_eq!(unsafe{range.MoveEndpointByUnit(TextPatternRangeEndpoint_End,TextUnit_Character,-1)}.unwrap(),-1);
+        unsafe{range.Select()}.unwrap();
+        assert_eq!(life.shared.lock().unwrap().actions,vec![AccessibilityAction::SetSelection{source_identity:(90,1),anchor:0,caret:14}]);
+        let (_other,other_provider)=provider_fixture("other");
+        let foreign=unsafe{other_provider.DocumentRange()}.unwrap();
+        assert!(unsafe{range.Compare(&foreign)}.is_err());
+        *life.source.write().unwrap()=Some(Arc::new(Source((90,2))));
+        assert!(unsafe{range.GetText(-1)}.is_err());
+        drop(life);
+        assert!(unsafe{clone.GetText(-1)}.is_err());
+    }
+    fn provider_fixture(text:&'static str)->(Arc<Life>,ITextProvider){
+        let (life,provider)=provider(text,None);(life,provider.cast().unwrap())
+    }
+    #[test]
+    fn com_active_composition_and_virtual_document_share_offsets(){
+        let (_life,provider)=provider("ab",Some("界"));
+        let active=unsafe{provider.GetActiveComposition()}.unwrap();
+        assert_eq!(unsafe{active.GetText(-1)}.unwrap().to_string(),"界");
+        let pattern:ITextProvider=provider.cast().unwrap();
+        let document=unsafe{pattern.DocumentRange()}.unwrap();
+        assert_eq!(unsafe{document.GetText(-1)}.unwrap().to_string(),"a界b");
+        assert_eq!(unsafe{active.CompareEndpoints(TextPatternRangeEndpoint_Start,&document,TextPatternRangeEndpoint_Start)}.unwrap(),1);
+    }
     struct Text(&'static str);
     impl AccessibilityTextSource for Text {
         fn identity(&self)->(u64,u64){(90,1)}
@@ -473,6 +547,16 @@ mod identity_tests {
         assert_eq!(view.source.len(),2);
         assert_eq!(view.committed(4).unwrap(),1);
         assert!(view.committed(2).is_err());
+    }
+    #[test]
+    fn page_targets_never_split_combining_or_emoji_clusters(){
+        let view=View{source:Arc::new(Text("a👩‍💻e\u{301}xyz")),overlay:None,selection:(0,0),visible:(0,4),page:4};
+        // The cluster is larger than the bounded context; report unsupported,
+        // rather than manufacture an endpoint inside the ZWJ sequence.
+        assert!(page_position(&view,0,true).is_err());
+        let view=View{source:Arc::new(Text("ae\u{301}xyz")),overlay:None,selection:(0,0),visible:(0,3),page:3};
+        let at=page_position(&view,0,true).unwrap();
+        assert_eq!(at,4);
     }
     #[test]
     fn five_gib_range_window_is_bounded_at_an_offscreen_offset() {

@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Bounded UTF-8 windows over a generation-aware source. Raw legacy bytes must first
 //! pass through a transcoder; byte offsets here address the UTF-8 text view only.
+pub use crate::source_transaction::{
+    OwnedTextRange, PreparedSourceTransaction, SourceEdit, SourceTransactionPoll,
+    SourceTransactionRequest,
+};
 use crate::{
     Budget, ContentStateId, EditTransaction, Error, Reservation, Revision, TextOffset,
     source::{MemorySource, PageTicket, SourceRead, Unavailable},
@@ -187,6 +191,7 @@ impl SparseLineIndex {
 }
 #[derive(Clone)]
 pub struct PagedSnapshot {
+    pub(crate) metadata: crate::DocumentMetadata,
     pub(crate) root: tree::Root,
     pub revision: Revision,
     pub content_state: ContentStateId,
@@ -194,6 +199,9 @@ pub struct PagedSnapshot {
     pub(crate) _structure: Option<std::sync::Arc<crate::BudgetClaim>>,
 }
 impl PagedSnapshot {
+    pub fn metadata(&self) -> &crate::DocumentMetadata {
+        &self.metadata
+    }
     /// Opaque source token for validating queued external actions; forks have distinct identities.
     pub fn identity_token(&self) -> (u64, u64) {
         (self.document_id, self.revision.0)
@@ -239,6 +247,7 @@ impl PagedSnapshot {
             content_state: ContentStateId(crate::unique()),
             document_id: crate::unique(),
             _structure: None,
+            metadata: crate::DocumentMetadata::default(),
         })
     }
     pub fn len(&self) -> usize {
@@ -395,6 +404,8 @@ pub struct OwnedDelta {
 }
 #[derive(Clone)]
 pub(crate) struct PagedHistory {
+    pub(crate) before_metadata: crate::DocumentMetadata,
+    pub(crate) after_metadata: crate::DocumentMetadata,
     pub(crate) typing_insert: bool,
     pub(crate) metadata: crate::history::EditMetadata,
     pub(crate) edits: Vec<OwnedEdit>,
@@ -451,10 +462,71 @@ impl PagedDocument {
             content_state: captured.content_state,
             document_id: captured.document_id,
             _structure: None,
+            metadata: captured.metadata.clone(),
         };
         let mut paged = Self::new(snapshot, document.bytes.clone(), document.history.clone());
         paged.history_policy = document.history_policy;
         Ok(paged)
+    }
+    /// Restore policy from a validated recovery recipe before exposing this actor.
+    pub fn restore_metadata(&mut self, metadata: crate::DocumentMetadata) -> Result<(), Error> {
+        if !self.undo.is_empty() || !self.redo.is_empty() {
+            return Err(Error::ActorBusy);
+        }
+        self.current.metadata = metadata;
+        Ok(())
+    }
+    pub fn initialize_metadata(&mut self, metadata: crate::DocumentMetadata) -> Result<(), Error> {
+        if self.saved_state != self.current.content_state
+            || !self.undo.is_empty()
+            || !self.redo.is_empty()
+        {
+            return Err(Error::ActorBusy);
+        }
+        self.current.metadata = metadata;
+        Ok(())
+    }
+    pub fn apply_metadata(
+        &mut self,
+        base_revision: Revision,
+        metadata: crate::DocumentMetadata,
+    ) -> Result<Revision, Error> {
+        if base_revision != self.current.revision {
+            return Err(Error::StaleRevision);
+        }
+        if metadata == self.current.metadata {
+            return Ok(base_revision);
+        }
+        let revision = Revision(
+            base_revision
+                .0
+                .checked_add(1)
+                .ok_or(Error::RevisionOverflow)?,
+        );
+        let charge = crate::history::Charge::new(
+            self.history
+                .reserve(metadata.charge().saturating_add(128))?,
+        );
+        self.undo
+            .try_reserve(1)
+            .map_err(|_| Error::BudgetExceeded)?;
+        let state = ContentStateId(crate::unique());
+        self.undo.push(PagedHistory {
+            before_metadata: self.current.metadata.clone(),
+            after_metadata: metadata.clone(),
+            typing_insert: false,
+            metadata: crate::history::EditMetadata::default(),
+            edits: Vec::new(),
+            before_state: self.current.content_state,
+            after_state: state,
+            _reservation: charge,
+        });
+        self.redo.clear();
+        self.current.metadata = metadata;
+        self.current.revision = revision;
+        self.current.content_state = state;
+        self.trim_history();
+        Ok(revision)
     }
     pub fn snapshot(&self) -> PagedSnapshot {
         self.current.clone()
@@ -592,6 +664,8 @@ impl PagedDocument {
             .try_reserve(1)
             .map_err(|_| Error::BudgetExceeded)?;
         let entry = PagedHistory {
+            before_metadata: self.current.metadata.clone(),
+            after_metadata: self.current.metadata.clone(),
             typing_insert,
             metadata,
             edits: owned_edits,
@@ -717,7 +791,7 @@ impl PagedDocument {
         self.history_policy = policy;
         self.trim_history();
     }
-    fn trim_history(&mut self) {
+    pub(crate) fn trim_history(&mut self) {
         let excess = self
             .undo
             .len()
@@ -862,6 +936,7 @@ impl PagedDocument {
                 edit.inverse.clone(),
             );
         }
+        self.current.metadata = entry.before_metadata.clone();
         self.current.content_state = entry.before_state;
         self.current.revision = revision;
         self.redo.push(entry);
@@ -884,6 +959,7 @@ impl PagedDocument {
                 edit.inserted.clone(),
             );
         }
+        self.current.metadata = entry.after_metadata.clone();
         self.current.content_state = entry.after_state;
         self.current.revision = revision;
         self.undo.push(entry);

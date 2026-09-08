@@ -19,6 +19,10 @@ use std::{
     },
 };
 const WINDOW: usize = 64 * 1024;
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum GlobalScrollPosition { Ready(u64, f64, f64), Pending }
+#[derive(Clone, Copy)]
+struct ViewportMapping { offset: usize, line: u64, line_start: TextOffset }
 type Job = Box<dyn FnOnce() + Send>;
 fn worker() -> &'static SyncSender<Job> {
     static WORKER: OnceLock<SyncSender<Job>> = OnceLock::new();
@@ -40,6 +44,7 @@ enum Action {
     UnlockTail,
     RetryRecovery,
     Prepared(EditTransaction),
+    Metadata(bareline_document::DocumentMetadata),
     Read(usize),
     Edit {
         range: std::ops::Range<TextOffset>,
@@ -151,6 +156,19 @@ impl PagedReadHandle {
     }
 }
 pub struct PagedEditorSurface {
+    global_folds: Vec<bareline_syntax::folding::Fold>,
+    global_fold_state: bareline_syntax::folding::FoldState,
+    global_fold_overrides: std::collections::BTreeMap<usize, bool>,
+    global_folds_partial: bool,
+    global_fold_initialized: bool,
+    pending_global_folds: Vec<std::ops::Range<u64>>,
+    fold_viewport_line: Option<usize>,
+    navigation: crate::paged_navigation::GlobalNavigation,
+    navigation_ready: Option<crate::paged_navigation::NavigationResult>,
+    requested_scroll: Option<(f64, f64)>,
+    pending_scroll_mapping: Option<(ViewportMapping, f64, f64)>,
+    viewport_mapping: Option<ViewportMapping>,
+    global_spacers: Vec<(u64, u64)>,
     search_marks: crate::search_marks::SearchMarks,
     pending_marks: Option<crate::search_marks::SearchMarks>,
     append_receipt: Option<bareline_file_io::tail::AppendReceipt>,
@@ -191,6 +209,8 @@ pub struct PagedEditorSurface {
     pub error: Option<String>,
 }
 impl PagedEditorSurface {
+    pub fn encoding_state(&self) -> Option<bareline_file_io::codecs::state::EncodingState> { bareline_file_io::codecs::state::metadata_encoding(self.snapshot.metadata()).or_else(||self.actor.try_lock().ok().map(|opened| opened.transcoded.store.state.clone())) }
+    pub fn apply_document_metadata(&mut self, metadata: bareline_document::DocumentMetadata) -> Result<(),String> { if self.surface.user_read_only {return Err("Document is read only".into());} self.submit(Action::Metadata(metadata)) }
     pub fn read_handle(&self) -> PagedReadHandle {
         if let Some(captured) = &self.captured { return captured.clone(); }
         PagedReadHandle { _generation: self.view_generation.clone(), retired: self.retired.clone(), _views: self.views.clone(), path: self.path.clone(), fingerprint: self.fingerprint.clone(), actor: self.actor.clone(), tail: self.tail.clone(), snapshot: self.snapshot.clone() }
@@ -206,13 +226,16 @@ impl PagedEditorSurface {
             .prefix();
         let mut surface = EditorSurface::loading(prefix, notify.clone());
         surface.encoding_label = format!("{:?}", opened.transcoded.store.state.save_target);
+        surface.user_read_only = opened.transcoded.store.state.binary_warning;
         let generation_owner = Arc::new(());
         let mut view = Self {
+            navigation: crate::paged_navigation::GlobalNavigation::new(), navigation_ready: None, requested_scroll: None, pending_scroll_mapping: None, viewport_mapping: None, global_spacers: Vec::new(),
+            global_folds: Vec::new(), global_fold_state: Default::default(), global_fold_overrides: Default::default(), global_folds_partial: true, global_fold_initialized: false, pending_global_folds: Vec::new(), fold_viewport_line: None,
             generation_owner: Arc::new(Mutex::new(generation_owner.clone())), view_generation: generation_owner,
             search_marks: Default::default(), pending_marks: None,
             append_receipt: None,
             retired: Arc::new(Mutex::new(Vec::new())), captured: None,
-            peer: Arc::new(Mutex::new(PeerState { epoch: 0, saved_state: opened.recovery_origin.is_none().then_some(snapshot.content_state), save_as_required: opened.recovery_origin.is_some() })),
+            peer: Arc::new(Mutex::new(PeerState { epoch: 0, saved_state: opened.recovery_origin.is_none().then_some(opened.transcoded.document.saved_content_state()), save_as_required: opened.recovery_origin.is_some() })),
             peer_epoch: 0,
             views: Arc::new(()),
             tail: Arc::new(Mutex::new(None)),
@@ -220,10 +243,10 @@ impl PagedEditorSurface {
             saved_state: opened
                 .recovery_origin
                 .is_none()
-                .then_some(snapshot.content_state),
+                .then_some(opened.transcoded.document.saved_content_state()),
             save_as_required: opened.recovery_origin.is_some(),
-            can_undo: false,
-            can_redo: false,
+            can_undo: opened.transcoded.document.can_undo(),
+            can_redo: opened.transcoded.document.can_redo(),
             recovery_config: None,
             recovery: Arc::new(Mutex::new(None)),
             recovery_status: Arc::new(Mutex::new(Default::default())),
@@ -273,7 +296,9 @@ impl PagedEditorSurface {
         surface.highlight_current_line = self.surface.highlight_current_line;
         surface.whitespace = self.surface.whitespace.clone();
         let mut view = Self {
+            navigation: crate::paged_navigation::GlobalNavigation::new(), navigation_ready: None, requested_scroll: None, pending_scroll_mapping: None, viewport_mapping: None, global_spacers: self.global_spacers.clone(),
             retired: self.retired.clone(), captured: captured.clone(),
+            global_folds: self.global_folds.clone(), global_fold_state: self.global_fold_state.clone(), global_fold_overrides: self.global_fold_overrides.clone(), global_folds_partial: self.global_folds_partial, global_fold_initialized: self.global_fold_initialized, pending_global_folds: self.pending_global_folds.clone(), fold_viewport_line: None,
             search_marks: self.search_marks.clone(), pending_marks: None,
             append_receipt: self.append_receipt,
             generation_owner: self.generation_owner.clone(), view_generation: captured.as_ref().map_or_else(|| self.view_generation.clone(), |h| h._generation.clone()),
@@ -331,6 +356,128 @@ impl PagedEditorSurface {
     }
     pub fn recovery_origin_path(&self) -> Option<&std::path::Path> { self.recovery_origin.as_deref() }
     pub fn viewport_ready(&self) -> bool { self.viewport_valid && !self.busy() }
+    pub fn set_known_global_folds(&mut self, mut folds: Vec<bareline_syntax::folding::Fold>, level: usize, partial: bool, viewport_first_line: usize) -> Result<(), String> {
+        if !self.viewport_valid { return Err("Wait for the paged viewport before projecting folds".into()); }
+        if folds.iter().any(|fold| fold.header >= fold.end) { return Err("Invalid global fold range".into()); }
+        let truncated = folds.len() > 8192; folds.truncate(8192); folds.sort_by_key(|fold| (fold.header, std::cmp::Reverse(fold.end))); folds.dedup_by_key(|fold| (fold.header, fold.end));
+        self.global_folds = folds; self.global_folds_partial = partial || truncated; self.fold_viewport_line = Some(viewport_first_line);
+        if !self.global_fold_initialized { if level > 0 { self.global_fold_state.apply_level(&self.global_folds, level); } self.global_fold_initialized = true; }
+        else { self.global_fold_state.refresh(&self.global_folds); }
+        for (&header, &collapsed) in &self.global_fold_overrides { if collapsed { self.global_fold_state.collapsed.insert(header); } else { self.global_fold_state.collapsed.remove(&header); } }
+        for range in &self.pending_global_folds { if let Some(fold) = self.global_folds.iter().find(|fold| fold.header as u64 == range.start && fold.end as u64 + 1 == range.end) { self.global_fold_state.collapsed.insert(fold.header); } }
+        if !self.global_folds_partial { self.pending_global_folds.clear(); }
+        self.project_global_folds(); Ok(())
+    }
+    pub fn persisted_global_folds(&self) -> Vec<std::ops::Range<u64>> {
+        if !self.pending_global_folds.is_empty() { return self.pending_global_folds.clone(); }
+        self.global_folds.iter().filter(|fold| self.global_fold_state.collapsed.contains(&fold.header)).map(|fold| fold.header as u64..fold.end as u64 + 1).collect()
+    }
+    pub fn restore_global_folds(&mut self, ranges: &[std::ops::Range<u64>]) {
+        self.pending_global_folds = ranges.iter().filter(|range| range.start < range.end && usize::try_from(range.end).is_ok()).take(8192).cloned().collect();
+        self.global_fold_initialized = true; self.global_fold_state.unfold_all();
+        for range in &self.pending_global_folds { if let Some(fold) = self.global_folds.iter().find(|fold| fold.header as u64 == range.start && fold.end as u64 + 1 == range.end) { self.global_fold_state.collapsed.insert(fold.header); } }
+        self.project_global_folds();
+    }
+    pub fn fold_all_known(&mut self, level: usize) { self.global_fold_initialized = true; self.global_fold_overrides.clear(); self.global_fold_state.apply_level(&self.global_folds, level); self.project_global_folds(); }
+    pub fn unfold_all_known(&mut self) { self.global_fold_initialized = true; self.global_fold_overrides.clear(); self.global_fold_state.unfold_all(); self.project_global_folds(); }
+    pub fn toggle_current_known(&mut self) -> Result<(), String> {
+        let first = self.fold_viewport_line.ok_or("Global line mapping is pending")?;
+        let local = self.surface.snapshot.line_at(TextOffset(self.surface.selection.caret)).map_err(|_| "Caret line unavailable")?;
+        let line = first.saturating_add(local);
+        let header = self.global_folds.iter().filter(|fold| fold.header <= line && line <= fold.end).max_by_key(|fold| fold.header).map(|fold| fold.header).ok_or("No verified fold at the caret")?;
+        self.global_fold_state.toggle(header); self.global_fold_overrides.insert(header, self.global_fold_state.collapsed.contains(&header)); self.project_global_folds(); Ok(())
+    }
+    fn project_global_folds(&mut self) {
+        let Some(first) = self.fold_viewport_line else { self.surface.set_known_folds(Vec::new(), 8, true); return; };
+        let end = first.saturating_add(self.surface.snapshot.line_count());
+        let length = self.surface.snapshot.len();
+        let at_eof = self.viewport_start.saturating_add(length) == self.snapshot.len();
+        let complete_line = length != 0 && self.surface.snapshot.read(TextOffset(length - 1)..TextOffset(length), 1).is_ok_and(|last| last == "\n" || last == "\r");
+        let complete_end = if at_eof || complete_line { end } else { end.saturating_sub(1) };
+        let first_complete = self.viewport_start == 0 || self.viewport_first_line_start().is_some_and(|start| start.0 == self.viewport_start);
+        let folds = self.global_folds.iter().filter(|fold| fold.header >= first && (fold.header != first || first_complete) && fold.end < complete_end).map(|fold| bareline_syntax::folding::Fold { header: fold.header - first, end: fold.end - first, level: fold.level }).collect();
+        self.surface.set_known_folds(folds, 8, self.global_folds_partial);
+        self.surface.fold_state.collapsed = self.global_fold_state.collapsed.iter().filter(|header| **header >= first && **header < end).map(|header| header - first).collect();
+        self.surface.refresh_hidden_lines();
+    }
+    pub fn viewport_first_global_line(&self) -> Option<u64> { self.viewport_mapping.filter(|mapping| self.viewport_valid && !self.busy() && mapping.offset == self.viewport_start).map(|mapping| mapping.line) }
+    pub fn viewport_first_line_start(&self) -> Option<TextOffset> { self.viewport_mapping.filter(|mapping| self.viewport_valid && !self.busy() && mapping.offset == self.viewport_start).map(|mapping| mapping.line_start) }
+    pub fn global_logical_scroll(&mut self) -> GlobalScrollPosition {
+        if self.busy() || self.requested_scroll.is_some() || self.pending_scroll_mapping.is_some() { return GlobalScrollPosition::Pending; }
+        if let Some(first) = self.viewport_first_global_line() {
+            let (line, fraction, x) = self.surface.logical_scroll();
+            GlobalScrollPosition::Ready(first.saturating_add(line), fraction, x)
+        } else { self.ensure_viewport_mapping(); GlobalScrollPosition::Pending }
+    }
+    pub fn request_global_scroll(&mut self, line: u64, fraction: f64, x: f64) -> Result<(), String> {
+        if let Some(first) = self.viewport_first_global_line() && line >= first && line - first < self.surface.snapshot.line_count() as u64 {
+            self.surface.set_logical_scroll(line - first, fraction, x); return Ok(());
+        }
+        self.requested_scroll = Some((fraction, x)); self.navigation_ready = None;
+        self.navigation.request(self.read_handle(), crate::paged_navigation::NavigationTarget::Line(line), self.budget.clone(), self.notify.clone())
+    }
+    /// User wheel/trackpad scrolling. Crossing a loaded window requests an adjacent
+    /// bounded viewport; the byte position remains useful while exact lines are pending.
+    pub fn scroll_viewport(&mut self, delta: f64, height: f32) -> Result<(), String> {
+        if !delta.is_finite() { return Ok(()); }
+        if self.following && delta < 0.0 { self.follow_paused = true; }
+        if self.busy() { return Ok(()); }
+        let line_height = self.surface.line_height() as f64;
+        let end = self.viewport_start.saturating_add(self.surface.snapshot.len());
+        let at_top = self.surface.scroll_y + delta < 0.0;
+        let at_bottom = self.surface.scroll_y + delta + height as f64 >= self.surface.snapshot.line_count() as f64 * line_height;
+        if (delta < 0.0 && at_top && self.viewport_start != 0) || (delta > 0.0 && at_bottom && end < self.snapshot.len()) {
+            if let GlobalScrollPosition::Ready(line, fraction, x) = self.global_logical_scroll() {
+                let rows = (delta / line_height).trunc() as i64;
+                let target = if rows < 0 { line.saturating_sub(rows.unsigned_abs()) } else { line.saturating_add(rows as u64) };
+                return self.request_global_scroll(target, fraction, x);
+            }
+            let start = if delta < 0.0 { self.viewport_start.saturating_sub(WINDOW / 2) } else { self.viewport_start.saturating_add(WINDOW / 2).min(self.snapshot.len()) };
+            return self.request_viewport(TextOffset(start));
+        }
+        self.surface.scroll(delta, height); Ok(())
+    }
+    pub fn request_byte_scroll(&mut self, fraction: f64) -> Result<(), String> {
+        if !fraction.is_finite() { return Err("Invalid scrollbar position".into()); }
+        if self.following && fraction < 1.0 { self.follow_paused = true; }
+        let offset = (self.snapshot.len() as f64 * fraction.clamp(0.0, 1.0)) as usize;
+        self.request_viewport(TextOffset(offset.min(self.snapshot.len())))
+    }
+    pub fn byte_scroll_fraction(&self) -> f64 { if self.snapshot.is_empty() { 0.0 } else { self.viewport_start as f64 / self.snapshot.len() as f64 } }
+    pub fn set_global_spacers(&mut self, rows: &[(u64, u64)]) -> Result<(), String> {
+        if rows.len() > 8192 { return Err("Too many comparison spacer rows".into()); }
+        self.global_spacers = rows.to_vec(); self.project_global_spacers()
+    }
+    fn project_global_spacers(&mut self) -> Result<(), String> {
+        let Some(first) = self.viewport_first_global_line() else { return self.surface.set_view_spacers(&[]); };
+        let end = first.saturating_add(self.surface.snapshot.line_count() as u64);
+        let rows: Vec<_> = self.global_spacers.iter().filter(|(line, _)| *line >= first && *line <= end).map(|(line, count)| (line - first, *count)).collect();
+        self.surface.set_view_spacers(&rows)
+    }
+    fn ensure_viewport_mapping(&mut self) {
+        if self.viewport_valid && self.viewport_mapping.is_none() && !self.navigation.is_pending() && self.navigation_ready.is_none() && self.requested_scroll.is_none() {
+            if let Err(error) = self.navigation.request(self.read_handle(), crate::paged_navigation::NavigationTarget::Byte(TextOffset(self.viewport_start)), self.budget.clone(), self.notify.clone()) { self.error = Some(error); }
+        }
+    }
+    fn pump_navigation(&mut self) -> bool {
+        let mut changed = false;
+        if let Some(result) = self.navigation.poll() {
+            match result { Ok(result) => self.navigation_ready = Some(result), Err(error) => { self.requested_scroll = None; self.error = Some(error); } }
+            changed = true;
+        }
+        if self.busy() { return changed; }
+        let Some(result) = self.navigation_ready.take() else { return changed; };
+        let handle = self.read_handle();
+        if !result.snapshot.same_document(handle.snapshot()) || result.snapshot.content_state != handle.snapshot().content_state { self.requested_scroll = None; return true; }
+        let mapping = ViewportMapping { offset: result.offset.0, line: result.first_global_line, line_start: result.line_start };
+        if let Some((fraction, x)) = self.requested_scroll.take() {
+            self.pending_scroll_mapping = Some((mapping, fraction, x));
+            if let Err(error) = self.request_viewport(result.offset) { self.pending_scroll_mapping = None; self.error = Some(error); }
+        } else if result.offset.0 == self.viewport_start {
+            self.viewport_mapping = Some(mapping); self.fold_viewport_line = usize::try_from(mapping.line).ok(); let _ = self.project_global_spacers(); self.project_global_folds();
+        }
+        true
+    }
     pub fn set_search_marks(&mut self, style: u8, ranges: Vec<std::ops::Range<TextOffset>>) -> Result<(), String> {
         if ranges.iter().any(|range| range.end.0 > self.snapshot.len()) { return Err("Mark is outside this paged generation".into()); }
         self.search_marks.set(style, ranges)?; self.project_search_marks(); Ok(())
@@ -546,7 +693,7 @@ impl PagedEditorSurface {
                     cancellation.check().map_err(|error| format!("{error:?}"))?;
                     let mut opened = actor.lock().map_err(|_| "Paged actor stopped.")?;
                     let mut tail = tail.lock().map_err(|_| "Tail actor stopped.")?;
-                    if tail.is_some() && matches!(&action, Action::Edit { .. } | Action::Prepared(_) | Action::Undo | Action::Redo | Action::Save { .. }) {
+                    if tail.is_some() && matches!(&action, Action::Edit { .. } | Action::Prepared(_) | Action::Metadata(_) | Action::Undo | Action::Redo | Action::Save { .. }) {
                         return Err("Unlock and capture a fixed generation before editing or saving monitored content.".into());
                     }
                     let saved_state = peer.lock().map_err(|_| "Peer state stopped")?.saved_state;
@@ -630,6 +777,7 @@ impl PagedEditorSurface {
                             start = offset;
                             caret = offset;
                         }
+                        Action::Metadata(metadata) => { let revision=opened.transcoded.document.snapshot().revision; opened.transcoded.document.apply_metadata(revision,metadata).map_err(|error|format!("{error:?}"))?; }
                         Action::Prepared(transaction) => {
                             if tail.is_some() { return Err("Monitoring document is read-only".into()); }
                             let snapshot = opened.transcoded.document.snapshot();
@@ -757,7 +905,7 @@ impl PagedEditorSurface {
                             }
                         }
                     }
-                    if !recovery_edits.is_empty() {
+                    if !recovery_edits.is_empty() || snapshot.metadata() != baseline.metadata() {
                         if let Some((root, platform)) = recovery_config {
                             let protected = (|| -> Result<(), String> {
                                 let mut journal =
@@ -824,8 +972,10 @@ impl PagedEditorSurface {
         Ok(())
     }
     pub fn pump(&mut self) -> bool {
+        let navigation_changed = self.pump_navigation();
         let Some(receiver) = &self.pending else {
-            return self.refresh_peer();
+            self.ensure_viewport_mapping();
+            return self.refresh_peer() || navigation_changed;
         };
         let result = match receiver.try_recv() {
             Ok(result) => result,
@@ -835,6 +985,11 @@ impl PagedEditorSurface {
         self.pending = None;
         match result {
             Ok(completed) => {
+                self.viewport_mapping = None;
+                self.fold_viewport_line = None;
+                if completed.snapshot.content_state != self.snapshot.content_state {
+                    self.global_folds.clear(); self.global_fold_overrides.clear(); self.global_fold_state.unfold_all(); self.global_fold_initialized = false;
+                }
                 if completed.snapshot.content_state != self.snapshot.content_state {
                     if let Some(marks) = self.pending_marks.take() { self.search_marks = marks; } else { self.search_marks.clear(None); }
                 } else { self.pending_marks = None; }
@@ -908,6 +1063,11 @@ impl PagedEditorSurface {
                             }
                         }
                         self.surface.selections = self.surface.selection.into();
+                        if let Some((mapping, fraction, x)) = self.pending_scroll_mapping.take() && mapping.offset == self.viewport_start {
+                            self.viewport_mapping = Some(mapping); self.fold_viewport_line = usize::try_from(mapping.line).ok(); self.surface.set_logical_scroll(0, fraction, x);
+                        }
+                        let _ = self.project_global_spacers();
+                        self.project_global_folds();
                         self.project_search_marks();
                         self.surface.error = Some(format!(
                             "Paged · bytes {}–{} of {} · Lines: indexing…",
@@ -926,6 +1086,7 @@ impl PagedEditorSurface {
                 self.error = Some(error);
             }
         }
+        self.ensure_viewport_mapping();
         true
     }
 }
@@ -985,10 +1146,35 @@ mod peer_tests {
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
             view.pump();
-            if !view.busy() { assert!(view.error.is_none(), "{:?}", view.error); break; }
+            if !view.busy() && !view.navigation.is_pending() && view.navigation_ready.is_none() { assert!(view.error.is_none(), "{:?}", view.error); break; }
             assert!(Instant::now() < deadline, "paged worker timed out");
             std::thread::yield_now();
         }
+    }
+    #[test]
+    fn global_scroll_crosses_windows_and_keeps_midline_coordinates_exact() {
+        use bareline_file_io::{codecs::disk::DiskOptions, lifecycle::{PagedOpenRequest, TranscodeOutcome, open_paged_encoded}, source::SourceOptions};
+        let root = std::env::temp_dir().join(format!("bareline-paged-global-{}", std::process::id()));
+        std::fs::create_dir(&root).unwrap();
+        let path = root.join("source.txt"); std::fs::write(&path, "abc\n".repeat(40000)).unwrap();
+        let budget = Budget::new(16 * 1024 * 1024);
+        let TranscodeOutcome::Complete(opened) = open_paged_encoded(PagedOpenRequest { path, bytes: budget.clone(), history: Budget::new(1024 * 1024), cache: root.clone(), options: DiskOptions { temp_quota_bytes: 4 * 1024 * 1024, interpret: None }, source_options: SourceOptions { resident_max_bytes: 0, ..SourceOptions::default() } }, Arc::new(Platform), Cancellation::default(), |_| {}) else { panic!("open failed") };
+        let mut view = PagedEditorSurface::new(opened, budget, Arc::new(|| {})).unwrap(); drain(&mut view);
+        view.request_global_scroll(30000, 0.25, 17.0).unwrap();
+        assert_eq!(view.global_logical_scroll(), GlobalScrollPosition::Pending);
+        drain(&mut view);
+        assert_eq!(view.global_logical_scroll(), GlobalScrollPosition::Ready(30000, 0.25, 17.0));
+        view.request_viewport(TextOffset(120002)).unwrap();
+        assert_eq!(view.global_logical_scroll(), GlobalScrollPosition::Pending);
+        drain(&mut view);
+        assert_eq!(view.viewport_first_global_line(), Some(30000));
+        assert_eq!(view.viewport_first_line_start(), Some(TextOffset(120000)));
+        view.set_known_global_folds(vec![bareline_syntax::folding::Fold { header: 30001, end: 30003, level: 1 }], 0, false, 30000).unwrap();
+        assert!(view.global_fold_state.collapsed.is_empty());
+        view.fold_all_known(1);
+        assert!(view.global_fold_state.collapsed.contains(&30001));
+        view.set_global_spacers(&[(30002, 3)]).unwrap();
+        drop(view); std::fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn peer_owns_full_document_and_survives_other_view_close() {

@@ -177,6 +177,45 @@ fn first_party_components_cross_authenticated_process_boundary() {
 
 /// Fixture launch remains below the production signature gate and uses only
 /// locally built components. Every request crosses the real authenticated pipe.
+struct CaseDiagnostics<'a> {
+    command: &'a str,
+    child: &'a std::cell::RefCell<std::process::Child>,
+    started: Instant,
+    complete: bool,
+    requests: u64,
+    requested_text_bytes: u64,
+    last_text_end: u64,
+    completed_replies: u64,
+    completed_response_bytes: u64,
+    read_wall: Duration,
+    encode_wall: Duration,
+    write_wall: Duration,
+}
+impl Drop for CaseDiagnostics<'_> {
+    fn drop(&mut self) {
+        if self.complete {
+            return;
+        }
+        let status = match self.child.try_borrow_mut() {
+            Ok(mut child) => format!("{:?}", child.try_wait()),
+            Err(_) => "child status borrowed during failure".into(),
+        };
+        eprintln!(
+            "PR027 failure diagnostic: command={} elapsed_ms={} requests={} requested_text_bytes={} last_text_end={} completed_replies={} completed_response_bytes={} read_wall_ms={} encode_wall_ms={} write_wall_ms={} child_status={}",
+            self.command,
+            self.started.elapsed().as_millis(),
+            self.requests,
+            self.requested_text_bytes,
+            self.last_text_end,
+            self.completed_replies,
+            self.completed_response_bytes,
+            self.read_wall.as_millis(),
+            self.encode_wall.as_millis(),
+            self.write_wall.as_millis(),
+            status
+        );
+    }
+}
 fn component_case(
     crate_name: &str,
     command: &str,
@@ -209,8 +248,25 @@ fn component_case(
         .stdout(Stdio::null())
         .stderr(Stdio::inherit());
     let started = Instant::now();
-    let (mut child, mut job) = WindowsProcessLauncher.spawn(&mut process).unwrap();
-    let mut pipe = server.accept(child.id(), Duration::from_secs(5)).unwrap();
+    let (child, mut job) = WindowsProcessLauncher.spawn(&mut process).unwrap();
+    let child = std::cell::RefCell::new(child);
+    let mut diagnostics = CaseDiagnostics {
+        command,
+        child: &child,
+        started,
+        complete: false,
+        requests: 0,
+        requested_text_bytes: 0,
+        last_text_end: 0,
+        completed_replies: 0,
+        completed_response_bytes: 0,
+        read_wall: Duration::ZERO,
+        encode_wall: Duration::ZERO,
+        write_wall: Duration::ZERO,
+    };
+    let mut pipe = server
+        .accept(child.borrow().id(), Duration::from_secs(5))
+        .unwrap();
     pipe.set_timeout(Duration::from_millis(budget.timeout_ms()) + Duration::from_secs(2));
     let invocation = Invocation {
         extension_id: format!("org.bareline.{}", crate_name.replace('_', "-")),
@@ -228,11 +284,19 @@ fn component_case(
     pipe.write_all(&bytes).unwrap();
     let mut panel = None;
     loop {
-        let message = match read_frame(&mut pipe) {
+        let read_started = Instant::now();
+        let received = read_frame(&mut pipe);
+        diagnostics.read_wall += read_started.elapsed();
+        let message = match received {
             Ok(message) => message,
             Err(ProtocolError::Io) => break,
             Err(error) => panic!("malformed child frame: {error:?}"),
         };
+        diagnostics.requests += 1;
+        if let Request::ReadTextRange { range, .. } = &message.request {
+            diagnostics.requested_text_bytes += range.end.saturating_sub(range.start);
+            diagnostics.last_text_end = range.end;
+        }
         assert_eq!(message.extension_id, invocation.extension_id);
         assert_eq!(
             message.context.grant_generation,
@@ -248,17 +312,25 @@ fn component_case(
         } else {
             broker(message.clone())
         };
-        let bytes = encode(&BrokerResponse {
+        let encode_started = Instant::now();
+        let encoded = encode(&BrokerResponse {
             request_id: message.request_id,
             result,
-        })
-        .unwrap();
-        pipe.write_all(&(bytes.len() as u32).to_le_bytes()).unwrap();
-        pipe.write_all(&bytes).unwrap();
+        });
+        diagnostics.encode_wall += encode_started.elapsed();
+        let bytes = encoded.unwrap();
+        let write_started = Instant::now();
+        let written = pipe
+            .write_all(&(bytes.len() as u32).to_le_bytes())
+            .and_then(|_| pipe.write_all(&bytes));
+        diagnostics.write_wall += write_started.elapsed();
+        written.unwrap();
+        diagnostics.completed_replies += 1;
+        diagnostics.completed_response_bytes += bytes.len() as u64;
     }
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
-        if let Some(status) = child.try_wait().unwrap() {
+        if let Some(status) = child.borrow_mut().try_wait().unwrap() {
             assert!(status.success(), "component process: {status}");
             break;
         }
@@ -268,7 +340,9 @@ fn component_case(
         }
         std::thread::sleep(Duration::from_millis(10));
     }
-    (panel.expect("component result panel"), started.elapsed())
+    let panel = panel.expect("component result panel");
+    diagnostics.complete = true;
+    (panel, started.elapsed())
 }
 
 const GIB_JSON_LENGTH: u64 = 1 << 30;
@@ -442,4 +516,50 @@ fn xml_xpath_security_and_hex_original_generation_cross_the_host() {
             "FF FE 41 00"
         }));
     }
+}
+
+#[test]
+#[ignore = "coordinated release component gate; actual bounded 5 GiB Hex source"]
+fn hex_five_gib_goto_reads_only_visible_original_range() {
+    let length = 5u64 * 1024 * 1024 * 1024;
+    let requested_offset = 4u64 * 1024 * 1024 * 1024 + 3;
+    let aligned = requested_offset / 16 * 16;
+    let mut calls = 0;
+    let mut bytes_read = 0;
+    let (panel, _) = component_case(
+        "hex_view",
+        "ext.hex.goto",
+        &format!("offset={requested_offset}\nrows=32"),
+        7,
+        length,
+        ExecutionBudget::Interactive,
+        |message| {
+            assert_eq!(message.context.capability, Capability::DocumentRead);
+            assert_eq!(message.context.scope, Scope::Document(11));
+            let Request::ReadOriginalBytes {
+                document,
+                generation,
+                range,
+            } = message.request
+            else {
+                panic!("large Hex must request only original bytes");
+            };
+            assert_eq!((document, generation), (11, 37));
+            assert_eq!((range.start, range.end), (aligned - 32, aligned + 34 * 16));
+            assert!(range.end - range.start <= 36 * 16);
+            calls += 1;
+            bytes_read += range.end - range.start;
+            Ok(BrokerValue::Bytes(
+                (range.start..range.end)
+                    .map(|offset| (offset & 255) as u8)
+                    .collect(),
+            ))
+        },
+    );
+    assert_eq!(calls, 1);
+    assert_eq!(bytes_read, 36 * 16);
+    assert!(panel.contains(&format!("{aligned:016X}")));
+    assert!(panel.contains("disk generation 37"));
+    assert!(panel.contains("Unsaved text edits are excluded"));
+    assert!(panel.contains("00 01 02 03 04 05 06 07"));
 }

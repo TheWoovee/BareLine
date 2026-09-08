@@ -401,6 +401,52 @@ pub fn snapshot(
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// These focused projection regressions inspect selected fields. Complete
+    /// retained native hierarchy/focus/action JSON baselines live in the native
+    /// composition tests, which exercise the actual owner layout fixtures.
+    fn semantic_json(snapshot: &AccessibilitySnapshot) -> serde_json::Value {
+        snapshot.validate().unwrap();
+        serde_json::to_value(snapshot).unwrap()
+    }
+    #[test]
+    fn default_editor_semantic_fields_regression() {
+        let document=bareline_document::Document::from_utf8("abc",bareline_document::Budget::new(1<<20),bareline_document::Budget::new(1<<20)).unwrap();
+        let mut editor=EditorSurface::loading(document.snapshot(),std::sync::Arc::new(||{}));
+        editor.visible_text=bareline_document::TextOffset(0)..bareline_document::TextOffset(3);
+        let tree=semantic_json(&snapshot("Bareline",800.0,600.0,Some(&editor),vec![],EDITOR_ID));
+        let actual:Vec<_>=tree["nodes"].as_array().unwrap().iter().map(|n|serde_json::json!([n["id"],n["parent"],n["role"],n["name"],n["focusable"],n["invokable"]])).collect();
+        assert_eq!(serde_json::Value::Array(actual),serde_json::json!([
+            [1,0,"Window","Bareline",false,false],
+            [2,1,"Editor","Editor",true,false],
+            [18446744073709551614u64,1,"Button","Previous editor viewport",false,true],
+            [18446744073709551613u64,1,"Button","Next editor viewport",false,true]
+        ]));
+        assert_eq!(tree["focus"],2);
+        assert_eq!(tree["text"]["value"],"abc");
+        assert_eq!(tree["text"]["character_lengths"],serde_json::json!([1,1,1]));
+    }
+    #[test]
+    fn app_control_fields_regression() {
+        let mut find=crate::find::FindController::default();find.show_replace();
+        find.field.insert("needle");find.replacement.insert("replacement");
+        let mut search=crate::search_panel::SearchPanel::default();search.open=true;search.field.insert("workspace");
+        let mut settings=crate::settings::SettingsController::new(bareline_settings::SettingsDocument::empty(bareline_settings::Scope::User),None,bareline_settings::SystemAppearance::default());settings.show();
+        let mut palette=crate::palette::PaletteController::default();palette.open=true;palette.field.insert("command");
+        let mut manager=crate::macros::MacroManager::default();manager.show(&Default::default(),None);
+        let semantics=find.semantics(1000.0).into_iter().chain(search.semantics()).chain(settings.semantics()).chain(palette.semantics()).chain(manager.semantics());
+        let chrome=semantics.map(|n|semantic_node(&n,WINDOW_ID)).collect();
+        let tree=semantic_json(&snapshot("Bareline",1000.0,800.0,None,chrome,11000));
+        let mut fields:Vec<_>=tree["nodes"].as_array().unwrap().iter().filter(|n|n["role"]=="TextField").map(|n|serde_json::json!([n["id"],n["name"],n["value"],n["focusable"]])).collect();
+        fields.sort_by_key(|row|row[0].as_u64().unwrap());
+        assert_eq!(serde_json::Value::Array(fields),serde_json::json!([
+            [6000,"Find","needle",true],[6001,"Replace with","replacement",true],
+            [7000,"Find in open documents","workspace",true],
+            [8000,"Search settings","",true],[11000,"Search commands","command",true],
+            [23100,"Macro name","",true],[23101,"Repeat count","1",true],
+            [23102,"Macro shortcut","",true],[23103,"Typing delay in milliseconds","50",true]
+        ]));
+        assert_eq!(tree["focus"],11000);
+    }
     #[test]
     fn find_semantics_follow_focus_toggle_and_field_value() {
         let mut find = crate::find::FindController::default();

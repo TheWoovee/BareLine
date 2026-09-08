@@ -164,7 +164,7 @@ impl PerformanceRuntime {
                 "launch" | "open" => { self.finish(true); return true; }
                 "edit" => workspace.editors[app.active].enqueue(Input::Insert("PERF_EDIT".into())),
                 "literal-search" | "regex-search" | "search-cancel" | "result-jump" => {
-                    workspace.find.show(); workspace.find.field.insert("PERF_NEEDLE");
+                    workspace.find.show(); workspace.find.field.insert(if config.workload == "result-jump" { "PERF_NEEDLE" } else { "PERF_ABSENT_TOKEN" });
                     if config.workload == "regex-search" { workspace.find.toggle_mode(); workspace.find.toggle_mode(); }
                 }
                 "scroll" => {
@@ -269,7 +269,6 @@ impl PerformanceRuntime {
             "literal-search" | "regex-search" | "result-jump" => {
                 if !self.frame_ready || workspace.find.searching() { return false; }
                 if workspace.find.completed_results().is_none() && workspace.find.completed_paged_results().is_none() {
-                    if workspace.find.status == "Type to find" || workspace.find.status == "Searching…" { return false; }
                     self.finish(false); return true;
                 }
                 if config.workload == "result-jump" && self.phase == 2 {
@@ -293,7 +292,9 @@ impl PerformanceRuntime {
             }
             "save" | "save-as" => {
                 let committed = self.output.as_deref().is_some_and(|path| workspace.path(app.active) == Some(path));
-                self.finish(committed && !workspace.editors[app.active].dirty()); true
+                let clean = committed && !workspace.editors[app.active].dirty();
+                if clean && let Some(start) = self.operation { self.extra.push(("save_to_clean_ack_us", start.elapsed().as_micros())); }
+                self.finish(clean); true
             }
             "tail-append" => {
                 if let Some(receiver) = &self.append {
@@ -348,8 +349,9 @@ impl super::Shell {
             }
         } else if extension_workload && self.performance.phase == 3 && let Some(receipt) = self.extensions.lifecycle_receipt() {
             if Some(receipt.generation) != self.performance.extension_generation { self.performance.finish(false); }
+            else if receipt.succeeded == Some(false) { self.performance.finish(false); }
             else { match receipt.phase {
-                super::extensions::ExtensionLifecyclePhase::Drained => { self.performance.extra.push(("extension_generation", receipt.generation as u128)); self.performance.finish(true); },
+                super::extensions::ExtensionLifecyclePhase::Drained if receipt.succeeded == Some(true) => { self.performance.extra.push(("extension_generation", receipt.generation as u128)); self.performance.finish(true); },
                 super::extensions::ExtensionLifecyclePhase::Rejected => self.performance.finish(false),
                 _ => {},
             } }

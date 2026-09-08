@@ -6,6 +6,14 @@ use bareline_document::DocumentSnapshot;
 use bareline_extensions_protocol::{Invocation, broker::ExtensionSession};
 mod readers;
 mod ui;
+#[cfg(test)]
+pub(super) fn accessibility_test_cases() -> Vec<(
+    &'static str,
+    Vec<bareline_platform::accessibility::AccessibilityNode>,
+    Option<u64>,
+)> {
+    ui::accessibility_test_cases()
+}
 use bareline_platform::PlatformServices;
 use bareline_platform_windows::extension_transport::{
     HostLaunch, HostLifecycle, run_verified_host_observed,
@@ -59,6 +67,9 @@ pub struct ExtensionLifecycleReceipt {
     pub generation: u64,
     pub phase: ExtensionLifecyclePhase,
     pub pid: Option<u32>,
+    /// Set only when the UI drains broker.finish's outcome and rechecks cancel.
+    /// Drained alone describes process cleanup, including failed invocations.
+    pub succeeded: Option<bool>,
 }
 pub struct ExtensionsRuntime {
     lifecycle: Arc<std::sync::Mutex<ExtensionLifecycleReceipt>>,
@@ -79,6 +90,8 @@ pub struct ExtensionsRuntime {
     selected: usize,
     index: ManagerIndex,
     restore_pending: bool,
+    inventory_restored: bool,
+    inventory_error: Option<String>,
     permission_review: Option<usize>,
     deferred_disabled: std::collections::BTreeSet<String>,
     command_selection: usize,
@@ -105,6 +118,8 @@ impl Default for ExtensionsRuntime {
             selected: 0,
             index: ManagerIndex::default(),
             restore_pending: false,
+            inventory_restored: false,
+            inventory_error: None,
             permission_review: None,
             deferred_disabled: std::collections::BTreeSet::new(),
             command_selection: 0,
@@ -113,6 +128,21 @@ impl Default for ExtensionsRuntime {
     }
 }
 impl ExtensionsRuntime {
+    pub fn command_inventory_ready(&self) -> Result<bool, String> {
+        if !self.enabled {
+            return Ok(true);
+        }
+        if let Some(error) = &self.inventory_error {
+            return Err(error.clone());
+        }
+        if self.restore_pending || self.manager_pending.is_some() || !self.inventory_restored {
+            return Ok(false);
+        }
+        if !self.valid_contribution_budget() {
+            return Err("Verified extension contribution limit exceeded".into());
+        }
+        Ok(true)
+    }
     pub fn lifecycle_receipt(&self) -> Option<ExtensionLifecycleReceipt> {
         self.lifecycle.try_lock().ok().map(|receipt| *receipt)
     }
@@ -120,6 +150,8 @@ impl ExtensionsRuntime {
         self.root = root;
         self.trust = compiled_trust();
         self.restore_pending = enabled;
+        self.inventory_restored = !enabled;
+        self.inventory_error = None;
         self.enabled = enabled;
         if !enabled {
             self.cancel();
@@ -170,6 +202,7 @@ impl ExtensionsRuntime {
                 .ok_or("Extension lifecycle generation exhausted")?;
             receipt.phase = ExtensionLifecyclePhase::Requested;
             receipt.pid = None;
+            receipt.succeeded = None;
         }
         std::thread::spawn(move || {
             let readers = std::cell::RefCell::new(readers::Readers::new(
@@ -220,6 +253,9 @@ impl ExtensionsRuntime {
         };
         if pending.cancel.load(Ordering::Acquire) {
             result = Err("Extension cancelled; document unchanged".into());
+        }
+        if let Ok(mut receipt) = self.lifecycle.lock() {
+            receipt.succeeded = Some(result.is_ok());
         }
         self.message = Some(match &result {
             Ok(_) => "Extension completed; host stopped".into(),
@@ -514,7 +550,11 @@ struct CatalogSelection {
 }
 enum ManagerResult {
     Catalog(CatalogSelection),
-    Installed(bareline_extensions_protocol::InstalledPackage, ManagerIndex),
+    Installed(
+        bareline_extensions_protocol::InstalledPackage,
+        ManagerIndex,
+        Option<String>,
+    ),
     Restored(
         ManagerIndex,
         Vec<InstalledRow>,
@@ -683,7 +723,23 @@ impl ExtensionsRuntime {
         if entry.artifact_type != "extension" {
             return Err("Use the verified native runtime provider for runtime installation".into());
         }
-        let index = self.index.clone();
+        let mut index = self.index.clone();
+        // Persisted counts are hints. Reconcile against verified manifests before
+        // deciding whether an update fits the bounded contribution registry.
+        for row in &self.installed {
+            if let Some(entry) = index
+                .entries
+                .iter_mut()
+                .find(|entry| entry.id == row.package.id)
+            {
+                entry.command_count = row.package.manifest.commands.len();
+            }
+        }
+        let previous = self
+            .installed
+            .iter()
+            .find(|row| row.package.id == entry.id)
+            .map(|row| row.package.clone());
         self.manager_work(notify, move |cancel| {
             let package = catalog
                 .source
@@ -695,7 +751,13 @@ impl ExtensionsRuntime {
             std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
             let (index, installed) =
                 bareline_app::extensions::manager::install(&root, &package, &index, &cancel)?;
-            Ok(ManagerResult::Installed(installed, index))
+            let cleanup = previous
+                .filter(|old| old.directory() != installed.directory())
+                .and_then(|old| old.remove_cached().err())
+                .map(|error| {
+                    format!("Update installed; old version cleanup needs attention: {error:?}")
+                });
+            Ok(ManagerResult::Installed(installed, index, cleanup))
         })
     }
     fn pump_manager(&mut self) -> bool {
@@ -719,7 +781,7 @@ impl ExtensionsRuntime {
                         .into(),
                 );
             }
-            Ok(ManagerResult::Installed(package, index)) => {
+            Ok(ManagerResult::Installed(package, index, cleanup)) => {
                 let state = index
                     .entries
                     .iter()
@@ -731,9 +793,14 @@ impl ExtensionsRuntime {
                 self.index = index;
                 self.tab = 0;
                 self.selected = 0;
-                self.message = Some("Installed. Review permissions before enabling.".into());
+                self.message =
+                    Some(cleanup.unwrap_or_else(|| {
+                        "Installed. Review permissions before enabling.".into()
+                    }));
             }
             Ok(ManagerResult::Restored(index, rows, runtime, errors)) => {
+                self.inventory_restored = true;
+                self.inventory_error = (!errors.is_empty()).then(|| errors.join("; "));
                 self.runtime_package = runtime;
                 self.index = index;
                 self.installed = rows;
@@ -771,9 +838,18 @@ impl ExtensionsRuntime {
                 self.index = index;
                 self.message = Some("Runtime removed".into());
             }
-            Err(error) => self.message = Some(error),
+            Err(error) => {
+                if !self.inventory_restored {
+                    self.inventory_error = Some(error.clone());
+                }
+                self.message = Some(error);
+            }
         }
-        for row in &mut self.installed { if self.deferred_disabled.contains(&row.package.id) { row.state.enabled=false; } }
+        for row in &mut self.installed {
+            if self.deferred_disabled.contains(&row.package.id) {
+                row.state.enabled = false;
+            }
+        }
         true
     }
 }
@@ -793,7 +869,9 @@ impl super::Shell {
         budget: bareline_extensions_protocol::ExecutionBudget,
     ) -> Result<(), String> {
         use bareline_extensions_protocol::{Capability, Scope, broker::Grant};
-        if !self.extensions.valid_contribution_budget() { return Err("Verified extension contribution limit (1024) exceeded".into()); }
+        if !self.extensions.valid_contribution_budget() {
+            return Err("Verified extension contribution limit (1024) exceeded".into());
+        }
         let runtime = self
             .extensions
             .runtime_package
@@ -930,6 +1008,55 @@ impl ExtensionsRuntime {
 mod manager_tests {
     use super::*;
     #[test]
+    fn deferred_disable_persists_against_latest_completed_manager_generation() {
+        let root = std::env::temp_dir().join(format!(
+            "bareline-deferred-disable-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let mut runtime = ExtensionsRuntime::default();
+        runtime.root = Some(root.clone());
+        let index = ManagerIndex {
+            generation: 8,
+            entries: vec![InstalledState {
+                id: "fixture.tools".into(),
+                digest: "a".repeat(64),
+                version: "2".into(),
+                approved: vec![bareline_extensions_protocol::Capability::DocumentRead],
+                enabled: true,
+                generation: 8,
+                command_count: 1,
+            }],
+            ..Default::default()
+        };
+        let (send, receive) = mpsc::sync_channel(1);
+        assert!(send.send(Ok(ManagerResult::Permissions(index))).is_ok());
+        runtime.manager_pending = Some(receive);
+        runtime.deferred_disabled.insert("fixture.tools".into());
+        assert!(runtime.pump_manager());
+        runtime.flush_disabled(Arc::new(|| {}));
+        let result = runtime
+            .manager_pending
+            .take()
+            .unwrap()
+            .recv_timeout(std::time::Duration::from_secs(3))
+            .unwrap();
+        let (send, receive) = mpsc::sync_channel(1);
+        assert!(send.send(result).is_ok());
+        runtime.manager_pending = Some(receive);
+        assert!(runtime.pump_manager());
+        let saved = ManagerIndex::load(&root).unwrap();
+        assert!(!saved.entries[0].enabled);
+        assert_eq!(saved.entries[0].version, "2");
+        assert!(saved.generation > 8);
+        std::fs::remove_file(root.join("manager-v1.json")).unwrap();
+        std::fs::remove_dir(root).unwrap();
+    }
+    #[test]
     fn release_without_owner_pins_cannot_open_or_install_catalog() {
         let mut runtime = ExtensionsRuntime::default();
         runtime.configure(Some(PathBuf::from("unused-extension-storage")), true);
@@ -959,9 +1086,11 @@ impl ExtensionsRuntime {
             self.message = Some(
                 "Owner trust policy unavailable; installed packages cannot be verified".into(),
             );
+            self.inventory_error = self.message.clone();
             return;
         };
         let Some(root) = self.root.clone() else {
+            self.inventory_error = Some("Extension storage unavailable".into());
             return;
         };
         if let Err(error) = self.manager_work(notify, move |cancel| {
@@ -1051,7 +1180,8 @@ impl ExtensionsRuntime {
             }
             if self.manager_pending.is_some() {
                 self.deferred_disabled.insert(id);
-                self.message=Some("Extension stopped; saving disabled state after current operation".into());
+                self.message =
+                    Some("Extension stopped; saving disabled state after current operation".into());
                 return Ok(());
             }
         }
@@ -1061,16 +1191,35 @@ impl ExtensionsRuntime {
         })
     }
     fn flush_disabled(&mut self, notify: Arc<dyn Fn() + Send + Sync>) {
-        if self.manager_pending.is_some() || self.deferred_disabled.is_empty() { return; }
-        let Some(root)=self.root.clone() else{return;};
-        let mut index=self.index.clone();
-        for id in &self.deferred_disabled {
-            if index.entries.iter().any(|entry|entry.id==*id) && let Err(error)=index.set_permission(id,&[],false) {self.message=Some(error);return;}
+        if self.manager_pending.is_some() || self.deferred_disabled.is_empty() {
+            return;
         }
-        if self.manager_work(notify,move |_|{index.save(&root)?;Ok(ManagerResult::Permissions(index))}).is_ok(){self.deferred_disabled.clear();}
+        let Some(root) = self.root.clone() else {
+            return;
+        };
+        let mut index = self.index.clone();
+        for id in &self.deferred_disabled {
+            if index.entries.iter().any(|entry| entry.id == *id)
+                && let Err(error) = index.set_permission(id, &[], false)
+            {
+                self.message = Some(error);
+                return;
+            }
+        }
+        if self
+            .manager_work(notify, move |_| {
+                index.save(&root)?;
+                Ok(ManagerResult::Permissions(index))
+            })
+            .is_ok()
+        {
+            self.deferred_disabled.clear();
+        }
     }
     pub fn contributions(&self) -> Vec<bareline_commands::DynamicCommandRecord> {
-        if !self.valid_contribution_budget() { return vec![]; }
+        if !self.valid_contribution_budget() {
+            return vec![];
+        }
         self.installed
             .iter()
             .flat_map(|row| {
@@ -1099,7 +1248,11 @@ impl ExtensionsRuntime {
             .collect()
     }
     fn valid_contribution_budget(&self) -> bool {
-        self.installed.iter().map(|row| row.package.manifest.commands.len()).sum::<usize>() <= 1024
+        self.installed
+            .iter()
+            .map(|row| row.package.manifest.commands.len())
+            .sum::<usize>()
+            <= 1024
     }
 }
 impl super::Shell {
@@ -1232,7 +1385,9 @@ impl ExtensionsRuntime {
         let root = self.root.clone().ok_or("Extension storage unavailable")?;
         let mut index = self.index.clone();
         self.manager_work(notify, move |_cancel| {
-            package.remove().map_err(|e| format!("Removal: {e:?}"))?;
+            package
+                .remove_cached()
+                .map_err(|e| format!("Removal: {e:?}"))?;
             index.remove(&id)?;
             index.save(&root)?;
             Ok(ManagerResult::Removed(id, index))

@@ -77,6 +77,7 @@ struct Request {
     cancel: CancelToken,
     response: SyncSender<CompareResult>,
     notify: Arc<dyn Fn() + Send + Sync>,
+    not_before: Option<std::time::Instant>,
 }
 struct Worker {
     sender: SyncSender<Request>,
@@ -88,6 +89,7 @@ impl Worker {
             .name("bareline-compare".into())
             .spawn(move || {
                 while let Ok(job) = receiver.recv() {
+                    if let Some(deadline)=job.not_before {while !job.cancel.is_cancelled()&&std::time::Instant::now()<deadline {std::thread::sleep(deadline.saturating_duration_since(std::time::Instant::now()).min(std::time::Duration::from_millis(5)));}}
                     let result = match (&job.left,&job.right) {
                         (CompareInput::Resident(left),CompareInput::Resident(right))=>bareline_diff::compare(left,right,&job.options,&job.cancel),
                         _=>compare_paged_inputs(&job.left,&job.right,&job.options,&job.cancel),
@@ -151,6 +153,12 @@ impl CompareController {
         self.start_inputs(CompareInput::Resident(left),CompareInput::Resident(right),notify)
     }
     pub fn start_inputs(&mut self,left:CompareInput,right:CompareInput,notify:Arc<dyn Fn()+Send+Sync>)->Result<(),CompareError> {
+        self.start_inputs_at(left,right,notify,None)
+    }
+    pub fn start_inputs_debounced(&mut self,left:CompareInput,right:CompareInput,notify:Arc<dyn Fn()+Send+Sync>)->Result<(),CompareError> {
+        self.start_inputs_at(left,right,notify,Some(std::time::Instant::now()+std::time::Duration::from_millis(150)))
+    }
+    fn start_inputs_at(&mut self,left:CompareInput,right:CompareInput,notify:Arc<dyn Fn()+Send+Sync>,not_before:Option<std::time::Instant>)->Result<(),CompareError> {
         self.remembered = self.current_hunk().map(|h| h.stable_id).or(self.remembered);
         self.cancel();
         self.result = None;
@@ -167,6 +175,7 @@ impl CompareController {
             cancel: cancel.clone(),
             response: sender,
             notify,
+            not_before,
         };
         match self
             .worker
@@ -177,7 +186,7 @@ impl CompareController {
         {
             Ok(()) => {}
             Err(TrySendError::Full(_)) => {
-                self.state = CompareState::AwaitingComparison;
+                self.state = CompareState::Stale;
                 return Err(CompareError::Busy);
             }
             Err(TrySendError::Disconnected(_)) => {

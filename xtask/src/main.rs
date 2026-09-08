@@ -19,6 +19,22 @@ use std::{
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args().skip(1).collect();
+    if args.first().is_some_and(|arg| arg == "qa") {
+        let python = std::env::var_os("BARELINE_QA_PYTHON").unwrap_or_else(|| "python".into());
+        if std::env::var_os("BARELINE_QA_PYTHON").is_some() && !std::path::Path::new(&python).is_absolute() {
+            return Err("BARELINE_QA_PYTHON must be an absolute executable path".into());
+        }
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let mut command = Command::new(python);
+        command.arg(root.join("tests/e2e/runner.py")).args(&args[1..]).current_dir(root);
+        // The Python runner owns kill-on-close Jobs for its adapters. An outer
+        // timeout closes those handles and terminates only its owned descendants.
+        let result = capture::run(&mut command, Duration::from_secs(660))?;
+        std::io::Write::write_all(&mut std::io::stdout(), result.stdout.as_bytes())?;
+        std::io::Write::write_all(&mut std::io::stderr(), result.stderr.as_bytes())?;
+        if result.status != "ok" { return Err(format!("QA runner {} (exit {:?}); no PASS inferred", result.status, result.exit_code).into()); }
+        return Ok(());
+    }
     #[cfg(windows)]
     if args.first().is_some_and(|a| a == "perf") && args.get(1).is_some_and(|a| a == "diff") {
         return bench_diff::run(&args[2..]);

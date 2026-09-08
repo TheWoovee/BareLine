@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Worker-side search over stable snapshots. No file I/O or UI dependencies.
 mod extended;
+mod disk_source;
 mod fold;
 pub mod folders;
 pub mod paged;

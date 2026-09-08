@@ -19,6 +19,26 @@ pub(super) struct Readers {
     cancel: Arc<AtomicBool>,
     deadline: Instant,
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn original_bytes_are_exact_bounded_and_cancelled_without_text_fallback() {
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let original = vec![0xff, 0xfe, 0x41, 0, 0, 0xd8];
+        let mut reader = Readers::new(
+            Some(OriginalSource::Resident(Arc::new(original.clone()))),
+            None,
+            cancelled.clone(),
+            Instant::now() + std::time::Duration::from_secs(1),
+        );
+        assert_eq!(reader.raw(RawRange { start: 0, end: 6 }).unwrap(), original);
+        assert!(reader.raw(RawRange { start: 0, end: 7 }).is_err());
+        assert!(reader.text(TextRange { start: 0, end: 1 }).is_err());
+        cancelled.store(true, Ordering::Release);
+        assert!(reader.raw(RawRange { start: 0, end: 1 }).is_err());
+    }
+}
 impl Readers {
     pub fn new(
         original: Option<OriginalSource>,

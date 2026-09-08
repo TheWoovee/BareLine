@@ -10,7 +10,7 @@ from pathlib import Path
 import tempfile
 import time
 
-from perf_suite import measurement, read_json
+from perf_suite import measurement, read_json, validate_fixture_size
 from notepadpp_driver import require_hash, require_x64_pe, file_version
 from windows_process_metrics import OwnedProcessTree, MemorySampler
 from cache_protocol import prepare as prepare_cache
@@ -80,8 +80,7 @@ def run(args):
         copied_bytes = 0
         if args.fixture:
             source_path = Path(args.fixture).resolve()
-            if not source_path.is_file():
-                raise ValueError('fixture must be a regular file')
+            validate_fixture_size(source_path, args.scenario)
             fixture_root = root / 'workspace'
             fixture_root.mkdir()
             fixture = fixture_root / ('fixture' + source_path.suffix)
@@ -131,6 +130,12 @@ def run(args):
                 metrics = measurement(json.dumps(event))
                 sampler.stop()
                 metrics.update(sampler.metrics())
+                if args.scenario == 'empty_idle':
+                    idle = next((point for point in reversed(sampler.points) if point.process_count > 0 and not point.missing_processes), None)
+                    if idle is None or idle.elapsed_ns < 9_000_000_000:
+                        raise RuntimeError('no complete sample near the end of the idle window')
+                    metrics.update(private_bytes_idle_total=idle.private_bytes_total,
+                                   working_set_bytes_idle_total=idle.working_set_bytes_total)
                 if args.scenario == 'extensions_memory' and metrics['process_count'] < 2:
                     raise RuntimeError('sampler did not observe the extension child; no process-tree comparison emitted')
                 metrics['owned_fixture_disk_bytes'] = copied_bytes

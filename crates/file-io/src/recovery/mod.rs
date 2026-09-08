@@ -12,7 +12,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 const MAX_RECORD: usize = 1024 * 1024;
 const MAX_TRANSACTION: usize = 16 * 1024 * 1024;
 const MAX_RECORDS: usize = 100_000;
@@ -58,6 +58,8 @@ pub struct RecoveryInspection {
     pub checkpoint_durable: Option<DurableReceipt>,
     pub validated_records: usize,
     pub complete_baseline: bool,
+    /// Latest validated policy transaction; absent in legacy v1 byte-only journals.
+    pub document_metadata: Option<std::collections::BTreeMap<String, String>>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Boundary {
@@ -105,6 +107,8 @@ struct EditRef {
 #[serde(deny_unknown_fields)]
 struct Record {
     version: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    metadata: Option<std::collections::BTreeMap<String, String>>,
     receipt: DurableReceipt,
     segment: Blob,
     edits: Vec<EditRef>,
@@ -312,8 +316,25 @@ impl RecoveryWriter {
         edits: &[RecoveryEdit],
         faults: &mut dyn FaultInjector,
     ) -> io::Result<DurableReceipt> {
+        self.append_record(revision, edits, None, faults)
+    }
+    /// Policy bytes are part of the CRC-framed journal, never a dummy text edit.
+    pub fn append_metadata(
+        &mut self,
+        revision: u64,
+        metadata: &bareline_document::DocumentMetadata,
+    ) -> io::Result<DurableReceipt> {
+        self.append_record(revision, &[], Some(metadata.values().clone()), &mut NoFault)
+    }
+    fn append_record(
+        &mut self,
+        revision: u64,
+        edits: &[RecoveryEdit],
+        metadata: Option<std::collections::BTreeMap<String, String>>,
+        faults: &mut dyn FaultInjector,
+    ) -> io::Result<DurableReceipt> {
         self.ensure_writable()?;
-        if edits.is_empty()
+        if (edits.is_empty() && metadata.is_none())
             || edits.len() > 4096
             || self.records >= MAX_RECORDS
             || self
@@ -363,6 +384,7 @@ impl RecoveryWriter {
             };
             let record = Record {
                 version: VERSION,
+                metadata,
                 receipt,
                 segment: Blob {
                     name,
@@ -496,7 +518,7 @@ fn read_manifest_file(path: &Path) -> io::Result<Manifest> {
         return Err(invalid("recovery manifest limit"));
     }
     let manifest: Manifest = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
-    if manifest.version != VERSION
+    if !matches!(manifest.version, 1 | VERSION)
         || manifest.metadata.source_generation.len() > 4096
         || manifest.metadata.codec_catalog_version.len() > 4096
     {
@@ -598,8 +620,12 @@ fn scan(directory: &Path, cancel: &Cancellation) -> io::Result<Scan> {
         let sum = record.edits.iter().try_fold(0u64, |n, e| {
             n.checked_add(e.removed)?.checked_add(e.inserted)
         });
-        if record.version != VERSION
-            || record.edits.is_empty()
+        if !matches!(record.version, 1 | VERSION)
+            || (record.version == 1 && record.metadata.is_some())
+            || (record.edits.is_empty() && record.metadata.is_none())
+            || record.metadata.as_ref().is_some_and(|metadata| {
+                bareline_document::DocumentMetadata::new(metadata.clone()).is_err()
+            })
             || record.edits.len() > 4096
             || record.segment.len > MAX_TRANSACTION as u64
             || sum != Some(record.segment.len)
@@ -684,6 +710,11 @@ impl Scan {
             checkpoint_durable: self.manifest.durable,
             validated_records: self.records.len(),
             complete_baseline: self.baseline_valid,
+            document_metadata: self
+                .records
+                .iter()
+                .rev()
+                .find_map(|record| record.metadata.clone()),
         }
     }
 }

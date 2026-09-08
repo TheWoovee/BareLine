@@ -611,14 +611,15 @@ fn save_impl(
                 .write_snapshot(&snapshot, encoding.state.save_target, bom, out)
                 .map_err(FileError::Encoding)
         } else {
-            if bom {
-                out.write_all(Encoding::Utf8.bom())?;
-            }
+            let policy=crate::codecs::state::metadata_encoding(snapshot.metadata());
+            let (encoding,bom)=policy.map_or((Encoding::Utf8,bom),|state|(state.save_target,state.bom));
+            if bom { out.write_all(encoding.bom())?; }
+            let encoder=crate::codecs::Encoder::new(encoding,false);
             for chunk in snapshot
                 .chunks(TextOffset(0)..TextOffset(snapshot.len()))
                 .map_err(|_| FileError::Budget)?
             {
-                out.write_all(chunk.as_bytes())?;
+                out.write_all(&encoder.encode_text(chunk).map_err(|error|FileError::Encoding(ResidentError::Codec(error)))?)?;
             }
             Ok(())
         }
@@ -750,12 +751,13 @@ fn save_bytes(
 // preserves the existing worker/UI message contract.
 #[allow(clippy::large_enum_variant)]
 pub enum IoCompletion {
-    ResidentSpilled { captured: DocumentSnapshot, result: Result<PagedTranscoded, FileError> },
+    ResidentSpilled { captured: DocumentSnapshot, result: Result<(PagedTranscoded, Option<bareline_document::spill::PreparedSpill>), FileError> },
     Transcode(TranscodeOutcome),
     Open(Result<Opened, FileError>),
     Save(Result<Saved, FileError>),
 }
 pub enum IoRequest {
+    SpillOwnedResident { saved_state: bareline_document::ContentStateId, service: bareline_document::service::DocumentService, captured: DocumentSnapshot, encoding: Option<ResidentEncoding>, original: Option<(PathBuf, Fingerprint)>, cache: PathBuf, quota: u64, options: crate::source::SourceOptions, bytes: Budget, history: Budget },
     SpillResident { captured: DocumentSnapshot, encoding: Option<ResidentEncoding>, bom: bool, cache: PathBuf, quota: u64, options: crate::source::SourceOptions, bytes: Budget, history: Budget },
     SaveCopy { snapshot: DocumentSnapshot, target: PathBuf, source: Option<PathBuf>, bom: bool, encoding: Option<ResidentEncoding> },
     RestorePagedRecovery { directory: PathBuf, bytes: Budget, history: Budget },
@@ -765,6 +767,7 @@ pub enum IoRequest {
         temp_quota_bytes: u64,
     },
     Interpret(Box<InterpretRequest>),
+    InterpretPaged(Box<InterpretPagedRequest>),
     OpenEncoded {
         path: PathBuf,
         bytes: Budget,
@@ -798,6 +801,10 @@ pub enum IoRequest {
     },
 }
 /// Reinterpret the retained sealed original on the worker without touching disk.
+pub struct InterpretPagedRequest {
+    pub source: crate::codecs::disk::DiskDecoded, pub target: Encoding, pub path: PathBuf, pub fingerprint: Fingerprint,
+    pub cache: PathBuf, pub quota: u64, pub options: crate::source::SourceOptions, pub bytes: Budget, pub history: Budget,
+}
 pub struct InterpretRequest {
     pub source: ResidentEncoding,
     pub target: Encoding,
@@ -851,9 +858,30 @@ impl IoService {
             .spawn(move || {
                 while let Ok(job) = receiver.recv() {
                     let result = match job.request {
+                        IoRequest::SpillOwnedResident { saved_state, service, captured, encoding, original, cache, quota, options, bytes, history } => {
+                            let result = (|| {
+                                let plan = service.capture_spill_with_saved(&captured, saved_state).map_err(|_| FileError::Budget)?;
+                                if !plan.matches_resident(&captured) { return Err(FileError::Changed); }
+                                let baseline = if encoding.is_none() && let Some((path, expected)) = original {
+                                    let request = PagedOpenRequest { path, bytes: bytes.clone(), history: history.clone(), cache: cache.clone(), options: DiskOptions { temp_quota_bytes: quota / 2, interpret: Some(Encoding::Utf8) }, source_options: options };
+                                    match open_paged_encoded(request, platform.clone(), job.cancellation.clone(), |_| {}) {
+                                        TranscodeOutcome::Complete(opened) if opened.fingerprint == expected => opened.transcoded,
+                                        TranscodeOutcome::Complete(_) => return Err(FileError::Changed),
+                                        TranscodeOutcome::Failed(error) => return Err(error),
+                                        TranscodeOutcome::Paused(paused) => return Err(FileError::Transcode(paused.error)),
+                                    }
+                                } else {
+                                    crate::owned_store::prepare_original_baseline(encoding.as_ref(), &cache, quota / 2, platform.clone(), options, bytes.clone(), history.clone(), job.cancellation.clone())?
+                                };
+                                let source = baseline.source.source();
+                                let prepared = crate::owned_store::prepare_segments(plan, encoding.as_ref().map(|encoding| (encoding, &source)), &cache, quota - quota / 2, platform.clone(), options, bytes, &job.cancellation)?;
+                                Ok((baseline, Some(prepared)))
+                            })();
+                            IoCompletion::ResidentSpilled { captured, result }
+                        }
                         IoRequest::SpillResident { captured, encoding, bom, cache, quota, options, bytes, history } => {
                             let result = crate::owned_store::prepare_resident(&captured, encoding.as_ref(), bom, &cache, quota, platform.clone(), options, bytes, history, job.cancellation.clone());
-                            IoCompletion::ResidentSpilled { captured, result }
+                            IoCompletion::ResidentSpilled { captured, result: result.map(|transcoded| (transcoded, None)) }
                         }
                         IoRequest::RestorePagedRecovery { directory, bytes, history } => IoCompletion::Transcode(match crate::paged_recovery::restore(&directory, platform.clone(), bytes, history, &job.cancellation) {
                             Ok(opened) => TranscodeOutcome::Complete(Box::new(opened)),
@@ -883,6 +911,13 @@ impl IoService {
                                 (job.notify)();
                             },
                         )),
+                        IoRequest::InterpretPaged(request) => {
+                            let result = crate::owned_store::reinterpret_paged(&request.source, request.target, &request.cache, request.quota, platform.clone(), request.options, request.bytes, request.history, job.cancellation.clone());
+                            IoCompletion::Transcode(match result {
+                                Ok(transcoded) => TranscodeOutcome::Complete(Box::new(PagedOpened { recovery_origin: None, transcoded, path: request.path, fingerprint: request.fingerprint })),
+                                Err(error) => TranscodeOutcome::Failed(error),
+                            })
+                        }
                         IoRequest::Interpret(request) => IoCompletion::Open((|| {
                             job.cancellation.check()?;
                             if request.dirty && !request.discard_confirmed {

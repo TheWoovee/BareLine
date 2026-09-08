@@ -17,6 +17,115 @@ use std::{
     sync::mpsc,
 };
 
+#[cfg(test)]
+pub(super) fn accessibility_test_cases() -> Vec<(
+    &'static str,
+    Vec<bareline_platform::accessibility::AccessibilityNode>,
+    Option<u64>,
+)> {
+    fn snapshot(
+        runtime: &mut MacrosRuntime,
+    ) -> (
+        Vec<bareline_platform::accessibility::AccessibilityNode>,
+        Option<u64>,
+    ) {
+        let mut backend = bareline_renderer_recording::RecordingBackend::default();
+        let mut ops = Vec::new();
+        runtime.bounds =
+            bareline_ui::rect(0., 800. - 24. - runtime.height(), 1000., runtime.height());
+        runtime
+            .controller
+            .draw_output(runtime.bounds, runtime.theme, &mut ops);
+        runtime
+            .controller
+            .manager
+            .draw(
+                &mut backend,
+                1000.,
+                800.,
+                &runtime.controller.status,
+                runtime.theme,
+                &runtime.command_context,
+                &mut ops,
+            )
+            .unwrap();
+        let semantics = runtime.controller.semantics();
+        let focus = semantics
+            .iter()
+            .find(|node| node.focused)
+            .map(|node| node.id.0);
+        let nodes = semantics
+            .iter()
+            .map(|node| bareline_app::accessibility::semantic_node(node, 1))
+            .collect();
+        runtime.controller.manager.release(&mut backend);
+        (nodes, focus)
+    }
+    let mut runtime = MacrosRuntime::default();
+    runtime.storage_ready = true;
+    runtime.controller.library.insert(
+        "Example".into(),
+        bareline_app::macros::model::Macro {
+            name: "Example".into(),
+            events: Vec::new(),
+        },
+    );
+    runtime.controller.selected = Some("Example".into());
+    let mut cases = Vec::new();
+    let (nodes, focus) = snapshot(&mut runtime);
+    cases.push(("macros_closed", nodes, focus));
+    runtime.controller.show_manager();
+    let (nodes, focus) = snapshot(&mut runtime);
+    cases.push(("macros_manager", nodes, focus));
+    assert!(
+        runtime
+            .controller
+            .manager
+            .accessibility(23200, false)
+            .is_none()
+    );
+    assert_eq!(runtime.controller.selected.as_deref(), Some("Example"));
+    let (nodes, focus) = snapshot(&mut runtime);
+    cases.push(("macros_button_focus", nodes, focus));
+    runtime.controller.manager.accessibility(23100, false);
+    let field = runtime.controller.manager.active_field().unwrap();
+    field.select_all();
+    field.insert("Renamed value");
+    assert!(runtime.controller.library.contains_key("Example"));
+    let (nodes, focus) = snapshot(&mut runtime);
+    cases.push(("macros_name_value", nodes, focus));
+    runtime.controller.manager.dismiss();
+    runtime.controller.output_open = true;
+    runtime.controller.status = "Process exited with code 0".into();
+    let (nodes, focus) = snapshot(&mut runtime);
+    cases.push(("macros_output_empty", nodes, focus));
+    let mut output = bareline_app::macros::model::process::OutputBuffer::new(4096);
+    output.push(
+        bareline_app::macros::model::process::OutputStream::Stdout,
+        b"src/example.rs:12:3\nBuild finished\n",
+    );
+    let value = output.text();
+    runtime.controller.update_output_snapshot(
+        Some(&value),
+        (output.byte_len(), output.discarded_bytes),
+        "Exited(0)",
+    );
+    let (nodes, focus) = snapshot(&mut runtime);
+    cases.push(("macros_output_populated", nodes, focus));
+    assert!(
+        runtime
+            .controller
+            .output_accessibility(2_000_000, false)
+            .is_none()
+    );
+    let (nodes, focus) = snapshot(&mut runtime);
+    cases.push(("macros_output_link_focus", nodes, focus));
+    runtime.controller.output_open = false;
+    let (nodes, focus) = snapshot(&mut runtime);
+    cases.push(("macros_closed_after_output", nodes, focus));
+    cases
+}
+
 enum FileResult {
     Macro(String),
     External(String),

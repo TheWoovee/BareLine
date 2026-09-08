@@ -26,6 +26,20 @@ SCENARIOS = (
     "tabs_100", "tabs_500", "extensions_memory",
 )
 LIMIT = 256 * 1024
+FIXTURE_SIZES = {'open_10mb': 10 * 1024**2, 'open_100mb': 100 * 1024**2,
+                 'open_1gb': 1024**3, 'open_5gb': 5 * 1024**3}
+
+
+def validate_fixture_size(path, scenario):
+    path = Path(path)
+    if not path.is_file():
+        raise ValueError('fixture must be a regular file')
+    size = path.stat().st_size
+    if not 0 < size <= 5 * 1024**3:
+        raise ValueError('fixture must be nonempty and at most 5 GiB')
+    if scenario in FIXTURE_SIZES and size != FIXTURE_SIZES[scenario]:
+        raise ValueError('fixture bytes do not match the named size scenario')
+    return size
 
 
 def digest(path):

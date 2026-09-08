@@ -49,6 +49,11 @@ impl SpillPlan {
             text: &segment.text,
         })
     }
+    pub fn matches_resident(&self, snapshot: &DocumentSnapshot) -> bool {
+        self.snapshot.document_id == snapshot.document_id
+            && self.snapshot.revision == snapshot.revision
+            && self.snapshot.content_state == snapshot.content_state
+    }
     pub fn snapshot(&self) -> &PagedSnapshot {
         &self.snapshot
     }
@@ -65,6 +70,7 @@ impl SpillPlan {
             return Err(Error::IncompleteSource);
         }
         let snapshot = PagedSnapshot {
+            metadata: document.current.metadata.clone(),
             root: document.current.root.clone(),
             revision: document.current.revision,
             content_state: document.current.content_state,
@@ -72,6 +78,8 @@ impl SpillPlan {
             _structure: None,
         };
         let convert = |entry: &crate::History| PagedHistory {
+            before_metadata: entry.before_metadata.clone(),
+            after_metadata: entry.after_metadata.clone(),
             typing_insert: entry.typing_insert,
             metadata: entry.metadata.clone(),
             edits: entry.edits.clone(),

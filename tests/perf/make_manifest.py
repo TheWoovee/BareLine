@@ -3,7 +3,7 @@
 import argparse
 from pathlib import Path
 import sys
-from perf_suite import digest, write_new
+from perf_suite import digest, write_new, validate_fixture_size
 
 COMMON = ('open_10mb', 'open_100mb', 'open_1gb', 'open_5gb', 'long_line',
           'scroll', 'edit_to_paint', 'literal_search', 'regex_search', 'result_jump', 'save', 'warm_launch', 'cold_launch', 'empty_idle')
@@ -52,6 +52,8 @@ def main():
         support.append({"path": str(config), "sha256": digest(config)})
     scenarios = []
     for scenario in dict.fromkeys(args.scenario):
+        if scenario not in ('cold_launch', 'warm_launch', 'empty_idle', 'tabs_100', 'tabs_500'):
+            validate_fixture_size(fixture, scenario)
         drivers = {}
         for name, application in applications.items():
             config = application['settings']
@@ -65,6 +67,8 @@ def main():
                 argv += ['--renderer', args.renderer]
             else:
                 argv += ['--expected-text-bytes', str(args.expected_text_bytes), '--timeout', '120']
+                if scenario in ('literal_search', 'regex_search'):
+                    argv += ['--pattern', 'PERF_ABSENT_TOKEN']
             if scenario == 'cold_launch':
                 cache_plan = str(Path(args.cache_plan).resolve())
                 argv += ['--cache-plan', cache_plan, '--cache-plan-sha256', digest(cache_plan)]
@@ -75,13 +79,14 @@ def main():
                 argv += ['--extension-inventory', inventory, '--extension-inventory-sha256', digest(inventory), '--extension-command', args.extension_command]
             drivers[name] = {"argv": argv, "sha256": digest(python), "pinned_files": support}
         scenarios.append({"name": scenario, "timeout_seconds": 300,
-            "cache_state": "uncontrolled; hash validation and per-trial copy warm caches",
+            "cache_state": 'cold protocol receipt required' if scenario == 'cold_launch' else 'one completed warm-up launch' if scenario == 'warm_launch' else "uncontrolled; hash validation and per-trial copy warm caches",
+            "cache_plan_sha256": digest(args.cache_plan) if scenario == 'cold_launch' else None,
             "renderer": args.renderer, "fixtures": [{"path": str(fixture), "sha256": fixture_hash}],
-            "comparable_metrics": [], "drivers": drivers})
+            "comparable_metrics": ['save_to_clean_ack_us'] if scenario == 'save' and len(names) == 2 else [], "drivers": drivers})
     write_new(args.destination, {"schema_version": 1, "series": "local", "machine_id": args.machine_id,
         "configuration": args.configuration, "repetitions": args.repetitions,
         "applications": applications, "scenarios": scenarios,
-        "comparison_review": "No default ratios: native presented/whole-find and Scintilla roundtrip endpoints differ. Review identical work and sampling boundaries before explicitly listing comparable_metrics."})
+        "comparison_review": "Only Save command-to-clean acknowledgement has a shared default endpoint and identical PERF_SAVE edit. This is not a durability/paint comparison. Native presented/whole-find and Scintilla roundtrip endpoints otherwise differ; review identical work and sampling boundaries before listing further comparable_metrics."})
 
 
 if __name__ == '__main__':

@@ -541,6 +541,8 @@ impl DiskDecoded {
         cancel: &Cancellation,
     ) -> Result<(), DiskError> {
         use bareline_document::paged::PagedPiece;
+        let policy=super::state::metadata_encoding(snapshot.metadata());
+        let (target,bom)=policy.map_or((target,bom),|state|(state.save_target,state.bom));
         let _sealed = self.lock_sealed()?;
         self.validate_sealed(cancel)?;
         if bom {

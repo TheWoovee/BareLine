@@ -469,6 +469,22 @@ fn vector(point: Point) -> windows_numerics::Vector2 {
     }
 }
 impl TextBackend for WindowsRenderer {
+    fn shape_wrapped(&mut self, text: &str, size: f32, width: f32, family: &str) -> Result<LayoutId, LayoutError> {
+        let id = self.shape_with_font_family(text, size, width, family)?;
+        let result = unsafe {
+            self.layouts[&id].layout.SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP)
+                .and_then(|_| self.layouts[&id].layout.SetLineSpacing(DWRITE_LINE_SPACING_METHOD_UNIFORM, size*1.2, size*0.9))
+                .and_then(|_| self.layouts[&id].layout.SetMaxHeight(1.0e9))
+        };
+        if result.is_err() { self.release_layout(id); return Err(LayoutError::BackendFailure); }
+        Ok(id)
+    }
+    fn layout_size(&self, id: LayoutId) -> Result<(f32, f32), LayoutError> {
+        let line = self.layouts.get(&id).ok_or(LayoutError::InvalidHandle)?;
+        let mut metrics = DWRITE_TEXT_METRICS::default();
+        unsafe { line.layout.GetMetrics(&mut metrics) }.map_err(|_| LayoutError::BackendFailure)?;
+        Ok((metrics.widthIncludingTrailingWhitespace, metrics.height))
+    }
     fn shape_with_font_family(&mut self, text: &str, size: f32, width: f32, family: &str) -> Result<LayoutId, LayoutError> {
         if !bareline_renderer::valid_font_family(family) { return Err(LayoutError::InvalidOffset); }
         self.font_family = Some(family.to_owned());

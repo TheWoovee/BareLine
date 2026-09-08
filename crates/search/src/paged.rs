@@ -128,6 +128,14 @@ fn window(
         }
     }
 }
+pub fn excerpt(
+    snapshot: &PagedSnapshot,
+    at: TextOffset,
+    job: &SearchJob,
+    mut resolve: impl FnMut(PageTicket) -> Result<bool, String>,
+) -> Result<String, Completeness> {
+    window(snapshot, at.0, 160, job, &mut resolve).map(|window| window.text().into())
+}
 /// No editor-surface dependency: callers provide their generation-checked page resolver.
 /// Regex requires a complete bounded subject; larger contexts explicitly remain incomplete.
 pub fn scan_paged(

@@ -54,7 +54,11 @@ impl Styling {
             language: self.language?,
             range: self.requested.clone()?,
             ready: self.result.as_ref().is_some_and(|result| {
-                result.is_current(source) && result.status == bareline_syntax::Status::Complete
+                result.is_current(source)
+                    && result.status == bareline_syntax::Status::Complete
+                    && self.requested.as_ref().is_some_and(|range| {
+                        result.range.start <= range.start && range.end <= result.range.end
+                    })
             }),
             unavailable: self.unavailable,
         })

@@ -279,6 +279,97 @@ mod tests {
     use super::*;
     use bareline_document::{Budget, Document};
     #[test]
+    fn paged_read_authority_is_bounded_and_never_accepts_edits() {
+        let source = Document::from_utf8("viewport", Budget::new(4096), Budget::new(4096))
+            .unwrap()
+            .snapshot();
+        let mut session = ExtensionSession::new("fixture".into()).unwrap();
+        session.approve(vec![
+            broker::Grant {
+                capability: Capability::DocumentRead,
+                scope: Scope::Document(1),
+            },
+            broker::Grant {
+                capability: Capability::DocumentEdit,
+                scope: Scope::Document(1),
+            },
+        ]);
+        let generation = session.generation();
+        let invocation = Invocation {
+            extension_id: "fixture".into(),
+            command: "fixture.run".into(),
+            arguments: String::new(),
+            document: 1,
+            revision: 77,
+            source_generation: 9,
+            text_length: 1 << 30,
+            raw_length: 4,
+            grant_generation: generation,
+        };
+        let mut broker = InvocationBroker::new_paged(invocation, source, session, vec![]).unwrap();
+        let envelope = |request_id, capability, request| Envelope {
+            protocol: PROTOCOL_VERSION,
+            request_id,
+            extension_id: "fixture".into(),
+            context: CapabilityContext {
+                capability,
+                scope: Scope::Document(1),
+                grant_generation: generation,
+            },
+            request,
+        };
+        let response = broker.request_with_text(
+            envelope(
+                1,
+                Capability::DocumentRead,
+                Request::ReadTextRange {
+                    document: 1,
+                    revision: 77,
+                    range: TextRange {
+                        start: 65535,
+                        end: 65537,
+                    },
+                },
+            ),
+            |_, _| unreachable!(),
+            |range| {
+                assert_eq!(range.start, 65535);
+                Ok(vec![0x9f, 0x99])
+            },
+        );
+        assert!(
+            matches!(response.result.unwrap(),BrokerValue::Bytes(bytes) if bytes==vec![0x9f,0x99])
+        );
+        let stale = broker.request_with_text(
+            envelope(
+                2,
+                Capability::DocumentRead,
+                Request::ReadOriginalBytes {
+                    document: 1,
+                    generation: 8,
+                    range: RawRange { start: 0, end: 1 },
+                },
+            ),
+            |_, _| panic!("stale raw authority reached reader"),
+            |_| unreachable!(),
+        );
+        assert!(stale.result.is_err());
+        let edit = broker.request(
+            envelope(
+                3,
+                Capability::DocumentEdit,
+                Request::ApplyEdits {
+                    document: 1,
+                    revision: 77,
+                    edits: vec![],
+                },
+            ),
+            |_, _| unreachable!(),
+        );
+        assert!(edit.result.is_err());
+        assert!(broker.finish(Ok(())).unwrap().transaction.is_none());
+    }
+    #[test]
     fn byte_chunks_cross_unicode_and_failed_child_discards_edits() {
         let document =
             Document::from_utf8("a🙂z", Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();

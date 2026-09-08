@@ -59,6 +59,7 @@ pub(super) fn spawn(
             let run = (|| {
                 let mut lexer = StreamLexer::new(language, preference, definition);
                 let mut folds = FoldAccumulator::default();
+                let mut folds_active = true;
                 let mut projection = Some(
                     ViewportProjection::new(local.clone(), origin, language)
                         .map_err(|e| format!("{e:?}"))?,
@@ -87,9 +88,14 @@ pub(super) fn spawn(
                     let window = lexer
                         .advance(&text, start, eof, &cancel)
                         .map_err(|e| format!("{e:?}"))?;
-                    folds
-                        .advance_stream(&window, 8192)
-                        .map_err(|e| format!("{e:?}"))?;
+                    if folds_active {
+                        match folds.advance_stream(&window, 8192) {
+                            Ok(()) => (),
+                            Err(bareline_syntax::Error::BudgetExceeded) => folds_active = false,
+                            Err(error) => return Err(format!("{error:?}")),
+                        }
+                    }
+
                     if let Some(view) = &mut projection {
                         view.accept(&window).map_err(|e| format!("{e:?}"))?;
                     }
@@ -123,7 +129,7 @@ pub(super) fn spawn(
                             syntax,
                             folds: folds.known().to_vec(),
                             first_line,
-                            partial: !eof,
+                            partial: !eof || !folds_active || !folds.context_complete(),
                         });
                         loop {
                             match tx.try_send(value) {

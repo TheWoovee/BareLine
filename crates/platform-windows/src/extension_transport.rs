@@ -276,6 +276,11 @@ impl Write for AuthenticatedPipe {
         if buffer.is_empty() {
             return Ok(0);
         }
+        // A framed 64 KiB byte response is larger than the pipe's 64 KiB
+        // outbound quota. Offering that whole buffer to a NOWAIT write can make
+        // no progress even while the peer is waiting for its body. write_all
+        // already handles partial writes; keep each OS offer below that quota.
+        let buffer = &buffer[..buffer.len().min(16 * 1024)];
         loop {
             if Instant::now() >= self.deadline {
                 return Err(io::Error::new(
@@ -301,6 +306,33 @@ impl Write for AuthenticatedPipe {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn framed_responses_larger_than_pipe_quota_make_bounded_progress() {
+        use bareline_extensions_protocol::{BrokerResponse, BrokerValue, decode, encode};
+        let server=PipeServer::create().unwrap();
+        let name=server.name().to_owned();let nonce=server.nonce;
+        let pid=unsafe {GetCurrentProcessId()};
+        let worker=std::thread::spawn(move || {
+            let mut pipe=server.accept(pid,Duration::from_secs(2)).unwrap();
+            for length in [65536usize,131072] {
+                let bytes=encode(&BrokerResponse{request_id:length as u64,result:Ok(BrokerValue::Bytes((0..length).map(|i|(i%251) as u8).collect()))}).unwrap();
+                assert!(bytes.len()>65536);
+                pipe.write_all(&(bytes.len() as u32).to_le_bytes()).unwrap();
+                pipe.write_all(&bytes).unwrap();
+                let mut ack=[0];pipe.read_exact(&mut ack).unwrap();assert_eq!(ack,[1]);
+            }
+        });
+        let mut client=AuthenticatedPipe::connect(&name,nonce,pid,Duration::from_secs(2)).unwrap();
+        for length in [65536usize,131072] {
+            let mut prefix=[0;4];client.read_exact(&mut prefix).unwrap();
+            let count=u32::from_le_bytes(prefix) as usize;assert!(count<=bareline_extensions_protocol::MAX_CHUNK_BYTES);
+            let mut bytes=vec![0;count];client.read_exact(&mut bytes).unwrap();
+            let response:BrokerResponse=decode(&bytes).unwrap();assert_eq!(response.request_id,length as u64);
+            match response.result.unwrap(){BrokerValue::Bytes(bytes)=>assert_eq!(bytes,(0..length).map(|i|(i%251) as u8).collect::<Vec<_>>()),_=>panic!("expected byte response")}
+            client.write_all(&[1]).unwrap();
+        }
+        worker.join().unwrap();
+    }
     #[test]
     fn same_user_pipe_requires_expected_process_and_nonce() {
         let server = PipeServer::create().unwrap();

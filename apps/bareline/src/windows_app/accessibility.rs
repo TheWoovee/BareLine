@@ -14,6 +14,42 @@ fn semantic_group(nodes: &mut Vec<AccessibilityNode>, id: u64, name: &str, mut c
         bounds: [x,y,right-x,bottom-y], disabled: false, selected: false, expanded: None, focusable: false, invokable: false });
     nodes.extend(children);
 }
+fn compose_snapshot(
+    title: &str,
+    width: f64,
+    height: f64,
+    editor: Option<&bareline_editor_surface::EditorSurface>,
+    chrome: Vec<AccessibilityNode>,
+    focus: u64,
+    active_layer: Option<u64>,
+) -> AccessibilitySnapshot {
+    let mut snapshot = bareline_app::accessibility::snapshot(title, width, height, editor, chrome, focus);
+    apply_modal_layer(&mut snapshot, active_layer);
+    snapshot
+}
+// Shared by native publication and complete headless semantic fixtures.
+fn apply_modal_layer(snapshot: &mut AccessibilitySnapshot, active_layer: Option<u64>) {
+        if let Some(layer) = active_layer {
+            let parents: std::collections::BTreeMap<_,_> = snapshot.nodes.iter().map(|n|(n.id,n.parent)).collect();
+            let belongs = |mut id| {
+                for _ in 0..parents.len() {
+                    if id == layer { return true; }
+                    let Some(parent) = parents.get(&id) else { break; };
+                    id = *parent;
+                    if id == 1 { break; }
+                }
+                false
+            };
+            for node in &mut snapshot.nodes {
+                if node.id != 1 && !belongs(node.id) {
+                    node.disabled = true; node.focusable = false; node.invokable = false;
+                }
+            }
+            if !belongs(snapshot.focus) {
+                snapshot.focus = snapshot.nodes.iter().find(|n| belongs(n.id) && n.focusable && !n.disabled).map_or(layer, |n|n.id);
+            }
+        }
+}
 impl Shell {
     pub(super) fn accessibility_text_source(&self) -> Option<std::sync::Arc<dyn bareline_platform::accessibility::AccessibilityTextSource>> {
         self.workspace.as_ref().and_then(|w| w.editors.get(self.app.active)).map(|editor| bareline_app::accessibility::text_source(editor, self.notify.clone()))
@@ -24,8 +60,17 @@ impl Shell {
         height: f64,
         scale: f64,
     ) -> AccessibilitySnapshot {
+        self.accessibility_snapshot_with_editor_bounds(width, height, scale, self.editor_bounds())
+    }
+
+    fn accessibility_snapshot_with_editor_bounds(
+        &self,
+        width: f64,
+        height: f64,
+        scale: f64,
+        editor_bounds: bareline_renderer::Rect,
+    ) -> AccessibilitySnapshot {
         let mut focus = 2;
-        let editor_bounds = self.editor_bounds();
         let mut chrome = Vec::new();
         semantic_group(&mut chrome, 90_000_001, "Document tabs", self.views_accessibility_nodes());
         semantic_group(&mut chrome, 90_000_002, "Command palette",
@@ -130,10 +175,11 @@ impl Shell {
         }
         semantic_group(&mut chrome, 90_000_003, "Toolbar", toolbar_nodes);
         chrome.extend(self.recovery_accessibility_nodes());
-        chrome.extend(self.compare_accessibility_nodes());
+        semantic_group(&mut chrome, 90_000_025, "Compare", self.compare_accessibility_nodes());
         chrome.extend(self.panels_accessibility_nodes());
         chrome.extend(self.extensions_accessibility_nodes());
         chrome.extend(self.language_accessibility_nodes());
+        semantic_group(&mut chrome, 90_000_026, "Utilities and print options", self.utilities_accessibility_nodes());
         if !self.settings.controller.open {
             if let Some(id) = self.views_accessibility_focus() { focus = id; }
             if let Some(id) = self.recovery_accessibility_focus() { focus = id; }
@@ -141,6 +187,7 @@ impl Shell {
             if let Some(id) = self.panels_accessibility_focus() { focus = id; }
             if let Some(id) = self.extensions_accessibility_focus() { focus = id; }
             if let Some(id) = self.language_accessibility_focus() { focus = id; }
+            if let Some(id) = self.utilities_accessibility_focus() { focus = id; }
         }
         let mut manager = Vec::new();
         let mut output = Vec::new();
@@ -162,41 +209,23 @@ impl Shell {
                 19000
             };
         }
-        let mut snapshot = bareline_app::accessibility::snapshot(
+        let active_layer = if self.palette.open { Some(90_000_002) }
+            else if self.shortcuts.open { Some(90_000_004) }
+            else if self.power.open { Some(90_000_006) }
+            else if self.settings.controller.open { Some(90_000_012) }
+            else if self.extensions.open { Some(60_000) }
+            else if self.utilities.has_input_focus() { Some(90_000_026) }
+            else if self.macros.controller.manager.open { Some(90_000_014) }
+            else { None };
+        let mut snapshot = compose_snapshot(
             "Bareline",
             width,
             height,
             editor.map(|v| &**v),
             chrome,
             if self.palette.open { self.palette.semantics().iter().find(|n|n.focused).map_or(11000, |n|n.id.0) } else { focus },
+            active_layer,
         );
-        let active_layer = if self.palette.open { Some(90_000_002) }
-            else if self.shortcuts.open { Some(90_000_004) }
-            else if self.power.open { Some(90_000_006) }
-            else if self.settings.controller.open { Some(90_000_012) }
-            else if self.extensions.open { Some(60_000) }
-            else if self.macros.controller.manager.open { Some(90_000_014) }
-            else { None };
-        if let Some(layer) = active_layer {
-            let parents: std::collections::BTreeMap<_,_> = snapshot.nodes.iter().map(|n|(n.id,n.parent)).collect();
-            let belongs = |mut id| {
-                for _ in 0..parents.len() {
-                    if id == layer { return true; }
-                    let Some(parent) = parents.get(&id) else { break; };
-                    id = *parent;
-                    if id == 1 { break; }
-                }
-                false
-            };
-            for node in &mut snapshot.nodes {
-                if node.id != 1 && !belongs(node.id) {
-                    node.disabled = true; node.focusable = false; node.invokable = false;
-                }
-            }
-            if !belongs(snapshot.focus) {
-                snapshot.focus = snapshot.nodes.iter().find(|n| belongs(n.id) && n.focusable && !n.disabled).map_or(layer, |n|n.id);
-            }
-        }
         if let (Some(editor), Some(renderer)) = (editor, self.renderer.as_ref()) {
             snapshot.text_geometry = editor.accessibility_geometry(renderer, editor_bounds.width, editor_bounds.height).into_iter().map(|(range, rect)| bareline_platform::accessibility::AccessibilityTextBox {
                 start: range.start, end: range.end,
@@ -252,6 +281,8 @@ impl Shell {
             if !self.palette.open && !self.power.open && !self.settings.controller.open {
                 if self.extensions_accessibility(el, &action) { continue; }
                 if self.extensions.open { continue; }
+                if self.utilities_accessibility(el, &action) { continue; }
+                if self.utilities.has_input_focus() { continue; }
                 if self.language_accessibility(el, &action) { continue; }
                 if !self.macros.controller.manager.open && (self.views_accessibility(el, &action) || self.recovery_accessibility(el, &action) || self.compare_accessibility(el, &action) || self.panels_accessibility(el, &action)) { continue; }
             }
@@ -404,14 +435,14 @@ impl Shell {
                         .as_mut()
                         .and_then(|w| w.editors.get_mut(self.app.active))
                     {
-                        editor.scroll(
+                        if !editor.page_by(id == PAGE_NEXT_ID) { editor.scroll(
                             if id == PAGE_PREVIOUS_ID {
                                 -(height as f64)
                             } else {
                                 height as f64
                             },
                             height,
-                        );
+                        ); }
                     }
                 }
                 AccessibilityAction::Focus(id) => {
@@ -487,5 +518,226 @@ impl Shell {
                 window.request_redraw();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::super::{launch, views, compare, utilities, shortcuts};
+    type ShellSetup = fn(&mut Shell, &str);
+    type SetupCases = (&'static str, ShellSetup, &'static [&'static str], u64);
+
+    fn headless_shell() -> Shell {
+        let launch = launch::LaunchConfig {
+            performance: None, portable: false, settings_path: None, session_path: None,
+            recovery_path: None, extensions_path: None, diagnostics_path: None, paths: vec![],
+            line: None, column: None, read_only: false, monitor: false, no_session: true,
+            no_extensions: true, new_instance: true, help: false, version: false,
+            software: true, hardware: false, smoke: false, prototype: false, perf: false,
+        };
+        Shell {
+            renderer: None, platform: None, accessibility: None, shell_integration: Default::default(),
+            window: None, app: Default::default(), palette: Default::default(), ui_focus: Default::default(),
+            ui_router: Default::default(), ledger: Default::default(), modifiers: Default::default(),
+            software: true, first_frame: false, smoke: false, failed: false, prototype: None,
+            workspace: None, notify: std::sync::Arc::new(|| {}), pointer: Default::default(),
+            editor_caret: None, perf: false, idle_at: None, frames: 0, log: None, log_directory: None,
+            startup_paths: vec![], session: Default::default(), settings: Default::default(),
+            views: Default::default(), macros: Default::default(), watch: Default::default(),
+            panels: Default::default(), launch: launch::LaunchRuntime::new(&launch), applied_settings: None,
+            update: Default::default(), language: Default::default(), extensions: Default::default(),
+            toolbar: Default::default(), compare: Default::default(), instance: Default::default(),
+            recovery_root: None, shortcuts: Default::default(), recovery: Default::default(),
+            lifecycle: Default::default(), performance: Default::default(), power: Default::default(),
+            utilities: Default::default(), migration: Default::default(), search: Default::default(),
+            encoding: Default::default(), inventory: Default::default(),
+        }
+    }
+
+    fn dump(errors: &mut Vec<String>, name: &str, snapshot: &AccessibilitySnapshot) -> serde_json::Value {
+        if let Err(error)=snapshot.validate() {
+            let mut counts=std::collections::BTreeMap::new();
+            for node in &snapshot.nodes {*counts.entry(node.id).or_insert(0usize)+=1;}
+            let duplicates:Vec<_>=counts.iter().filter(|(_,count)|**count>1).collect();
+            errors.push(format!("{name}: {error}; root={} focus={} focus_present={} duplicates={duplicates:?}; nodes={:?}",snapshot.root,snapshot.focus,counts.contains_key(&snapshot.focus),snapshot.nodes.iter().map(|n|(n.id,n.parent,n.name.as_str())).collect::<Vec<_>>()));
+        }
+        let mut value = serde_json::to_value(snapshot).unwrap();
+        // Document identity is process-allocated, not UI. Preserve revision and all
+        // semantic/text fields; source-token correctness has separate COM tests.
+        if let Some(context) = value.get_mut("text_context").and_then(|v| v.as_object_mut()) {
+            context.get_mut("source_identity").unwrap()[0] = serde_json::json!(0);
+        }
+        value
+    }
+
+    fn shell_snapshot(shell: &Shell) -> AccessibilitySnapshot {
+        let bounds = bareline_ui::rect(shell.panels.width_left(), shell.toolbar.controller.height(),
+            (1000.0-shell.panels.width_left()-shell.panels.width_right()).max(0.0),
+            (800.0-shell.macros.height()-shell.toolbar.controller.height()).max(0.0));
+        shell.accessibility_snapshot_with_editor_bounds(1000.0, 800.0, 1.0, bounds)
+    }
+
+    fn app_shell(scenario: &str) -> Shell {
+        let mut shell = headless_shell();
+        views::accessibility_test_setup(&mut shell, "open");
+        let mut backend = bareline_renderer_recording::RecordingBackend::default();
+        let mut operations = Vec::new();
+        let context = bareline_commands::CommandContext::default();
+        let keymap = bareline_commands::Keymap::defaults(&shell.app.commands);
+        if scenario.starts_with("find") || scenario == "all_app_panels" {
+            let workspace = shell.workspace.as_mut().unwrap();
+            workspace.find.show_replace();
+            workspace.find.field.insert("needle");
+            workspace.find.replacement.insert("replacement");
+            if scenario == "find.replace_focus" { workspace.find.accessibility_action(6001, false); }
+            if scenario == "find.match_case_focus" { let id=workspace.find.semantics(1000.0).iter().find(|n|n.command_id=="search.match_case").unwrap().id.0; workspace.find.accessibility_action(id, true); }
+            workspace.find.draw(&mut backend, 1000.0, &mut operations).unwrap();
+        }
+        if scenario.starts_with("search") || scenario == "all_app_panels" {
+            let workspace = shell.workspace.as_mut().unwrap();
+            workspace.search_panel.open = true;
+            workspace.search_panel.field.insert("workspace");
+            workspace.search_panel.draw(&mut backend,1000.0,800.0,&[],&mut operations).unwrap();
+        }
+        if scenario.starts_with("settings") || scenario == "all_app_panels" {
+            shell.settings.controller.show();
+            if scenario == "settings.query_value" { assert!(shell.settings.controller.accessibility_set_value(8000,"font")); }
+            shell.settings.controller.draw(bareline_ui::rect(0.0,0.0,1000.0,800.0),&mut backend,&mut operations).unwrap();
+        }
+        if scenario.starts_with("palette") || scenario == "all_app_panels" {
+            shell.palette.show(&shell.app.commands,&context,&keymap);
+            shell.palette.draw(&mut backend,1000.0,800.0,&mut operations).unwrap();
+            if scenario == "palette.result_focus" { assert!(shell.palette.accessibility_focus(11001)); }
+        }
+        if scenario.starts_with("toolbar") || scenario == "all_app_panels" {
+            shell.toolbar.controller.model.visible = true;
+            shell.toolbar.controller.refresh(&shell.app.commands,&context,&keymap,1000.0);
+            if scenario == "toolbar.focus" { shell.toolbar.controller.focus(); }
+            if scenario == "toolbar.customize" { shell.toolbar.controller.customize(&shell.app.commands); }
+            shell.toolbar.controller.draw(1000.0,800.0,Default::default(),&mut operations);
+        }
+        shell
+    }
+
+    #[test]
+    fn complete_native_semantic_json_golden() {
+        let mut errors = Vec::new();
+        let mut cases = std::collections::BTreeMap::new();
+        cases.insert("default".to_owned(), dump(&mut errors,"default",&shell_snapshot(&headless_shell())));
+        for scenario in ["default_document","find.open","find.replace_focus","find.match_case_focus","search.open","settings.open","settings.query_value","palette.open","palette.result_focus","toolbar.open","toolbar.focus","toolbar.customize","all_app_panels"] {
+            let snapshot = shell_snapshot(&app_shell(scenario));
+            if !snapshot.nodes.iter().any(|n|n.id==2) {errors.push(format!("{scenario}: document fixture must expose editor"));}
+            let target=if scenario.starts_with("find") {Some(6000)} else if scenario.starts_with("search") {Some(7000)} else if scenario.starts_with("settings") {Some(90_000_012)} else if scenario.starts_with("palette") {Some(90_000_002)} else if scenario.starts_with("toolbar") {Some(90_000_003)} else {None};
+            if let Some(target)=target {if !snapshot.nodes.iter().any(|n|n.id==target) {errors.push(format!("{scenario}: missing actual surface {target}"));}}
+            cases.insert(scenario.to_owned(),dump(&mut errors,scenario,&snapshot));
+        }
+        let setups: &[SetupCases] = &[
+            ("views", views::accessibility_test_setup, &["closed","open","populated","focus_close","focus_overflow","mru","vertical"],90_000_001),
+            ("compare", compare::accessibility_test_setup, &["closed","open","populated","options","colors","focus","value"],90_000_025),
+            ("utilities", utilities::accessibility_test_setup, &["closed","open","populated","options","focus","value"],90_000_026),
+            ("shortcuts", shortcuts::accessibility_test_setup, &["closed","open","filtered","focus_binding","error"],90_000_004),
+        ];
+        let mut all_chrome = Vec::new();
+        for (prefix, setup, scenarios, group) in setups {
+            for scenario in *scenarios {
+                let mut shell = headless_shell();
+                setup(&mut shell, scenario);
+                let snapshot = shell_snapshot(&shell);
+                if *scenario != "closed" {
+                    if !snapshot.nodes.iter().any(|n|n.id==*group) {errors.push(format!("{prefix}.{scenario}: missing actual container {group}"));}
+                    if !snapshot.nodes.iter().any(|n|n.id!=*group && n.parent==*group) {errors.push(format!("{prefix}.{scenario}: missing actual controls"));}
+                }
+                if *scenario == "populated" {
+                    // Retain complete owner subtrees, excluding other shell surfaces.
+                    let parents: std::collections::BTreeMap<_,_> = snapshot.nodes.iter().map(|n|(n.id,n.parent)).collect();
+                    all_chrome.extend(snapshot.nodes.iter().filter(|n| {
+                        let mut id=n.id;
+                        for _ in 0..parents.len() { if id==*group{return true;} let Some(parent)=parents.get(&id) else {break}; if *parent==1{break;} id=*parent; }
+                        false
+                    }).cloned());
+                }
+                cases.insert(format!("{prefix}.{scenario}"),dump(&mut errors,&format!("{prefix}.{scenario}"),&snapshot));
+            }
+        }
+        let fixture_groups = [
+            ("power",super::super::power::accessibility_test_cases(), Some((90_000_006,"Column editor and clipboard history"))),
+            ("recovery",super::super::recovery::accessibility_test_cases(), None),
+            ("panels",super::super::workspace_panels::accessibility_test_cases(), None),
+            ("language",super::super::language::accessibility_test_cases(), None),
+            ("extensions",super::super::extensions::accessibility_test_cases(), None),
+        ];
+        for (prefix,fixtures, group) in fixture_groups {
+            let mut representative: Option<Vec<AccessibilityNode>> = None;
+            for (name, nodes, focus) in fixtures {
+                if !name.ends_with("closed") && nodes.is_empty() {errors.push(format!("{prefix}/{name}: missing actual controls"));}
+                let mut chrome=Vec::new();
+                if let Some((id,label))=group { semantic_group(&mut chrome,id,label,nodes); } else {chrome=nodes;}
+                if !chrome.is_empty() {
+                    let root=match prefix {"power"=>90_000_006,"recovery"=>100900,"panels"=>90_000_009,"language"=>70000,"extensions"=>60000,_=>unreachable!()};
+                    if !chrome.iter().any(|n|n.id==root) {errors.push(format!("{prefix}/{name}: missing owner hierarchy {root}"));}
+                }
+                if representative.as_ref().is_none_or(|previous|chrome.len()>previous.len()) || name.ends_with("all_open") {representative=Some(chrome.clone());}
+                let layer=group.map(|(id,_)|id).filter(|_|!chrome.is_empty());
+                let snapshot=compose_snapshot("Bareline",1000.0,800.0,None,chrome,focus.unwrap_or(1),layer);
+                if cases.insert(format!("{prefix}/{name}"),dump(&mut errors,&format!("{prefix}/{name}"),&snapshot)).is_some() {errors.push(format!("duplicate fixture case {prefix}/{name}"));}
+            }
+            if let Some(nodes)=representative {all_chrome.extend(nodes);}
+        }
+        let mut macro_manager = Vec::new();
+        let mut macro_output = Vec::new();
+        for (name,nodes,focus) in super::super::macros::accessibility_test_cases() {
+            let (output,manager): (Vec<_>,Vec<_>) = nodes.into_iter().partition(|n|n.id>=2_000_000);
+            let mut chrome=Vec::new();
+            semantic_group(&mut chrome,90_000_014,"Macro and Run manager",manager.clone());
+            semantic_group(&mut chrome,90_000_015,"Command output",output.clone());
+            let layer=(!manager.is_empty()).then_some(90_000_014);
+            cases.insert(name.into(),dump(&mut errors,name,&compose_snapshot("Bareline",1000.0,800.0,None,chrome,focus.unwrap_or(1),layer)));
+            if manager.len()>macro_manager.len() {macro_manager=manager;}
+            if output.len()>macro_output.len() {macro_output=output;}
+        }
+        if macro_manager.is_empty() {errors.push("actual macro manager fixture required".into());}
+        if !macro_output.iter().any(|n|n.focusable) {errors.push("actual populated output row fixture required".into());}
+        semantic_group(&mut all_chrome,90_000_014,"Macro and Run manager",macro_manager);
+        semantic_group(&mut all_chrome,90_000_015,"Command output",macro_output);
+        let app = app_shell("all_app_panels");
+        let app_snapshot = shell_snapshot(&app);
+        // Full retained app controls join native owner subtrees. Their modal
+        // flags are reset by taking each surface's own nonmodal snapshot below.
+        for scenario in ["find.open","search.open","settings.open","palette.open","toolbar.open"] {
+            let shell=app_shell(scenario);
+            let surface=shell_snapshot(&shell);
+            let allowed=match scenario {
+                "find.open"=>shell.workspace.as_ref().unwrap().find.semantics(1000.0).iter().map(|n|n.id.0).chain([9001]).collect(),
+                "search.open"=>shell.workspace.as_ref().unwrap().search_panel.semantics().iter().map(|n|n.id.0).chain([9002]).collect(),
+                "settings.open"=>vec![90_000_012],"palette.open"=>vec![90_000_002],_=>vec![90_000_003]
+            };
+            let parents:std::collections::BTreeMap<_,_>=surface.nodes.iter().map(|n|(n.id,n.parent)).collect();
+            all_chrome.extend(surface.nodes.into_iter().filter(|n| {
+                let mut id=n.id;
+                for _ in 0..parents.len() {if allowed.contains(&id){return true;} let Some(parent)=parents.get(&id) else{break}; if *parent==1{break;} id=*parent;}
+                false
+            }));
+        }
+        all_chrome.extend(app_snapshot.nodes.into_iter().filter(|n|n.id==90_000_020||n.parent==90_000_020));
+        let editor=app.workspace.as_ref().unwrap().editors.first().map(|e|&**e);
+        let mut shortcuts_shell=headless_shell();
+        shortcuts::accessibility_test_setup(&mut shortcuts_shell,"open");
+        all_chrome.extend(shell_snapshot(&shortcuts_shell).nodes.into_iter().filter(|n|n.id==90_000_004||n.parent==90_000_004));
+        for layer in [90_000_002,90_000_004,90_000_006,90_000_012,60_000,90_000_026,90_000_014] {
+            if !all_chrome.iter().any(|n|n.id==layer) {errors.push(format!("all_panels.modal_{layer}: missing actual layer"));}
+            let snapshot=compose_snapshot("Bareline",1000.0,800.0,editor,all_chrome.clone(),2,Some(layer));
+            if !snapshot.nodes.iter().any(|n|n.id==snapshot.focus&&n.focusable&&!n.disabled) {errors.push(format!("all_panels.modal_{layer}: focus {} must be enabled and focusable",snapshot.focus));}
+            cases.insert(format!("all_panels.modal_{layer}"),dump(&mut errors,&format!("all_panels.modal_{layer}"),&snapshot));
+        }
+        assert!(errors.is_empty(), "semantic fixture validation failures:\n{}", errors.join("\n"));
+        let actual=serde_json::to_string_pretty(&cases).unwrap()+"\n";
+        let path=std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/a11y/native-semantic.json");
+        if let Some(candidate)=std::env::var_os("BARELINE_CAPTURE_ACCESSIBILITY_GOLDEN") {
+            std::fs::write(candidate, &actual).expect("write explicitly requested candidate");
+            panic!("candidate captured; review full JSON and install baseline, then rerun without capture");
+        }
+        let expected=std::fs::read_to_string(&path).expect("reviewed full semantic baseline must exist");
+        assert_eq!(actual,expected,"full semantic fields, hierarchy, focus and action capabilities changed");
     }
 }

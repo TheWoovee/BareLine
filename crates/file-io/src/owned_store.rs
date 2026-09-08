@@ -121,3 +121,57 @@ impl bareline_document::source::OwnedPageLoader for SealedSegments {
         file.read_exact(output)
     }
 }
+
+/// Rebuild only the immutable opening baseline, never the current edited text.
+/// This supplies raw provenance when a Resident actor migrates with dirty history.
+pub fn prepare_original_baseline(
+    encoding: Option<&ResidentEncoding>, cache: &Path, quota: u64,
+    platform: Arc<dyn LocalFileSystem>, options: SourceOptions,
+    bytes: Budget, history: Budget, cancellation: Cancellation,
+) -> Result<PagedTranscoded, FileError> {
+    cancellation.check()?;
+    fs::create_dir_all(cache)?;
+    let _parent = platform.guard_directory(cache)?;
+    static NEXT_BASELINE: AtomicU64 = AtomicU64::new(1);
+    let directory = cache.join(format!("spill-baseline-{}-{}", std::process::id(), NEXT_BASELINE.fetch_add(1, Ordering::Relaxed)));
+    fs::create_dir(&directory)?;
+    let staging = Staging(directory);
+    let directory_guard = platform.guard_directory(&staging.0)?;
+    let path = staging.0.join("input.raw");
+    let output = OpenOptions::new().write(true).create_new(true).open(&path)?;
+    let mut writer = QuotaWriter { output, directory: &staging.0, platform: platform.as_ref(), cancel: &cancellation, quota: quota / 2, written: 0 };
+    if let Some(encoding) = encoding {
+        for chunk in encoding.original_bytes().chunks(64 * 1024) { writer.write_all(chunk)?; }
+    }
+    writer.output.sync_all()?;
+    let used = writer.written;
+    drop(writer);
+    let file = platform.open_sealed_read(&path)?;
+    let mut job = DiskTranscoder::new(FileInput { path, file }, platform.clone(), cache,
+        DiskOptions { temp_quota_bytes: quota.saturating_sub(used), interpret: Some(encoding.map_or(Encoding::Utf8, ResidentEncoding::original_encoding)) },
+        bytes.clone(), cancellation.clone()).map_err(FileError::Transcode)?;
+    loop { if job.step().map_err(FileError::Transcode)?.complete { break; } }
+    let mut store = job.finish().map_err(FileError::Transcode)?;
+    if let Some(encoding) = encoding { store.state = encoding.state.clone(); }
+    let result = store.open_paged(platform, options, bytes, history, cancellation).map_err(FileError::Transcode)?;
+    result.source.source().retain_owner(Arc::new(store)).map_err(|_| FileError::Budget)?;
+    drop(directory_guard);
+    Ok(result)
+}
+
+pub fn reinterpret_paged(
+    source: &crate::codecs::disk::DiskDecoded, target: Encoding, cache: &Path,
+    quota: u64, platform: Arc<dyn LocalFileSystem>, options: SourceOptions,
+    bytes: Budget, history: Budget, cancellation: Cancellation,
+) -> Result<PagedTranscoded, FileError> {
+    let _sealed = source.sealed_original_reader(&cancellation).map_err(FileError::Transcode)?;
+    let path = source.original_path();
+    let file = platform.open_sealed_read(&path)?;
+    let mut job = DiskTranscoder::new(FileInput { path, file }, platform.clone(), cache,
+        DiskOptions { temp_quota_bytes: quota, interpret: Some(target) }, bytes.clone(), cancellation.clone()).map_err(FileError::Transcode)?;
+    loop { if job.step().map_err(FileError::Transcode)?.complete { break; } }
+    let store = job.finish().map_err(FileError::Transcode)?;
+    let result = store.open_paged(platform, options, bytes, history, cancellation).map_err(FileError::Transcode)?;
+    result.source.source().retain_owner(Arc::new(store)).map_err(|_| FileError::Budget)?;
+    Ok(result)
+}

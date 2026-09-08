@@ -14,6 +14,10 @@ pub enum SubmitError {
     InvalidGroup,
 }
 pub enum Mutation {
+    Metadata {
+        base_revision: Revision,
+        metadata: crate::DocumentMetadata,
+    },
     Apply(EditTransaction),
     Undo,
     Redo,
@@ -203,6 +207,7 @@ impl Scheduler {
                             let applying = matches!(&request.mutation, Mutation::Apply(_));
                             let mut metadata = match &request.mutation {
                                 Mutation::Apply(_) => request.metadata.clone(),
+                                Mutation::Metadata { .. } => None,
                                 Mutation::Undo => actor.document.history_metadata(true).cloned(),
                                 Mutation::Redo => actor.document.history_metadata(false).cloned(),
                             };
@@ -213,6 +218,10 @@ impl Scheduler {
                                     }
                                     None => actor.document.apply(edit),
                                 },
+                                Mutation::Metadata {
+                                    base_revision,
+                                    metadata,
+                                } => actor.document.apply_metadata(base_revision, metadata),
                                 Mutation::Undo => actor.document.undo(),
                                 Mutation::Redo => actor.document.redo(),
                             };
@@ -448,6 +457,24 @@ impl DocumentService {
         self.document_id == snapshot.document_id
     }
     /// Capture on a worker: clones immutable current/history roots without performing I/O.
+    pub fn capture_spill_with_saved(
+        &self,
+        captured: &DocumentSnapshot,
+        saved: crate::ContentStateId,
+    ) -> Result<crate::spill::SpillPlan, Error> {
+        let mut actor = self.actor.try_lock().map_err(|_| Error::ActorBusy)?;
+        if actor.retired || actor.scheduled || !actor.queue.is_empty() {
+            return Err(Error::ActorBusy);
+        }
+        if !actor.document.current.same_document(captured)
+            || actor.document.current.revision != captured.revision
+        {
+            return Err(Error::StaleRevision);
+        }
+        // The caller owns the UI's opaque savepoint for this exact document snapshot.
+        actor.document.saved_state = saved;
+        crate::spill::SpillPlan::resident(&actor.document)
+    }
     pub fn capture_spill(&self) -> Result<crate::spill::SpillPlan, Error> {
         let actor = self.actor.try_lock().map_err(|_| Error::ActorBusy)?;
         if actor.retired || actor.scheduled || !actor.queue.is_empty() {
@@ -522,6 +549,20 @@ impl DocumentService {
         notify: Option<Arc<dyn Fn() + Send + Sync>>,
     ) -> Result<Receiver<Completion>, (SubmitError, Mutation)> {
         self.submit_context(mutation, None, notify)
+    }
+    pub fn submit_metadata(
+        &self,
+        base_revision: Revision,
+        metadata: crate::DocumentMetadata,
+        notify: Option<Arc<dyn Fn() + Send + Sync>>,
+    ) -> Result<Receiver<Completion>, (SubmitError, Mutation)> {
+        self.submit_with_notify(
+            Mutation::Metadata {
+                base_revision,
+                metadata,
+            },
+            notify,
+        )
     }
     /// Metadata remains owned by the caller when admission fails, just like the edit.
     pub fn submit_with_metadata(

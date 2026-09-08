@@ -1,5 +1,7 @@
 # PR-008 Lexilla bridge evidence
 
+Historical test chronology below is retained. The current source/remaining-scope matrix is [PR-008.md](PR-008.md); it supersedes foundation-era statements that paged styling, UDL consumers or detection are absent.
+
 ## Delivery
 
 The `bareline-lexilla-bridge` crate builds actual C++ Lexilla implementations with the ADR-09-approved `cc` build dependency. `IDocument` is a bounded owned UTF-8 window with all 24 accessors implemented; it is not a Scintilla editor buffer. No Windows types enter the public Rust interface. The syntax worker now owns a persistent `!Send`/`!Sync` `LexerSession`; standalone `lex` retains its one-shot interface.
@@ -40,11 +42,4 @@ The subsequent ForwardLexer/FoldAccumulator pass carries open Lexilla headers ac
 
 Collapsed folds now retain exact byte anchors through submitted edit transactions, and apply their mapping only after successful document acknowledgments. Undo/redo and grouped history retain before/after anchors. Derived metadata is cleared until the mapped line range matches newly verified folds; no stale fold is displayed. Focused acknowledged edit/undo/redo and view-local pending-restore regressions pass.
 
-| Remaining PR-008 scope | Exact status |
-|---|---|
-| Opaque seek/rewind | Forward session only; noncontiguous seeks use verified native checkpoints or conservative plain text. Reconstructing Lexilla from origin to arbitrary seek remains incomplete. |
-| Native/Lexilla language parity | Fifteen paired catalog entries and bounded native definitions exist; C-family shared lexer grammar differences remain documented above. Exhaustive parity fixtures and controlled 1 GB timing are pending. |
-| UDL import/schema | Bounded validation, atomic in-memory replacement and deterministic XML mapping report implemented/tested. Native import displays report. |
-| UDL runtime/editor/export | Imported definition is retained in controller but not selected as active editor syntax; no editing form/live sample/export consumer. Not complete. |
-| Detection/settings | Filename detection and manual per-view override work; full workspace/modeline/heuristic precedence and persistent per-language lexer selection remain incomplete. |
-| Native acceptance | Resident Rust/Python folding, popup input and exact mockup comparison await dedicated QA. Paged full-document language consumers remain unavailable. |
+The former remaining-scope table has moved to the current audit in [PR-008.md](PR-008.md). Paged syntax, verified projection, UDL editing/export, persistent lexer choice and bounded detection now have actual consumers. Paged arbitrary-size fold hiding and paged fold edit-anchor preservation remain explicit source limitations there.

@@ -97,6 +97,11 @@ fn move_history(
         } else {
             document.undo.pop().unwrap()
         };
+        document.current.metadata = if redo {
+            entry.after_metadata.clone()
+        } else {
+            entry.before_metadata.clone()
+        };
         document.current.root = if redo {
             entry.after.clone()
         } else {

@@ -117,7 +117,7 @@ impl Request {
                     &query,
                     &self.job,
                     trust.as_ref(),
-                    platform.as_ref(),
+                    platform,
                 )));
             }
             Work::ReplacePaged {
@@ -237,9 +237,15 @@ pub struct BackgroundTicket<T> {
     receiver: Receiver<Result<T, String>>,
 }
 impl<T> BackgroundTicket<T> {
-    pub fn try_recv(&self) -> Result<Result<T, String>, TryRecvError> { self.receiver.try_recv() }
+    pub fn try_recv(&self) -> Result<Result<T, String>, TryRecvError> {
+        self.receiver.try_recv()
+    }
 }
-impl<T> Drop for BackgroundTicket<T> { fn drop(&mut self) { self.job.cancel(); } }
+impl<T> Drop for BackgroundTicket<T> {
+    fn drop(&mut self) {
+        self.job.cancel();
+    }
+}
 pub struct PagedSearchTicket {
     pub job: SearchJob,
     receiver: Receiver<Result<super::paged::PagedResults, SearchError>>,
@@ -300,15 +306,26 @@ impl Drop for SearchTicket {
 }
 impl SearchWorker {
     /// Shares the same bounded/coalescing worker with search and preview preparation.
-    pub fn operation<T: Send + 'static>(&self, operation: impl FnOnce(&SearchJob) -> Result<T, String> + Send + 'static,
-        notify: Notify) -> BackgroundTicket<T> {
+    pub fn operation<T: Send + 'static>(
+        &self,
+        operation: impl FnOnce(&SearchJob) -> Result<T, String> + Send + 'static,
+        notify: Notify,
+    ) -> BackgroundTicket<T> {
         let job = SearchJob::default();
         let (reply, receiver) = mpsc::sync_channel(1);
         let rejected = reply.clone();
-        self.enqueue(Request { work: Work::Operation {
-            run: Box::new(move |job| { let _ = reply.try_send(operation(job)); }),
-            reject: Box::new(move || { let _ = rejected.try_send(Err("Operation superseded".into())); }),
-        }, job: job.clone(), notify });
+        self.enqueue(Request {
+            work: Work::Operation {
+                run: Box::new(move |job| {
+                    let _ = reply.try_send(operation(job));
+                }),
+                reject: Box::new(move || {
+                    let _ = rejected.try_send(Err("Operation superseded".into()));
+                }),
+            },
+            job: job.clone(),
+            notify,
+        });
         BackgroundTicket { job, receiver }
     }
 

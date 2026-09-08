@@ -35,6 +35,7 @@ pub(super) struct RecoveryRuntime {
     preview_cancellation: bareline_file_io::cancellation::Cancellation,
 }
 impl RecoveryRuntime {
+    pub(super) fn has_input_focus(&self) -> bool { self.open || self.confirm_discard.is_some() }
     fn action_enabled(&self, command:&str)->bool {
         let selected=self.entries.get(self.selected);
         match command {
@@ -827,131 +828,8 @@ fn recovery_action_id(command: &str) -> u64 {
         }
 }
 impl Shell {
-    pub(super) fn recovery_accessibility_nodes(
-        &self,
-    ) -> Vec<bareline_platform::accessibility::AccessibilityNode> {
-        use bareline_platform::accessibility::{AccessibilityNode, AccessibilityRole};
-        if !self.recovery.open {
-            return Vec::new();
-        }
-        let origin = self.editor_bounds();
-        let mut nodes = vec![AccessibilityNode {
-            id: 100_900,
-            parent: 1,
-            role: AccessibilityRole::Group,
-            name: "Recovery Center".into(),
-            value: None,
-            bounds: [
-                origin.x as f64,
-                origin.y as f64,
-                origin.width as f64,
-                origin.height as f64,
-            ],
-            disabled: false,
-            selected: false,
-            expanded: None,
-            focusable: false,
-            invokable: false,
-        }];
-        for (bounds, command) in &self.recovery.hits {
-            let row = command
-                .strip_prefix("recovery.select.")
-                .and_then(|s| s.parse::<usize>().ok());
-            let name = if let Some(index) = row {
-                self.recovery
-                    .entries
-                    .get(index)
-                    .map(|(path, inspection)| {
-                        format!(
-                            "{}; {}; last protected {}",
-                            inspection
-                                .metadata
-                                .original_path
-                                .as_ref()
-                                .unwrap_or(path)
-                                .display(),
-                            recovery_state_label(inspection.status),
-                            inspection.last_durable.map_or(0, |r| r.protected_unix_ms)
-                        )
-                    })
-                    .unwrap_or_else(|| "Recovery checkpoint".into())
-            } else {
-                match command.as_str() {
-                    "recovery.restore_selected" => "Open recovered copy",
-                    "recovery.compare" => "Compare with current disk",
-                    "recovery.export" => "Export saved edits and gap report",
-                    "recovery.discard" => "Discard recovery",
-                    "recovery.keep" => "Keep recovery",
-                    "recovery.confirm_discard" => "Confirm irreversible discard",
-                    _ => "Recovery action",
-                }
-                .into()
-            };
-            nodes.push(AccessibilityNode {
-                id: recovery_action_id(command),
-                parent: 100_900,
-                role: if row.is_some() {
-                    AccessibilityRole::ListItem
-                } else {
-                    AccessibilityRole::Button
-                },
-                name,
-                value: None,
-                bounds: [
-                    (bounds.x + origin.x) as f64,
-                    (bounds.y + origin.y) as f64,
-                    bounds.width as f64,
-                    bounds.height as f64,
-                ],
-                disabled: !self.recovery.action_enabled(command),
-                selected: row == Some(self.recovery.selected),
-                expanded: None,
-                focusable: self.recovery.action_enabled(command),
-                invokable: self.recovery.action_enabled(command),
-            });
-        }
-        nodes.push(AccessibilityNode {
-            id: 100_901,
-            parent: 100_900,
-            role: AccessibilityRole::Status,
-            name: if let Some(path) = &self.recovery.confirm_discard {
-                format!(
-                    "Permanently discard {}? This cannot be undone.",
-                    path.display()
-                )
-            } else {
-                "Recovered copy preview".into()
-            },
-            value: Some(self.recovery.preview_text.clone()),
-            bounds: [
-                origin.x as f64,
-                (origin.y + origin.height - 270.0).max(origin.y) as f64,
-                origin.width as f64,
-                150.0,
-            ],
-            disabled: false,
-            selected: false,
-            expanded: None,
-            focusable: false,
-            invokable: false,
-        });
-        nodes
-    }
-    pub(super) fn recovery_accessibility_focus(&self) -> Option<u64> {
-        self.recovery.open.then(|| {
-            self.recovery
-                .focus
-                .and_then(|index| self.recovery.hits.get(index))
-                .map_or(
-                    if self.recovery.entries.is_empty() {
-                        100_504
-                    } else {
-                        100_000 + self.recovery.selected as u64
-                    },
-                    |(_, command)| recovery_action_id(command),
-                )
-        })
-    }
+    pub(super) fn recovery_accessibility_nodes(&self) -> Vec<bareline_platform::accessibility::AccessibilityNode> { self.recovery.accessibility_nodes(self.editor_bounds()) }
+    pub(super) fn recovery_accessibility_focus(&self) -> Option<u64> { self.recovery.accessibility_focus() }
     pub(super) fn recovery_accessibility(
         &mut self,
         el: &ActiveEventLoop,
@@ -996,4 +874,157 @@ fn recovery_state_label(status: bareline_file_io::recovery::RecoveryStatus) -> &
         RecoveryStatus::SourceUnavailable => "Source unavailable",
         RecoveryStatus::Discarded => "Discarded",
     }
+}
+
+impl RecoveryRuntime {
+    pub(super) fn accessibility_nodes(
+        &self, origin: bareline_renderer::Rect,
+    ) -> Vec<bareline_platform::accessibility::AccessibilityNode> {
+        use bareline_platform::accessibility::{AccessibilityNode, AccessibilityRole};
+        if !self.open {
+            return Vec::new();
+        }
+        let mut nodes = vec![AccessibilityNode {
+            id: 100_900,
+            parent: 1,
+            role: AccessibilityRole::Group,
+            name: "Recovery Center".into(),
+            value: None,
+            bounds: [
+                origin.x as f64,
+                origin.y as f64,
+                origin.width as f64,
+                origin.height as f64,
+            ],
+            disabled: false,
+            selected: false,
+            expanded: None,
+            focusable: false,
+            invokable: false,
+        }];
+        for (bounds, command) in &self.hits {
+            let row = command
+                .strip_prefix("recovery.select.")
+                .and_then(|s| s.parse::<usize>().ok());
+            let name = if let Some(index) = row {
+                self
+                    .entries
+                    .get(index)
+                    .map(|(path, inspection)| {
+                        format!(
+                            "{}; {}; last protected {}",
+                            inspection
+                                .metadata
+                                .original_path
+                                .as_ref()
+                                .unwrap_or(path)
+                                .display(),
+                            recovery_state_label(inspection.status),
+                            inspection.last_durable.map_or(0, |r| r.protected_unix_ms)
+                        )
+                    })
+                    .unwrap_or_else(|| "Recovery checkpoint".into())
+            } else {
+                match command.as_str() {
+                    "recovery.restore_selected" => "Open recovered copy",
+                    "recovery.compare" => "Compare with current disk",
+                    "recovery.export" => "Export saved edits and gap report",
+                    "recovery.discard" => "Discard recovery",
+                    "recovery.keep" => "Keep recovery",
+                    "recovery.confirm_discard" => "Confirm irreversible discard",
+                    _ => "Recovery action",
+                }
+                .into()
+            };
+            nodes.push(AccessibilityNode {
+                id: recovery_action_id(command),
+                parent: 100_900,
+                role: if row.is_some() {
+                    AccessibilityRole::ListItem
+                } else {
+                    AccessibilityRole::Button
+                },
+                name,
+                value: None,
+                bounds: [
+                    (bounds.x + origin.x) as f64,
+                    (bounds.y + origin.y) as f64,
+                    bounds.width as f64,
+                    bounds.height as f64,
+                ],
+                disabled: !self.action_enabled(command),
+                selected: row == Some(self.selected),
+                expanded: None,
+                focusable: self.action_enabled(command),
+                invokable: self.action_enabled(command),
+            });
+        }
+        nodes.push(AccessibilityNode {
+            id: 100_901,
+            parent: 100_900,
+            role: AccessibilityRole::Status,
+            name: if let Some(path) = &self.confirm_discard {
+                format!(
+                    "Permanently discard {}? This cannot be undone.",
+                    path.display()
+                )
+            } else {
+                "Recovered copy preview".into()
+            },
+            value: Some(self.preview_text.clone()),
+            bounds: [
+                origin.x as f64,
+                (origin.y + origin.height - 270.0).max(origin.y) as f64,
+                origin.width as f64,
+                150.0,
+            ],
+            disabled: false,
+            selected: false,
+            expanded: None,
+            focusable: false,
+            invokable: false,
+        });
+        nodes
+    }
+    pub(super) fn accessibility_focus(&self) -> Option<u64> {
+        self.open.then(|| {
+            self
+                .focus
+                .and_then(|index| self.hits.get(index))
+                .map_or(
+                    if self.entries.is_empty() {
+                        100_504
+                    } else {
+                        100_000 + self.selected as u64
+                    },
+                    |(_, command)| recovery_action_id(command),
+                )
+        })
+    }
+}
+
+/// Golden fixtures use the same layout, enabled-state policy, node builder and
+/// focus mapping as the native Center; no window or disk access is required.
+#[cfg(test)]
+pub(super) fn accessibility_test_cases() -> Vec<(&'static str, Vec<bareline_platform::accessibility::AccessibilityNode>, Option<u64>)> {
+    use bareline_file_io::recovery::{DurableReceipt, RecoveryInspection, RecoveryMetadata, RecoveryStatus};
+    let mut result=Vec::new();
+    for scenario in ["closed","open_empty","populated","discard_confirmation","focus_forward","focus_backward"] {
+        let mut runtime=RecoveryRuntime::default();
+        runtime.open=scenario!="closed";
+        if !matches!(scenario,"closed"|"open_empty") {
+            runtime.entries.push((PathBuf::from("checkpoint-1"),RecoveryInspection {
+                status:RecoveryStatus::Complete,
+                metadata:RecoveryMetadata {original_path:Some(PathBuf::from("document.txt")),source_generation:"fixture-generation".into(),codec_catalog_version:"bareline-codecs-v1".into(),original_len:12},
+                last_durable:Some(DurableReceipt {revision:3,protected_unix_ms:123456}),checkpoint_durable:Some(DurableReceipt {revision:3,protected_unix_ms:123456}),validated_records:3,complete_baseline:true,document_metadata:None,
+            }));
+            runtime.preview_text="First line\nSecond line".into();
+        }
+        if scenario=="discard_confirmation" {runtime.confirm_discard=Some(PathBuf::from("checkpoint-1"));}
+        runtime.draw(Default::default(),1000.0,800.0,&mut Vec::new());
+        if scenario=="focus_forward" {runtime.focus=next_recovery_focus(None,runtime.hits.len(),false);}
+        if scenario=="focus_backward" {runtime.focus=next_recovery_focus(None,runtime.hits.len(),true);}
+        result.push((scenario,runtime.accessibility_nodes(rect(0.0,0.0,1000.0,800.0)),runtime.accessibility_focus()));
+    }
+    result
 }

@@ -38,12 +38,12 @@ def prepare(plan_path, plan_sha256, application, fixture, root):
         raise ValueError('cache preparer did not acknowledge a cold-state protocol')
     receipt = receipts[0]
     evidence = Path(receipt['evidence_path']).resolve()
+    if not evidence.is_file() or evidence.stat().st_size > 65536:
+        raise ValueError('cache evidence must be a regular file at most 64 KiB')
     if not evidence.is_relative_to(Path(root).resolve()) or digest(evidence) != receipt['evidence_sha256'].lower():
         raise ValueError('cache preparation evidence must be a pinned file inside this trial root')
     # Evidence is emitted into retained raw stdout before the temporary root is
     # removed; bounded JSON receipts cannot reference a disappearing-only artifact.
-    if evidence.stat().st_size > 65536:
-        raise ValueError('cache evidence exceeds 64 KiB')
     receipt['evidence_text'] = evidence.read_text(encoding='utf-8')
     receipt['plan_sha256'] = plan_sha256
     return receipt

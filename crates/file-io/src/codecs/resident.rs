@@ -439,6 +439,8 @@ impl ResidentEncoding {
         bom: bool,
         out: &mut dyn Write,
     ) -> Result<(), ResidentError> {
+        let policy=super::state::metadata_encoding(snapshot.metadata());
+        let (target,bom)=policy.map_or((target,bom),|state|(state.save_target,state.bom));
         if !snapshot.same_document(&self.baseline) {
             return Err(ResidentError::WrongDocument);
         }

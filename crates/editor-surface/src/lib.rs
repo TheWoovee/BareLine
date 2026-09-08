@@ -3,13 +3,17 @@ pub mod completion;
 pub mod group_view;
 pub mod search_marks;
 pub mod paged_view;
+pub mod paged_navigation;
 pub mod power;
+mod view_geometry;
+mod grapheme_navigation;
+mod virtual_layout;
 use bareline_document::{
     DocumentSnapshot, EditTransaction, TextOffset,
     service::{Completion, DocumentService, Mutation, SubmitError},
 };
 use bareline_renderer::{
-    DrawOp, LayoutError, LayoutId, MAX_LAYOUT_BYTES, Point, Rect, TextBackend,
+    DrawOp, LayoutError, LayoutId, MAX_LAYOUT_BYTES, MAX_LAYOUTS, Point, Rect, TextBackend,
 };
 use bareline_ui::{
     STATUS_HEIGHT, TAB_HEIGHT,
@@ -93,8 +97,17 @@ struct LineLayout {
     id: LayoutId,
     start: usize,
     end: usize,
+    x_origin: f64,
+    row_origin: usize,
 }
 pub struct EditorSurface {
+    blink: view_geometry::CaretBlink,
+    wrap: bool,
+    wrap_rows: BTreeMap<usize, usize>,
+    preferred_x: Option<f32>,
+    visual_navigation: VecDeque<Input>,
+    grapheme_navigation: Option<grapheme_navigation::Navigation>,
+    virtual_lines: BTreeMap<usize,virtual_layout::VirtualLine>,
     recovery: Option<bareline_file_io::resident_recovery::ResidentRecovery>,
     pub theme: bareline_ui::theme::EditorTheme,
     service: Option<DocumentService>,
@@ -120,6 +133,7 @@ pub struct EditorSurface {
     column_maps: BTreeMap<usize,power::DisplayColumnMap>,
     column_maps_revision: Option<bareline_document::Revision>,
     column_map_bytes: usize,
+    column_measurement_pending: bool,
     notify: Arc<dyn Fn() + Send + Sync>,
     layouts: BTreeMap<usize, LineLayout>,
     layout_revision: Option<u64>,
@@ -179,6 +193,13 @@ impl EditorSurface {
     ) -> Self {
         let initial_state = snapshot.content_state;
         Self {
+            blink: Default::default(),
+            wrap: false,
+            wrap_rows: BTreeMap::new(),
+            preferred_x: None,
+            visual_navigation: VecDeque::new(),
+            grapheme_navigation: None,
+            virtual_lines: BTreeMap::new(),
             recovery: None,
             service,
             theme: bareline_ui::theme::EditorTheme::default(),
@@ -204,6 +225,7 @@ impl EditorSurface {
             column_maps: BTreeMap::new(),
             column_maps_revision: None,
             column_map_bytes: 0,
+            column_measurement_pending: false,
             notify,
             layouts: BTreeMap::new(),
             layout_revision: None,
@@ -247,6 +269,9 @@ impl EditorSurface {
     }
     pub fn snapshot(&self) -> &DocumentSnapshot {
         &self.snapshot
+    }
+    pub fn layout_range(&self, id: LayoutId) -> Option<std::ops::Range<TextOffset>> {
+        self.layouts.values().find(|layout| layout.id == id).map(|layout| TextOffset(layout.start)..TextOffset(layout.end))
     }
     pub fn set_known_folds(&mut self, mut folds: Vec<bareline_syntax::folding::Fold>, level: usize, incomplete: bool) {
         folds.truncate(8192);
@@ -367,7 +392,8 @@ impl EditorSurface {
             if line < *r.start() { 0 } else { line.min(*r.end()) - r.start() + 1 }
         }).sum();
         let spacers = self.view_spacers.iter().filter(|(before,_)| *before <= line && !self.hidden_lines.iter().any(|range| range.contains(before))).fold(0usize,|total,(_,rows)| total.saturating_add(*rows));
-        line.saturating_sub(hidden).saturating_add(spacers)
+        let wrapped = if self.wrap { self.wrap_rows.range(..line).filter(|(line,_)| !self.hidden_lines.iter().any(|range| range.contains(line))).fold(0usize, |sum,(_,rows)| sum.saturating_add(rows.saturating_sub(1))) } else { 0 };
+        line.saturating_sub(hidden).saturating_add(spacers).saturating_add(wrapped)
     }
     fn logical_line(&self, row: usize) -> usize {
         // Lower bound also maps a spacer hit to the next real logical line.
@@ -376,6 +402,10 @@ impl EditorSurface {
         while first < last {
             let middle = first + (last-first)/2;
             if self.visual_line(middle) < row { first=middle+1; } else { last=middle; }
+        }
+        if self.wrap && first > 0 {
+            let previous = first-1;
+            if row < self.visual_line(previous).saturating_add(self.wrap_rows.get(&previous).copied().unwrap_or(1)) { return previous; }
         }
         first
     }
@@ -388,14 +418,14 @@ impl EditorSurface {
         whitespace: &str,
     ) {
         let next_font=(font_size_pt.clamp(6.0,72.0)*96.0/72.0)as f32;
+        let changed=self.font_pixels!=next_font||self.tab_width!=usize::from(tab_width.clamp(1,16))||self.line_numbers!=line_numbers||self.highlight_current_line!=highlight_current_line||self.whitespace!=whitespace;
         if self.font_pixels!=next_font||self.tab_width!=usize::from(tab_width.clamp(1,16)){self.clear_column_metrics();}
         self.font_pixels = next_font;
         self.tab_width = usize::from(tab_width.clamp(1, 16));
         self.line_numbers = line_numbers;
         self.highlight_current_line = highlight_current_line;
         self.whitespace = whitespace.to_owned();
-        self.layout_revision = None;
-        self.reveal_caret = true;
+        if changed {self.layout_revision = None;self.reveal_caret = true;}
     }
     fn line_height(&self) -> f32 {
         self.font_pixels * 1.2
@@ -424,6 +454,8 @@ impl EditorSurface {
         view.smart_indent = self.smart_indent;
         view.manual_hidden = self.manual_hidden.clone();
         view.scroll_x = self.scroll_x;
+        view.wrap = self.wrap;
+        view.wrap_rows = self.wrap_rows.clone();
         view.known_folds = self.known_folds.clone();
         view.fold_state = self.fold_state.clone();
         view.hidden_lines = self.hidden_lines.clone();
@@ -614,6 +646,12 @@ impl EditorSurface {
         });
         Ok(())
     }
+    pub fn apply_document_metadata(&mut self, metadata: bareline_document::DocumentMetadata) -> Result<(), String> {
+        if self.read_only() || self.busy() { return Err("Document is busy or read only".into()); }
+        let receiver=self.service.as_ref().ok_or("Document unavailable")?.submit_metadata(self.snapshot.revision,metadata,Some(self.notify.clone())).map_err(|_|"Document worker is busy")?;
+        self.pending=Some(Pending {folds_before:self.fold_anchors(),folds_after:self.fold_anchors(),input:None,receiver,before:self.selection_set(),after:self.selection_set(),bookmarks_before:self.bookmarks.clone(),bookmarks_after:self.bookmarks.clone(),marks_before:self.search_marks.clone(),marks_after:self.search_marks.clone(),history:HistoryMove::Edit});
+        Ok(())
+    }
     pub fn apply_power(&mut self, prepared: power::PowerEdit) -> Result<(), String> {
         if self.read_only() || self.busy() || self.composition.is_some() {
             return Err("Document is busy or read only.".into());
@@ -651,7 +689,7 @@ impl EditorSurface {
         }
         let limit=4*1024*1024;
         if let Some(rectangle)=self.power_rectangle {
-            return power::rectangle_copy(&self.snapshot,rectangle,power::Limits {max_bytes:limit,..self.power_limits()}).map_err(|_|"Rectangle exceeds the clipboard limit.");
+            return self.copy_rectangle(rectangle,limit).map_err(|_|"Rectangle exceeds the clipboard limit.");
         }
         let mut text=String::new();
         for (index,selection) in self.selection_set().selections.iter().enumerate() {
@@ -667,7 +705,7 @@ impl EditorSurface {
         }
     }
     pub fn busy(&self) -> bool {
-        self.group_pending || self.pending.is_some() || !self.queue.is_empty()
+        self.column_measurement_pending || self.group_pending || self.pending.is_some() || !self.queue.is_empty()
     }
     /// Accept worker-prepared edits only against their original document and revision.
     pub fn apply_prepared(
@@ -780,10 +818,12 @@ impl EditorSurface {
         self.pump();
     }
     pub fn pump(&mut self) -> bool {
+        let navigation_changed = self.pump_virtual_navigation();
+        if self.column_measurement_pending { return navigation_changed; }
         if self.group_pending {
-            return false;
+            return navigation_changed;
         }
-        let mut changed = false;
+        let mut changed = navigation_changed;
         if let Some(pending) = &self.pending {
             match pending.receiver.try_recv() {
                 Ok(completion) => {
@@ -861,7 +901,7 @@ impl EditorSurface {
             if origin!=bareline_document::history::EditOrigin::Typing {self.history_boundary=power::consumer::next_receipt_sequence();}
             if matches!(input, Input::SetCaret(..)) { self.power_rectangle = None; }
             let before = self.selection_set();
-            let smart = self.smart_typing && self.language != bareline_syntax::Language::PlainText;
+            let smart = self.smart_typing && (self.language != bareline_syntax::Language::PlainText || self.udl.is_some());
             if smart && self.smart_pairs && self.power_rectangle.is_none() && let Input::Insert(value) = &input && value.chars().count() == 1 {
                 if let Ok(Some(next)) = completion::overtype_closer(&self.snapshot, &before, value.chars().next().unwrap(), self.power_limits()) {
                     self.selection = next.primary(); self.selections = next;
@@ -871,13 +911,13 @@ impl EditorSurface {
             let mut history = HistoryMove::Edit;
             let rectangle = self.power_rectangle;
             let operation = match &input {
-                Input::Insert(value) if rectangle.is_some() => Some(power::rectangle_paste(&self.snapshot, rectangle.unwrap(), value, self.power_limits())),
-                Input::Backspace | Input::Delete if rectangle.is_some() => Some(power::rectangle_paste(&self.snapshot, rectangle.unwrap(), "", self.power_limits())),
+                Input::Insert(value) if rectangle.is_some() => Some(self.prepare_rectangle_paste(rectangle.unwrap(), value)),
+                Input::Backspace | Input::Delete if rectangle.is_some() => Some(self.prepare_rectangle_paste(rectangle.unwrap(), "")),
                 Input::Insert(value) if smart && self.smart_indent && matches!(value.as_str(), "\n" | "\r\n" | "\r") => {
                     let inside_literal = self.typing_syntax.as_ref().filter(|s| s.is_current(&self.snapshot)).is_some_and(|s| s.spans.iter().any(|span| span.range.start.0 < self.selection.caret && self.selection.caret <= span.range.end.0 && matches!(span.kind, bareline_syntax::StyleKind::Comment | bareline_syntax::StyleKind::String)));
                     Some(completion::smart_newline(&self.snapshot, &before, if inside_literal { bareline_syntax::Language::PlainText } else { self.language }, self.power_limits()))
                 }
-                Input::Insert(value) if smart && self.smart_pairs && value.chars().count() == 1 => Some(completion::smart_pair(&self.snapshot, &before, value.chars().next().unwrap(), self.language, self.typing_syntax.as_ref(), self.power_limits())),
+                Input::Insert(value) if smart && self.smart_pairs && value.chars().count() == 1 => Some(completion::smart_pair_configured(&self.snapshot, &before, value.chars().next().unwrap(), self.language, self.typing_syntax.as_ref(), self.power_limits(), self.udl.as_deref())),
                 Input::Backspace if smart && self.smart_pairs => Some(completion::pair_backspace(&self.snapshot, &before, self.power_limits())),
                 Input::Insert(value) => Some(power::replace(
                     &self.snapshot,
@@ -1058,6 +1098,25 @@ impl EditorSurface {
         Some(start..end)
     }
     fn navigate(&mut self, input: Input) {
+        self.reset_caret_blink();
+        if matches!(input, Input::Up(_) | Input::Down(_)) {
+            if self.visual_navigation.len() < MAX_QUEUED_INPUTS { self.visual_navigation.push_back(input); (self.notify)(); }
+            return;
+        }
+        self.preferred_x = None;
+        if let Input::Left(extend) | Input::Right(extend) = input {
+            let forward = matches!(input, Input::Right(_));
+            let origin = self.selection.caret;
+            let target = if forward { self.next_grapheme(origin) } else { self.previous_grapheme(origin) };
+            if target.is_none() && ((forward && origin < self.snapshot.len()) || (!forward && origin > 0)) {
+                if self.grapheme_navigation.is_none() {
+                    match grapheme_navigation::Navigation::start(self.snapshot.clone(),origin,forward,extend,self.notify.clone()) {
+                        Ok(job)=>self.grapheme_navigation=Some(job), Err(error)=>self.error=Some(error),
+                    }
+                }
+                return;
+            }
+        }
         let caret = self.selection.caret;
         let line = self.snapshot.line_at(TextOffset(caret)).unwrap_or(0);
         let (target, extend) = match input {
@@ -1135,7 +1194,7 @@ impl EditorSurface {
                 id
             } else { layout.id };
             let shift = if !composed && start >= caret { composition.map_or(0,str::len) } else { 0 };
-            let origin_y = self.top() + (self.visual_line(*line) as f64 * self.line_height() as f64-self.scroll_y) as f32;
+            let origin_y = self.top() + ((self.visual_line(*line)+layout.row_origin) as f64 * self.line_height() as f64-self.scroll_y) as f32;
             for (offset, grapheme) in text.grapheme_indices(true) {
                 if result.len() >= 4096 { return result; }
                 let a = start+shift+offset;
@@ -1143,7 +1202,7 @@ impl EditorSurface {
                 let local = start-layout.start+offset;
                 let Ok(rects) = backend.range_rects(draw_id, local..local+grapheme.len()) else { continue; };
                 for r in rects {
-                    let x = r.x+LEFT-self.scroll_x as f32;
+                    let x = r.x+LEFT+(layout.x_origin-self.scroll_x) as f32;
                     let y = r.y+origin_y;
                     let left = x.max(LEFT);
                     let top = y.max(self.top());
@@ -1176,6 +1235,8 @@ impl EditorSurface {
         TAB_HEIGHT + self.top_inset
     }
     pub fn release_layouts(&mut self, backend: &mut impl TextBackend) {
+        self.virtual_lines.clear();
+        self.wrap_rows.clear();
         for (_, layout) in std::mem::take(&mut self.layouts) {
             backend.release_layout(layout.id);
         }
@@ -1207,8 +1268,8 @@ impl EditorSurface {
             let hit = backend.hit_test(
                 layout.id,
                 Point {
-                    x: p.x - LEFT + self.scroll_x as f32,
-                    y: (line.fract() * self.line_height() as f64) as f32,
+                    x: p.x - LEFT + (self.scroll_x-layout.x_origin) as f32,
+                    y: ((line-(self.visual_line(number)+layout.row_origin) as f64) * self.line_height() as f64) as f32,
                 },
             )?;
             let offset = (layout.start + hit.byte_offset).min(layout.end);
@@ -1227,7 +1288,11 @@ impl EditorSurface {
                     .take_while(|i| *i <= offset - layout.start)
                     .last()
                     .unwrap_or(0);
-            self.enqueue(Input::SetCaret(snapped, extend));
+            if layout.start > self.content_range(number).map_or(layout.start,|range|range.start) {
+                if self.grapheme_navigation.is_none() {
+                    self.grapheme_navigation=Some(grapheme_navigation::Navigation::start_snap(self.snapshot.clone(),self.selection.caret,snapped,extend,self.notify.clone()).map_err(|_|LayoutError::BackendFailure)?);
+                }
+            } else {self.enqueue(Input::SetCaret(snapped, extend));}
         }
         Ok(())
     }
@@ -1273,6 +1338,7 @@ impl EditorSurface {
         }
         let body_height = (height - self.top() - STATUS_HEIGHT - self.bottom_inset).max(0.0);
         let body = rect(0.0, self.top(), width, body_height);
+        let reveal_requested=self.reveal_caret;
         let caret_line = self
             .snapshot
             .line_at(TextOffset(self.selection.caret))
@@ -1286,7 +1352,8 @@ impl EditorSurface {
                 }
                 self.refresh_hidden_lines();
             }
-            let top = self.visual_line(caret_line) as f64 * self.line_height() as f64;
+            let caret_y = self.layouts.get(&caret_line).filter(|layout| (layout.start..=layout.end).contains(&self.selection.caret)).and_then(|layout| backend.caret(layout.id, self.selection.caret-layout.start).ok()).map_or(0.0, |rect|rect.y);
+            let top = self.visual_line(caret_line) as f64 * self.line_height() as f64 + f64::from(caret_y);
             if top < self.scroll_y {
                 self.scroll_y = top;
             } else if top + self.line_height() as f64 > self.scroll_y + body_height as f64 {
@@ -1316,11 +1383,16 @@ impl EditorSurface {
                 .snapshot
                 .line_range(self.logical_line(visible.end.saturating_sub(1)))
                 .map_or(TextOffset(self.snapshot.len()), |r| r.end);
+        let visible_lines: std::collections::BTreeSet<_> = visible.clone().map(|row| self.logical_line(row)).filter(|line| *line < self.snapshot.line_count()).collect();
+        self.virtual_lines.retain(|line,_|visible_lines.contains(line));
+        if self.wrap_rows.len()>MAX_LAYOUTS {
+            self.wrap_rows.retain(|line,_|visible_lines.contains(line));
+        }
         let evicted: Vec<_> = self
             .layouts
             .keys()
             .copied()
-            .filter(|n| !visible.contains(&self.visual_line(*n)))
+            .filter(|n| !visible_lines.contains(n))
             .collect();
         for number in evicted {
             backend.release_layout(self.layouts.remove(&number).unwrap().id);
@@ -1328,13 +1400,30 @@ impl EditorSurface {
         ops.push(DrawOp::PushClip(body));
         ops.push(DrawOp::Fill(body, self.theme.ui.editor));
         let mut caret_rect = None;
-        for row in visible {
-            let number = self.logical_line(row);
-            if self.visual_line(number) != row { continue; }
+        for number in visible_lines {
+            let row = self.visual_line(number);
+            if self.hidden_lines.iter().any(|range| range.contains(&number)) { continue; }
             let y = self.top() + (row as f64 * self.line_height() as f64 - self.scroll_y) as f32;
             let range = self.content_range(number).unwrap();
+            let long=range.end-range.start>MAX_LAYOUT_BYTES;
+            let mut fragment=None;
+            if long {
+                if self.virtual_lines.get(&number).is_none_or(|state|!state.matches(&self.snapshot,&range)) {
+                    self.virtual_lines.insert(number,virtual_layout::VirtualLine::new(&self.snapshot,range.clone()));
+                }
+                let target_row=(self.scroll_y/self.line_height() as f64).floor() as usize;
+                let state=self.virtual_lines.get_mut(&number).unwrap();
+                state.seek(self.scroll_x,target_row.saturating_sub(row),(number==caret_line&&reveal_requested).then_some(self.selection.caret),self.wrap);
+                if !state.prepare(&self.snapshot,self.notify.clone()).map_err(|_|LayoutError::BackendFailure)? {
+                    text(ops,LEFT,y,"Preparing line…",self.font_pixels,self.theme.gutter);
+                    if reveal_requested {self.reveal_caret=true;}
+                    continue;
+                }
+                let (start,x,rows)=state.origin();
+                fragment=Some((start,state.end,state.text.as_ref().unwrap().clone(),x,rows));
+            }
             let mut start = range.start;
-            if number == caret_line && self.selection.caret > start + MAX_LAYOUT_BYTES / 2 {
+            if !long && number == caret_line && self.selection.caret > start + MAX_LAYOUT_BYTES / 2 {
                 start = self
                     .selection
                     .caret
@@ -1348,6 +1437,8 @@ impl EditorSurface {
             while !self.snapshot.is_boundary(TextOffset(end)) {
                 end -= 1;
             }
+            let (x_origin,row_origin)=if let Some((a,b,_,x,rows))=&fragment {start=*a;end=*b;(*x,*rows)}else{(0.0,0)};
+            let y=y+row_origin as f32*self.line_height();
             if self
                 .layouts
                 .get(&number)
@@ -1356,23 +1447,37 @@ impl EditorSurface {
                 backend.release_layout(self.layouts.remove(&number).unwrap().id);
             }
             if !self.layouts.contains_key(&number) {
-                let value = self
+                let value = if let Some((_,_,value,_,_))=&fragment {value.clone()}else{ self
                     .snapshot
                     .read(TextOffset(start)..TextOffset(end), MAX_LAYOUT_BYTES)
-                    .map_err(|_| LayoutError::InvalidOffset)?;
+                    .map_err(|_| LayoutError::InvalidOffset)? };
                 self.layouts.insert(
                     number,
                     LineLayout {
-                        id: backend.shape_with_font_family(
+                        id: if self.wrap { backend.shape_wrapped(
+                            &value, self.font_pixels, (width-LEFT-16.0).max(1.0), &self.font_family,
+                        )? } else { backend.shape_with_font_family(
                             &value,
                             self.font_pixels,
                             (width - LEFT - 16.0).max(1.0),
                             &self.font_family,
-                        )?,
+                        )? },
                         start,
                         end,
+                        x_origin,
+                        row_origin,
                     },
                 );
+            }
+            if self.wrap {
+                let rows = (backend.layout_size(self.layouts[&number].id)?.1/self.line_height()).ceil().max(1.0) as usize;
+                let total=row_origin.saturating_add(rows).saturating_add(usize::from(end<range.end));
+                if self.wrap_rows.insert(number, total) != Some(total) { (self.notify)(); }
+            }
+            if long {
+                let (width,height)=backend.layout_size(self.layouts[&number].id)?;
+                let line_height=self.line_height();
+                if self.virtual_lines.get_mut(&number).unwrap().measured(width,height,line_height,self.wrap) {if reveal_requested {self.reveal_caret=true;}(self.notify)();}
             }
             let layout = &self.layouts[&number];
             if number == caret_line && self.highlight_current_line {
@@ -1397,7 +1502,7 @@ impl EditorSurface {
             for (style,marked) in self.search_marks.iter() {
                 let a=marked.start.0.max(start);let b=marked.end.0.min(end);
                 if a<b {for r in backend.range_rects(layout.id,a-start..b-start)? {
-                    ops.push(DrawOp::Fill(rect(LEFT-self.scroll_x as f32+r.x,y+r.y,r.width,r.height),self.theme.marks[(style-1)as usize]));
+                    ops.push(DrawOp::Fill(rect(LEFT+(x_origin-self.scroll_x) as f32+r.x,y+r.y,r.width,r.height),self.theme.marks[(style-1)as usize]));
                 }}
             }
             for selection in self.selection_set().selections {
@@ -1407,7 +1512,7 @@ impl EditorSurface {
                 if a < b {
                     for r in backend.range_rects(layout.id, a - start..b - start)? {
                         ops.push(DrawOp::Fill(
-                            rect(LEFT - self.scroll_x as f32 + r.x, y + r.y, r.width, r.height),
+                            rect(LEFT + (x_origin-self.scroll_x) as f32 + r.x, y + r.y, r.width, r.height),
                             self.theme.ui.selection,
                         ));
                     }
@@ -1429,23 +1534,25 @@ impl EditorSurface {
                     if let Some(old) = self.composition_layout.take() {
                         backend.release_layout(old);
                     }
-                    draw_id = backend.shape_with_font_family(
+                    draw_id = if self.wrap { backend.shape_wrapped(
+                        &displayed, self.font_pixels, (width-LEFT-16.0).max(1.0), &self.font_family,
+                    )? } else { backend.shape_with_font_family(
                         &displayed,
                         self.font_pixels,
                         (width - LEFT - 16.0).max(1.0),
                         &self.font_family,
-                    )?;
+                    )? };
                     self.composition_layout = Some(draw_id);
                     for r in backend
                         .range_rects(draw_id, caret_offset..caret_offset + composition.len())?
                     {
                         ops.push(DrawOp::Line {
                             from: Point {
-                                x: LEFT - self.scroll_x as f32 + r.x,
+                                x: LEFT + (x_origin-self.scroll_x) as f32 + r.x,
                                 y: y + r.y + r.height,
                             },
                             to: Point {
-                                x: LEFT - self.scroll_x as f32 + r.x + r.width,
+                                x: LEFT + (x_origin-self.scroll_x) as f32 + r.x + r.width,
                                 y: y + r.y + r.height,
                             },
                             color: self.theme.ui.caret,
@@ -1493,24 +1600,30 @@ impl EditorSurface {
             };
             backend.set_styles(draw_id, &styles)?;
             ops.push(DrawOp::Layout {
-                origin: Point { x: LEFT - self.scroll_x as f32, y },
+                origin: Point { x: LEFT + (x_origin-self.scroll_x) as f32, y },
                 layout: draw_id,
                 color: self.theme.ui.text,
             });
             if number == caret_line && (start..=end).contains(&self.selection.caret) {
                 let r = backend.caret(draw_id, caret_offset)?;
-                let caret = rect(LEFT - self.scroll_x as f32 + r.x, y + r.y, r.width, r.height);
-                ops.push(DrawOp::Fill(caret, self.theme.ui.caret));
+                let caret = rect(LEFT + (x_origin-self.scroll_x) as f32 + r.x, y + r.y, r.width, r.height);
+                if reveal_requested && !self.wrap {
+                    let x=x_origin+f64::from(r.x);
+                    let viewport=f64::from((width-LEFT-16.0).max(1.0));
+                    let next=if x<self.scroll_x {x}else if x>self.scroll_x+viewport {(x-viewport+f64::from(self.font_pixels)).max(0.0)}else{self.scroll_x};
+                    if next!=self.scroll_x {self.scroll_x=next;(self.notify)();}
+                }
+                if self.caret_visible() { ops.push(DrawOp::Fill(caret, self.theme.ui.caret)); }
                 caret_rect = Some(caret);
             }
-            if self.composition.is_none() {
+            if self.composition.is_none() && self.caret_visible() {
                 for selection in self.selection_set().selections {
                     if selection == self.selection || !(start..=end).contains(&selection.caret) {
                         continue;
                     }
                     let r = backend.caret(draw_id, selection.caret - start)?;
                     ops.push(DrawOp::Fill(
-                        rect(LEFT - self.scroll_x as f32 + r.x, y + r.y, r.width, r.height),
+                        rect(LEFT + (x_origin-self.scroll_x) as f32 + r.x, y + r.y, r.width, r.height),
                         self.theme.ui.caret,
                     ));
                 }
@@ -1519,6 +1632,7 @@ impl EditorSurface {
                 text(ops, width - 34.0, y, "…", 13.0, self.theme.gutter);
             }
         }
+        self.resolve_visual_navigation(backend)?;
         ops.push(DrawOp::Fill(
             rect(48.0, self.top(), 1.0, body_height),
             self.theme.ui.border,

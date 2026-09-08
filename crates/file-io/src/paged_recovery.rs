@@ -187,7 +187,7 @@ impl PagedRecovery {
                 .writer
                 .lock()
                 .map_err(|_| "Recovery writer stopped".to_owned())?;
-            let receipt = writer.append(revision, edits).map_err(|e| e.to_string())?;
+            let receipt = if edits.is_empty() {writer.append_metadata(revision,snapshot.metadata())} else {writer.append(revision,edits)}.map_err(|e|e.to_string())?;
             write_root(&self.directory, snapshot, self.platform.as_ref(), &self.cancellation)
                 .map_err(|e| e.to_string())?;
             writer
@@ -228,6 +228,8 @@ struct RootReceipt {
     revision: u64,
     file: String,
     sha256: [u8; 32],
+    #[serde(default)]
+    metadata: std::collections::BTreeMap<String,String>,
 }
 fn write_root(
     directory: &Path,
@@ -286,6 +288,7 @@ fn write_root(
         revision: snapshot.revision.0,
         file: name,
         sha256: hash.finalize().into(),
+        metadata: snapshot.metadata().values().clone(),
     };
     crate::session::publish_json(
         &directory.join(format!("root-{}.receipt.json", receipt.revision)),
@@ -316,11 +319,11 @@ pub fn restore(
         let file = platform
             .open_sealed_read(&directory.join(name))
             .map_err(|e| e.to_string())?;
-        if file.metadata().map_err(|e| e.to_string())?.len() > 16384 {
+        if file.metadata().map_err(|e| e.to_string())?.len() > 524288 {
             return Err("Recovery metadata limit".into());
         }
         let mut value = Vec::new();
-        file.take(16384)
+        file.take(524288)
             .read_to_end(&mut value)
             .map_err(|e| e.to_string())?;
         Ok(value)
@@ -427,6 +430,7 @@ pub fn restore(
         bareline_document::Revision(root.revision),
     )
     .map_err(|e| format!("{e:?}"))?;
+    transcoded.document.restore_metadata(bareline_document::DocumentMetadata::new(root.metadata).map_err(|e|format!("{e:?}"))?).map_err(|e|format!("{e:?}"))?;
     Ok(crate::lifecycle::PagedOpened {
         recovery_origin: Some(directory.into()),
         fingerprint: store.fingerprint.clone(),

@@ -41,6 +41,14 @@ class EvidenceTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 suite.measurement(json.dumps(value))
 
+    def test_named_size_cannot_be_reported_for_a_tiny_fixture(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'small.txt'
+            path.write_bytes(b'PERF_NEEDLE')
+            with self.assertRaises(ValueError):
+                suite.validate_fixture_size(path, 'open_5gb')
+            self.assertEqual(suite.validate_fixture_size(path, 'result_jump'), 11)
+
     def test_equal_names_are_not_implicitly_comparable(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

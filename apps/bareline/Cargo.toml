@@ -6,6 +6,7 @@ license.workspace = true
 
 [features]
 default = []
+qa-inventory = []
 perf-spans = ["bareline-renderer/perf-spans", "bareline-diagnostics/perf-spans"]
 
 [dependencies]
@@ -34,3 +35,7 @@ bareline-diff = { path = "../../crates/diff" }
 winit.workspace = true
 
 
+
+[dev-dependencies]
+serde_json = "1"
+bareline-renderer-recording = { path = "../../crates/renderer-recording" }

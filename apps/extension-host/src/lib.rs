@@ -186,7 +186,7 @@ impl Runtime {
                 }
             }
         });
-        let result = (|| {
+        let result: wasmtime::Result<()> = (|| {
             let component = Component::new(&self.engine, bytes)?;
             let instance = linker.instantiate(&mut store, &component)?;
             let run = instance.get_typed_func::<(), ()>(&mut store, "run")?;
@@ -195,7 +195,14 @@ impl Runtime {
         })();
         let _ = stop_tx.send(());
         let _ = watchdog.join();
-        result
+        result.map_err(|error| {
+            let diagnostic = format!(
+                "extension execution failed: trap={:?}, remaining_fuel={:?}",
+                error.downcast_ref::<wasmtime::Trap>(),
+                store.get_fuel(),
+            );
+            error.context(diagnostic)
+        })
     }
 }
 #[cfg(test)]

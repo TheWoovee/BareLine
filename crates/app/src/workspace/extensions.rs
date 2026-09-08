@@ -12,6 +12,71 @@ pub enum OriginalSource {
         platform: Arc<dyn bareline_platform::LocalFileSystem>,
     },
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bareline_platform::{FileIdentity, LocalFileSystem};
+    use std::{
+        fs::File,
+        io::{self, Read},
+        path::Path,
+        sync::atomic::AtomicBool,
+    };
+    struct Platform;
+    impl LocalFileSystem for Platform {
+        fn open_sealed_read(&self, path: &Path) -> io::Result<File> {
+            File::open(path)
+        }
+        fn identity(&self, file: &File) -> io::Result<FileIdentity> {
+            Ok(FileIdentity {
+                volume: 1,
+                file: 2,
+                length: file.metadata()?.len(),
+                modified: 0,
+            })
+        }
+        fn validate_target(&self, _: &Path) -> io::Result<()> {
+            Ok(())
+        }
+        fn commit(&self, _: &Path, _: &Path, _: bool) -> io::Result<()> {
+            unreachable!()
+        }
+    }
+    #[test]
+    fn normal_utf8_original_reader_verifies_disk_generation_not_editor_text() {
+        use sha2::{Digest, Sha256};
+        let path = std::env::temp_dir().join(format!(
+            "bareline-extension-original-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::write(&path, b"original").unwrap();
+        let platform = Arc::new(Platform);
+        let source = OriginalSource::File {
+            path: path.clone(),
+            fingerprint: bareline_file_io::lifecycle::Fingerprint {
+                identity: platform.identity(&File::open(&path).unwrap()).unwrap(),
+                sha256: Sha256::digest(b"original").into(),
+            },
+            platform,
+        };
+        let mut held = source
+            .verified_file(&AtomicBool::new(false))
+            .unwrap()
+            .unwrap();
+        let mut bytes = vec![];
+        held.read_to_end(&mut bytes).unwrap();
+        assert_eq!(bytes, b"original");
+        drop(held);
+        std::fs::write(&path, b"modified").unwrap();
+        assert!(source.verified_file(&AtomicBool::new(false)).is_err());
+        assert!(source.verified_file(&AtomicBool::new(true)).is_err());
+        std::fs::remove_file(path).unwrap();
+    }
+}
 impl OriginalSource {
     pub fn len(&self) -> u64 {
         match self {

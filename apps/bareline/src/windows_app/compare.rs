@@ -57,6 +57,11 @@ pub(super) fn register(registry: &mut CommandRegistry) {
         ("compare.colorsTab", "Compare colors"),
         ("compare.trimEdges", "Ignore leading/trailing whitespace"),
         ("compare.ignoreWhitespace", "Ignore all whitespace"),
+        ("compare.resetAdded", "Reset added colors"),
+        ("compare.resetRemoved", "Reset removed colors"),
+        ("compare.resetChanged", "Reset changed colors"),
+        ("compare.resetMoved", "Reset moved colors"),
+        ("compare.resetCurrent", "Reset current difference colors"),
     ]) {
         let id = CommandId(id);
         let _ = registry.register(CommandSpec {
@@ -94,6 +99,8 @@ pub(super) struct CompareRuntime {
     colors_tab: bool,
     active_color: Option<&'static str>,
     color_field: bareline_ui::text_field::TextField,
+    color_bounds: Option<Rect>,
+    color_focus: bool,
     color_blind: bool,
     saved: Vec<(DocumentSnapshot, String)>,
     saved_paged: Vec<(bareline_editor_surface::paged_view::PagedReadHandle,String)>,
@@ -261,30 +268,41 @@ impl CompareRuntime {
 }
 
 impl Shell {
+    /// Command identity plus visible occurrence keeps duplicate actions distinct.
+    /// Compare chrome has at most two occurrences of any command; reserve sixteen.
+    fn compare_accessibility_hit_id(&self,hit:usize)->Option<u64> {
+        let (_,id)=self.compare.hits.get(hit)?;
+        let command=self.app.commands.entries().filter(|command|command.id.0.starts_with("compare.")).position(|command|command.id.0==*id)?;
+        let occurrence=self.compare.hits[..hit].iter().filter(|(_,candidate)|candidate==id).count();
+        Some(50_000+command as u64*16+occurrence as u64)
+    }
     pub(super) fn compare_accessibility_nodes(&self)->Vec<bareline_platform::accessibility::AccessibilityNode> {
         use bareline_platform::accessibility::{AccessibilityNode,AccessibilityRole};
         let offset=self.editor_bounds();
         let mut context=bareline_commands::CommandContext::default();
         self.compare.annotate_context(&mut context,self.workspace.as_ref());
-        self.compare.hits.iter().filter_map(|(bounds,id)| {
-            let (index,command)=self.app.commands.entries().enumerate().find(|(_,command)|command.id.0==*id)?;
-            Some(AccessibilityNode{id:50_000+index as u64,parent:1,role:AccessibilityRole::Button,name:command.title.into(),value:None,
+        let mut nodes:Vec<_>=self.compare.hits.iter().enumerate().filter_map(|(hit,(bounds,id))| {
+            let command=self.app.commands.entries().find(|command|command.id.0==*id)?;
+            Some(AccessibilityNode{id:self.compare_accessibility_hit_id(hit)?,parent:1,role:AccessibilityRole::Button,name:command.title.into(),value:None,
                 bounds:[(bounds.x+offset.x) as f64,(bounds.y+offset.y) as f64,bounds.width as f64,bounds.height as f64],
                 disabled:context.states.get(&command.id).is_some_and(|state|!state.enabled),selected:false,expanded:None,focusable:true,invokable:true})
-        }).collect()
+        }).collect();
+        if self.compare.active_color.is_some(){if let Some(bounds)=self.compare.color_bounds{nodes.push(AccessibilityNode{id:59_999,parent:1,role:AccessibilityRole::TextField,name:"Compare color hexadecimal value".into(),value:Some(self.compare.color_field.value().into()),bounds:[(bounds.x+offset.x) as f64,(bounds.y+offset.y) as f64,bounds.width as f64,bounds.height as f64],disabled:false,selected:false,expanded:None,focusable:true,invokable:false});}}nodes
     }
     pub(super) fn compare_accessibility_focus(&self)->Option<u64> {
         if !self.compare.options_open{return None;}
-        let (_,id)=self.compare.hits.get(self.compare.focus)?;
-        self.app.commands.entries().position(|command|command.id.0==*id).map(|i|50_000+i as u64)
+        if self.compare.active_color.is_some()&&self.compare.color_focus{return Some(59_999);}
+        self.compare_accessibility_hit_id(self.compare.focus)
     }
     pub(super) fn compare_accessibility(&mut self,el:&ActiveEventLoop,action:&bareline_platform::accessibility::AccessibilityAction)->bool {
         use bareline_platform::accessibility::AccessibilityAction;
+        if self.compare.active_color.is_some(){match action{AccessibilityAction::SetValue{id:59_999,value}=>{if value.len()<=9&&value.chars().all(|c|c=='#'||c.is_ascii_hexdigit()){self.compare.color_field.select_all();self.compare.color_field.insert(value);self.compare.color_focus=true;self.compare_redraw();}return true;},AccessibilityAction::Focus(59_999)=>{self.compare.color_focus=true;self.compare_redraw();return true;},_=>{}}}
         let (id,invoke)=match action{AccessibilityAction::Focus(id)=>(*id,false),AccessibilityAction::Invoke(id)=>(*id,true),_=>return false};
         let Some(node)=self.compare_accessibility_nodes().into_iter().find(|node|node.id==id)else{return false;};
         if node.disabled{return true;}
-        let Some(command)=self.app.commands.entries().nth((id-50_000) as usize).map(|command|command.id.0)else{return false;};
-        if let Some(index)=self.compare.hits.iter().position(|(_,candidate)|*candidate==command){self.compare.focus=index;}
+        self.compare.color_focus=false;
+        let Some((index,command))=self.compare.hits.iter().enumerate().find_map(|(index,(_,command))|(self.compare_accessibility_hit_id(index)==Some(id)).then_some((index,*command)))else{return false;};
+        self.compare.focus=index;
         if invoke{self.compare_dispatch(el,command);}self.compare_redraw();true
     }
     /// Both indices must refer to actual loaded sources. Recovery Center owns their
@@ -432,12 +450,17 @@ impl Shell {
         }
         if let Some((_, key)) = COLOR_CONTROLS.iter().find(|(command, _)| *command == id) {
             self.compare.active_color = Some(key);
+            self.compare.color_focus=true;
             self.compare.color_field.select_all();
             let color = self.settings.theme_color(key).map_or(0, |c| c.0);
             self.compare.color_field.insert(&format!("#{color:06X}"));
             self.compare.color_field.select_all();
             self.compare_redraw();
             return true;
+        }
+        if let Some(prefix)=match id{"compare.resetAdded"=>Some("diff.added"),"compare.resetRemoved"=>Some("diff.removed"),"compare.resetChanged"=>Some("diff.changed"),"compare.resetMoved"=>Some("diff.moved"),"compare.resetCurrent"=>Some("diff.current"),_=>None} {
+            let mut overrides=self.settings.effective().theme_overrides;overrides.retain(|key,_|key!=prefix&&!key.starts_with(&format!("{prefix}.")));
+            let result=self.settings.controller.edit("theme.overrides",bareline_settings::SettingValue::Map(overrides));if let Some(workspace)=&mut self.workspace{workspace.message=result.err();}self.compare_redraw();return true;
         }
         if matches!(
             id,
@@ -795,7 +818,7 @@ impl Shell {
             && !controller.pause_automatic
             && indices.iter().all(|i| !workspace.editors[*i].busy())
         {
-            let _ = controller.start_inputs(
+            let _ = controller.start_inputs_debounced(
                 snapshots[0].clone(),
                 snapshots[1].clone(),
                 self.notify.clone(),
@@ -820,6 +843,7 @@ impl Shell {
                 ..
             } => {
                 let pointer = self.editor_pointer();
+                if self.compare.active_color.is_some()&&self.compare.color_bounds.is_some_and(|bounds|bounds.contains(pointer)) {self.compare.color_focus=true;if let Some(renderer)=&self.renderer{let _=self.compare.color_field.click(renderer,pointer,self.modifiers.shift_key());}self.compare_redraw();return true;}
                 if !self.compare.options_open {
                     if let Some((side,bounds))=self.compare.overview.iter().enumerate().find_map(|(i,r)|r.filter(|r|r.contains(pointer)).map(|r|(i,r))) {
                         if let Some(workspace)=&mut self.workspace {
@@ -847,21 +871,22 @@ impl Shell {
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
                 if self.compare.active_color.is_some() {
                     match &event.logical_key {
+                        Key::Named(NamedKey::Tab)=>{self.compare.color_focus=!self.compare.color_focus;self.compare.focus=0;},
                         Key::Named(NamedKey::Enter) => {
                             return self.compare_dispatch(el, "compare.applyColor");
                         }
                         Key::Named(NamedKey::Escape) => self.compare.active_color = None,
-                        Key::Named(NamedKey::Backspace) => {
+                        Key::Named(NamedKey::Backspace) if self.compare.color_focus => {
                             self.compare.color_field.delete(false);
                         }
-                        Key::Named(NamedKey::Delete) => {
+                        Key::Named(NamedKey::Delete) if self.compare.color_focus => {
                             self.compare.color_field.delete(true);
                         }
-                        Key::Named(NamedKey::ArrowLeft) => self
+                        Key::Named(NamedKey::ArrowLeft) if self.compare.color_focus => self
                             .compare
                             .color_field
                             .horizontal(false, self.modifiers.shift_key()),
-                        Key::Named(NamedKey::ArrowRight) => self
+                        Key::Named(NamedKey::ArrowRight) if self.compare.color_focus => self
                             .compare
                             .color_field
                             .horizontal(true, self.modifiers.shift_key()),
@@ -871,7 +896,7 @@ impl Shell {
                             self.compare.color_field.select_all()
                         }
                         _ => {
-                            if let Some(value) = &event.text
+                            if self.compare.color_focus && let Some(value) = &event.text
                                 && value.chars().all(|c| c == '#' || c.is_ascii_hexdigit())
                             {
                                 self.compare.color_field.insert(value);
@@ -948,14 +973,13 @@ impl CompareRuntime {
         let Some(indices) = self.indices(workspace) else {
             return Ok(());
         };
-        let Some(snapshots)=views.compare_snapshots(workspace)else{return Ok(());};
         let inputs = indices.map(|i| compare_input(&workspace.editors[i]));
         let bases=views.compare_viewport_starts(workspace);
         let geometry = views.compare_geometry();
-        let scroll = views.compare_scroll(workspace);
         let line_height =
             (settings.effective().editor_font_size_pt.clamp(6.0, 72.0) * 96.0 / 72.0 * 1.2) as f32;
         let theme = settings.ui_theme();
+        self.color_bounds=None;
         let colors = [
             "diff.added",
             "diff.removed",
@@ -977,11 +1001,7 @@ impl CompareRuntime {
                     .position(|r| r.is_some_and(|r| r.contains(*origin)))
             {
                 let bounds = geometry[side].unwrap();
-                let row = (((origin.y - bounds.y - TAB_HEIGHT) as f64 + scroll[side])
-                    / line_height as f64)
-                    .round()
-                    .max(0.0) as usize;
-                if let Ok(local_line) = snapshots[side].line_range(row) {
+                if let Some(local_line) = views.compare_layout_range(workspace,side,*layout) {
                     let line=bareline_document::TextOffset(local_line.start.0+bases[side])..bareline_document::TextOffset(local_line.end.0+bases[side]);
                     for hunk in hunks {
                         let range = if side == 0 { &hunk.left } else { &hunk.right };
@@ -1007,7 +1027,7 @@ impl CompareRuntime {
                                     _ => "~",
                                 },
                                 12.0,
-                                theme.text,
+                                settings.theme_color(match hunk.kind{DiffKind::Added=>"diff.added.gutter",DiffKind::Removed=>"diff.removed.gutter",DiffKind::MovedAligned=>"diff.moved.gutter",_=>"diff.changed.gutter"}).unwrap_or(theme.text),
                             );
                             if Some(hunk.stable_id) == current {
                                 painted.push(DrawOp::Stroke(
@@ -1272,6 +1292,7 @@ impl CompareRuntime {
                     }
                     self.hits.push((bounds, id));
                 }
+                option_button(ops,&mut self.hits,r(482.0,y,30.0,30.0),"↶",["compare.resetAdded","compare.resetRemoved","compare.resetChanged","compare.resetMoved","compare.resetCurrent"][row],theme);
             }
             ops.push(DrawOp::Fill(r(24.0, 458.0, 502.0, 1.0), theme.border));
             option_button(
@@ -1349,14 +1370,16 @@ impl CompareRuntime {
             theme,
         );
         if let Some(key) = self.active_color {
+            self.hits.clear();
             let popup = r(45.0, 300.0, 460.0, 150.0);
             ops.push(DrawOp::FillRounded(popup, theme.elevated, 8.0));
             ops.push(DrawOp::StrokeRounded(popup, theme.focus, 8.0, 2.0));
             label(ops, 62.0, 315.0, &format!("Color: {key}"), 16.0);
+            self.color_bounds=Some(r(62.0,349.0,265.0,38.0));
             self.color_field.draw_with_theme(
                 renderer,
                 r(62.0, 349.0, 265.0, 38.0),
-                true,
+                self.color_focus,
                 theme,
                 ops,
             )?;
@@ -1402,6 +1425,41 @@ fn option_button(
         theme.text,
     );
     hits.push((bounds, id));
+}
+
+#[cfg(test)]
+pub(super) fn accessibility_test_setup(shell:&mut Shell,scenario:&str) {
+    register(&mut shell.app.commands);
+    shell.compare=CompareRuntime::default();
+    if scenario=="closed"{return;}
+    shell.views=views::ViewsRuntime::default();
+    let notify:std::sync::Arc<dyn Fn()+Send+Sync>=std::sync::Arc::new(||{});
+    let mut workspace=Workspace::new(notify,std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem)).expect("compare fixture workspace");
+    workspace.new_document().unwrap();workspace.new_document().unwrap();
+    workspace.editors[0].enqueue(Input::Insert("anchor\nleft 🙂\nend\n".into()));
+    workspace.editors[1].enqueue(Input::Insert("anchor\nright 🙂\nend\n".into()));
+    let deadline=std::time::Instant::now()+std::time::Duration::from_secs(5);
+    while workspace.editors.iter().any(|editor|editor.busy()){assert!(std::time::Instant::now()<deadline,"fixture editor completion");workspace.pump();std::thread::yield_now();}
+    shell.workspace=Some(workspace);shell.app.active=0;
+    assert!(shell.compare_start_pair(0,1));
+    {
+        let workspace=shell.workspace.as_ref().unwrap();let inputs=[compare_input(&workspace.editors[0]),compare_input(&workspace.editors[1])];
+        let controller=shell.compare.controller.as_mut().unwrap();
+        while !controller.poll_inputs(&inputs[0],&inputs[1]){assert!(std::time::Instant::now()<deadline,"fixture comparison completion");std::thread::yield_now();}
+        assert!(matches!(controller.state,CompareState::Exact|CompareState::Coarse(_)));
+    }
+    match scenario {
+        "open"|"populated"=>{},
+        "options"=>{shell.compare.options_open=true;shell.compare.colors_tab=false;},
+        "colors"=>{shell.compare.options_open=true;shell.compare.colors_tab=true;},
+        "focus"=>{shell.compare.options_open=true;shell.compare.colors_tab=true;shell.compare.focus=2;},
+        "value"=>{shell.compare.options_open=true;shell.compare.colors_tab=true;shell.compare.active_color=Some("diff.added");shell.compare.color_focus=true;shell.compare.color_field.insert("#123456");},
+        _=>panic!("unknown compare accessibility fixture: {scenario}"),
+    }
+    let mut renderer=bareline_renderer_recording::RecordingBackend::default();let mut ops=Vec::new();
+    let workspace=shell.workspace.as_mut().unwrap();
+    shell.views.draw(workspace,&mut shell.app,&mut renderer,1000.0,800.0,&mut ops).unwrap();
+    shell.compare.draw(workspace,&mut shell.views,&shell.settings,&mut renderer,1000.0,800.0,&mut ops).unwrap();
 }
 
 #[cfg(test)]

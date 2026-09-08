@@ -42,8 +42,9 @@ impl LanguageConfiguration {
 }
 enum WorkerResult {
     Saved,
+    Hint(Option<String>),
     Completion(CompletionResult, Option<String>),
-    Signatures(Vec<bareline_editor_surface::completion::Signature>),
+    Signatures(String, Vec<bareline_editor_surface::completion::Signature>),
     Folds(DocumentSnapshot, Vec<bareline_syntax::folding::Fold>, bool),
     Udl(
         bareline_syntax::udl::Definition,
@@ -67,7 +68,8 @@ impl ItemSource for Rows {
 pub struct LanguageController {
     completion_generation: u64,
     word_indexes: Arc<std::sync::Mutex<Vec<WordIndex>>>,
-    signatures: Vec<bareline_editor_surface::completion::Signature>,
+    signatures:
+        std::collections::BTreeMap<String, Vec<bareline_editor_surface::completion::Signature>>,
     pub signature_hint: Option<String>,
     definitions: std::collections::BTreeMap<String, Arc<bareline_syntax::udl::Definition>>,
     pub open: bool,
@@ -90,7 +92,7 @@ impl Default for LanguageController {
         Self {
             completion_generation: 0,
             word_indexes: Default::default(),
-            signatures: Vec::new(),
+            signatures: Default::default(),
             signature_hint: None,
             open: false,
             title: String::new(),
@@ -219,6 +221,7 @@ impl LanguageController {
         self.cancel.cancel();
         self.open = false;
         self.completion = None;
+        self.signature_hint = None;
         self.rows.0.clear();
         self.list.selected = None;
     }
@@ -283,6 +286,9 @@ impl LanguageController {
         verified_syntax: Option<bareline_syntax::SyntaxResult>,
     ) {
         if !config.policy.completion {
+            self.close();
+            self.receiver = None;
+            self.title = "Completion".into();
             self.open = true;
             self.status = "Completion is disabled for this language".into();
             return;
@@ -294,7 +300,16 @@ impl LanguageController {
         self.completion_generation = self.completion_generation.wrapping_add(1);
         let generation = self.completion_generation;
         let indexes = self.word_indexes.clone();
-        let signatures = self.signatures.clone();
+        let signatures = self
+            .signatures
+            .get(
+                config
+                    .definition
+                    .as_ref()
+                    .map_or(language.metadata().id, |definition| definition.id.as_str()),
+            )
+            .cloned()
+            .unwrap_or_default();
         self.signature_hint = None;
         self.launch("Completion", notify, move |cancel| {
             let limits=CompletionLimits::default();
@@ -318,7 +333,7 @@ impl LanguageController {
             result.provider_generation=generation;
             let prefix=snapshot.read(result.replacement.clone(),limits.max_scan_bytes).map_err(|e|format!("{e:?}"))?;
             if prefix.chars().count()<config.policy.min_chars as usize {result.items.clear();return Ok(WorkerResult::Completion(result,None));}
-            let supported=syntax.as_ref().is_some_and(|syntax| syntax.range.start<=result.replacement.start && TextOffset(caret)<=syntax.range.end && !syntax.spans.iter().any(|span|span.range.start.0<=caret && caret<span.range.end.0 && matches!(span.kind,bareline_syntax::StyleKind::String|bareline_syntax::StyleKind::Comment)));
+            let supported=bareline_editor_surface::completion::semantic_completion_supported(&snapshot,TextOffset(caret),syntax.as_ref());
             let mut extra=Vec::new();
             if supported {
                 if let Some(definition)=&config.definition { extra.extend(definition.keywords.iter().cloned().map(|word|(word,bareline_editor_surface::completion::CompletionKind::Keyword,None))); }
@@ -340,8 +355,52 @@ impl LanguageController {
             Ok(WorkerResult::Completion(result,hint))
         });
     }
-    pub fn import_signatures(&mut self, path: PathBuf, notify: Arc<dyn Fn() + Send + Sync>) {
-        self.launch("Static signatures", notify, move |_| {
+    pub fn has_signatures(&self, id: &str) -> bool {
+        self.signatures
+            .get(id)
+            .is_some_and(|values| !values.is_empty())
+    }
+    pub fn request_parameter_hint(
+        &mut self,
+        snapshot: DocumentSnapshot,
+        caret: TextOffset,
+        syntax: bareline_syntax::SyntaxResult,
+        language_id: &str,
+        notify: Arc<dyn Fn() + Send + Sync>,
+    ) {
+        let signatures = self
+            .signatures
+            .get(language_id)
+            .cloned()
+            .unwrap_or_default();
+        self.launch("Parameter Hint", notify, move |cancel| {
+            if cancel.is_cancelled() {
+                return Err("Hint cancelled".into());
+            }
+            bareline_editor_surface::completion::parameter_hint(
+                &snapshot,
+                caret,
+                Some(&syntax),
+                &signatures,
+            )
+            .map(|hint| {
+                WorkerResult::Hint(hint.map(|(signature, argument)| {
+                    format!("{} · argument {}", signature.display, argument + 1)
+                }))
+            })
+            .map_err(|error| format!("{error:?}"))
+        });
+    }
+    pub fn import_signatures(
+        &mut self,
+        path: PathBuf,
+        language_id: String,
+        notify: Arc<dyn Fn() + Send + Sync>,
+    ) {
+        self.launch("Static signatures", notify, move |cancel| {
+            if language_id.len() > 64 {
+                return Err("Invalid language identifier".into());
+            }
             use std::io::Read;
             let mut bytes = Vec::new();
             std::fs::File::open(path)
@@ -349,9 +408,12 @@ impl LanguageController {
                 .take(128 * 1024 + 1)
                 .read_to_end(&mut bytes)
                 .map_err(|e| e.to_string())?;
+            if cancel.is_cancelled() {
+                return Err("Signature import cancelled".into());
+            }
             let text = std::str::from_utf8(&bytes).map_err(|e| e.to_string())?;
             bareline_editor_surface::completion::load_signatures(text, 128 * 1024, 2048)
-                .map(WorkerResult::Signatures)
+                .map(|signatures| WorkerResult::Signatures(language_id, signatures))
                 .map_err(|e| format!("{e:?}"))
         });
     }
@@ -421,19 +483,19 @@ impl LanguageController {
                         notify();
                         return;
                     }
-                    let partial = end < snapshot.len();
+                    let partial = end < snapshot.len() || !accumulator.context_complete();
                     let result = Ok(WorkerResult::Folds(
                         snapshot.clone(),
                         accumulator.known().to_vec(),
                         partial,
                     ));
-                    if partial {
+                    if end < snapshot.len() {
                         let _ = tx.try_send(result);
                     } else {
                         let _ = tx.send(result);
                     }
                     notify();
-                    if !partial {
+                    if end == snapshot.len() {
                         return;
                     }
                     start = end;
@@ -452,11 +514,13 @@ impl LanguageController {
             file.take(128 * 1024 + 1)
                 .read_to_end(&mut bytes)
                 .map_err(|e| e.to_string())?;
-            parse_udl_bytes(bytes,&cancel)
+            parse_udl_bytes(bytes, &cancel)
         });
     }
-    pub fn import_udl_bytes(&mut self, bytes:Vec<u8>, notify:Arc<dyn Fn()+Send+Sync>) {
-        self.launch("Import Language",notify,move |cancel|parse_udl_bytes(bytes,&cancel));
+    pub fn import_udl_bytes(&mut self, bytes: Vec<u8>, notify: Arc<dyn Fn() + Send + Sync>) {
+        self.launch("Import Language", notify, move |cancel| {
+            parse_udl_bytes(bytes, &cancel)
+        });
     }
     pub fn poll(&mut self) -> bool {
         self.poll_definition(None)
@@ -486,10 +550,22 @@ impl LanguageController {
             return false;
         }
         match result {
+            Ok(WorkerResult::Hint(hint)) => {
+                if let Some(hint) = hint {
+                    self.status = hint.clone();
+                    self.signature_hint = Some(hint);
+                } else {
+                    self.close();
+                }
+            }
             Ok(WorkerResult::Saved) => self.status = "Language definition exported".into(),
-            Ok(WorkerResult::Signatures(signatures)) => {
+            Ok(WorkerResult::Signatures(language_id, signatures)) => {
+                if self.signatures.len() >= 128 && !self.signatures.contains_key(&language_id) {
+                    self.status = "Signature catalog limit reached".into();
+                    return true;
+                }
                 self.status = format!("Loaded {} static signatures", signatures.len());
-                self.signatures = signatures;
+                self.signatures.insert(language_id, signatures);
             }
             Ok(WorkerResult::Completion(result, hint)) => {
                 if result.provider_generation != self.completion_generation {
@@ -732,25 +808,23 @@ impl LanguageController {
         );
     }
 }
-fn parse_udl_bytes(bytes:Vec<u8>,cancel:&Cancellation)->Result<WorkerResult,String> {
-            if cancel.is_cancelled() {
-                return Err("Import cancelled".into());
-            }
-            if bytes.len() > 128 * 1024 {
-                return Err("Language definition exceeds 128 KiB".into());
-            }
-            let text = String::from_utf8(bytes).map_err(|e| e.to_string())?;
-            let (definition, report) = if text.trim_start().starts_with('<') {
-                bareline_syntax::udl::import_notepad_xml(&text).map_err(|e| format!("{e:?}"))?
-            } else {
-                (
-                    bareline_syntax::udl::Definition::from_json(&text)
-                        .map_err(|e| format!("{e:?}"))?,
-                    Vec::new(),
-                )
-            };
-            Ok(WorkerResult::Udl(definition, report, None))
-
+fn parse_udl_bytes(bytes: Vec<u8>, cancel: &Cancellation) -> Result<WorkerResult, String> {
+    if cancel.is_cancelled() {
+        return Err("Import cancelled".into());
+    }
+    if bytes.len() > 128 * 1024 {
+        return Err("Language definition exceeds 128 KiB".into());
+    }
+    let text = String::from_utf8(bytes).map_err(|e| e.to_string())?;
+    let (definition, report) = if text.trim_start().starts_with('<') {
+        bareline_syntax::udl::import_notepad_xml(&text).map_err(|e| format!("{e:?}"))?
+    } else {
+        (
+            bareline_syntax::udl::Definition::from_json(&text).map_err(|e| format!("{e:?}"))?,
+            Vec::new(),
+        )
+    };
+    Ok(WorkerResult::Udl(definition, report, None))
 }
 pub fn register_commands(registry: &mut bareline_commands::CommandRegistry) {
     use bareline_commands::{Action, CommandId, CommandSpec};
@@ -853,6 +927,49 @@ mod tests {
         );
         assert!(!controller.busy());
         assert!(controller.completion.is_none());
+    }
+    #[test]
+    fn signatures_are_language_scoped_and_hint_uses_verified_context() {
+        let mut controller = LanguageController::default();
+        controller.signatures.insert(
+            "rust".into(),
+            vec![bareline_editor_surface::completion::Signature {
+                name: "f".into(),
+                display: "f(value)".into(),
+            }],
+        );
+        assert!(controller.has_signatures("rust"));
+        assert!(!controller.has_signatures("python"));
+        let snapshot = source("f(");
+        let syntax = bareline_syntax::lex(
+            snapshot.clone(),
+            Language::Rust,
+            TextOffset(0)..TextOffset(2),
+            None,
+            &Cancellation::default(),
+        )
+        .unwrap();
+        let (tx, rx) = mpsc::channel();
+        controller.request_parameter_hint(
+            snapshot,
+            TextOffset(2),
+            syntax,
+            "rust",
+            Arc::new(move || {
+                let _ = tx.send(());
+            }),
+        );
+        rx.recv_timeout(std::time::Duration::from_secs(3)).unwrap();
+        assert!(controller.poll());
+        assert_eq!(
+            controller.signature_hint.as_deref(),
+            Some("f(value) · argument 1")
+        );
+    }
+    #[test]
+    fn reviewed_udl_bytes_enforce_utf8_and_size_before_publication() {
+        assert!(parse_udl_bytes(vec![255], &Cancellation::default()).is_err());
+        assert!(parse_udl_bytes(vec![b' '; 128 * 1024 + 1], &Cancellation::default()).is_err());
     }
     #[test]
     fn stale_provider_generation_cannot_accept() {

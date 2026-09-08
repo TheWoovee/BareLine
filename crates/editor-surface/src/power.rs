@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Revision-bound power edits. Offsets address UTF-8 text, never original bytes.
 pub mod consumer;
+pub mod streaming;
 use crate::Selection;
 use bareline_document::{DocumentSnapshot, Edit, EditTransaction, Error, TextOffset};
 use std::ops::Range;
@@ -846,7 +847,8 @@ pub fn select_occurrences(
 ) -> Result<SelectionSet, Error> {
     let mut out = normalize(snapshot, set, limits)?;
     let p = out.primary();
-    let needle = snapshot.read(TextOffset(p.anchor)..TextOffset(p.caret), limits.max_bytes)?;
+    let primary_range=p.range();
+    let needle = snapshot.read(TextOffset(primary_range.start)..TextOffset(primary_range.end), limits.max_bytes)?;
     if needle.is_empty() {
         return Ok(out);
     }
@@ -856,8 +858,8 @@ pub fn select_occurrences(
         .map(|(i, _)| i..i + needle.len());
     for r in matches
         .clone()
-        .filter(|r| all || r.start >= p.caret)
-        .chain(matches.filter(|r| !all && r.start < p.caret))
+        .filter(|r| all || r.start >= primary_range.end)
+        .chain(matches.filter(|r| !all && r.start < primary_range.end))
     {
         if out.selections.iter().any(|s| s.range() == r) {
             continue;
@@ -1317,7 +1319,7 @@ pub fn rectangle_paste_mapped(snapshot:&DocumentSnapshot,rectangle:Rectangle,tex
     if text.len() > limits.max_bytes {
         return Err(Error::BudgetExceeded);
     }
-    let rows = split_rows(text);
+    let rows = clipboard_rows(text);
     let count = rectangle
         .last_line
         .checked_sub(rectangle.first_line)
@@ -1334,7 +1336,7 @@ pub fn rectangle_paste_mapped(snapshot:&DocumentSnapshot,rectangle:Rectangle,tex
     for row in 0..count {
         let value = rows
             .get(if rows.len() > 1 { row } else { 0 })
-            .map_or("", |(s, _)| *s);
+            .map_or("", |s| *s);
         let projected = column_insert_mapped(
             snapshot,
             Rectangle {
@@ -1359,6 +1361,9 @@ pub fn rectangle_copy(
     rectangle: Rectangle,
     limits: Limits,
 ) -> Result<String, Error> {
+    rectangle_copy_mapped(snapshot,rectangle,limits,None)
+}
+pub fn rectangle_copy_mapped(snapshot:&DocumentSnapshot,rectangle:Rectangle,limits:Limits,maps:Option<&std::collections::BTreeMap<usize,DisplayColumnMap>>)->Result<String,Error> {
     if !snapshot.is_complete() {
         return Err(Error::IncompleteSource);
     }
@@ -1374,7 +1379,8 @@ pub fn rectangle_copy(
     for n in rectangle.first_line..=rectangle.last_line {
         let (_, text) = line(snapshot, n, limits)?;
         let body = content(&text);
-        let map = DisplayColumnMap::new(body, limits.tab_width);
+        let fallback;
+        let map=if let Some(maps)=maps{maps.get(&n).ok_or(Error::OutOfBounds)?}else{fallback=DisplayColumnMap::new(body,limits.tab_width);&fallback};
         if n > rectangle.first_line {
             charge(&mut bytes, 1, limits)?;
             output.push('\n');
@@ -1434,10 +1440,13 @@ pub fn expand_lines(
 ) -> Result<SelectionSet, Error> {
     let mut out = normalize(snapshot, set, limits)?;
     for s in &mut out.selections {
-        let start = snapshot.line_at(TextOffset(s.anchor))?;
-        let end = snapshot.line_at(TextOffset(s.caret))?;
-        s.anchor = snapshot.line_range(start)?.start.0;
-        s.caret = snapshot.line_range(end)?.end.0;
+        let range=s.range();let backward=s.anchor>s.caret;
+        let start = snapshot.line_at(TextOffset(range.start))?;
+        let mut last=if range.end>range.start{range.end-1}else{range.end};
+        while !snapshot.is_boundary(TextOffset(last)){last-=1;}
+        let end = snapshot.line_at(TextOffset(last))?;
+        let first=snapshot.line_range(start)?.start.0;let last=snapshot.line_range(end)?.end.0;
+        s.anchor=if backward{last}else{first};s.caret=if backward{first}else{last};
     }
     normalize(snapshot, &out, limits)
 }
@@ -1671,4 +1680,11 @@ pub fn skip_occurrence(
         next.primary = next.primary.min(next.selections.len() - 1);
     }
     normalize(snapshot, &next, limits)
+}
+
+/// Clipboard rows retain a final empty row, unlike line-transform terminator parsing.
+fn clipboard_rows(text:&str)->Vec<&str>{
+    let mut rows:Vec<_>=split_rows(text).into_iter().map(|(body,_)|body).collect();
+    if text.is_empty()||text.ends_with(['\r','\n']){rows.push("");}
+    rows
 }

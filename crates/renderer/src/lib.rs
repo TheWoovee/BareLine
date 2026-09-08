@@ -109,6 +109,10 @@ pub struct TextStyle {
     pub color: Color,
 }
 pub trait TextBackend {
+    fn shape_wrapped(&mut self, text: &str, size: f32, width: f32, family: &str) -> Result<LayoutId, LayoutError> {
+        self.shape_with_font_family(text, size, width, family)
+    }
+    fn layout_size(&self, layout: LayoutId) -> Result<(f32, f32), LayoutError>;
     fn shape_with_font_family(&mut self, text: &str, size: f32, width: f32, family: &str) -> Result<LayoutId, LayoutError> {
         if !valid_font_family(family) { return Err(LayoutError::InvalidOffset); }
         self.shape(text, size, width)

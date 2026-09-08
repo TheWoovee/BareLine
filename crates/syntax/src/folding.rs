@@ -19,8 +19,12 @@ pub struct FoldAccumulator {
     indent_candidate: Option<(usize, usize)>,
     known: Vec<Fold>,
     next: usize,
+    lost_headers: bool,
 }
 impl FoldAccumulator {
+    pub fn context_complete(&self) -> bool {
+        !self.lost_headers
+    }
     pub fn known(&self) -> &[Fold] {
         &self.known
     }
@@ -119,6 +123,7 @@ impl FoldAccumulator {
                 }
             }
         } else if syntax.indent_folding {
+            self.lost_headers |= !self.open.is_empty();
             self.open.clear();
             append_indent(
                 snapshot,
@@ -132,6 +137,7 @@ impl FoldAccumulator {
             )?;
         } else {
             // A fallback grammar cannot finish opaque primary-lexer headers.
+            self.lost_headers |= !self.open.is_empty();
             self.open.clear();
             append_native(
                 snapshot,

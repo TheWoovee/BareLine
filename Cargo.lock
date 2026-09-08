@@ -189,10 +189,12 @@ dependencies = [
  "bareline-platform",
  "bareline-platform-windows",
  "bareline-renderer",
+ "bareline-renderer-recording",
  "bareline-search",
  "bareline-settings",
  "bareline-syntax",
  "bareline-ui",
+ "serde_json",
  "winit",
 ]
 

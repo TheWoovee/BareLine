@@ -21,7 +21,7 @@ pub(super) struct PowerRuntime {
     rectangle_drag: Option<(usize,usize)>,
     drag: Option<(usize,u32,bareline_document::DocumentSnapshot,bareline_editor_surface::Selection)>,
     group: Option<(bareline_editor_surface::group_view::SurfaceGroup,usize)>,
-    metric_job: Option<(bareline_document::DocumentSnapshot,Arguments,usize,usize)>,
+    metric_job: Option<(bareline_document::DocumentSnapshot,Arguments,usize,usize,Option<Rectangle>)>,
 }
 impl Default for PowerRuntime {
     fn default() -> Self {
@@ -69,7 +69,13 @@ impl PowerRuntime {
 }
 impl Shell {
     pub(super) fn power_dispatch(&mut self, _el:&ActiveEventLoop,id:&str)->bool {
-        if id=="editor.clipboard.toggleHistory" { self.power.history.set_enabled(!self.power.history.enabled()); return true; }
+        if id=="editor.clipboard.toggleHistory" {
+            let enabled=!self.settings.controller.effective().clipboard_history_enabled;
+            let scope=self.settings.controller.scope;self.settings.controller.scope=bareline_settings::Scope::User;
+            let result=self.settings.controller.edit("editor.clipboard.history_enabled",bareline_settings::SettingValue::Bool(enabled));self.settings.controller.scope=scope;
+            match result{Ok(())=>self.power.history.set_enabled(enabled),Err(error)=>self.power.status=error}
+            if let Some(window)=&self.window{window.request_redraw();}return true;
+        }
         let Some(workspace)=self.workspace.as_mut() else { return false; };
         let Some(editor)=self.views.active_editor_mut(workspace,self.app.active) else { return false; };
         match id {
@@ -108,7 +114,8 @@ impl Shell {
         if !self.power.target.as_ref().is_some_and(|snapshot| snapshot.same_document(editor.snapshot()) && snapshot.revision==editor.snapshot().revision) {self.power.status="Document changed; reopen this dialog.".into();return;}
         if !self.power.history_open {
             let rectangle=self.power.rectangle.unwrap();editor.clear_column_metrics();
-            self.power.metric_job=Some((editor.snapshot().clone(),args,rectangle.first_line,rectangle.last_line));
+            if let Err(error)=editor.begin_column_measurement(){self.power.status=error;return;}
+            self.power.metric_job=Some((editor.snapshot().clone(),args,rectangle.first_line,rectangle.last_line,None));
             self.power.status="Measuring selected rows… Escape cancels.".into();(self.notify)();return;
         }
         match editor.execute_power_recorded(id,&args) {Ok(())=>self.power.open=false,Err(e)=>self.power.status=e}
@@ -144,17 +151,29 @@ impl Shell {
         let Some(workspace)=self.workspace.as_mut()else{return false;};let Some(editor)=self.views.active_editor_mut(workspace,self.app.active)else{return false;};
         let (line,column)=editor.caret_display_position().unwrap_or((0,0));
         let mut rectangle=self.power.rectangle.unwrap_or(Rectangle{first_line:line,last_line:line,start_column:column,end_column:column});rectangle.last_line=rectangle.last_line.saturating_add_signed(dy).min(editor.snapshot().line_count().saturating_sub(1));rectangle.end_column=rectangle.end_column.saturating_add_signed(dx);if rectangle.last_line<rectangle.first_line{rectangle.first_line=rectangle.last_line;}
-        if let Err(e)=editor.select_rectangle(rectangle){editor.error=Some(e);}else{self.power.rectangle=Some(rectangle);}if let Some(window)=&self.window{window.request_redraw();}true
+        if let Err(e)=editor.select_rectangle(rectangle){editor.error=Some(e);}else{
+            self.power.rectangle=Some(rectangle);
+            if let Err(error)=editor.begin_column_measurement(){editor.error=Some(error);}else{self.power.metric_job=Some((editor.snapshot().clone(),rectangle_arguments(rectangle),rectangle.first_line,rectangle.last_line,Some(rectangle)));(self.notify)();}
+        }if let Some(window)=&self.window{window.request_redraw();}true
     }
     pub(super) fn power_pump(&mut self)->bool {
-        if let Some((snapshot,args,mut next,last))=self.power.metric_job.take() {
-            if !self.power.open{return true;}
-            let Some(workspace)=self.workspace.as_mut()else{return true;};let Some(editor)=self.views.active_editor_mut(workspace,self.app.active)else{return true;};let Some(renderer)=self.renderer.as_mut()else{return true;};
-            if !snapshot.same_document(editor.snapshot())||snapshot.revision!=editor.snapshot().revision{self.power.status="Document changed; reopen Column Editor.".into();editor.clear_column_metrics();return true;}
+        if let Some((snapshot,args,mut next,last,selection))=self.power.metric_job.take() {
+            let Some(workspace)=self.workspace.as_mut()else{return true;};
+            let same=self.views.active_editor(workspace,self.app.active).is_some_and(|editor|snapshot.same_document(editor.snapshot())&&snapshot.revision==editor.snapshot().revision);
+            if !same || (selection.is_none()&&!self.power.open) {
+                for editor in &mut workspace.editors{if snapshot.same_document(editor.snapshot()){editor.finish_column_measurement();}}
+                if let Some(editor)=self.views.secondary.as_mut(){if snapshot.same_document(editor.snapshot()){editor.finish_column_measurement();}}
+                self.power.status="Column measurement cancelled.".into();return true;
+            }
+            let Some(editor)=self.views.active_editor_mut(workspace,self.app.active)else{return true;};let Some(renderer)=self.renderer.as_mut()else{editor.finish_column_measurement();return true;};
             let stop=next.saturating_add(8).min(last.saturating_add(1));
-            while next<stop {if let Err(error)=editor.measure_column_row(renderer,next){self.power.status=error;editor.clear_column_metrics();return true;}next+=1;}
-            if next<=last{self.power.metric_job=Some((snapshot,args,next,last));(self.notify)();}
-            else {match editor.execute_power_recorded("editor.column.insert",&args){Ok(())=>self.power.open=false,Err(error)=>self.power.status=error}}
+            while next<stop {if let Err(error)=editor.measure_column_row(renderer,next){self.power.status=error;editor.clear_column_metrics();editor.finish_column_measurement();return true;}next+=1;}
+            if next<=last{self.power.metric_job=Some((snapshot,args,next,last,selection));(self.notify)();}
+            else {
+                editor.finish_column_measurement();
+                if let Some(rectangle)=selection {if let Err(error)=editor.select_rectangle(rectangle){editor.error=Some(error);}editor.pump();}
+                else {match editor.execute_power_recorded("editor.column.insert",&args){Ok(())=>self.power.open=false,Err(error)=>self.power.status=error}}
+            }
             if let Some(window)=&self.window{window.request_redraw();}return true;
         }
         let Some((mut group,index))=self.power.group.take() else{return false;};
@@ -186,7 +205,10 @@ impl Shell {
             WindowEvent::MouseInput{state:ElementState::Pressed,..} if (editor.selection.anchor.min(editor.selection.caret)..editor.selection.anchor.max(editor.selection.caret)).contains(&offset)=>{self.power.drag=Some((self.app.active,pane as u32,editor.snapshot().clone(),editor.selection));}
             WindowEvent::CursorMoved{..} if self.power.rectangle_drag.is_some()=>{
                 let (anchor_line,anchor_column)=self.power.rectangle_drag.unwrap();let rectangle=Rectangle{first_line:anchor_line.min(line),last_line:anchor_line.max(line),start_column:anchor_column,end_column:column};
-                if let Err(e)=editor.select_rectangle(rectangle){editor.error=Some(e);}else{self.power.rectangle=Some(rectangle);}
+                if let Err(e)=editor.select_rectangle(rectangle){editor.error=Some(e);}else{
+            self.power.rectangle=Some(rectangle);
+            if let Err(error)=editor.begin_column_measurement(){editor.error=Some(error);}else{self.power.metric_job=Some((editor.snapshot().clone(),rectangle_arguments(rectangle),rectangle.first_line,rectangle.last_line,Some(rectangle)));(self.notify)();}
+        }
             }
             WindowEvent::MouseInput{state:ElementState::Released,..} if self.power.rectangle_drag.take().is_some()=>{},
             WindowEvent::MouseInput{state:ElementState::Released,..} if self.power.drag.is_some()=>{
@@ -273,4 +295,52 @@ impl Shell {
         }
         if let Some(window)=&self.window{window.request_redraw();}true
     }
+}
+
+#[cfg(test)]
+pub(super) fn accessibility_test_cases() -> Vec<(
+    &'static str,
+    Vec<bareline_platform::accessibility::AccessibilityNode>,
+    Option<u64>,
+)> {
+    // Match the runtime's 1000x800 popover placement; no native window is created.
+    let width = 1000.0_f32;
+    let height = 800.0_f32;
+    let mut runtime = PowerRuntime::default();
+    runtime.bounds = rect(
+        (width - 440.0).max(0.0) / 2.0,
+        (height - 400.0).max(48.0) / 2.0,
+        width.min(440.0),
+        height.min(400.0),
+    );
+    let mut cases = vec![("power.closed", runtime.accessibility_nodes(), None)];
+    runtime.open = true;
+    cases.push(("power.column", runtime.accessibility_nodes(), Some(34000)));
+    runtime.focus = 2;
+    runtime.accessibility_focus = Some(34002);
+    cases.push(("power.column_focus", runtime.accessibility_nodes(), Some(34002)));
+    runtime.fields[2].select_all();
+    runtime.fields[2].insert("-24");
+    cases.push(("power.column_value", runtime.accessibility_nodes(), Some(34002)));
+    runtime.accessibility_focus = Some(34020);
+    cases.push(("power.column_apply_focus", runtime.accessibility_nodes(), Some(34020)));
+    runtime.accessibility_focus = Some(34021);
+    cases.push(("power.column_cancel_focus", runtime.accessibility_nodes(), Some(34021)));
+    runtime.history_open = true;
+    runtime.accessibility_focus = None;
+    cases.push(("power.history_disabled", runtime.accessibility_nodes(), None));
+    runtime.configure_history(true, 20, 16 << 20, 4 << 20);
+    runtime.copied("First copied row");
+    runtime.copied("界 and emoji 🦀\nsecond row");
+    runtime.selected = 0;
+    cases.push(("power.history", runtime.accessibility_nodes(), Some(34100)));
+    runtime.selected = 1;
+    runtime.accessibility_focus = Some(34101);
+    cases.push(("power.history_focus", runtime.accessibility_nodes(), Some(34101)));
+    runtime.accessibility_focus = Some(34021);
+    cases.push(("power.history_cancel_focus", runtime.accessibility_nodes(), Some(34021)));
+    runtime.configure_history(false, 20, 16 << 20, 4 << 20);
+    runtime.accessibility_focus = None;
+    cases.push(("power.history_cleared", runtime.accessibility_nodes(), None));
+    cases
 }

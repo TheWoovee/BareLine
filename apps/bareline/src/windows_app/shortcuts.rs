@@ -163,7 +163,7 @@ impl ShortcutsRuntime {
     #[allow(clippy::too_many_arguments)] // Explicit borrowed render/context inputs avoid retaining stale command state.
     pub fn draw(
         &mut self,
-        renderer: &mut WindowsRenderer,
+        renderer: &mut impl bareline_renderer::TextBackend,
         width: f32,
         height: f32,
         theme: bareline_ui::theme::UiTheme,
@@ -726,4 +726,33 @@ mod tests {
         snapshot.focus = 19000;
         assert!(snapshot.validate().is_ok());
     }
+}
+
+#[cfg(test)]
+pub(super) fn accessibility_test_setup(shell: &mut Shell, scenario: &str) {
+    shell.shortcuts = ShortcutsRuntime::default();
+    shell.shortcuts.open = scenario != "closed";
+    shell.shortcuts.binding_focus = scenario == "focus_binding";
+    if scenario == "filtered" {
+        shell.shortcuts.query.insert("Save");
+    }
+    if scenario == "error" {
+        shell.shortcuts.status = "Shortcut conflicts with an existing binding".into();
+    }
+    shell.shortcuts.refresh(&shell.app.commands);
+    shell.shortcuts.select(&shell.settings.keymap.keymap);
+    let mut renderer = bareline_renderer_recording::RecordingBackend::default();
+    let mut operations = Vec::new();
+    shell
+        .shortcuts
+        .draw(
+            &mut renderer,
+            1000.0,
+            800.0,
+            shell.settings.ui_theme(),
+            &shell.app.commands,
+            &shell.settings.keymap.keymap,
+            &mut operations,
+        )
+        .unwrap();
 }

@@ -1,0 +1,756 @@
+{
+  "schema_version": 1,
+  "source": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md",
+  "features": [
+    {
+      "id": "parity-001",
+      "capability": "New/Open/Save/Save As/Save All/Save Copy",
+      "ownership": "FR-001/002, PR-004",
+      "intended_ux": "atomic replace + recovery separation; viewport-first open",
+      "blueprint_route": "Planned",
+      "state": null,
+      "cases": [
+        "AC-004-01",
+        "AC-004-02",
+        "AC-004-03"
+      ],
+      "reason": "",
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md"
+    },
+    {
+      "id": "parity-002",
+      "capability": "Reload from disk, Set read-only",
+      "ownership": "FR-001/003, PR-004",
+      "intended_ux": "explicit commands, editor lock separate from file attribute",
+      "blueprint_route": "Planned",
+      "state": null,
+      "cases": [
+        "AC-004-01",
+        "AC-004-02",
+        "AC-004-03"
+      ],
+      "reason": "",
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md"
+    },
+    {
+      "id": "parity-003",
+      "capability": "Recent files / tabs / pin / sort / document switcher",
+      "ownership": "FR-003, PR-004 (model), PR-010 (UI)",
+      "intended_ux": "cleaner tab model; update-safe persistence",
+      "blueprint_route": "Planned",
+      "state": null,
+      "cases": [
+        "AC-004-01",
+        "AC-004-02",
+        "AC-004-03",
+        "AC-010-01",
+        "AC-010-02",
+        "AC-010-03"
+      ],
+      "reason": "",
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md"
+    },
+    {
+      "id": "parity-004",
+      "capability": "Restore last closed tab",
+      "ownership": "FR-001, PR-004",
+      "intended_ux": "caret and pin state restored",
+      "blueprint_route": "Planned",
+      "state": null,
+      "cases": [
+        "AC-004-01",
+        "AC-004-02",
+        "AC-004-03"
+      ],
+      "reason": "",
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md"
+    },
+    {
+      "id": "parity-005",
+      "capability": "Dual view / clone / synchronized scroll",
+      "ownership": "FR-004, PR-010",
+      "intended_ux": "same document model; independent views",
+      "blueprint_route": "Planned",
+      "state": null,
+      "cases": [
+        "AC-010-01",
+        "AC-010-02",
+        "AC-010-03"
+      ],
+      "reason": "",
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md"
+    },
+    {
+      "id": "parity-006",
+      "capability": "Move to new instance",
+      "ownership": "FR-004, PR-018",
+      "intended_ux": "opens in a new process via IPC handoff",
+      "blueprint_route": "Equivalent",
+      "state": null,
+      "cases": [
+        "AC-018-01",
+        "AC-018-02",
+        "AC-018-03"
+      ],
+      "reason": "",
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md"
+    },
+    {
+      "id": "parity-007",
+      "capability": "Undo/redo/cut/copy/paste/line editing",
+      "ownership": "FR-005, PR-003/006",
+      "intended_ux": "unified transactions",
+      "blueprint_route": "Planned",
+      "state": null,
+      "cases": [
+        "AC-003-01",
+        "AC-003-02",
+        "AC-003-03"
+      ],
+      "reason": "",
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md"
+    },
+    {
+      "id": "parity-008",
+      "capability": "Paste Special, drag-and-drop text",
+      "ownership": "FR-005, PR-006",
+      "intended_ux": "",
+      "blueprint_route": "Planned",
+      "state": null,
+      "cases": [
+        "AC-006-01",
+        "AC-006-02",
+        "AC-006-03"
+      ],
+      "reason": "",
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md"
+    },
+    {
+      "id": "parity-009",
+      "capability": "Hide Lines",
+      "ownership": "FR-005, PR-006",
+      "intended_ux": "view-only, never changes bytes",
+      "blueprint_route": "Planned",
+      "state": null,
+      "cases": [
+        "AC-006-01",
+        "AC-006-02",
+        "AC-006-03"
+      ],
+      "reason": "",
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md"
+    },
+    {
+      "id": "parity-010",
+      "capability": "Clipboard History panel",
+      "ownership": "FR-005/029, PR-006",
+      "intended_ux": "opt-in, in-memory only, off by default",
+      "blueprint_route": "Planned",
+      "state": null,
+      "cases": [
+        "AC-006-01",
+        "AC-006-02",
+        "AC-006-03"
+      ],
+      "reason": "",
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md"
+    },
+    {
+      "id": "parity-011",
+      "capability": "Column mode / multi-editing",
+      "ownership": "FR-006, PR-003/006",
+      "intended_ux": "one selection engine, UTF-8-safe",
+      "blueprint_route": "Planned",
+      "state": null,
+      "cases": [
+        "AC-003-01",
+        "AC-003-02",
+        "AC-003-03"
+      ],
+      "reason": "",
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md"
+    },
+    {
+      "id": "parity-012",
+      "capability": "Column Editor (number sequences)",
+      "ownership": "FR-006, PR-006",
+      "intended_ux": "bases 10/16/8/2, padding, step",
+      "blueprint_route": "Planned",
+      "state": null,
+      "cases": [
+        "AC-006-01",
+        "AC-006-02",
+        "AC-006-03"
+      ],
+      "reason": "",
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md"
+    },
+    {
+      "id": "parity-013",
+      "capability": "Find/replace/count/mark/find in files",
+      "ownership": "FR-007, PR-005",
+      "intended_ux": "streaming/cancellable, huge-file safe",
+      "blueprint_route": "Planned",
+      "state": null,
+      "cases": [
+        "AC-005-01",
+        "AC-005-02",
+        "AC-005-03"
+      ],
+      "reason": "",
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md"
+    },
+    {
+      "id": "parity-014",
+      "capability": "Replace in files / projects",
+      "ownership": "FR-007, PR-026",
+      "intended_ux": "preview-first, per-file atomic, encoding-preserving",
+      "blueprint_route": "Planned",
+      "state": null,
+      "cases": [
+        "AC-026-01",
+        "AC-026-02",
+        "AC-026-03"
+      ],
+      "reason": "",
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md"
+    },
+    {
+      "id": "parity-015",
+      "capability": "Mark with style tokens 1–5",
+      "ownership": "FR-007, PR-005",
+      "intended_ux": "five per-view styles with stable IDs",
+      "blueprint_route": "Planned",
+      "state": null,
+      "cases": [
+        "AC-005-01",
+        "AC-005-02",
+        "AC-005-03"
+      ],
+      "reason": "",
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md"
+    },
+    {
+      "id": "parity-016",
+      "capability": "Go to / bookmarks / brace match",
+      "ownership": "FR-008, PR-006 (bookmarks, go to), PR-013 (brace match)",
+      "intended_ux": "byte-offset navigation + persistent option",
+      "blueprint_route": "Planned",
+      "state": null,
+      "cases": [
+        "AC-006-01",
+        "AC-006-02",
+        "AC-006-03",
+        "AC-013-01",
+        "AC-013-02",
+        "AC-013-03"
+      ],
+      "reason": "",
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md"
+    },
+    {
+      "id": "parity-017",
+      "capability": "Encoding/character sets/EOL conversion",
+      "ownership": "FR-009, PR-007",
+      "intended_ux": "valid text view, original-byte provenance, streaming save",
+      "blueprint_route": "Planned",
+      "state": null,
+      "cases": [
+        "AC-007-01",
+        "AC-007-02",
+        "AC-007-03"
+      ],
+      "reason": "",
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md"
+    },
+    {
+      "id": "parity-018",
+      "capability": "Syntax highlighting / folding",
+      "ownership": "FR-010, PR-008",
+      "intended_ux": "Lexilla without Scintilla buffer; viewport-first; native fallback",
+      "blueprint_route": "Planned",
+      "state": null,
+      "cases": [
+        "AC-008-01",
+        "AC-008-02",
+        "AC-008-03"
+      ],
+      "reason": "",
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md"
+    },
+    {
+      "id": "parity-019",
+      "capability": "Fold All / Unfold All / Fold Level N",
+      "ownership": "FR-010, PR-008",
+      "intended_ux": "acts on known folds, continues as indexing completes",
+      "blueprint_route": "Planned",
+      "state": null,
+      "cases": [
+        "AC-008-01",
+        "AC-008-02",
+        "AC-008-03"
+      ],
+      "reason": "",
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md"
+    },
+    {
+      "id": "parity-020",
+      "capability": "User Defined Language",
+      "ownership": "FR-011, PR-008",
+      "intended_ux": "TOML schema + N++ UDL importer; UDL engine doubles as lexer",
+      "blueprint_route": "Planned",
+      "state": null,
+      "cases": [
+        "AC-008-01",
+        "AC-008-02",
+        "AC-008-03"
+      ],
+      "reason": "",
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md"
+    },
+    {
+      "id": "parity-021",
+      "capability": "Auto-completion/function hints",
+      "ownership": "FR-012, PR-013",
+      "intended_ux": "bounded local indexes",
+      "blueprint_route": "Planned",
+      "state": null,
+      "cases": [
+        "AC-013-01",
+        "AC-013-02",
+        "AC-013-03"
+      ],
+      "reason": "",
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md"
+    },
+    {
+      "id": "parity-022",
+      "capability": "Word wrap/symbols/guides/zoom/fullscreen/always-on-top",
+      "ownership": "FR-013, PR-003/012",
+      "intended_ux": "consistent modern theming",
+      "blueprint_route": "Planned",
+      "state": null,
+      "cases": [
+        "AC-003-01",
+        "AC-003-02",
+        "AC-003-03"
+      ],
+      "reason": "",
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md"
+    },
+    {
+      "id": "parity-023",
+      "capability": "Document map",
+      "ownership": "FR-014, PR-009",
+      "intended_ux": "progressive for multi-GB files",
+      "blueprint_route": "Planned",
+      "state": null,
+      "cases": [
+        "AC-009-01",
+        "AC-009-02",
+        "AC-009-03"
+      ],
+      "reason": "",
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md"
+    },
+    {
+      "id": "parity-024",
+      "capability": "Function List",
+      "ownership": "FR-015, PR-009",
+      "intended_ux": "progressive/cancellable; imports N++ functionList definitions",
+      "blueprint_route": "Planned",
+      "state": null,
+      "cases": [
+        "AC-009-01",
+        "AC-009-02",
+        "AC-009-03"
+      ],
+      "reason": "",
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md"
+    },
+    {
+      "id": "parity-025",
+      "capability": "Folder as Workspace / projects",
+      "ownership": "FR-016, PR-009",
+      "intended_ux": "no forced project metadata",
+      "blueprint_route": "Planned",
+      "state": null,
+      "cases": [
+        "AC-009-01",
+        "AC-009-02",
+        "AC-009-03"
+      ],
+      "reason": "",
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md"
+    },
+    {
+      "id": "parity-026",
+      "capability": "Sessions / workspace restore / backups",
+      "ownership": "FR-017, PR-004",
+      "intended_ux": "checksummed recovery journal + clear recovery center",
+      "blueprint_route": "Planned",
+      "state": null,
+      "cases": [
+        "AC-004-01",
+        "AC-004-02",
+        "AC-004-03"
+      ],
+      "reason": "",
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md"
+    },
+    {
+      "id": "parity-027",
+      "capability": "Monitoring (tail -f)",
+      "ownership": "FR-018, PR-015",
+      "intended_ux": "rotation/truncation handling on paged source",
+      "blueprint_route": "Planned",
+      "state": null,
+      "cases": [
+        "AC-015-01",
+        "AC-015-02",
+        "AC-015-03"
+      ],
+      "reason": "",
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md"
+    },
+    {
+      "id": "parity-028",
+      "capability": "Macros",
+      "ownership": "FR-019, PR-014",
+      "intended_ux": "stable command IDs and TOML format",
+      "blueprint_route": "Planned",
+      "state": null,
+      "cases": [
+        "AC-014-01",
+        "AC-014-02",
+        "AC-014-03"
+      ],
+      "reason": "",
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md"
+    },
+    {
+      "id": "parity-029",
+      "capability": "Ghost/replay typing",
+      "ownership": "FR-019, PR-014",
+      "intended_ux": "macro action rather than special subsystem",
+      "blueprint_route": "Planned",
+      "state": null,
+      "cases": [
+        "AC-014-01",
+        "AC-014-02",
+        "AC-014-03"
+      ],
+      "reason": "",
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md"
+    },
+    {
+      "id": "parity-030",
+      "capability": "Run external commands",
+      "ownership": "FR-020, PR-014",
+      "intended_ux": "safe direct spawn + captured output",
+      "blueprint_route": "Planned",
+      "state": null,
+      "cases": [
+        "AC-014-01",
+        "AC-014-02",
+        "AC-014-03"
+      ],
+      "reason": "",
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md"
+    },
+    {
+      "id": "parity-031",
+      "capability": "Hash tools",
+      "ownership": "FR-021, PR-017",
+      "intended_ux": "same parity, clearer security labels",
+      "blueprint_route": "Planned",
+      "state": null,
+      "cases": [
+        "AC-017-01",
+        "AC-017-02",
+        "AC-017-03"
+      ],
+      "reason": "",
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md"
+    },
+    {
+      "id": "parity-032",
+      "capability": "Print / export",
+      "ownership": "FR-021, PR-017",
+      "intended_ux": "first-party utility path",
+      "blueprint_route": "Planned",
+      "state": null,
+      "cases": [
+        "AC-017-01",
+        "AC-017-02",
+        "AC-017-03"
+      ],
+      "reason": "",
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md"
+    },
+    {
+      "id": "parity-033",
+      "capability": "Compare (N++ plugin)",
+      "ownership": "FR-021A, PR-025 (engine), PR-017 (UI)",
+      "intended_ux": "built-in, five semantic states, configurable per theme",
+      "blueprint_route": "Planned",
+      "state": null,
+      "cases": [
+        "AC-025-01",
+        "AC-025-02",
+        "AC-025-03",
+        "AC-017-01",
+        "AC-017-02",
+        "AC-017-03"
+      ],
+      "reason": "",
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md"
+    },
+    {
+      "id": "parity-034",
+      "capability": "Compare inline view, folder compare",
+      "ownership": "FR-021A",
+      "intended_ux": "",
+      "blueprint_route": "v1.1",
+      "state": null,
+      "cases": [],
+      "reason": "",
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md"
+    },
+    {
+      "id": "parity-035",
+      "capability": "Plugins / Plugins Admin",
+      "ownership": "FR-022, PR-016",
+      "intended_ux": "isolated versioned extension host, optional download",
+      "blueprint_route": "Planned",
+      "state": null,
+      "cases": [
+        "AC-016-01",
+        "AC-016-02",
+        "AC-016-03"
+      ],
+      "reason": "",
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md"
+    },
+    {
+      "id": "parity-036",
+      "capability": "Seed XML/JSON/Hex capabilities (not ecosystem breadth)",
+      "ownership": "FR-022, PR-027",
+      "intended_ux": "first-party JSON tools, XML tools, Hex view; SDK reference",
+      "blueprint_route": "Extension",
+      "state": null,
+      "cases": [
+        "AC-027-01",
+        "AC-027-02",
+        "AC-027-03"
+      ],
+      "reason": "",
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md"
+    },
+    {
+      "id": "parity-037",
+      "capability": "Spell check, CSV tools, LSP client",
+      "ownership": "FR-022",
+      "intended_ux": "community extensions",
+      "blueprint_route": "v1.1",
+      "state": null,
+      "cases": [],
+      "reason": "",
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md"
+    },
+    {
+      "id": "parity-038",
+      "capability": "Preferences / Style Configurator / Shortcut Mapper",
+      "ownership": "FR-023, PR-011/012",
+      "intended_ux": "searchable settings + TOML, keys visible",
+      "blueprint_route": "Planned",
+      "state": null,
+      "cases": [
+        "AC-011-01",
+        "AC-011-02",
+        "AC-011-03"
+      ],
+      "reason": "",
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md"
+    },
+    {
+      "id": "parity-039",
+      "capability": "Localization (N++ ships ~90 languages)",
+      "ownership": "FR-024, PR-012",
+      "intended_ux": "English-only v1; community packs planned; language breadth deferred",
+      "blueprint_route": "v1.1",
+      "state": null,
+      "cases": [
+        "AC-012-01",
+        "AC-012-02",
+        "AC-012-03"
+      ],
+      "reason": "",
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md"
+    },
+    {
+      "id": "parity-040",
+      "capability": "Command line args / multi-instance",
+      "ownership": "FR-025, PR-018",
+      "intended_ux": "versioned IPC",
+      "blueprint_route": "Planned",
+      "state": null,
+      "cases": [
+        "AC-018-01",
+        "AC-018-02",
+        "AC-018-03"
+      ],
+      "reason": "",
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md"
+    },
+    {
+      "id": "parity-041",
+      "capability": "Explorer “Edit with…” / file associations",
+      "ownership": "FR-026, PR-018",
+      "intended_ux": "opt-in and portable-safe",
+      "blueprint_route": "Planned",
+      "state": null,
+      "cases": [
+        "AC-018-01",
+        "AC-018-02",
+        "AC-018-03"
+      ],
+      "reason": "",
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md"
+    },
+    {
+      "id": "parity-042",
+      "capability": "Replace Windows Notepad",
+      "ownership": "FR-026",
+      "intended_ux": "not offered; user sets default app manually",
+      "blueprint_route": "Excluded",
+      "state": null,
+      "cases": [],
+      "reason": "not offered; user sets default app manually",
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md"
+    },
+    {
+      "id": "parity-043",
+      "capability": "System tray",
+      "ownership": "FR-026, PR-018",
+      "intended_ux": "same behaviors with explicit settings",
+      "blueprint_route": "Planned",
+      "state": null,
+      "cases": [
+        "AC-018-01",
+        "AC-018-02",
+        "AC-018-03"
+      ],
+      "reason": "",
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md"
+    },
+    {
+      "id": "parity-044",
+      "capability": "Update / debug info",
+      "ownership": "FR-027, PR-018/020",
+      "intended_ux": "signed staged update + rollback",
+      "blueprint_route": "Planned",
+      "state": null,
+      "cases": [
+        "AC-018-01",
+        "AC-018-02",
+        "AC-018-03"
+      ],
+      "reason": "",
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md"
+    },
+    {
+      "id": "parity-045",
+      "capability": "Portable package",
+      "ownership": "FR-028, PR-018",
+      "intended_ux": "fully relocatable persistent data",
+      "blueprint_route": "Planned",
+      "state": null,
+      "cases": [
+        "AC-018-01",
+        "AC-018-02",
+        "AC-018-03"
+      ],
+      "reason": "",
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md"
+    },
+    {
+      "id": "parity-046",
+      "capability": "Character Panel",
+      "ownership": "",
+      "intended_ux": "",
+      "blueprint_route": "v1.1",
+      "state": null,
+      "cases": [],
+      "reason": "",
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md"
+    },
+    {
+      "id": "parity-047",
+      "capability": "Post-It mode (frameless)",
+      "ownership": "FR-013",
+      "intended_ux": "fullscreen/distraction-free covers the use case",
+      "blueprint_route": "v1.1",
+      "state": null,
+      "cases": [],
+      "reason": "",
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md"
+    },
+    {
+      "id": "parity-048",
+      "capability": "Document Peeker (tab hover preview)",
+      "ownership": "",
+      "intended_ux": "",
+      "blueprint_route": "v1.1",
+      "state": null,
+      "cases": [],
+      "reason": "",
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md"
+    },
+    {
+      "id": "parity-049",
+      "capability": "Local history (not in N++)",
+      "ownership": "FR-017",
+      "intended_ux": "planned differentiator",
+      "blueprint_route": "v1.1",
+      "state": null,
+      "cases": [],
+      "reason": "",
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md"
+    },
+    {
+      "id": "parity-050",
+      "capability": "Integrated terminal (not in N++)",
+      "ownership": "FR 2.2",
+      "intended_ux": "out of scope by design",
+      "blueprint_route": "Excluded",
+      "state": null,
+      "cases": [],
+      "reason": "out of scope by design",
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md"
+    },
+    {
+      "id": "parity-051",
+      "capability": "Source control panel (not in N++)",
+      "ownership": "FR 2.2",
+      "intended_ux": "out of scope by design",
+      "blueprint_route": "Excluded",
+      "state": null,
+      "cases": [],
+      "reason": "out of scope by design",
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md"
+    },
+    {
+      "id": "parity-052",
+      "capability": "Telemetry (not in N++)",
+      "ownership": "FR 2.2",
+      "intended_ux": "none, ever",
+      "blueprint_route": "Excluded",
+      "state": null,
+      "cases": [],
+      "reason": "none, ever",
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md"
+    }
+  ],
+  "evidence": []
+}

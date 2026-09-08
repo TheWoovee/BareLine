@@ -220,3 +220,12 @@ mod tests {
         );
     }
 }
+
+pub fn metadata_encoding(metadata: &bareline_document::DocumentMetadata) -> Option<EncodingState> {
+    metadata.get("file.encoding").and_then(|value| serde_json::from_str(value).ok())
+}
+pub fn with_encoding(metadata: &bareline_document::DocumentMetadata, state: &EncodingState) -> Result<bareline_document::DocumentMetadata, bareline_document::Error> {
+    let mut values=metadata.values().clone();
+    values.insert("file.encoding".into(),serde_json::to_string(state).map_err(|_|bareline_document::Error::BudgetExceeded)?);
+    bareline_document::DocumentMetadata::new(values)
+}

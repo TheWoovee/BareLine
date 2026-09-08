@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Native printer selection and a cancellable GDI spool job. No document or filesystem writes.
-use bareline_platform::printing::{PrintError,PrintLine,PrintOptions,PrintSummary,PrintTarget};
+use bareline_platform::printing::{PrintError,PrintLine,PrintOptions,PrintSpan,PrintSummary,PrintTarget};
 use std::sync::atomic::{AtomicBool,Ordering};
 use windows::{core::{PCWSTR,w},Win32::{Foundation::{COLORREF,HGLOBAL,RECT},Graphics::Gdi::*,Storage::Xps::*,
     System::Memory::{GlobalLock,GlobalSize,GlobalUnlock},UI::Controls::Dialogs::*}};
@@ -95,6 +95,7 @@ impl WindowsPrintJob {
 impl PrintTarget for WindowsPrintJob {
     fn write_line(&mut self,line:PrintLine<'_>,cancel:&AtomicBool)->Result<(),PrintError> {
         if line.text.len()>256*1024 || line.spans.windows(2).any(|s|s[0].bytes.end>s[1].bytes.start) || line.spans.iter().any(|s|s.bytes.start>s.bytes.end||s.bytes.end>line.text.len()||!line.text.is_char_boundary(s.bytes.start)||!line.text.is_char_boundary(s.bytes.end)){return Err(PrintError::InvalidLine);}
+        if line.text.contains('\t') {let (text,spans)=expand_tabs(&line,self.options.tab_width as usize)?;return self.write_line(PrintLine{number:line.number,text:&text,spans:&spans},cancel);}
         let text=line.text.trim_end_matches(['\r','\n']);let mut at=0;let mut first=true;
         loop {
             if cancel.load(Ordering::Acquire){return Err(PrintError::Cancelled);}
@@ -120,3 +121,20 @@ impl PrintTarget for WindowsPrintJob {
     }
 }
 impl Drop for WindowsPrintJob {fn drop(&mut self){unsafe{if !self.finished{AbortDoc(self.dc);}SelectObject(self.dc,self.old_font);let _=DeleteObject(HGDIOBJ(self.font.0));let _=DeleteDC(self.dc);}}}
+fn expand_tabs(line:&PrintLine<'_>,width:usize)->Result<(String,Vec<PrintSpan>),PrintError> {
+    let mut output=String::new();let mut offsets=vec![0;line.text.len()+1];let mut column=0;
+    for (at,c) in line.text.char_indices(){offsets[at]=output.len();if c=='\t'{let spaces=width-column%width;if output.len()+spaces>256*1024{return Err(PrintError::InvalidLine);}output.extend(std::iter::repeat_n(' ',spaces));column+=spaces;}else{if output.len()+c.len_utf8()>256*1024{return Err(PrintError::InvalidLine);}output.push(c);column=if matches!(c,'\r'|'\n'){0}else{column+1};}}
+    offsets[line.text.len()]=output.len();let spans=line.spans.iter().map(|s|PrintSpan{bytes:offsets[s.bytes.start]..offsets[s.bytes.end],rgb:s.rgb}).collect();Ok((output,spans))
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn tab_expansion_preserves_unicode_style_ranges() {
+        let spans=[PrintSpan{bytes:2..6,rgb:0x123456}];let line=PrintLine{number:1,text:"a\t🙂",spans:&spans};let (text,expanded)=expand_tabs(&line,4).unwrap();assert_eq!(text,"a   🙂");assert_eq!(expanded[0].bytes,4..8);
+    }
+    #[test]
+    fn invalid_options_fail_before_driver_access() {
+        let mut options=PrintOptions::default();options.font_size_pt=f64::NAN;assert!(matches!(WindowsPrintJob::start(PrinterSelection{name:vec![],mode:vec![]},options),Err(PrintError::InvalidOptions)));
+    }
+}

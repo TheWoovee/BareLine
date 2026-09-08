@@ -106,6 +106,25 @@ impl<R: Read, W: Write> Parser<R, W> {
     fn string(&mut self) -> Result<(), Error> {
         self.expect(b'"')?;
         loop {
+            // Ordinary ASCII cannot contain an escape, delimiter, newline or
+            // UTF-8 continuation. Consume its buffered span without allocating.
+            let span = (|| -> std::io::Result<usize> {
+                let bytes = self.input.fill_buf()?;
+                let count = bytes
+                    .iter()
+                    .position(|&b| b < 0x20 || b >= 0x80 || b == b'"' || b == b'\\')
+                    .unwrap_or(bytes.len());
+                if count != 0 && !matches!(self.layout, Layout::Validate) {
+                    self.out.write_all(&bytes[..count])?;
+                }
+                Ok(count)
+            })()
+            .map_err(|e| self.error(&e.to_string()))?;
+            if span != 0 {
+                self.input.consume(span);
+                self.offset += span as u64;
+                continue;
+            }
             let b = self
                 .peek()?
                 .ok_or_else(|| self.error("unterminated string"))?;
@@ -333,6 +352,76 @@ mod tests {
                 .message
                 .contains("fixture")
         );
+    }
+
+    struct ShortReads<'a> {
+        bytes: &'a [u8],
+        limit: usize,
+    }
+    impl Read for ShortReads<'_> {
+        fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+            let count = out.len().min(self.limit).min(self.bytes.len());
+            out[..count].copy_from_slice(&self.bytes[..count]);
+            self.bytes = &self.bytes[count..];
+            Ok(count)
+        }
+    }
+
+    #[test]
+    fn ascii_spans_preserve_lexemes_across_special_byte_boundaries() {
+        let source = format!(
+            "\"{}\\\"\\\\\\uD83D\\uDE00é🦀\u{7f}tail\"",
+            "a".repeat(65534)
+        );
+        for limit in [1, 2, 3, 7, 65536] {
+            for layout in [Layout::Validate, Layout::Minify, Layout::Pretty] {
+                let mut output = Vec::new();
+                let nodes = process(
+                    ShortReads {
+                        bytes: source.as_bytes(),
+                        limit,
+                    },
+                    &mut output,
+                    layout,
+                )
+                .unwrap();
+                assert_eq!((nodes[0].start, nodes[0].end), (0, source.len() as u64));
+                if matches!(layout, Layout::Validate) {
+                    assert!(output.is_empty());
+                } else {
+                    assert_eq!(output, source.as_bytes());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn ascii_spans_preserve_invalid_byte_offsets_and_lines() {
+        let prefix = format!("[\n\"{}", "a".repeat(65533));
+        for (tail, advance, message) in [
+            (b"\n\"]".as_slice(), 0, "unescaped control character"),
+            (b"\\q\"]".as_slice(), 2, "invalid string escape"),
+            (b"\xff\"]".as_slice(), 0, "invalid UTF-8"),
+            (b"\xc3x\"]".as_slice(), 2, "invalid UTF-8"),
+            (b"".as_slice(), 0, "unterminated string"),
+        ] {
+            let mut source = prefix.as_bytes().to_vec();
+            source.extend_from_slice(tail);
+            for limit in [1, 7, 65536] {
+                let error = process(
+                    ShortReads {
+                        bytes: &source,
+                        limit,
+                    },
+                    std::io::sink(),
+                    Layout::Validate,
+                )
+                .unwrap_err();
+                assert_eq!(error.offset, prefix.len() as u64 + advance);
+                assert_eq!(error.line, 2);
+                assert_eq!(error.message, message);
+            }
+        }
     }
 }
 

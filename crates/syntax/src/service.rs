@@ -220,6 +220,7 @@ impl SyntaxWorker {
             checkpoint,
             notify,
             crate::LexOptions {
+                line_origin: 0,
                 preference,
                 definition: None,
             },
@@ -240,6 +241,7 @@ impl SyntaxWorker {
             checkpoint,
             notify,
             crate::LexOptions {
+                line_origin: 0,
                 definition: Some(definition),
                 preference: LexerPreference::Native,
             },

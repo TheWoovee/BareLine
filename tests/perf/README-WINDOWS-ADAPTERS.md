@@ -32,15 +32,18 @@ message roundtrip, idle sample and sampled memory peak. `edit_to_paint` emits
 `edit_roundtrip_us`, never a paint metric. Search measures Scintilla's target-search
 primitive; it does not claim the Notepad++ Find dialog's cancellation or separate
 regex implementation. Save modifies only the copied fixture and checks modified
-state; its roundtrip is not a durability/flush measurement.
+state. Save also emits `save_to_clean_ack_us`, from dispatch to verified clean state
+after the same PERF_SAVE insertion as Bareline. This shared acknowledgement endpoint
+does not claim flush durability or paint completion.
 
 Unsupported signals/scenarios: frame presentation/stall distribution, syntax
 viewport-ready, Find-dialog cancellation acknowledgement, Save As dialog,
 workspace scan, tail append, 100/500-tab automation and extension-runtime memory
 comparisons. Unsupported scenario IDs fail argument parsing; no proxy values are
-invented. Cold cache is not established by this adapter: fixture copying and hash
-verification warm source caches. Caller provenance must not call those runs cold
-without an independently implemented cache preparation method. Paired metric
+invented. Warm launch completes one unmeasured responsive launch first. Cold launch
+requires the explicit pinned `cache_protocol.py` preparer contract after all copy/hash
+work; its bounded evidence is embedded in raw output. No built-in OS-cache reset is
+claimed. Caller review must validate the external preparation method. Paired metric
 comparisons must match endpoint semantics, fixture/configuration and cache state.
 `downloaded_bytes=0` counts the adapter's downloads only; it is not a network trace.
 Owned fixture disk bytes exclude application installation and private config data.

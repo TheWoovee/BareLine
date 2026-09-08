@@ -119,3 +119,5 @@ mod tests {
 pub mod accessibility;
 
 pub mod extensions;
+
+pub mod encoding;

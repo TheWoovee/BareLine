@@ -10,6 +10,7 @@ use bareline_renderer::{DrawOp, LayoutError, Rect, TextBackend};
 use std::sync::Arc;
 use std::{path::PathBuf, sync::mpsc::TryRecvError};
 
+mod encoding;
 pub enum WorkspaceEditor {
     Resident(EditorSurface),
     Paged(PagedEditorSurface),
@@ -83,6 +84,8 @@ pub struct Workspace {
     retired: Vec<WorkspaceEditor>,
     closed: Vec<(WorkspaceEditor, Option<FileState>, String)>,
     paused_transcode: Option<Box<bareline_file_io::lifecycle::PausedTranscode>>,
+    eol_job: Option<encoding::EolJob>,
+    interpreting_paged: Option<(bareline_document::paged::PagedSnapshot, PathBuf)>,
     spill_pending: bool,
     spill_paused: bool,
     spill_selection: Option<(bareline_document::paged::PagedSnapshot, usize, usize)>,
@@ -99,6 +102,7 @@ struct PendingSearchNavigation {
     backwards: bool,
 }
 struct FileState {
+    binary_accepted: bool,
     _lease: Option<bareline_search::replace_disk::OpenFileLease>,
     path: PathBuf,
     fingerprint: Fingerprint,
@@ -121,6 +125,27 @@ pub enum CloseError {
     Missing,
 }
 impl Workspace {
+    pub fn apply_reviewed_open(&mut self, mut prepared: Vec<(bareline_document::DocumentSnapshot, bareline_document::EditTransaction)>) -> Result<bareline_editor_surface::group_view::SurfaceGroup, String> {
+        let mut views = Vec::new();
+        let mut ordered = Vec::new();
+        for editor in &mut self.editors {
+            if let WorkspaceEditor::Resident(editor) = editor && let Some(index) = prepared.iter().position(|(snapshot, _)| snapshot.same_document(editor.snapshot())) {
+                let (snapshot, transaction) = prepared.remove(index);
+                ordered.push((snapshot, bareline_editor_surface::power::PowerEdit { transaction, selections: bareline_editor_surface::Selection::default().into() }));
+                views.push(editor);
+            }
+        }
+        if !prepared.is_empty() || views.is_empty() { return Err("A replacement document closed or changed".into()); }
+        bareline_editor_surface::group_view::SurfaceGroup::apply(&self.scheduler, &mut views, ordered)
+    }
+    pub fn pump_reviewed_open(&mut self, group: &mut bareline_editor_surface::group_view::SurfaceGroup, sources: &[bareline_document::DocumentSnapshot]) -> Result<Option<bareline_document::group::UndoGroup>, String> {
+        let mut views: Vec<_> = self.editors.iter_mut().filter_map(|editor| match editor {
+            WorkspaceEditor::Resident(editor) if sources.iter().any(|source| source.same_document(editor.snapshot())) => Some(editor),
+            _ => None,
+        }).collect();
+        group.pump(&mut views)
+    }
+
     pub fn replacement_registry(&self) -> bareline_search::replace_disk::OpenFileRegistry { self.replacement_registry.clone() }
 
     /// Created lazily on the first document command, after the initial frame.
@@ -159,6 +184,8 @@ impl Workspace {
             retired: Vec::new(),
             closed: Vec::new(),
             paused_transcode: None,
+            eol_job: None,
+            interpreting_paged: None,
             spill_pending: false,
             spill_paused: false,
             spill_selection: None,
@@ -211,6 +238,7 @@ impl Workspace {
             changed |= editor.pump();
             if let WorkspaceEditor::Paged(paged) = editor { if let Some(error) = &paged.error { self.message = Some(error.clone()); } }
         }
+        changed |= self.pump_encoding();
         changed |= self.pump_search_acknowledgment();
         let mut saved_paths=Vec::new();
         for (index, editor) in self.editors.iter().enumerate() {
@@ -350,7 +378,8 @@ impl Workspace {
                             let snapshot = opened.document.snapshot();
                             self.editors[index].finish_loading(self.scheduler.document(opened.document, 32), snapshot);
                             self.editors[index].enqueue(Input::SetCaret(0,false));
-                            self.files[index] = Some(FileState {_lease:admission.take(),path:opened.path,fingerprint:opened.fingerprint,bom:opened.bom,encoding:opened.encoding});
+                            self.files[index] = Some(FileState {binary_accepted:false,_lease:admission.take(),path:opened.path,fingerprint:opened.fingerprint,bom:opened.bom,encoding:opened.encoding});
+                            self.refresh_encoding_open(index);
                             self.find.clear_source();
                             self.message = Some("Reloaded from disk.".into());
                         } else { self.message = Some("Document changed while reloading; current edits were preserved.".into()); }
@@ -369,6 +398,7 @@ impl Workspace {
                     }
                     let snapshot = opened.document.snapshot();
                     let file = Some(FileState {
+                        binary_accepted: false,
                         _lease: admission.take(),
                         path: opened.path,
                         fingerprint: opened.fingerprint,
@@ -394,6 +424,8 @@ impl Workspace {
                         self.files.push(file);
                         self.untitled_labels.push(String::new());
                     }
+                    let index = preview.unwrap_or(self.editors.len() - 1);
+                    self.refresh_encoding_open(index);
                     self.message = None;
                 }
                 IoCompletion::Save(Ok(saved)) => {
@@ -404,6 +436,7 @@ impl Workspace {
                         editor.mark_saved(&saved.captured);
                         self.note_recent(path.clone());
                         self.files[index] = Some(FileState {
+                            binary_accepted: true,
                             _lease: admission.take(),
                             path,
                             fingerprint: saved.fingerprint,
@@ -416,9 +449,21 @@ impl Workspace {
                     self.message = None;
                 }
                 IoCompletion::Transcode(bareline_file_io::lifecycle::TranscodeOutcome::Complete(opened)) => {
+                    if self.interpreting_paged.as_ref().is_some_and(|(_, path)| *path == opened.path) {
+                        let (captured, _) = self.interpreting_paged.take().unwrap();
+                        let index = self.editors.iter().position(|editor| matches!(editor, WorkspaceEditor::Paged(editor) if editor.snapshot().same_document(&captured) && editor.snapshot().revision == captured.revision));
+                        if let Some(index) = index {
+                            let file = FileState { binary_accepted:false, _lease:admission.take(), path:opened.path.clone(), fingerprint:opened.fingerprint.clone(), bom:opened.transcoded.store.state.bom, encoding:None };
+                            match PagedEditorSurface::new(opened,self.bytes.clone(),self.notify.clone()) {
+                                Ok(mut editor) => { if let Some(root)=&self.recovery_root {editor.enable_recovery(root.clone(),self.file_system.clone());} self.editors[index]=WorkspaceEditor::Paged(editor); self.files[index]=Some(file); self.find.clear_source(); self.message=Some("Original bytes reinterpreted.".into()); }
+                                Err(error)=>self.message=Some(error),
+                            }
+                        } else {self.message=Some("Document changed while interpreting; current edits retained.".into());}
+                        continue;
+                    }
                     if opened.recovery_origin.is_none() {self.note_recent(opened.path.clone());}
                     self.discard_preview(pending.preview.as_ref());
-                    let file = FileState { _lease: admission.take(), path: opened.path.clone(), fingerprint: opened.fingerprint.clone(), bom: opened.transcoded.store.state.bom, encoding: None };
+                    let file = FileState { binary_accepted:false, _lease: admission.take(), path: opened.path.clone(), fingerprint: opened.fingerprint.clone(), bom: opened.transcoded.store.state.bom, encoding: None };
                     match PagedEditorSurface::new(opened, self.bytes.clone(), self.notify.clone()) {
                         Ok(mut editor) => { if let Some(root) = &self.recovery_root { editor.enable_recovery(root.clone(), self.file_system.clone()); } self.editors.push(WorkspaceEditor::Paged(editor)); self.files.push(Some(file)); self.untitled_labels.push(String::new()); self.message = None; }
                         Err(error) => self.message = Some(error),
@@ -430,21 +475,26 @@ impl Workspace {
                     self.paused_transcode = Some(paused);
                 }
                 IoCompletion::Transcode(bareline_file_io::lifecycle::TranscodeOutcome::Failed(error)) => {
-                    self.discard_preview(pending.preview.as_ref()); self.message = Some(file_error(error));
+                    self.interpreting_paged = None; self.discard_preview(pending.preview.as_ref()); self.message = Some(file_error(error));
                 }
                 IoCompletion::ResidentSpilled { captured, result } => {
                     self.spill_pending = false;
                     match result {
                         Err(error) => { self.spill_paused = true; self.message = Some(format!("Memory spill paused; document retained: {}", file_error(error))); }
-                        Ok(mut transcoded) => {
+                        Ok((mut transcoded, prepared)) => {
+                            let preserving_history = prepared.is_some();
                             let index = self.editors.iter().position(|editor| matches!(editor, WorkspaceEditor::Resident(_)) && editor.snapshot().same_document(&captured));
-                            if let Some(index) = index && !self.document_busy(index) && !self.editors[index].dirty()
+                            if let Some(index) = index && !self.document_busy(index)
                                 && self.editors[index].snapshot().revision == captured.revision
                                 && self.editors.iter().filter(|editor| editor.snapshot().same_document(&captured)).count() == 1
                                 && let Some(file) = &self.files[index]
-                                && transcoded.store.fingerprint.sha256 == file.fingerprint.sha256 {
+                                && (preserving_history || transcoded.store.fingerprint.sha256 == file.fingerprint.sha256) {
                                 let selection = self.editors[index].selection;
-                                match self.editors[index].migrate_clean_spill(&captured, transcoded.source.source()) {
+                                let migration = match prepared {
+                                    Some(prepared) => self.editors[index].document_service().ok_or(bareline_document::Error::ActorBusy).and_then(|service| service.migrate_spill(prepared)),
+                                    None => self.editors[index].migrate_clean_spill(&captured, transcoded.source.source()),
+                                };
+                                match migration {
                                     Err(error) => { self.spill_paused = true; self.message = Some(format!("Memory spill could not attach: {error:?}")); }
                                     Ok(document) => {
                                         transcoded.document = document;
@@ -458,7 +508,8 @@ impl Workspace {
                                                 let old = std::mem::replace(&mut self.editors[index], WorkspaceEditor::Paged(paged));
                                                 self.retired.push(old);
                                                 self.files[index].as_mut().unwrap().encoding = None;
-                                                self.find.clear_source(); self.last_drawn = None;
+                                                self.refresh_encoding_open(index);
+                            self.find.clear_source(); self.last_drawn = None;
                                                 self.message = Some("Resident data moved to private paged storage.".into());
                                             }
                                         }
@@ -500,7 +551,7 @@ impl Workspace {
         if self.spill_pending || !self.pending_io.is_empty() { return false; }
         let candidate = self.editors.iter().enumerate().filter(|(index, editor)| {
             matches!(editor, WorkspaceEditor::Resident(_)) && self.files[*index].is_some()
-                && !editor.busy() && !editor.dirty() && !editor.can_undo() && !editor.can_redo()
+                && !editor.busy()
                 && editor.snapshot().is_complete() && editor.snapshot().len() >= 1024 * 1024
                 && editor.selection.anchor.abs_diff(editor.selection.caret) <= 64 * 1024 - 8
                 && self.editors.iter().filter(|peer| peer.snapshot().same_document(editor.snapshot())).count() == 1
@@ -508,7 +559,8 @@ impl Workspace {
         let Some(index) = candidate else { return false; };
         if !self.ensure_io() { return false; }
         let file = self.files[index].as_ref().unwrap();
-        let request = IoRequest::SpillResident { captured: self.editors[index].snapshot().clone(), encoding: file.encoding.clone(), bom: file.bom,
+        let Some(service) = self.editors[index].document_service() else { return false; };
+        let request = IoRequest::SpillOwnedResident { saved_state: self.editors[index].saved_content_state(), service, captured: self.editors[index].snapshot().clone(), encoding: file.encoding.clone(), original: Some((file.path.clone(), file.fingerprint.clone())),
             cache: std::env::temp_dir().join("Bareline-owned-spill"), quota: self.transcode_quota_bytes,
             options: bareline_file_io::source::SourceOptions::default(), bytes: self.bytes.clone(), history: self.history.clone() };
         match self.io.as_ref().unwrap().submit(request, self.notify.clone()) {
@@ -729,9 +781,10 @@ impl Workspace {
         Some(index)
     }
     pub fn io_busy(&self) -> bool {
-        !self.pending_io.is_empty() || self.editors.iter().any(|editor| editor.paged() && editor.busy())
+        self.eol_job.is_some() || !self.pending_io.is_empty() || self.editors.iter().any(|editor| editor.paged() && editor.busy())
     }
     pub fn cancel_file_operations(&mut self) {
+        self.eol_job = None;
         self.paused_transcode = None;
         for pending in &self.pending_io {
             pending.receiver.cancel();
@@ -1042,6 +1095,14 @@ impl Workspace {
                         paged.read_handle(), paged.surface.snapshot(), paged.viewport_start(), language,
                         crate::language::LanguageConfiguration { policy, definition: definition.clone() }, self.notify.clone(),
                     );
+                    if self.styling.receipt().is_some_and(|receipt| receipt.identity == paged.snapshot().identity_token())
+                        && self.styling.result.as_ref().is_some_and(|result| result.is_current(&paged.surface.snapshot()))
+                        && let Some((folds, first_line, partial)) = self.styling.paged_folds.take()
+                    {
+                        if let Err(error) = paged.set_known_global_folds(folds, 0, partial, first_line) {
+                            self.message = Some(error);
+                        }
+                    }
                 }
                 let result = editor.draw_styled(
                     renderer,
@@ -1142,6 +1203,21 @@ mod tests {
         }
         fn validate_target(&self, _: &std::path::Path) -> std::io::Result<()> { Ok(()) }
         fn commit(&self, staged: &std::path::Path, target: &std::path::Path, _: bool) -> std::io::Result<()> { if target.exists() { std::fs::remove_file(target)?; } std::fs::rename(staged, target) }
+    }
+    #[test]
+    fn encoding_policy_undo_redo_and_untitled_save() {
+        use bareline_file_io::codecs::Encoding;
+        let mut workspace=Workspace::new(Arc::new(||{}),Arc::new(PagedFileSystem)).unwrap();
+        workspace.new_document().unwrap();
+        fn settle(workspace:&mut Workspace){let deadline=std::time::Instant::now()+std::time::Duration::from_secs(10);loop{workspace.pump();if !workspace.io_busy()&&!workspace.editors.iter().any(WorkspaceEditor::busy){break;}assert!(std::time::Instant::now()<deadline);std::thread::yield_now();}}
+        workspace.encoding_convert(0,Encoding::Utf16Le,true).unwrap();settle(&mut workspace);
+        assert!(workspace.editors[0].dirty());assert_eq!(workspace.encoding_state(0).unwrap().save_target,Encoding::Utf16Le);
+        workspace.editors[0].enqueue(Input::Undo);settle(&mut workspace);
+        assert!(!workspace.editors[0].dirty());assert_eq!(workspace.encoding_state(0).unwrap().save_target,Encoding::Utf8);
+        workspace.editors[0].enqueue(Input::Redo);settle(&mut workspace);
+        let path=std::env::temp_dir().join(format!("bareline-policy-{}-{}.txt",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        workspace.save(0,path.clone());settle(&mut workspace);
+        assert_eq!(std::fs::read(&path).unwrap(),[0xff,0xfe]);assert!(!workspace.editors[0].dirty());let _=std::fs::remove_file(path);
     }
     #[test]
     fn paged_workspace_edits_undoes_navigates_and_saves() {

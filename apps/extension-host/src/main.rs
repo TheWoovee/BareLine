@@ -77,7 +77,7 @@ fn run() -> Result<(), String> {
             Arc::new(AtomicBool::new(false)),
             budget,
         )
-        .map_err(|e| e.to_string())
+        .map_err(|e| format!("{e:#}"))
 }
 fn main() {
     #[cfg(windows)]

@@ -279,18 +279,26 @@ impl WorkspacePanelsRuntime {
         }
     }
 }
-impl Shell {
-    pub(super) fn panels_accessibility_nodes(&self) -> Vec<bareline_platform::accessibility::AccessibilityNode> {
+impl WorkspacePanelsRuntime {
+    fn accessibility_nodes(&self) -> Vec<bareline_platform::accessibility::AccessibilityNode> {
         use bareline_platform::accessibility::{AccessibilityNode, AccessibilityRole};
-        let entries = self.panels.semantics();
+        let entries = self.semantics();
         if entries.is_empty() { return Vec::new(); }
         let mut nodes = vec![AccessibilityNode { id: ACCESS_GROUP, parent: 1, role: AccessibilityRole::Group, name: "Navigation panels".into(), value: None,
             bounds: [0.0, TAB_HEIGHT as f64, 0.0, 0.0], disabled: false, selected: false, expanded: None, focusable: false, invokable: false }];
         nodes.extend(entries.iter().map(|entry| bareline_app::accessibility::semantic_node(&entry.node, entry.parent.0)));
         nodes
     }
+    fn accessibility_focus(&self) -> Option<u64> {
+        self.semantics().into_iter().find(|entry| entry.node.focused).map(|entry| entry.node.id.0)
+    }
+}
+impl Shell {
+    pub(super) fn panels_accessibility_nodes(&self) -> Vec<bareline_platform::accessibility::AccessibilityNode> {
+        self.panels.accessibility_nodes()
+    }
     pub(super) fn panels_accessibility_focus(&self) -> Option<u64> {
-        self.panels.semantics().into_iter().find(|entry| entry.node.focused).map(|entry| entry.node.id.0)
+        self.panels.accessibility_focus()
     }
     pub(super) fn panels_accessibility(&mut self, el: &ActiveEventLoop, action: &bareline_platform::accessibility::AccessibilityAction) -> bool {
         use bareline_platform::accessibility::AccessibilityAction;
@@ -848,6 +856,80 @@ impl Shell {
         handled
     }
 }
+/// Native golden fixtures exercise retained production layout and model actions;
+/// they never create a window, enumerate a folder, or write a platform file.
+#[cfg(test)]
+pub(super) fn accessibility_test_cases() -> Vec<(&'static str, Vec<bareline_platform::accessibility::AccessibilityNode>, Option<u64>)> {
+    use bareline_document::{Budget, Document};
+    use bareline_ui::widgets::SemanticAction;
+    fn capture(runtime: &WorkspacePanelsRuntime, name: &'static str) -> (&'static str, Vec<bareline_platform::accessibility::AccessibilityNode>, Option<u64>) {
+        (name, runtime.accessibility_nodes(), runtime.accessibility_focus())
+    }
+    let mut runtime = WorkspacePanelsRuntime::default();
+    let mut renderer = bareline_renderer_recording::RecordingBackend::default();
+    let mut workspace = Workspace::new(Arc::new(|| {}), Arc::new(bareline_platform_windows::WindowsFileSystem)).unwrap();
+    let source = Document::from_utf8("fn first() {}\nfn second() {}\n", Budget::new(4096), Budget::new(4096)).unwrap().snapshot();
+    workspace.add_snapshot_preview(&source, "main.rs".into()).unwrap();
+    workspace.add_snapshot_preview(&source, "notes.rs".into()).unwrap();
+    let mut ops = Vec::new();
+    runtime.draw(&mut renderer, 1000.0, 800.0, &workspace, 0, &mut ops).unwrap();
+    let mut cases = vec![capture(&runtime, "panels.closed")];
+
+    let mut explorer = WorkspacePanel::new(Arc::new(|| {}));
+    explorer.add_root(PathBuf::from("golden-workspace"));
+    runtime.explorer = Some(explorer);
+    runtime.draw(&mut renderer, 1000.0, 800.0, &workspace, 0, &mut ops).unwrap();
+    cases.push(capture(&runtime, "panels.explorer.open"));
+    runtime.focus = Focus::Explorer;
+    runtime.explorer.as_mut().unwrap().key(UiKey::Home);
+    let root_id = runtime.explorer.as_ref().unwrap().semantics(bareline_ui::ViewId(ACCESS_EXPLORER), ACCESS_EXPLORER + 65536)[0].node.id.0;
+    runtime.explorer.as_mut().unwrap().accessibility_action(bareline_ui::virtual_tree::NodeId(root_id - ACCESS_EXPLORER - 65536), SemanticAction::Focus);
+    cases.push(capture(&runtime, "panels.explorer.focus"));
+
+    runtime.explorer.as_mut().unwrap().hide();
+    runtime.documents.open = true;
+    runtime.focus = Focus::Documents;
+    runtime.draw(&mut renderer, 1000.0, 800.0, &workspace, 0, &mut ops).unwrap();
+    cases.push(capture(&runtime, "panels.documents.populated"));
+    runtime.document_filter = "notes".into();
+    runtime.documents.set_filter("notes");
+    runtime.documents.draw(runtime.left, &mut ops);
+    let selected = runtime.documents.semantics(bareline_ui::ViewId(ACCESS_DOCUMENTS), ACCESS_DOCUMENTS, true)[0].node.id.0;
+    assert!(matches!(runtime.documents.accessibility_action(selected, ACCESS_DOCUMENTS, true), Some(DocumentAction::Activate(1))));
+    cases.push(capture(&runtime, "panels.documents.filtered-invoked"));
+
+    runtime.documents.open = false;
+    runtime.outline.open = true;
+    runtime.focus = Focus::Outline;
+    runtime.draw(&mut renderer, 1000.0, 800.0, &workspace, 0, &mut ops).unwrap();
+    let (wake, ready) = mpsc::channel();
+    runtime.outline.refresh(&source, Some(std::path::Path::new("main.rs")), "main.rs", Arc::new(move || { let _ = wake.send(()); }));
+    ready.recv_timeout(std::time::Duration::from_secs(5)).expect("bounded outline fixture completion");
+    assert!(runtime.outline.pump());
+    runtime.outline.draw(runtime.right, &mut ops);
+    cases.push(capture(&runtime, "panels.outline.populated"));
+    runtime.outline_filter = "second".into();
+    runtime.outline.set_filter("second");
+    runtime.outline.draw(runtime.right, &mut ops);
+    let selected = runtime.outline.semantics(bareline_ui::ViewId(ACCESS_OUTLINE), ACCESS_OUTLINE, true)[0].node.id.0;
+    assert_eq!(runtime.outline.accessibility_action(selected, ACCESS_OUTLINE, false, &source), None);
+    assert_eq!(runtime.outline.accessibility_action(selected, ACCESS_OUTLINE, true, &source), Some(bareline_document::TextOffset(17)));
+    cases.push(capture(&runtime, "panels.outline.filtered-invoked"));
+    // Exercise the combined owner tree, including the normally alternative left
+    // panels. Each controller retains its real populated model and draw bounds.
+    runtime.explorer.as_mut().unwrap().show();
+    runtime.documents.open = true;
+    runtime.left.width = runtime.width_left();
+    runtime.document_filter.clear();
+    runtime.documents.set_filter("");
+    runtime.documents.draw(runtime.left, &mut ops);
+    runtime.outline_filter.clear();
+    runtime.outline.set_filter("");
+    runtime.outline.draw(runtime.right, &mut ops);
+    cases.push(capture(&runtime, "panels.all_open"));
+    cases
+}
+
 #[cfg(test)]
 mod workspace_panel_regressions {
     use super::*;

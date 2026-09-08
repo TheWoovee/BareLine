@@ -28,6 +28,7 @@ pub enum LexerPreference {
 }
 #[derive(Clone, Default)]
 struct LexOptions {
+    line_origin: usize,
     preference: LexerPreference,
     definition: Option<Arc<udl::Definition>>,
 }
@@ -76,6 +77,7 @@ impl ForwardLexer {
                 None
             },
             options: LexOptions {
+                line_origin: 0,
                 preference,
                 definition,
             },
@@ -251,6 +253,7 @@ pub fn lex_udl(
         cancel,
         None,
         LexOptions {
+            line_origin: 0,
             preference: LexerPreference::Native,
             definition: Some(definition),
         },
@@ -338,9 +341,10 @@ fn lex_configured(
         .map_err(|_| Error::InvalidRange)?;
     let mut spans = Vec::new();
     let mut checkpoints = Vec::new();
-    let mut line = source
-        .line_at(range.start)
-        .map_err(|_| Error::InvalidRange)?;
+    let mut line = options.line_origin
+        + source
+            .line_at(range.start)
+            .map_err(|_| Error::InvalidRange)?;
     let mut i = 0;
     let custom = definition.as_deref();
     let custom_keywords: std::collections::BTreeSet<&str> = custom
@@ -674,28 +678,84 @@ mod tests {
     use bareline_document::{Budget, Document, Edit, EditTransaction};
     #[test]
     fn configured_udl_carries_comments_and_custom_folds_and_rejects_replacement_checkpoint() {
-        let definition = Arc::new(udl::Definition { version:1,id:"angle".into(),name:"Angle".into(),extensions:vec!["angle".into()],keywords:vec!["begin".into()],operators:"<>".into(),line_comment:Some("#".into()),block_comment:Some(("/*".into(),"*/".into())),strings:vec!['"'],fold_pairs:vec![('<','>')] });
-        let first="begin <\n/* hidden\n";
-        let text=format!("{first}> */\nvalue\n>\n");
-        let source=document(&text).snapshot();
-        let mut pass=ForwardLexer::configured(source.clone(),Language::PlainText,LexerPreference::Native,Some(definition.clone()));
-        let one=pass.advance(TextOffset(first.len()),&Cancellation::default()).unwrap();
-        let two=pass.advance(TextOffset(text.len()),&Cancellation::default()).unwrap();
-        let mut folds=folding::FoldAccumulator::default();
-        folds.advance(&source,&one,10).unwrap(); folds.advance(&source,&two,10).unwrap();
-        assert_eq!(folds.known(), &[folding::Fold{header:0,end:4,level:1}]);
-        assert!(two.spans.iter().any(|span| span.kind==StyleKind::Comment && span.range.start==TextOffset(first.len())));
-        assert!(matches!(lex_udl(source,Arc::new((*definition).clone()),TextOffset(first.len())..TextOffset(text.len()),one.checkpoint.as_ref(),&Cancellation::default()),Err(Error::StaleCheckpoint)));
+        let definition = Arc::new(udl::Definition {
+            version: 1,
+            id: "angle".into(),
+            name: "Angle".into(),
+            extensions: vec!["angle".into()],
+            keywords: vec!["begin".into()],
+            operators: "<>".into(),
+            line_comment: Some("#".into()),
+            block_comment: Some(("/*".into(), "*/".into())),
+            strings: vec!['"'],
+            fold_pairs: vec![('<', '>')],
+        });
+        let first = "begin <\n/* hidden\n";
+        let text = format!("{first}> */\nvalue\n>\n");
+        let source = document(&text).snapshot();
+        let mut pass = ForwardLexer::configured(
+            source.clone(),
+            Language::PlainText,
+            LexerPreference::Native,
+            Some(definition.clone()),
+        );
+        let one = pass
+            .advance(TextOffset(first.len()), &Cancellation::default())
+            .unwrap();
+        let two = pass
+            .advance(TextOffset(text.len()), &Cancellation::default())
+            .unwrap();
+        let mut folds = folding::FoldAccumulator::default();
+        folds.advance(&source, &one, 10).unwrap();
+        folds.advance(&source, &two, 10).unwrap();
+        assert_eq!(
+            folds.known(),
+            &[folding::Fold {
+                header: 0,
+                end: 4,
+                level: 1
+            }]
+        );
+        assert!(
+            two.spans.iter().any(|span| span.kind == StyleKind::Comment
+                && span.range.start == TextOffset(first.len()))
+        );
+        assert!(matches!(
+            lex_udl(
+                source,
+                Arc::new((*definition).clone()),
+                TextOffset(first.len())..TextOffset(text.len()),
+                one.checkpoint.as_ref(),
+                &Cancellation::default()
+            ),
+            Err(Error::StaleCheckpoint)
+        ));
     }
     #[test]
     fn all_fifteen_native_definitions_validate_and_native_python_folds() {
-        for entry in catalog::CATALOG { entry.native_definition().validate().unwrap(); }
-        let text="def f():\n    value = 1\n    return value\nother = 2\n";
-        let source=document(text).snapshot();
-        let mut pass=ForwardLexer::configured(source.clone(),Language::Python,LexerPreference::Native,None);
-        let result=pass.advance(TextOffset(text.len()),&Cancellation::default()).unwrap();
+        for entry in catalog::CATALOG {
+            entry.native_definition().validate().unwrap();
+        }
+        let text = "def f():\n    value = 1\n    return value\nother = 2\n";
+        let source = document(text).snapshot();
+        let mut pass = ForwardLexer::configured(
+            source.clone(),
+            Language::Python,
+            LexerPreference::Native,
+            None,
+        );
+        let result = pass
+            .advance(TextOffset(text.len()), &Cancellation::default())
+            .unwrap();
         assert!(result.fold_levels.is_none());
-        assert_eq!(folding::folds(&source,&result,10).unwrap(),vec![folding::Fold{header:0,end:2,level:1}]);
+        assert_eq!(
+            folding::folds(&source, &result, 10).unwrap(),
+            vec![folding::Fold {
+                header: 0,
+                end: 2,
+                level: 1
+            }]
+        );
     }
     fn document(text: &str) -> Document {
         Document::from_utf8(text, Budget::new(4 << 20), Budget::new(4 << 20)).unwrap()
