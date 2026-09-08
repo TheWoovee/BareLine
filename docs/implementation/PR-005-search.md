@@ -1,5 +1,13 @@
 # PR-005 search engine continuation
 
+State: IMPLEMENTATION_COMPLETE_PENDING_ACCEPTANCE. The final scope review confirms mixed full-source search, bounded partial regex/capture expansion and actual folder controls. The [batch10 gate](INTEGRATION-20260908-BATCH10.md) passes: native35, document26, editor56, app87, file-I/O60, search40 and the default native build. Cumulative recorded Rust coverage is 492 distinct passing tests. No manual, controlled-performance, foreign-platform, signing or release acceptance is claimed.
+
+Current regex behavior uses bounded partial matching for supported patterns and referenced capture reads beyond 64 MiB. Context-sensitive grammar and whole-word fallback retain explicit bounded subject limits; UnsupportedStreaming/RegexLimit are incomplete outcomes, never successful full coverage. Earlier smaller-limit descriptions below are historical.
+
+## Historical implementation record
+
+The following entries describe earlier checkpoints and their then-current gaps. The status and batch10 evidence above supersede pending-gate and incomplete-source statements for the resolved implementation scope. Explicit algorithm/resource limits and unrun acceptance items remain applicable.
+
 State: bounded regex fallback implemented; full PR-005 remains IN_PROGRESS.
 Authority read: PR-005 brief, FC-05/06, ADR-09 and ADR-18. Dependency: pinned `pcre2-sys =0.2.10`, the low-level bridge for approved bundled PCRE2. It builds bundled PCRE2 on this Windows toolchain. Non-Windows builds must set `PCRE2_SYS_STATIC=1` to prohibit the dependency's system-library discovery; cross-platform compile has not been run here.
 
