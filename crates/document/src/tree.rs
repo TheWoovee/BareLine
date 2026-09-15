@@ -96,8 +96,7 @@ impl Summary {
         Self {
             unknown: false,
             bytes: self.bytes + rhs.bytes,
-            breaks: self.breaks + rhs.breaks
-                - usize::from(self.last == Some(b'\r') && rhs.first == Some(b'\n')),
+            breaks: self.breaks + rhs.breaks - usize::from(self.last == Some(b'\r') && rhs.first == Some(b'\n')),
             cr: self.cr + rhs.cr - cross,
             lf: self.lf + rhs.lf - cross,
             crlf: self.crlf + rhs.crlf + cross,
@@ -164,37 +163,25 @@ fn branch(left: Arc<Node>, right: Arc<Node>) -> Arc<Node> {
 }
 fn balance(left: Arc<Node>, right: Arc<Node>) -> Arc<Node> {
     if left.height() > right.height() + 1 {
-        let Node::Branch {
-            left: a, right: b, ..
-        } = left.as_ref()
-        else {
+        let Node::Branch { left: a, right: b, .. } = left.as_ref() else {
             unreachable!()
         };
         if a.height() >= b.height() {
             return branch(a.clone(), branch(b.clone(), right));
         }
-        let Node::Branch {
-            left: c, right: d, ..
-        } = b.as_ref()
-        else {
+        let Node::Branch { left: c, right: d, .. } = b.as_ref() else {
             unreachable!()
         };
         return branch(branch(a.clone(), c.clone()), branch(d.clone(), right));
     }
     if right.height() > left.height() + 1 {
-        let Node::Branch {
-            left: a, right: b, ..
-        } = right.as_ref()
-        else {
+        let Node::Branch { left: a, right: b, .. } = right.as_ref() else {
             unreachable!()
         };
         if b.height() >= a.height() {
             return branch(branch(left, a.clone()), b.clone());
         }
-        let Node::Branch {
-            left: c, right: d, ..
-        } = a.as_ref()
-        else {
+        let Node::Branch { left: c, right: d, .. } = a.as_ref() else {
             unreachable!()
         };
         return branch(branch(left, c.clone()), branch(d.clone(), b.clone()));
@@ -207,28 +194,16 @@ pub(crate) fn concat(left: Root, right: Root) -> Root {
         (l, None) => l,
         (Some(l), Some(r)) => {
             if l.height() > r.height() + 1 {
-                let Node::Branch {
-                    left: a, right: b, ..
-                } = l.as_ref()
-                else {
+                let Node::Branch { left: a, right: b, .. } = l.as_ref() else {
                     unreachable!()
                 };
-                return Some(balance(
-                    a.clone(),
-                    concat(Some(b.clone()), Some(r)).unwrap(),
-                ));
+                return Some(balance(a.clone(), concat(Some(b.clone()), Some(r)).unwrap()));
             }
             if r.height() > l.height() + 1 {
-                let Node::Branch {
-                    left: a, right: b, ..
-                } = r.as_ref()
-                else {
+                let Node::Branch { left: a, right: b, .. } = r.as_ref() else {
                     unreachable!()
                 };
-                return Some(balance(
-                    concat(Some(l), Some(a.clone())).unwrap(),
-                    b.clone(),
-                ));
+                return Some(balance(concat(Some(l), Some(a.clone())).unwrap(), b.clone()));
             }
             Some(branch(l, r))
         }
@@ -309,20 +284,12 @@ pub(crate) fn from_text(text: &str, budget: &Budget) -> Result<Root, Error> {
             _reservation: reservation,
             origin: None,
         });
-        root = concat(
-            root,
-            Some(Arc::new(Node::Leaf(Piece::new(segment, 0..end - start)))),
-        );
+        root = concat(root, Some(Arc::new(Node::Leaf(Piece::new(segment, 0..end - start)))));
         start = end;
     }
     Ok(root)
 }
-pub(crate) fn own_inverse(
-    root: &Root,
-    range: Range<usize>,
-    text: &str,
-    budget: &Budget,
-) -> Result<Root, Error> {
+pub(crate) fn own_inverse(root: &Root, range: Range<usize>, text: &str, budget: &Budget) -> Result<Root, Error> {
     let mut output = None;
     let mut cursor = range.start;
     while cursor < range.end {
@@ -333,14 +300,10 @@ pub(crate) fn own_inverse(
                 None,
             ),
             Span::Source(source, source_range) => {
-                let count = (source_range.end - source_range.start).min((range.end - cursor) as u64)
-                    as usize;
+                let count = (source_range.end - source_range.start).min((range.end - cursor) as u64) as usize;
                 (
                     count,
-                    Some((
-                        source.clone(),
-                        source_range.start..source_range.start + count as u64,
-                    )),
+                    Some((source.clone(), source_range.start..source_range.start + count as u64)),
                 )
             }
         };
@@ -357,10 +320,7 @@ pub(crate) fn own_inverse(
                 _reservation: reservation,
                 origin: Some(origin),
             });
-            Some(charged_node(
-                Node::Leaf(Piece::new(segment, 0..count)),
-                budget,
-            )?)
+            Some(charged_node(Node::Leaf(Piece::new(segment, 0..count)), budget)?)
         } else {
             // Preserve any existing owned provenance by reusing the immutable subroot.
             let (prefix, _) = charged_split(root.clone(), cursor + count, budget)?;
@@ -411,10 +371,7 @@ pub(crate) fn span_at(root: &Root, mut offset: usize) -> Option<Span<'_>> {
         match node {
             Node::Leaf(piece) => return Some(Span::Owned(&piece.text().as_bytes()[offset..])),
             Node::OwnedSource { source, range, .. } => {
-                return Some(Span::OwnedSource(
-                    source,
-                    range.start + offset as u64..range.end,
-                ));
+                return Some(Span::OwnedSource(source, range.start + offset as u64..range.end));
             }
             Node::Source { source, range, .. } => {
                 return Some(Span::Source(source, range.start + offset as u64..range.end));
@@ -478,13 +435,11 @@ pub(crate) fn line_start(root: &Root, line: usize) -> Option<usize> {
             }
             Node::Branch { left, right, .. } => {
                 let left_summary = left.summary();
-                let count = left_summary.breaks
-                    - usize::from(preceding_cr && left_summary.first == Some(b'\n'));
+                let count = left_summary.breaks - usize::from(preceding_cr && left_summary.first == Some(b'\n'));
                 if ordinal <= count {
                     find(left, ordinal, preceding_cr)
                 } else {
-                    left_summary.bytes
-                        + find(right, ordinal - count, left_summary.last == Some(b'\r'))
+                    left_summary.bytes + find(right, ordinal - count, left_summary.last == Some(b'\r'))
                 }
             }
         }
@@ -492,9 +447,7 @@ pub(crate) fn line_start(root: &Root, line: usize) -> Option<usize> {
     let separator = find(node, line, false);
     Some(
         separator
-            + if byte_at(root, separator) == Some(b'\r')
-                && byte_at(root, separator + 1) == Some(b'\n')
-            {
+            + if byte_at(root, separator) == Some(b'\r') && byte_at(root, separator + 1) == Some(b'\n') {
                 2
             } else {
                 1
@@ -522,12 +475,7 @@ pub(crate) fn line_at(root: &Root, offset: usize) -> usize {
         }
     }
     let count = root.as_ref().map_or(0, |n| prefix(n, offset).breaks);
-    count
-        - usize::from(
-            offset > 0
-                && byte_at(root, offset - 1) == Some(b'\r')
-                && byte_at(root, offset) == Some(b'\n'),
-        )
+    count - usize::from(offset > 0 && byte_at(root, offset - 1) == Some(b'\r') && byte_at(root, offset) == Some(b'\n'))
 }
 /// A range iterator with O(tree height) scratch storage, never one entry per document piece.
 pub struct Chunks<'a> {
@@ -552,10 +500,8 @@ impl<'a> Iterator for Chunks<'a> {
                 Node::Branch { left, right, .. } => {
                     let middle = left.summary().bytes;
                     if range.end > middle {
-                        self.stack.push((
-                            right,
-                            range.start.saturating_sub(middle)..range.end - middle,
-                        ));
+                        self.stack
+                            .push((right, range.start.saturating_sub(middle)..range.end - middle));
                     }
                     if range.start < middle {
                         self.stack.push((left, range.start..range.end.min(middle)));
@@ -607,15 +553,13 @@ pub(crate) fn has_source(root: &Root) -> bool {
 /// Every node created on the paged mutation path owns its reservation. Shared
 /// children retain their existing claims; abandoned temporary paths release theirs.
 pub(crate) fn charged_node(mut node: Node, budget: &Budget) -> Result<Arc<Node>, Error> {
-    let bytes = std::mem::size_of::<Node>()
-        + std::mem::size_of::<Reservation>()
-        + 4 * std::mem::size_of::<usize>();
+    let bytes = std::mem::size_of::<Node>() + std::mem::size_of::<Reservation>() + 4 * std::mem::size_of::<usize>();
     let charge = Some(Arc::new(budget.reserve(bytes)?));
     match &mut node {
         Node::Leaf(piece) => piece._node_charge = charge,
-        Node::Source { _charge, .. }
-        | Node::OwnedSource { _charge, .. }
-        | Node::Branch { _charge, .. } => *_charge = charge,
+        Node::Source { _charge, .. } | Node::OwnedSource { _charge, .. } | Node::Branch { _charge, .. } => {
+            *_charge = charge
+        }
     }
     Ok(Arc::new(node))
 }
@@ -635,19 +579,13 @@ fn charged_branch(left: Arc<Node>, right: Arc<Node>, budget: &Budget) -> Result<
 }
 fn charged_balance(left: Arc<Node>, right: Arc<Node>, budget: &Budget) -> Result<Arc<Node>, Error> {
     if left.height() > right.height() + 1 {
-        let Node::Branch {
-            left: a, right: b, ..
-        } = left.as_ref()
-        else {
+        let Node::Branch { left: a, right: b, .. } = left.as_ref() else {
             unreachable!()
         };
         if a.height() >= b.height() {
             return charged_branch(a.clone(), charged_branch(b.clone(), right, budget)?, budget);
         }
-        let Node::Branch {
-            left: c, right: d, ..
-        } = b.as_ref()
-        else {
+        let Node::Branch { left: c, right: d, .. } = b.as_ref() else {
             unreachable!()
         };
         return charged_branch(
@@ -657,19 +595,13 @@ fn charged_balance(left: Arc<Node>, right: Arc<Node>, budget: &Budget) -> Result
         );
     }
     if right.height() > left.height() + 1 {
-        let Node::Branch {
-            left: a, right: b, ..
-        } = right.as_ref()
-        else {
+        let Node::Branch { left: a, right: b, .. } = right.as_ref() else {
             unreachable!()
         };
         if b.height() >= a.height() {
             return charged_branch(charged_branch(left, a.clone(), budget)?, b.clone(), budget);
         }
-        let Node::Branch {
-            left: c, right: d, ..
-        } = a.as_ref()
-        else {
+        let Node::Branch { left: c, right: d, .. } = a.as_ref() else {
             unreachable!()
         };
         return charged_branch(
@@ -686,10 +618,7 @@ pub(crate) fn charged_concat(left: Root, right: Root, budget: &Budget) -> Result
         (l, None) => Ok(l),
         (Some(l), Some(r)) => {
             if l.height() > r.height() + 1 {
-                let Node::Branch {
-                    left: a, right: b, ..
-                } = l.as_ref()
-                else {
+                let Node::Branch { left: a, right: b, .. } = l.as_ref() else {
                     unreachable!()
                 };
                 return Ok(Some(charged_balance(
@@ -699,10 +628,7 @@ pub(crate) fn charged_concat(left: Root, right: Root, budget: &Budget) -> Result
                 )?));
             }
             if r.height() > l.height() + 1 {
-                let Node::Branch {
-                    left: a, right: b, ..
-                } = r.as_ref()
-                else {
+                let Node::Branch { left: a, right: b, .. } = r.as_ref() else {
                     unreachable!()
                 };
                 return Ok(Some(charged_balance(
@@ -715,11 +641,7 @@ pub(crate) fn charged_concat(left: Root, right: Root, budget: &Budget) -> Result
         }
     }
 }
-pub(crate) fn charged_source(
-    source: MemorySource,
-    range: Range<u64>,
-    budget: &Budget,
-) -> Result<Root, Error> {
+pub(crate) fn charged_source(source: MemorySource, range: Range<u64>, budget: &Budget) -> Result<Root, Error> {
     if range.is_empty() {
         return Ok(None);
     }
@@ -757,11 +679,7 @@ pub(crate) fn charged_owned(
         budget,
     )?))
 }
-pub(crate) fn charged_split(
-    root: Root,
-    offset: usize,
-    budget: &Budget,
-) -> Result<(Root, Root), Error> {
+pub(crate) fn charged_split(root: Root, offset: usize, budget: &Budget) -> Result<(Root, Root), Error> {
     let Some(node) = root else {
         return Ok((None, None));
     };
@@ -822,12 +740,7 @@ pub(crate) fn charged_split(
         }
     }
 }
-pub(crate) fn charged_replace(
-    root: Root,
-    range: Range<usize>,
-    inserted: Root,
-    budget: &Budget,
-) -> Result<Root, Error> {
+pub(crate) fn charged_replace(root: Root, range: Range<usize>, inserted: Root, budget: &Budget) -> Result<Root, Error> {
     let (prefix, suffix) = charged_split(root, range.end, budget)?;
     let (prefix, _) = charged_split(prefix, range.start, budget)?;
     charged_concat(charged_concat(prefix, inserted, budget)?, suffix, budget)

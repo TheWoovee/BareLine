@@ -12,26 +12,34 @@ use std::{
 };
 
 mod salvage;
-pub use salvage::{decode_report,DecodedSession,SessionDiagnostic,SessionDiagnostics,SessionIssue};
+pub use salvage::{DecodedSession, SessionDiagnostic, SessionDiagnostics, SessionIssue, decode_report};
 pub const SESSION_VERSION: u32 = 1;
 pub const MAX_SESSION_BYTES: usize = 8 * 1024 * 1024;
 const MAX_ENTRIES: usize = 10_000;
 
 /// Optional per-view selection. Identifiers only: never a path or embedded executable definition.
-#[derive(Clone,Debug,PartialEq,Eq,Serialize,Deserialize)]
-#[serde(tag="kind",content="id",rename_all="snake_case",deny_unknown_fields)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "id", rename_all = "snake_case", deny_unknown_fields)]
 pub enum LanguageSelection {
-    Builtin(#[serde(deserialize_with="language_id")] String),
-    Udl(#[serde(deserialize_with="language_id")] String),
+    Builtin(#[serde(deserialize_with = "language_id")] String),
+    Udl(#[serde(deserialize_with = "language_id")] String),
 }
-fn language_id<'de,D:serde::Deserializer<'de>>(d:D)->Result<String,D::Error>{
-    let id=String::deserialize(d)?;
-    if id.is_empty()||id.len()>64||!id.bytes().all(|b|b.is_ascii_alphanumeric()||matches!(b,b'-'|b'_')){return Err(serde::de::Error::custom("invalid language identifier"));}Ok(id)
+fn language_id<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    let id = String::deserialize(d)?;
+    if id.is_empty()
+        || id.len() > 64
+        || !id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'))
+    {
+        return Err(serde::de::Error::custom("invalid language identifier"));
+    }
+    Ok(id)
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct ViewState {
-    #[serde(default,skip_serializing_if="Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language: Option<LanguageSelection>,
     pub caret: u64,
     pub anchor: u64,
@@ -80,6 +88,9 @@ pub struct SessionLayout {
     pub active_tabs: [Option<u64>; 2],
     pub sync_horizontal: bool,
     pub sync_vertical: bool,
+    pub bottom_panel: Option<String>,
+    pub bottom_panel_collapsed: bool,
+    pub bottom_panel_height_bits: u32,
 }
 impl Default for SessionLayout {
     fn default() -> Self {
@@ -94,6 +105,9 @@ impl Default for SessionLayout {
             active_tabs: [None, None],
             sync_horizontal: false,
             sync_vertical: false,
+            bottom_panel: None,
+            bottom_panel_collapsed: true,
+            bottom_panel_height_bits: 260.0f32.to_bits(),
         }
     }
 }
@@ -105,6 +119,16 @@ pub struct SessionCompare {
     pub right_document: u64,
     /// Versioned application compare options, bounded separately from the manifest.
     pub options_json: Vec<u8>,
+}
+/// Last main window placement, in physical screen coordinates.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionWindow {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+    pub maximized: bool,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -121,10 +145,10 @@ pub struct SessionManifest {
     pub layout: SessionLayout,
     #[serde(default)]
     pub compare: Option<SessionCompare>,
+    #[serde(default)]
+    pub window: Option<SessionWindow>,
 }
-fn decode_layout<'de, D: serde::Deserializer<'de>>(
-    deserializer: D,
-) -> Result<SessionLayout, D::Error> {
+fn decode_layout<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<SessionLayout, D::Error> {
     let value = serde_json::Value::deserialize(deserializer)?;
     Ok(serde_json::from_value(value).unwrap_or_default())
 }
@@ -139,6 +163,7 @@ impl Default for SessionManifest {
             recent: vec![],
             layout: SessionLayout::default(),
             compare: None,
+            window: None,
         }
     }
 }
@@ -150,14 +175,9 @@ impl SessionManifest {
         if self.version != SESSION_VERSION {
             return Err(invalid("unsupported session version"));
         }
-        if [
-            self.documents.len(),
-            self.tabs.len(),
-            self.mru.len(),
-            self.recent.len(),
-        ]
-        .iter()
-        .any(|n| *n > MAX_ENTRIES)
+        if [self.documents.len(), self.tabs.len(), self.mru.len(), self.recent.len()]
+            .iter()
+            .any(|n| *n > MAX_ENTRIES)
         {
             return Err(invalid("session entry limit"));
         }
@@ -183,9 +203,7 @@ impl SessionManifest {
         }
         let mut unpinned = false;
         for tab in &self.tabs {
-            if tab.view.folds.len() > 100_000
-                || tab.view.folds.iter().any(|range| range.start >= range.end)
-            {
+            if tab.view.folds.len() > 100_000 || tab.view.folds.iter().any(|range| range.start >= range.end) {
                 return Err(invalid("invalid or oversized fold state"));
             }
             let scroll_y = f64::from_bits(tab.view.scroll_y_bits);
@@ -212,7 +230,15 @@ impl SessionManifest {
         for path in &self.recent {
             validate_path(path)?;
         }
-        if self.layout.tab_colors.len()>MAX_ENTRIES || self.layout.tab_colors.iter().any(|(id,color)|!tabs.contains(id)||*color>0xff_ffff) {return Err(invalid("invalid session tab color"));}
+        if self.layout.tab_colors.len() > MAX_ENTRIES
+            || self
+                .layout
+                .tab_colors
+                .iter()
+                .any(|(id, color)| !tabs.contains(id) || *color > 0xff_ffff)
+        {
+            return Err(invalid("invalid session tab color"));
+        }
         if !self.valid_layout() {
             return Err(invalid("invalid session layout"));
         }
@@ -220,25 +246,28 @@ impl SessionManifest {
     }
     fn valid_layout(&self) -> bool {
         let ratio = f64::from_bits(self.layout.ratio_bits);
+        let bottom_height = f32::from_bits(self.layout.bottom_panel_height_bits);
         ratio.is_finite()
             && (0.1..=0.9).contains(&ratio)
+            && bottom_height.is_finite()
+            && (140.0..=10_000.0).contains(&bottom_height)
+            && self
+                .layout
+                .bottom_panel
+                .as_deref()
+                .is_none_or(|panel| matches!(panel, "search" | "compare" | "output"))
             && self.layout.active_pane <= u32::from(self.layout.split)
             && self
                 .tabs
                 .iter()
                 .all(|tab| tab.view.split <= u32::from(self.layout.split))
-            && self
-                .layout
-                .active_tabs
-                .iter()
-                .enumerate()
-                .all(|(pane, id)| {
-                    id.is_none_or(|id| {
-                        self.tabs
-                            .iter()
-                            .any(|tab| tab.id == id && tab.view.split == pane as u32)
-                    })
+            && self.layout.active_tabs.iter().enumerate().all(|(pane, id)| {
+                id.is_none_or(|id| {
+                    self.tabs
+                        .iter()
+                        .any(|tab| tab.id == id && tab.view.split == pane as u32)
                 })
+            })
     }
     /// Active document first, then MRU, tab documents and surviving orphan documents.
     /// Stable IDs/order are retained even when a corrupt tab entry was discarded.
@@ -254,7 +283,7 @@ impl SessionManifest {
             .into_iter()
             .chain(self.mru.iter().copied())
             .chain(self.tabs.iter().map(|tab| tab.document_id))
-            .chain(self.documents.iter().map(|document|document.id))
+            .chain(self.documents.iter().map(|document| document.id))
             .filter(|id| seen.insert(*id))
             .collect()
     }
@@ -268,7 +297,9 @@ fn validate_path(path: &SerializedPath) -> io::Result<()> {
 }
 /// Import untrusted machine-written JSON without filesystem access. Version zero used
 /// the same layout without MRU/recent; those default empty during migration.
-pub fn decode(bytes: &[u8]) -> io::Result<SessionManifest> {decode_report(bytes).map(|decoded|decoded.manifest)}
+pub fn decode(bytes: &[u8]) -> io::Result<SessionManifest> {
+    decode_report(bytes).map(|decoded| decoded.manifest)
+}
 pub fn encode(manifest: &SessionManifest) -> io::Result<Vec<u8>> {
     manifest.validate()?;
     struct Bounded(Vec<u8>);
@@ -305,21 +336,33 @@ impl SessionStore {
     }
     pub fn load(&self) -> io::Result<LoadedSession> {
         match read_manifest(&self.path) {
-            Ok(mut decoded) if decoded.manifest.documents.is_empty() && decoded.diagnostics.skipped_documents>0 => {
-                if let Ok(previous)=read_manifest(&self.previous()) && !previous.manifest.documents.is_empty() {
+            Ok(mut decoded) if decoded.manifest.documents.is_empty() && decoded.diagnostics.skipped_documents > 0 => {
+                if let Ok(previous) = read_manifest(&self.previous())
+                    && !previous.manifest.documents.is_empty()
+                {
                     decoded.diagnostics.merge(previous.diagnostics);
-                    Ok(LoadedSession {manifest:previous.manifest,recovered_previous:true,diagnostics:decoded.diagnostics})
-                } else {Ok(LoadedSession {manifest:decoded.manifest,recovered_previous:false,diagnostics:decoded.diagnostics})}
+                    Ok(LoadedSession {
+                        manifest: previous.manifest,
+                        recovered_previous: true,
+                        diagnostics: decoded.diagnostics,
+                    })
+                } else {
+                    Ok(LoadedSession {
+                        manifest: decoded.manifest,
+                        recovered_previous: false,
+                        diagnostics: decoded.diagnostics,
+                    })
+                }
             }
             Ok(decoded) => Ok(LoadedSession {
-                manifest:decoded.manifest,
-                diagnostics:decoded.diagnostics,
+                manifest: decoded.manifest,
+                diagnostics: decoded.diagnostics,
                 recovered_previous: false,
             }),
             Err(primary) => match read_manifest(&self.previous()) {
                 Ok(decoded) => Ok(LoadedSession {
-                    manifest:decoded.manifest,
-                    diagnostics:decoded.diagnostics,
+                    manifest: decoded.manifest,
+                    diagnostics: decoded.diagnostics,
                     recovered_previous: true,
                 }),
                 Err(_) => Err(primary),
@@ -328,14 +371,12 @@ impl SessionStore {
     }
     /// Serialized by the owning I/O service. Retains a validated previous generation
     /// before publishing the new one. A failed commit never truncates the current file.
-    pub fn save(
-        &self,
-        manifest: &SessionManifest,
-        platform: &dyn LocalFileSystem,
-    ) -> io::Result<()> {
+    pub fn save(&self, manifest: &SessionManifest, platform: &dyn LocalFileSystem) -> io::Result<()> {
         let bytes = encode(manifest)?;
         platform.validate_target(&self.path)?;
-        if let Ok(previous) = read_manifest(&self.path) && previous.diagnostics.is_empty() {
+        if let Ok(previous) = read_manifest(&self.path)
+            && previous.diagnostics.is_empty()
+        {
             atomic_write(&self.previous(), &encode(&previous.manifest)?, platform)?;
         }
         atomic_write(&self.path, &bytes, platform)
@@ -356,18 +397,13 @@ fn read_manifest(path: &Path) -> io::Result<DecodedSession> {
 fn atomic_write(path: &Path, bytes: &[u8], platform: &dyn LocalFileSystem) -> io::Result<()> {
     static NEXT: AtomicU64 = AtomicU64::new(0);
     platform.validate_target(path)?;
-    let parent = path
-        .parent()
-        .ok_or_else(|| invalid("session path has no parent"))?;
+    let parent = path.parent().ok_or_else(|| invalid("session path has no parent"))?;
     let staged = parent.join(format!(
         ".bareline-session-{}-{}.tmp",
         std::process::id(),
         NEXT.fetch_add(1, Ordering::Relaxed)
     ));
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&staged)?;
+    let mut file = OpenOptions::new().write(true).create_new(true).open(&staged)?;
     let result = (|| {
         file.write_all(bytes)?;
         file.sync_all()?;
@@ -443,30 +479,119 @@ mod tests {
     }
     #[test]
     fn mixed_corrupt_entries_preserve_ids_order_views_and_safe_references() {
-        let original=fixture();let mut value=serde_json::to_value(&original).unwrap();
-        let mut bad_path=serde_json::to_value(SerializedPath::from_native(Path::new("must-not-be-opened"))).unwrap();bad_path["data"]=serde_json::json!("!!!!");
-        value["documents"]=serde_json::json!([value["documents"][0].clone(),{"id":9,"title":"secret-invalid-title","path":bad_path.clone()},value["documents"][1].clone(),{"id":7,"title":"duplicate","path":null}]);
-        value["tabs"][1]["view"]["folds"]=serde_json::json!([{"start":9,"end":2}]);
-        let tabs=value["tabs"].as_array_mut().unwrap();tabs.push(serde_json::json!({"id":3,"document_id":9,"pinned":false,"view":{}}));tabs.push(serde_json::json!({"id":1,"document_id":8,"pinned":false,"view":{}}));tabs.push(serde_json::json!({"id":4,"document_id":8,"pinned":true,"view":{}}));
-        value["active_tab"]=serde_json::json!(3);value["mru"]=serde_json::json!([9,8,8,7]);value["recent"]=serde_json::json!([original.documents[0].path.clone().unwrap(),bad_path]);
-        value["compare"]=serde_json::json!({"version":1,"left_document":7,"right_document":9,"options_json":[]});
-        let decoded=decode_report(&serde_json::to_vec(&value).unwrap()).unwrap();let manifest=decoded.manifest;
-        assert_eq!(manifest.documents.iter().map(|doc|doc.id).collect::<Vec<_>>(),vec![7,8]);assert_eq!(manifest.documents[0],original.documents[0]);
-        assert_eq!(manifest.tabs.iter().map(|tab|tab.id).collect::<Vec<_>>(),vec![1,2,4]);assert_eq!(manifest.tabs[0].view,original.tabs[0].view);assert_eq!(manifest.tabs[1].view,ViewState::default());assert!(!manifest.tabs[2].pinned);
-        assert_eq!(manifest.active_tab,Some(1));assert_eq!(manifest.mru,vec![8,7]);assert_eq!(manifest.recent.len(),1);assert!(manifest.compare.is_none());manifest.validate().unwrap();
-        assert!(decoded.diagnostics.entries.iter().any(|entry|entry.issue==SessionIssue::InvalidPath));assert!(decoded.diagnostics.entries.iter().any(|entry|entry.issue==SessionIssue::InvalidView));assert!(!decoded.diagnostics.summary().contains("secret-invalid-title"));assert!(!decoded.diagnostics.summary().contains("must-not-be-opened"));
+        let original = fixture();
+        let mut value = serde_json::to_value(&original).unwrap();
+        let mut bad_path = serde_json::to_value(SerializedPath::from_native(Path::new("must-not-be-opened"))).unwrap();
+        bad_path["data"] = serde_json::json!("!!!!");
+        value["documents"] = serde_json::json!([value["documents"][0].clone(),{"id":9,"title":"secret-invalid-title","path":bad_path.clone()},value["documents"][1].clone(),{"id":7,"title":"duplicate","path":null}]);
+        value["tabs"][1]["view"]["folds"] = serde_json::json!([{"start":9,"end":2}]);
+        let tabs = value["tabs"].as_array_mut().unwrap();
+        tabs.push(serde_json::json!({"id":3,"document_id":9,"pinned":false,"view":{}}));
+        tabs.push(serde_json::json!({"id":1,"document_id":8,"pinned":false,"view":{}}));
+        tabs.push(serde_json::json!({"id":4,"document_id":8,"pinned":true,"view":{}}));
+        value["active_tab"] = serde_json::json!(3);
+        value["mru"] = serde_json::json!([9, 8, 8, 7]);
+        value["recent"] = serde_json::json!([original.documents[0].path.clone().unwrap(), bad_path]);
+        value["compare"] = serde_json::json!({"version":1,"left_document":7,"right_document":9,"options_json":[]});
+        let decoded = decode_report(&serde_json::to_vec(&value).unwrap()).unwrap();
+        let manifest = decoded.manifest;
+        assert_eq!(
+            manifest.documents.iter().map(|doc| doc.id).collect::<Vec<_>>(),
+            vec![7, 8]
+        );
+        assert_eq!(manifest.documents[0], original.documents[0]);
+        assert_eq!(
+            manifest.tabs.iter().map(|tab| tab.id).collect::<Vec<_>>(),
+            vec![1, 2, 4]
+        );
+        assert_eq!(manifest.tabs[0].view, original.tabs[0].view);
+        assert_eq!(manifest.tabs[1].view, ViewState::default());
+        assert!(!manifest.tabs[2].pinned);
+        assert_eq!(manifest.active_tab, Some(1));
+        assert_eq!(manifest.mru, vec![8, 7]);
+        assert_eq!(manifest.recent.len(), 1);
+        assert!(manifest.compare.is_none());
+        manifest.validate().unwrap();
+        assert!(
+            decoded
+                .diagnostics
+                .entries
+                .iter()
+                .any(|entry| entry.issue == SessionIssue::InvalidPath)
+        );
+        assert!(
+            decoded
+                .diagnostics
+                .entries
+                .iter()
+                .any(|entry| entry.issue == SessionIssue::InvalidView)
+        );
+        assert!(!decoded.diagnostics.summary().contains("secret-invalid-title"));
+        assert!(!decoded.diagnostics.summary().contains("must-not-be-opened"));
+    }
+    #[test]
+    fn bottom_panel_layout_round_trips_and_rejects_unbounded_state() {
+        let mut manifest = fixture();
+        manifest.layout.bottom_panel = Some("compare".into());
+        manifest.layout.bottom_panel_collapsed = false;
+        manifest.layout.bottom_panel_height_bits = 344.0f32.to_bits();
+        let decoded: SessionManifest = serde_json::from_slice(&serde_json::to_vec(&manifest).unwrap()).unwrap();
+        decoded.validate().unwrap();
+        assert_eq!(decoded.layout.bottom_panel.as_deref(), Some("compare"));
+        assert_eq!(f32::from_bits(decoded.layout.bottom_panel_height_bits), 344.0);
+
+        manifest.layout.bottom_panel = Some("unknown".into());
+        assert!(manifest.validate().is_err());
+        manifest.layout.bottom_panel = Some("search".into());
+        manifest.layout.bottom_panel_height_bits = f32::NAN.to_bits();
+        assert!(manifest.validate().is_err());
+    }
+    #[test]
+    fn window_placement_round_trips_and_absent_window_decodes() {
+        // P4-7 added `SessionManifest.window`; the salvage decoder must accept and
+        // restore it (regression: an encoded `"window"` key was rejected as unknown,
+        // dropping the entire session on reload).
+        let mut original = fixture();
+        original.window = Some(SessionWindow {
+            x: -12,
+            y: 34,
+            width: 1280,
+            height: 800,
+            maximized: true,
+        });
+        let decoded = decode(&encode(&original).unwrap()).unwrap();
+        assert_eq!(decoded.window, original.window);
+        let mut none = fixture();
+        none.window = None;
+        assert_eq!(decode(&encode(&none).unwrap()).unwrap().window, None);
     }
     #[test]
     fn bounded_entry_failure_does_not_consume_following_valid_document() {
-        let value=serde_json::json!({"version":1,"documents":[{"id":1,"path":null,"title":"x".repeat(2*1024*1024+1)},{"id":2,"path":null,"title":"kept"}],"tabs":[],"active_tab":null});
-        let decoded=decode_report(&serde_json::to_vec(&value).unwrap()).unwrap();assert_eq!(decoded.manifest.restore_order(),vec![2]);assert_eq!(decoded.diagnostics.skipped,1);assert_eq!(decoded.diagnostics.entries[0].issue,SessionIssue::ResourceLimit);
-        let mut entries=vec![serde_json::json!({"id":2,"path":null,"title":"kept"})];entries.extend((0..MAX_ENTRIES+20).map(|_|serde_json::Value::Null));
-        let value=serde_json::json!({"version":1,"documents":entries,"tabs":[],"active_tab":null});let decoded=decode_report(&serde_json::to_vec(&value).unwrap()).unwrap();assert_eq!(decoded.manifest.documents.len(),1);assert_eq!(decoded.diagnostics.entries.len(),128);assert!(decoded.diagnostics.omitted>0);
+        let value = serde_json::json!({"version":1,"documents":[{"id":1,"path":null,"title":"x".repeat(2*1024*1024+1)},{"id":2,"path":null,"title":"kept"}],"tabs":[],"active_tab":null});
+        let decoded = decode_report(&serde_json::to_vec(&value).unwrap()).unwrap();
+        assert_eq!(decoded.manifest.restore_order(), vec![2]);
+        assert_eq!(decoded.diagnostics.skipped, 1);
+        assert_eq!(decoded.diagnostics.entries[0].issue, SessionIssue::ResourceLimit);
+        let mut entries = vec![serde_json::json!({"id":2,"path":null,"title":"kept"})];
+        entries.extend((0..MAX_ENTRIES + 20).map(|_| serde_json::Value::Null));
+        let value = serde_json::json!({"version":1,"documents":entries,"tabs":[],"active_tab":null});
+        let decoded = decode_report(&serde_json::to_vec(&value).unwrap()).unwrap();
+        assert_eq!(decoded.manifest.documents.len(), 1);
+        assert_eq!(decoded.diagnostics.entries.len(), 128);
+        assert!(decoded.diagnostics.omitted > 0);
     }
     #[test]
     fn ambiguous_entry_fields_are_skipped_but_global_corruption_stays_fatal() {
-        let decoded=decode_report(br#"{"version":1,"documents":[{"id":1,"id":2,"path":null,"title":"bad"},{"id":3,"path":null,"title":"good"}],"tabs":[],"active_tab":null}"#).unwrap();assert_eq!(decoded.manifest.restore_order(),vec![3]);assert_eq!(decoded.diagnostics.entries[0].issue,SessionIssue::DuplicateField);
-        for bytes in [br#"{"version":1,"version":1,"documents":[],"tabs":[]}"#.as_slice(),br#"{"version":999,"documents":[],"tabs":[]}"#,br#"{"version":1,"documents":["#]{assert!(decode_report(bytes).is_err());}
+        let decoded=decode_report(br#"{"version":1,"documents":[{"id":1,"id":2,"path":null,"title":"bad"},{"id":3,"path":null,"title":"good"}],"tabs":[],"active_tab":null}"#).unwrap();
+        assert_eq!(decoded.manifest.restore_order(), vec![3]);
+        assert_eq!(decoded.diagnostics.entries[0].issue, SessionIssue::DuplicateField);
+        for bytes in [
+            br#"{"version":1,"version":1,"documents":[],"tabs":[]}"#.as_slice(),
+            br#"{"version":999,"documents":[],"tabs":[]}"#,
+            br#"{"version":1,"documents":["#,
+        ] {
+            assert!(decode_report(bytes).is_err());
+        }
     }
     #[test]
     fn round_trip_and_migration_preserve_views_and_paths() {
@@ -477,7 +602,9 @@ mod tests {
             .replacen("\"version\":1", "\"version\":0", 1);
         assert_eq!(decode(old.as_bytes()).unwrap(), manifest);
         assert_eq!(manifest.restore_order(), vec![8, 7]);
-        let without_byte = String::from_utf8(encode(&manifest).unwrap()).unwrap().replace("\"scroll_byte\":4096,", "");
+        let without_byte = String::from_utf8(encode(&manifest).unwrap())
+            .unwrap()
+            .replace("\"scroll_byte\":4096,", "");
         let legacy = decode(without_byte.as_bytes()).unwrap();
         assert_eq!(legacy.tabs[0].view.scroll_byte, None);
         assert_eq!(legacy.tabs[0].view.anchor, manifest.tabs[0].view.anchor);
@@ -504,9 +631,7 @@ mod tests {
         assert!(restored.tabs.iter().all(|tab| tab.view.split == 0));
         value["layout"] = serde_json::json!({"orientation":"unknown"});
         assert_eq!(
-            decode(&serde_json::to_vec(&value).unwrap())
-                .unwrap()
-                .documents,
+            decode(&serde_json::to_vec(&value).unwrap()).unwrap().documents,
             original.documents
         );
     }
@@ -543,10 +668,7 @@ mod tests {
         }
         fn commit(&self, staged: &Path, target: &Path, _: bool) -> io::Result<()> {
             if self.fail.load(Ordering::Relaxed) {
-                return Err(io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    "injected lock",
-                ));
+                return Err(io::Error::new(io::ErrorKind::PermissionDenied, "injected lock"));
             }
             fs::rename(staged, target)
         }
@@ -582,16 +704,28 @@ mod tests {
             path.encoding = bareline_platform::PathEncoding::WindowsUtf16Le;
             path.data = data.into();
             fs::write(&store.path, serde_json::to_vec(&corrupt).unwrap()).unwrap();
-            let salvaged=store.load().unwrap();
+            let salvaged = store.load().unwrap();
             assert!(!salvaged.recovered_previous);
-            assert_eq!(salvaged.manifest.documents.iter().map(|doc|doc.id).collect::<Vec<_>>(),vec![8]);
+            assert_eq!(
+                salvaged.manifest.documents.iter().map(|doc| doc.id).collect::<Vec<_>>(),
+                vec![8]
+            );
             assert!(!salvaged.diagnostics.is_empty());
         }
-        let backup_before=fs::read(store.previous()).unwrap();
-        store.save(&SessionManifest::default(),&platform).unwrap();
-        assert_eq!(fs::read(store.previous()).unwrap(),backup_before,"salvaged primary must not overwrite healthy backup");
-        let mut all_bad=serde_json::to_value(&original).unwrap();all_bad["documents"]=serde_json::json!([null,null]);fs::write(&store.path,serde_json::to_vec(&all_bad).unwrap()).unwrap();
-        let previous=store.load().unwrap();assert!(previous.recovered_previous);assert_eq!(previous.manifest,original);assert_eq!(previous.diagnostics.skipped_documents,2);
+        let backup_before = fs::read(store.previous()).unwrap();
+        store.save(&SessionManifest::default(), &platform).unwrap();
+        assert_eq!(
+            fs::read(store.previous()).unwrap(),
+            backup_before,
+            "salvaged primary must not overwrite healthy backup"
+        );
+        let mut all_bad = serde_json::to_value(&original).unwrap();
+        all_bad["documents"] = serde_json::json!([null, null]);
+        fs::write(&store.path, serde_json::to_vec(&all_bad).unwrap()).unwrap();
+        let previous = store.load().unwrap();
+        assert!(previous.recovered_previous);
+        assert_eq!(previous.manifest, original);
+        assert_eq!(previous.diagnostics.skipped_documents, 2);
         fs::remove_dir_all(dir).unwrap();
     }
     #[test]
@@ -615,12 +749,24 @@ mod tests {
     }
 }
 
-#[cfg(test)]mod language_selection_tests{
+#[cfg(test)]
+mod language_selection_tests {
     use super::*;
-    #[test]fn per_view_language_roundtrip_and_legacy_default(){
-        let mut view=ViewState::default();assert_eq!(serde_json::from_str::<ViewState>("{}").unwrap().language,None);
-        for language in [LanguageSelection::Builtin("rust".into()),LanguageSelection::Udl("my_language-1".into())]{view.language=Some(language);let bytes=serde_json::to_vec(&view).unwrap();assert_eq!(serde_json::from_slice::<ViewState>(&bytes).unwrap(),view);}
+    #[test]
+    fn per_view_language_roundtrip_and_legacy_default() {
+        let mut view = ViewState::default();
+        assert_eq!(serde_json::from_str::<ViewState>("{}").unwrap().language, None);
+        for language in [
+            LanguageSelection::Builtin("rust".into()),
+            LanguageSelection::Udl("my_language-1".into()),
+        ] {
+            view.language = Some(language);
+            let bytes = serde_json::to_vec(&view).unwrap();
+            assert_eq!(serde_json::from_slice::<ViewState>(&bytes).unwrap(), view);
+        }
         assert!(serde_json::from_str::<ViewState>(r#"{"language":{"kind":"udl","id":"\\\\host\\share"}}"#).is_err());
-        assert!(serde_json::from_str::<ViewState>(r#"{"language":{"kind":"builtin","id":"rust","path":"x"}}"#).is_err());
+        assert!(
+            serde_json::from_str::<ViewState>(r#"{"language":{"kind":"builtin","id":"rust","path":"x"}}"#).is_err()
+        );
     }
 }

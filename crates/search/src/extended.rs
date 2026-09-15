@@ -25,9 +25,7 @@ pub fn decode(input: &str) -> Option<String> {
 fn hexadecimal(chars: &mut impl Iterator<Item = char>, count: usize) -> Option<char> {
     let mut code = 0u32;
     for _ in 0..count {
-        code = code
-            .checked_mul(16)?
-            .checked_add(chars.next()?.to_digit(16)?)?;
+        code = code.checked_mul(16)?.checked_add(chars.next()?.to_digit(16)?)?;
     }
     char::from_u32(code)
 }

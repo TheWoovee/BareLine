@@ -1,0 +1,15 @@
+{
+  "arguments": [
+    "test",
+    "-p",
+    "xtask",
+    "--bin",
+    "xtask",
+    "journey::evidence_tests"
+  ],
+  "completed_utc": "2026-09-12T09:37:29.4322369Z",
+  "integration_snapshot": "325c7c1fb7570cea5a2aaf7042c80bae4299c77d",
+  "exit_code": 0,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\T09-xtask-evidence-central.log"
+}

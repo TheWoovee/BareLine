@@ -1,0 +1,252 @@
+diff --git a/apps/bareline/src/windows_app/recovery.rs b/apps/bareline/src/windows_app/recovery.rs
+index 529f912..43d0793 100644
+--- a/apps/bareline/src/windows_app/recovery.rs
++++ b/apps/bareline/src/windows_app/recovery.rs
+@@ -18,6 +18,40 @@ struct PendingRestore {
+     request_id: u64,
+ }
+ type RecoveryDiscovery = Result<Vec<(PathBuf, bareline_file_io::recovery::RecoveryInspection)>, String>;
++fn inspect_recovery_root(
++    root: &std::path::Path,
++    excluded: &std::collections::HashSet<PathBuf>,
++    cancel: &bareline_file_io::cancellation::Cancellation,
++    platform: &dyn LocalFileSystem,
++) -> RecoveryDiscovery {
++    let mut entries = Vec::new();
++    for entry in std::fs::read_dir(root).map_err(|error| error.to_string())? {
++        cancel.check().map_err(|error| format!("{error:?}"))?;
++        let entry = entry.map_err(|error| error.to_string())?;
++        if !entry.file_name().to_string_lossy().starts_with("paged-") {
++            continue;
++        }
++        let directory = entry.path();
++        if excluded.contains(&directory) {
++            continue;
++        }
++        let Ok(_guard) = platform.guard_directory(&directory) else {
++            continue;
++        };
++        if let Ok(inspection) = bareline_file_io::recovery::inspect(&directory, cancel)
++            && inspection.status != bareline_file_io::recovery::RecoveryStatus::Discarded
++        {
++            entries.push((directory, inspection));
++            if entries.len() == 256 {
++                break;
++            }
++        }
++    }
++    entries.sort_by_key(|(_, inspection)| {
++        std::cmp::Reverse(inspection.last_durable.map_or(0, |receipt| receipt.protected_unix_ms))
++    });
++    Ok(entries)
++}
+ #[derive(Clone, Debug, Default, PartialEq, Eq)]
+ struct DiscoveryToken {
+     generation: u64,
+@@ -178,6 +212,7 @@ pub(super) struct RecoveryRuntime {
+     content: RecoveryContent,
+     discovery_generation: u64,
+     completion_notice_generation: Option<u64>,
++    claimed_directories: std::collections::BTreeMap<PathBuf, u64>,
+     selection_identity: Option<RecoveryRowId>,
+     cancellation: bareline_file_io::cancellation::Cancellation,
+     discovery_cancellation: bareline_file_io::cancellation::Cancellation,
+@@ -311,6 +346,12 @@ impl RecoveryRuntime {
+         self.discovery_generation = self.discovery_generation.wrapping_add(1).max(1);
+         self.content = RecoveryContent::Discovering;
+     }
++    fn release_closed_claims(&mut self, open_documents: &std::collections::BTreeSet<u64>) -> bool {
++        let before = self.claimed_directories.len();
++        self.claimed_directories
++            .retain(|_, document| open_documents.contains(document));
++        self.claimed_directories.len() != before
++    }
+     fn token(&self) -> DiscoveryToken {
+         DiscoveryToken {
+             generation: self.discovery_generation,
+@@ -745,10 +786,13 @@ impl Shell {
+             return;
+         }
+         match outcome {
+-            bareline_app::workspace::RecoveryRestoreOutcome::Restored { request_id, .. }
++            bareline_app::workspace::RecoveryRestoreOutcome::Restored { request_id, document }
+                 if request_id == pending.request_id =>
+             {
+-                self.recovery.refresh_after_operation(&[]);
++                self.recovery
++                    .claimed_directories
++                    .insert(pending.directory.clone(), document.0);
++                self.recovery.refresh_after_operation(&[pending.directory]);
+                 (self.notify)();
+             }
+             bareline_app::workspace::RecoveryRestoreOutcome::Failed { request_id, error }
+@@ -770,6 +814,15 @@ impl Shell {
+             let pending = self.recovery.pending_restore.take().unwrap();
+             self.finish_pending_restore(pending, outcome);
+         }
++        let open_document_ids: std::collections::BTreeSet<u64> = self
++            .workspace
++            .as_ref()
++            .into_iter()
++            .flat_map(|workspace| workspace.editors.iter().map(|editor| editor.document_identity().0))
++            .collect();
++        if self.recovery.release_closed_claims(&open_document_ids) {
++            self.recovery.request_discovery();
++        }
+         if self.recovery.pending_compare.is_some() && self.workspace.as_ref().is_some_and(|w| !w.io_busy()) {
+             let mut pending = self.recovery.pending_compare.take().unwrap();
+             let workspace = self.workspace.as_mut().unwrap();
+@@ -963,7 +1016,7 @@ impl Shell {
+                 let cancel = self.recovery.discovery_cancellation.clone();
+                 let notify = self.notify.clone();
+                 let worker_token = token.clone();
+-                let referenced: std::collections::HashSet<PathBuf> = self
++                let mut referenced: std::collections::HashSet<PathBuf> = self
+                     .workspace
+                     .as_ref()
+                     .map(|workspace| {
+@@ -974,6 +1027,9 @@ impl Shell {
+                             .collect()
+                     })
+                     .unwrap_or_default();
++                let excluded: std::collections::HashSet<PathBuf> =
++                    self.recovery.claimed_directories.keys().cloned().collect();
++                referenced.extend(excluded.iter().cloned());
+                 let launched = std::thread::Builder::new()
+                     .name("recovery-discovery".into())
+                     .spawn(move || {
+@@ -996,32 +1052,7 @@ impl Shell {
+                                 20,
+                                 &platform,
+                             );
+-                            let mut entries = Vec::new();
+-                            for entry in std::fs::read_dir(&root).map_err(|e| e.to_string())? {
+-                                cancel.check().map_err(|e| format!("{e:?}"))?;
+-                                let entry = entry.map_err(|e| e.to_string())?;
+-                                if !entry.file_name().to_string_lossy().starts_with("paged-") {
+-                                    continue;
+-                                }
+-                                let directory = entry.path();
+-                                let Ok(_guard) = platform.guard_directory(&directory) else {
+-                                    continue;
+-                                };
+-                                if let Ok(inspection) = bareline_file_io::recovery::inspect(&directory, &cancel)
+-                                    && inspection.status != bareline_file_io::recovery::RecoveryStatus::Discarded
+-                                {
+-                                    entries.push((directory, inspection));
+-                                    if entries.len() == 256 {
+-                                        break;
+-                                    }
+-                                }
+-                            }
+-                            entries.sort_by_key(|(_, inspection)| {
+-                                std::cmp::Reverse(
+-                                    inspection.last_durable.map_or(0, |receipt| receipt.protected_unix_ms),
+-                                )
+-                            });
+-                            Ok(entries)
++                            inspect_recovery_root(&root, &excluded, &cancel, &platform)
+                         })();
+                         let _ = tx.send((worker_token, result));
+                         notify();
+@@ -1389,6 +1420,58 @@ fn activates_recovery_command(key: &Key) -> bool {
+ #[cfg(test)]
+ mod tests {
+     use super::*;
++    #[test]
++    fn generated_discovery_excludes_live_adopted_checkpoint_and_keeps_other_data() {
++        let root = std::env::temp_dir().join(format!(
++            "bareline-recovery-center-claimed-{}-{}",
++            std::process::id(),
++            std::time::SystemTime::now()
++                .duration_since(std::time::UNIX_EPOCH)
++                .unwrap()
++                .as_nanos()
++        ));
++        std::fs::create_dir(&root).unwrap();
++        let platform = bareline_platform_windows::WindowsFileSystem;
++        let cancel = bareline_file_io::cancellation::Cancellation::default();
++        let mut paths = Vec::new();
++        for (name, byte) in [("paged-live", b'U'), ("paged-other", b'V')] {
++            let directory = root.join(name);
++            let mut writer = bareline_file_io::recovery::RecoveryWriter::create(
++                &directory,
++                bareline_file_io::recovery::RecoveryMetadata {
++                    original_path: None,
++                    source_generation: format!("fixture-{name}"),
++                    codec_catalog_version: "utf8-v1".into(),
++                    original_len: 0,
++                },
++                &platform,
++            )
++            .unwrap();
++            writer
++                .seal_baseline(&mut std::io::empty(), || Ok(true), &cancel, &platform)
++                .unwrap();
++            writer
++                .append(
++                    1,
++                    &[bareline_file_io::recovery::RecoveryEdit {
++                        offset: 0,
++                        removed: Vec::new(),
++                        inserted: vec![byte],
++                    }],
++                )
++                .unwrap();
++            writer.checkpoint(&platform).unwrap();
++            drop(writer);
++            paths.push(directory);
++        }
++        let excluded = std::collections::HashSet::from([paths[0].clone()]);
++        let found = inspect_recovery_root(&root, &excluded, &cancel, &platform).unwrap();
++        assert_eq!(found.len(), 1);
++        assert_eq!(found[0].0, paths[1]);
++        assert_eq!(found[0].1.status, bareline_file_io::recovery::RecoveryStatus::Complete);
++        std::fs::remove_dir_all(root).unwrap();
++    }
++
+     #[test]
+     fn center_actions_share_keyboard_and_accessibility_targets() {
+         let mut runtime = RecoveryRuntime::default();
+@@ -1668,6 +1751,20 @@ mod tests {
+         );
+         assert_eq!(shell.recovery.discovery_generation, generation + 1);
+         assert!(matches!(&shell.recovery.content, RecoveryContent::Discovering));
++        assert!(
++            shell.recovery.entries.is_empty(),
++            "claimed row is removed before rescan"
++        );
++        assert_eq!(
++            shell.recovery.claimed_directories.get(&PathBuf::from("checkpoint-a")),
++            Some(&9)
++        );
++        assert!(
++            !shell
++                .recovery
++                .release_closed_claims(&std::collections::BTreeSet::from([9]))
++        );
++        assert!(shell.recovery.release_closed_claims(&std::collections::BTreeSet::new()));
+ 
+         shell.recovery.configure(Some(PathBuf::from("root-b")), true);
+         let stale = PendingRestore {
+diff --git a/docs/implementation/2026-09-12-audit-implementation/PR-U05-R8.md b/docs/implementation/2026-09-12-audit-implementation/PR-U05-R8.md
+new file mode 100644
+index 0000000..4817bd8
+--- /dev/null
++++ b/docs/implementation/2026-09-12-audit-implementation/PR-U05-R8.md
+@@ -0,0 +1,15 @@
++# PR-U05-R8 — Recovery refresh after restore
++
++## Baseline and evidence
++
++Baseline `8eca399e663156d9ff2b74be86a57f46ee13f39a`. Native R7 evidence `target/qualification/final-native-audit/evidence/r7-recovery-restore-stale-entry.json` shows a successful dirty Untitled restore followed by the same one-byte Recovery Center row, whose preview later fails because its adopted checkpoint has retired. Earlier export/restore evidence remains `r7-recovery-export-restore-pass.json`.
++
++## Plan
++
++Bind a restored checkpoint suppression to the typed restore terminal's document identity. Remove it from the current rows immediately, exclude it from asynchronous discovery while that document remains open, and release suppression when its owning document closes so unresolved data remains discoverable. Preserve generation/root fences and derive completion notification counts from the filtered terminal result.
++
++Add a bounded generated recovery fixture proving an adopted live checkpoint cannot return from a post-terminal scan while another real checkpoint remains visible. Root owns Cargo and native qualification.
++
++## Export clarification
++
++The R7 `Export Edits` artifact reports `complete: false`, unavailable original ranges, and a zero-byte segment while Restore reconstructs the one-byte Untitled document. This package does not change export: `crates/file-io/src/recovery/mod.rs::export_edits` explicitly exports owned transaction segments and a `gaps.json` report with `complete: false` and the unavailable original range. No linked contract inspected for R8 establishes that this edits-only artifact must duplicate the full restore output.

@@ -1,0 +1,164 @@
+diff --git a/crates/file-io/src/owned_cache.rs b/crates/file-io/src/owned_cache.rs
+index 08afbf7..c42dcc2 100644
+--- a/crates/file-io/src/owned_cache.rs
++++ b/crates/file-io/src/owned_cache.rs
+@@ -273,6 +273,24 @@ pub fn registered_root(root: &Path) -> bool {
+         .and_then(|name| name.to_str())
+         .is_some_and(|name| ROOTS.contains(&name))
+ }
++
++/// Resolve a producer to an exact registered root beside an already registered root.
++/// Ambiguous kinds and unregistered callers fail closed without granting authority.
++pub fn registered_producer_root(current_root: &Path, kind: CacheKind) -> Option<PathBuf> {
++    if !registered_root(current_root) {
++        return None;
++    }
++    if registered_kind(current_root, kind) {
++        return Some(current_root.to_path_buf());
++    }
++    let parent = current_root.parent()?;
++    let mut matches = ROOTS
++        .into_iter()
++        .map(|name| parent.join(name))
++        .filter(|root| registered_kind(root, kind));
++    let root = matches.next()?;
++    matches.next().is_none().then_some(root)
++}
+ fn registered_kind(root: &Path, kind: CacheKind) -> bool {
+     match root.file_name().and_then(|name| name.to_str()) {
+         Some("Bareline-owned-spill") => matches!(
+@@ -469,6 +487,33 @@ mod tests {
+         assert!(publish_ownership(&wrong_kind, CacheKind::OwnedStream, &platform).is_err());
+     }
+ 
++    #[test]
++    fn producer_root_resolution_requires_exact_registered_authority() {
++        let temp = std::env::temp_dir().join("bareline-owned-cache-root-resolution");
++        let owned = temp.join("Bareline-owned-spill");
++        let transcode = temp.join("Bareline-transcode");
++        assert_eq!(
++            registered_producer_root(&owned, CacheKind::Transcode),
++            Some(transcode.clone())
++        );
++        assert_eq!(
++            registered_producer_root(&transcode, CacheKind::Transcode),
++            Some(transcode)
++        );
++        assert_eq!(
++            registered_producer_root(&temp.join("custom-cache"), CacheKind::Transcode),
++            None
++        );
++        assert_eq!(
++            registered_producer_root(&temp.join("Bareline-owned-spill-lookalike"), CacheKind::Transcode),
++            None
++        );
++        assert_eq!(
++            registered_producer_root(&temp.join("Bareline-transcode"), CacheKind::OwnedStream),
++            None
++        );
++    }
++
+     #[test]
+     fn sweep_removes_only_proven_unreferenced_definitely_dead_cache() {
+         let fixture = Fixture::new();
+diff --git a/crates/file-io/src/owned_store.rs b/crates/file-io/src/owned_store.rs
+index 9daad68..532e1f2 100644
+--- a/crates/file-io/src/owned_store.rs
++++ b/crates/file-io/src/owned_store.rs
+@@ -134,11 +134,17 @@ pub fn prepare_resident(
+         temp_quota_bytes: quota.saturating_sub(used),
+         interpret: Some(encoding.map_or(Encoding::Utf8, |encoding| encoding.state.save_target)),
+     };
++    let transcode_cache = if crate::owned_cache::registered_root(cache) {
++        crate::owned_cache::registered_producer_root(cache, crate::owned_cache::CacheKind::Transcode)
++            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "no unique registered transcode root"))?
++    } else {
++        cache.to_path_buf()
++    };
+     let mut job = if encoding.map_or(bom, |encoding| encoding.state.bom) {
+         DiskTranscoder::new(
+             input,
+             platform.clone(),
+-            cache,
++            &transcode_cache,
+             options_disk,
+             bytes.clone(),
+             cancellation.clone(),
+@@ -147,7 +153,7 @@ pub fn prepare_resident(
+         DiskTranscoder::continuation(
+             input,
+             platform.clone(),
+-            cache,
++            &transcode_cache,
+             options_disk,
+             bytes.clone(),
+             cancellation.clone(),
+diff --git a/crates/file-io/src/profile_migration.rs b/crates/file-io/src/profile_migration.rs
+index 35dd3f6..1cbdd9d 100644
+--- a/crates/file-io/src/profile_migration.rs
++++ b/crates/file-io/src/profile_migration.rs
+@@ -586,7 +586,7 @@ fn fingerprint_into(
+         let mut entries = 1u64;
+         let mut bytes = 0u64;
+         for entry in sorted_entries(path, budget)? {
+-            let name = encoded_name(&entry.file_name());
++            let name = encoded_name(&entry.file_name())?;
+             hash.update((name.len() as u64).to_le_bytes());
+             hash.update(&name);
+             let (_, child_entries, child_bytes) = fingerprint_into(
+@@ -657,25 +657,10 @@ fn sorted_entries(path: &Path, budget: &mut Budget<'_>) -> io::Result<Vec<fs::Di
+     Ok(entries)
+ }
+ 
+-#[cfg(windows)]
+-fn encoded_name(name: &OsStr) -> Vec<u8> {
+-    use std::os::windows::ffi::OsStrExt;
+-    let mut bytes = Vec::new();
+-    for unit in name.encode_wide() {
+-        bytes.extend_from_slice(&unit.to_le_bytes());
+-    }
+-    bytes
+-}
+-
+-#[cfg(unix)]
+-fn encoded_name(name: &OsStr) -> Vec<u8> {
+-    use std::os::unix::ffi::OsStrExt;
+-    name.as_bytes().to_vec()
+-}
+-
+-#[cfg(not(any(windows, unix)))]
+-fn encoded_name(name: &OsStr) -> Vec<u8> {
+-    name.to_string_lossy().as_bytes().to_vec()
++fn encoded_name(name: &OsStr) -> io::Result<Vec<u8>> {
++    bareline_platform::SerializedPath::from_native(Path::new(name))
++        .identity_bytes()
++        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+ }
+ 
+ fn new_journal() -> Journal {
+diff --git a/docs/implementation/2026-09-12-audit-implementation/PR-T01-T02-final-corrections.md b/docs/implementation/2026-09-12-audit-implementation/PR-T01-T02-final-corrections.md
+new file mode 100644
+index 0000000..a4785d3
+--- /dev/null
++++ b/docs/implementation/2026-09-12-audit-implementation/PR-T01-T02-final-corrections.md
+@@ -0,0 +1,20 @@
++# PR-T01/T02 final integration corrections
++
++- Base: `bc5baab471751681f88486a1a6e97a08c031cf02`
++- Scope: retain the exact T01 cache producer registry during resident promotion, and route T02 migration filename identity through the shared lossless path codec.
++
++## Confirmed causes
++
++- Resident promotion publishes its resident staging directory under `Bareline-owned-spill`, then the nested disk transcoder tries to publish `CacheKind::Transcode` under that same root. T01 permits transcode producers only under `Bareline-transcode`, so the rejection is correct and production must select the authorized producer root.
++- Profile migration duplicated platform-specific `OsStr` byte encoding inside the neutral file-I/O crate. `bareline_platform::SerializedPath` already owns the lossless native path identity contract.
++
++## Corrective contract
++
++- A registered producer root may resolve a sibling only after the supplied root passes the existing exact registry check. The destination name comes from `owned_cache::ROOTS`, must authorize the requested kind, and must be unique. Ambiguous kinds fail closed. Already-authorized roots are unchanged; unregistered custom roots receive no registered authority and retain their previous path.
++- `prepare_resident` applies that resolver only to its nested `CacheKind::Transcode` stage. Resident staging remains under `Bareline-owned-spill`; transcode output is published under `Bareline-transcode`.
++- Migration directory-entry hashing obtains native identity bytes through `SerializedPath`, preserving Windows UTF-16 code units and Unix bytes without a second platform-specific codec.
++
++## Verification ownership
++
++- Worker: portability guard, focused formatting, and diff validation only.
++- Root: `owned_cache::tests::producer_root_resolution_requires_exact_registered_authority`, the two failed promotion tests (`large_selected_copy_promotes_exact_destination_and_waits_for_durable_actor` and `promotion_rebinds_linked_views_without_replacing_tabs_or_history`), and final Cargo/native gates after source review.

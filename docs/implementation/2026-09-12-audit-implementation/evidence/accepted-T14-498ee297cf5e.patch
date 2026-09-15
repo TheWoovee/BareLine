@@ -1,0 +1,91 @@
+diff --git a/README.md b/README.md
+index 3f38d40..c53226d 100644
+--- a/README.md
++++ b/README.md
+@@ -47,8 +47,9 @@ and opaque-byte rules. Unchanged same-encoding saves preserve original byte
+ ranges. Changed saves stage captured document content, check destination/source
+ identity, flush and verify before replacement. Automatic resident and paged
+ recovery uses bounded, checksummed local journals; explicit discard must become
+-durable before recovery ownership is retired. The PR-U05 Recovery Center loading
+-correction remains under review and is the open implementation defect in the ledger.
++durable before recovery ownership is retired. The PR-U05 Recovery Center source
++correction is integrated with focused receipts; final native recovery and AC
++qualification remain pending.
+ 
+ Preview builds fail closed for downloads, updates and first-party extension
+ execution unless a reviewed public trust configuration is compiled in. They do
+diff --git a/docs/IMPLEMENTATION_STATUS.md b/docs/IMPLEMENTATION_STATUS.md
+index b48b6a8..6a86ec3 100644
+--- a/docs/IMPLEMENTATION_STATUS.md
++++ b/docs/IMPLEMENTATION_STATUS.md
+@@ -1,6 +1,6 @@
+ # Implementation status
+ 
+-**Implementation checkpoint, 2026-09-12:** 30 of the [31 audit PR plans](qa/2026-09-12-local-audit/PR_INDEX.md) are integrated pending final qualification. PR-U05 is in correction review. Follow the [orchestration record](implementation/2026-09-12-audit-implementation/ORCHESTRATION.md) and its live status. Contained checks establish source behavior only; full integrated qualification and a fresh independent audit remain pending.
++**Implementation checkpoint, 2026-09-12:** all [31 audit PR plans](qa/2026-09-12-local-audit/PR_INDEX.md) are integrated at package checkpoint `32b04b53ad79838a7925c5f6b038094b368684b1`, pending final qualification. No known ordinary implementation row remains open in the current capability ledger. Follow the [orchestration record](implementation/2026-09-12-audit-implementation/ORCHESTRATION.md) and its live status. Contained checks establish source behavior only; root-owned final gates and a fresh independent audit are next.
+ 
+ **Current capability authority:** use the 52-row
+ [capability ledger](parity/index.json) and its [evidence contract](parity/README.md)
+@@ -12,7 +12,7 @@ older PR-004 ownership text remains historical.
+ 
+ **TECH-019 source integrated pending final qualification:** PR-T16 gives every paged document one file-io `PagedSession` owner for path/fingerprint, savepoint, encoding/conflict/cleanup state, and recovery generations. Paged views share that owner and keep presentation state locally; save completion is a typed identity/revision/content/source/operation-generation-fenced receipt. Twelve contained lifecycle checks pass. Final native and full integration qualification remain pending. See [PR-T16 evidence](implementation/2026-09-12-audit-implementation/PR-T16.md).
+ 
+-**Current contained checkpoint:** PR-U02 passes 20 focused notification checks; PR-T14 passes 13 Python adapter/resolver checks and all 10 composed command-inventory checks after the routed search-mode correction. PR-T11's corrected release source is integrated after its first connected run built three pre-correction release binaries but failed before installed delivery. The corrected connected fixture, actual installation, installed Fast run, signing, external hardware and all matching final AC/native receipts remain pending.
++**Current contained checkpoint:** PR-U02 passes 20 focused notification checks; PR-T16 passes 12 lifecycle checks; PR-T14 passes 13 Python adapter/resolver checks and all 10 composed command-inventory checks after the routed search-mode correction. PR-U05 passes 12 controller checks, two result-retention/failure checks and two actual resident/paged insertion checks. PR-T11's corrected release source is integrated after its first connected run built three pre-correction release binaries but failed before installed delivery. The corrected connected fixture, actual installation, installed Fast run, signing, external hardware and all matching final AC/native receipts remain pending.
+ 
+ **Current audit, 2026-09-12:** the [local working-tree review](qa/2026-09-12-local-audit/README.md) records newly reproduced data-safety and native usability defects, fresh test results, and [implementor-ready PR plans](qa/2026-09-12-local-audit/PR_INDEX.md). Use that audit to qualify the historical completion statements below; source completion is not current runtime acceptance.
+ 
+diff --git a/docs/implementation/2026-09-12-audit-implementation/PR-T14.md b/docs/implementation/2026-09-12-audit-implementation/PR-T14.md
+index 876b111..fb72df6 100644
+--- a/docs/implementation/2026-09-12-audit-implementation/PR-T14.md
++++ b/docs/implementation/2026-09-12-audit-implementation/PR-T14.md
+@@ -64,13 +64,15 @@ it is not a release-readiness claim.
+   lifecycle checks. These remain source-level receipts, not final AC/native
+   qualification.
+ - PR-T11's corrected source is integrated. Its first connected run built three
+-  pre-correction release binaries, then failed before installed delivery; the corrected
+-  connected fixture, actual install, installed Fast run, signing and external
++  pre-correction release binaries, then failed before installed delivery. The
++  corrected connected fixture, actual install, installed Fast run, signing and external
+   acceptance remain pending.
+-- PR-U05 remains in correction review, so Recovery Center stays the sole
+-  `open-defect` ledger row. The ledger now has 40 implemented-awaiting-
+-  qualification rows, one open defect, seven deferred rows and four intentional
+-  limits. It still has no `implemented-and-tested` row or imported AC evidence.
++- All 31 audit packages are integrated. PR-U05's focused controller,
++  result-retention/failure and actual resident/paged insertion checks pass, so
++  Recovery Center moves to `implemented-awaiting-qualification`. The ledger now
++  has 41 such rows, no open defect, seven deferred rows and four intentional
++  limits. It still has no `implemented-and-tested` row or imported AC evidence;
++  root-owned final gates and a fresh independent audit are next.
+ 
+ ## Focused verification
+ 
+diff --git a/docs/parity/README.md b/docs/parity/README.md
+index 8e3d9b5..9569e74 100644
+--- a/docs/parity/README.md
++++ b/docs/parity/README.md
+@@ -90,5 +90,8 @@ qualification imports matching receipts. At the pre-qualification checkpoint,
+ the T14 Python adapter/resolver cohort passes 13 checks and the composed command
+ inventory cohort passes all 10 checks. The actual schema-2 export and matching
+ native/AC evidence are still pending. T11's configured source and the three
+-pre-correction binaries from its first connected run likewise await the corrected connected run, actual installation,
+-installed Fast execution, signing and external acceptance.
++pre-correction binaries from its first connected run likewise await the corrected
++connected run, actual installation, installed Fast execution, signing and
++external acceptance. All 31 audit packages are now integrated; the ledger has
++no current `open-defect` row. Root-owned final gates, matching native/AC receipts
++and a fresh independent audit remain next.
+diff --git a/docs/parity/index.json b/docs/parity/index.json
+index 7f2c4f5..39ac41a 100644
+--- a/docs/parity/index.json
++++ b/docs/parity/index.json
+@@ -778,7 +778,7 @@
+     {"id":"parity-023","state":"implemented-awaiting-qualification","owner":"PR-009/U13 + final qualification","code":"crates/app/src/workspace_panel.rs; document-map command","tests":"workspace panel and U13 sparse-index receipts","limitation":"Final native progressive map interaction is pending.","next_step":"Open a large generated file, navigate partial/exact map states, import receipt.","source_binary_identity":"pending: final inventory/T09 receipt"},
+     {"id":"parity-024","state":"implemented-awaiting-qualification","owner":"PR-009 + final qualification","code":"crates/syntax/src/outline.rs; function-list command","tests":"outline import/stale-result tests","limitation":"Final native progressive/cancellation evidence is pending.","next_step":"Qualify function list on edits/language switches and import receipt.","source_binary_identity":"pending: final inventory/T09 receipt"},
+     {"id":"parity-025","state":"implemented-awaiting-qualification","owner":"PR-009 + final qualification","code":"crates/app/src/workspace_panel.rs; workspace commands","tests":"workspace enumeration/mutation tests","limitation":"Final native filesystem/dialog workflow is pending.","next_step":"Run generated workspace navigation/mutation journey and import receipt.","source_binary_identity":"pending: final inventory/T09 receipt"},
+-    {"id":"parity-026","state":"open-defect","owner":"PR-U05 correction review + final qualification","code":"crates/file-io/src/recovery; apps/bareline/src/windows_app/recovery.rs","tests":"T05 recovery receipts; T16 lifecycle cohort 12 passed; U05 correction pending review","limitation":"Recovery Center in-flight discovery/loading presentation remains under correction; final lifecycle qualification is pending.","next_step":"Complete U05 correction review, then run crash/restart/discard/session journeys on the frozen binary.","source_binary_identity":"pending: corrected final inventory/T09 receipt"},
++    {"id":"parity-026","state":"implemented-awaiting-qualification","owner":"PR-U05/T16 + final qualification","code":"crates/file-io/src/recovery; apps/bareline/src/windows_app/recovery.rs","tests":"T16 lifecycle 12 passed; U05 controller 12, result-retention/failure 2, actual resident/paged insertion 2 passed","limitation":"Recovery Center root/generation, loading/failure, acknowledgement and keyboard/UIA source contracts are integrated; final native lifecycle and AC qualification are pending.","next_step":"Run final crash/restart/discard/session and native Recovery Center journeys, then import matching AC receipts.","source_binary_identity":"pending: final inventory/T09 receipt"},
+     {"id":"parity-027","state":"implemented-awaiting-qualification","owner":"PR-015 + final qualification","code":"crates/file-io/src/tail.rs; apps/bareline/src/windows_app/watch.rs","tests":"tail rotation/truncation tests","limitation":"Final native rotation/truncation/follow receipt is pending.","next_step":"Run generated append/rotate/truncate cases and import receipt.","source_binary_identity":"pending: final inventory/T09 receipt"},
+     {"id":"parity-028","state":"implemented-awaiting-qualification","owner":"PR-014/U11 + final qualification","code":"crates/app/src/macros.rs; apps/bareline/src/windows_app/macros.rs","tests":"macro model/playback and U11 output focus receipts","limitation":"Final native record/playback/persistence evidence is pending.","next_step":"Run macro record/replay across focus/output states and import receipt.","source_binary_identity":"pending: final inventory/T09 receipt"},
+     {"id":"parity-029","state":"implemented-awaiting-qualification","owner":"PR-014 + final qualification","code":"crates/app/src/macros.rs; macro replay actions","tests":"macro replay timing/action tests","limitation":"Final visible replay and cancellation evidence is pending.","next_step":"Run bounded replay typing journey and import receipt.","source_binary_identity":"pending: final inventory/T09 receipt"},

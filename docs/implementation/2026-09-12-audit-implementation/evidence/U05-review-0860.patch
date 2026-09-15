@@ -1,0 +1,1565 @@
+diff --git a/apps/bareline/src/windows_app/recovery.rs b/apps/bareline/src/windows_app/recovery.rs
+index 5189b4e..8990fbc 100644
+--- a/apps/bareline/src/windows_app/recovery.rs
++++ b/apps/bareline/src/windows_app/recovery.rs
+@@ -12,7 +12,28 @@ struct PendingCompare {
+     original: PathBuf,
+     recovered: Option<super::lifecycle::Identity>,
+ }
++struct PendingRestore {
++    directory: PathBuf,
++    token: DiscoveryToken,
++    request_id: u64,
++}
+ type RecoveryDiscovery = Result<Vec<(PathBuf, bareline_file_io::recovery::RecoveryInspection)>, String>;
++#[derive(Clone, Debug, Default, PartialEq, Eq)]
++struct DiscoveryToken {
++    generation: u64,
++    root: Option<PathBuf>,
++}
++#[derive(Clone)]
++enum RecoveryContent {
++    Discovering,
++    Ready(Vec<RecoveryRow>),
++    Failed(String),
++}
++impl Default for RecoveryContent {
++    fn default() -> Self {
++        Self::Discovering
++    }
++}
+ #[derive(Clone, Debug, PartialEq, Eq)]
+ enum RecoveryNoticeState {
+     Idle,
+@@ -36,6 +57,19 @@ pub(super) struct RecoveryRow {
+     count: usize,
+     complete_baseline: bool,
+ }
++#[derive(Clone, Debug, PartialEq, Eq)]
++enum RecoveryRowId {
++    Original(PathBuf),
++    Untitled(PathBuf),
++}
++impl RecoveryRow {
++    fn identity(&self) -> RecoveryRowId {
++        self.original.clone().map_or_else(
++            || RecoveryRowId::Untitled(self.directory.clone()),
++            RecoveryRowId::Original,
++        )
++    }
++}
+ /// Collapse raw checkpoint directories into one row per document, keeping the
+ /// newest checkpoint as the representative. Directories sharing an original
+ /// path are the same document; path-less (untitled) recoveries stay separate.
+@@ -139,10 +173,14 @@ pub(super) struct RecoveryRuntime {
+     root: Option<PathBuf>,
+     mutation_allowed: bool,
+     started: bool,
+-    pending: Option<Receiver<RecoveryDiscovery>>,
++    pending: Option<Receiver<(DiscoveryToken, RecoveryDiscovery)>>,
+     entries: Vec<(PathBuf, bareline_file_io::recovery::RecoveryInspection)>,
+-    rows: Vec<RecoveryRow>,
++    content: RecoveryContent,
++    discovery_generation: u64,
++    completion_notice_generation: Option<u64>,
++    selection_identity: Option<RecoveryRowId>,
+     cancellation: bareline_file_io::cancellation::Cancellation,
++    discovery_cancellation: bareline_file_io::cancellation::Cancellation,
+     notice_states: std::collections::BTreeMap<toast::DocumentKey, RecoveryNoticeState>,
+     active_notice_document: Option<toast::DocumentKey>,
+     notice_revision: u64,
+@@ -150,6 +188,7 @@ pub(super) struct RecoveryRuntime {
+     selected: usize,
+     focus: Option<usize>,
+     pending_compare: Option<PendingCompare>,
++    pending_restore: Option<PendingRestore>,
+     confirm_discard: Option<Vec<PathBuf>>,
+     hits: Vec<(bareline_renderer::Rect, String)>,
+     operation: Option<Receiver<Result<Vec<PathBuf>, String>>>,
+@@ -170,9 +209,25 @@ impl RecoveryRuntime {
+         self.open || self.confirm_discard.is_some()
+     }
+     fn action_enabled(&self, command: &str) -> bool {
+-        let selected = self.rows.get(self.selected);
++        let requires_ready_checkpoint = matches!(
++            command,
++            "recovery.restore_selected"
++                | "recovery.compare"
++                | "recovery.export"
++                | "recovery.discard"
++                | "recovery.confirm_discard"
++                | "recovery.delete_old"
++        );
++        if requires_ready_checkpoint
++            && (self.pending_restore.is_some() || !matches!(&self.content, RecoveryContent::Ready(_)))
++        {
++            return false;
++        }
++        let selected = self.rows().get(self.selected);
+         match command {
+-            "recovery.restore_selected" => selected.is_some_and(|row| row.complete_baseline),
++            "recovery.restore_selected" => {
++                self.pending_restore.is_none() && selected.is_some_and(|row| row.complete_baseline)
++            }
+             "recovery.compare" => selected.is_some_and(|row| row.complete_baseline && row.original.is_some()),
+             "recovery.export" => selected.is_some() && self.operation.is_none(),
+             "recovery.discard" => self.mutation_allowed && selected.is_some() && self.operation.is_none(),
+@@ -182,9 +237,24 @@ impl RecoveryRuntime {
+             "recovery.delete_old" => {
+                 self.mutation_allowed && self.operation.is_none() && self.stale_directories().next().is_some()
+             }
++            "recovery.discovery_retry" => matches!(&self.content, RecoveryContent::Failed(_)),
+             _ => true,
+         }
+     }
++    fn default_command(&self) -> &'static str {
++        match &self.content {
++            RecoveryContent::Failed(_) => "recovery.discovery_retry",
++            RecoveryContent::Ready(rows) if !rows.is_empty() && self.pending_restore.is_none() => {
++                "recovery.restore_selected"
++            }
++            RecoveryContent::Discovering | RecoveryContent::Ready(_) => "recovery.keep",
++        }
++    }
++    fn focused_command(&self) -> String {
++        self.focus
++            .and_then(|index| self.hits.get(index))
++            .map_or_else(|| self.default_command().into(), |(_, command)| command.clone())
++    }
+     fn stale_directories(&self) -> impl Iterator<Item = PathBuf> + '_ {
+         let cutoff = now_unix_ms().saturating_sub(STALE_MS);
+         self.entries.iter().filter_map(move |(directory, inspection)| {
+@@ -192,26 +262,102 @@ impl RecoveryRuntime {
+             (ms != 0 && ms < cutoff).then(|| directory.clone())
+         })
+     }
++    fn rows(&self) -> &[RecoveryRow] {
++        match &self.content {
++            RecoveryContent::Ready(rows) => rows,
++            RecoveryContent::Discovering | RecoveryContent::Failed(_) => &[],
++        }
++    }
++    fn remember_selection(&mut self) {
++        let identity = self.rows().get(self.selected).map(RecoveryRow::identity);
++        self.selection_identity = identity;
++    }
+     fn rebuild_rows(&mut self) {
+-        self.rows = group_documents(&self.entries);
+-        self.selected = self.selected.min(self.rows.len().saturating_sub(1));
++        let previous_index = self.selected;
++        let previous_path = self.rows().get(previous_index).map(|row| row.directory.clone());
++        let identity = self
++            .selection_identity
++            .clone()
++            .or_else(|| self.rows().get(previous_index).map(RecoveryRow::identity));
++        let rows = group_documents(&self.entries);
++        self.selected = identity
++            .as_ref()
++            .and_then(|identity| rows.iter().position(|row| &row.identity() == identity))
++            .unwrap_or_else(|| previous_index.min(rows.len().saturating_sub(1)));
++        self.selection_identity = rows.get(self.selected).map(RecoveryRow::identity);
++        let selected_path = rows.get(self.selected).map(|row| row.directory.clone());
++        if previous_path != selected_path {
++            self.preview_cancellation.cancel();
++            self.preview = None;
++            self.preview_path = None;
++            self.preview_text.clear();
++        }
++        self.content = RecoveryContent::Ready(rows);
+         self.focus = None;
+     }
++    fn request_discovery(&mut self) {
++        self.discovery_cancellation.cancel();
++        self.discovery_cancellation = Default::default();
++        self.pending = None;
++        self.started = false;
++        self.discovery_generation = self.discovery_generation.wrapping_add(1).max(1);
++        self.content = RecoveryContent::Discovering;
++    }
++    fn token(&self) -> DiscoveryToken {
++        DiscoveryToken {
++            generation: self.discovery_generation,
++            root: self.root.clone(),
++        }
++    }
++    fn accept_discovery(&mut self, token: &DiscoveryToken, result: RecoveryDiscovery) -> bool {
++        if token != &self.token() {
++            return false;
++        }
++        match result {
++            Ok(entries) => {
++                self.entries = entries;
++                self.rebuild_rows();
++            }
++            Err(error) => {
++                self.entries.clear();
++                self.preview_cancellation.cancel();
++                self.preview = None;
++                self.preview_path = None;
++                self.preview_text.clear();
++                self.content = RecoveryContent::Failed(error);
++                self.focus = None;
++            }
++        }
++        true
++    }
++    fn refresh_after_operation(&mut self, removed: &[PathBuf]) {
++        if !removed.is_empty() {
++            self.entries.retain(|(entry, _)| !removed.contains(entry));
++            self.rebuild_rows();
++        }
++        self.request_discovery();
++    }
+     pub(super) fn configure(&mut self, root: Option<PathBuf>, mutation_allowed: bool) {
+         self.cancellation.cancel();
++        self.discovery_cancellation.cancel();
+         self.preview_cancellation.cancel();
+         self.root = root;
+         self.mutation_allowed = mutation_allowed;
+-        self.started = false;
+-        self.pending = None;
+-        self.entries.clear();
+-        self.rows.clear();
+         self.cancellation = Default::default();
++        self.request_discovery();
++        self.entries.clear();
++        self.selection_identity = None;
++        self.preview = None;
++        self.preview_path = None;
++        self.preview_text.clear();
+         self.allow_auto_open = true;
+     }
+     pub(super) fn dismiss(&mut self) {
+         self.open = false;
+         self.preview_cancellation.cancel();
++        self.preview = None;
++        self.preview_path = None;
++        self.preview_text.clear();
+         self.confirm_discard = None;
+         self.focus = None;
+         self.allow_auto_open = false;
+@@ -220,10 +366,54 @@ impl RecoveryRuntime {
+ impl Drop for RecoveryRuntime {
+     fn drop(&mut self) {
+         self.cancellation.cancel();
++        self.discovery_cancellation.cancel();
+         self.preview_cancellation.cancel();
+     }
+ }
+ impl Shell {
++    fn open_recovery_center(&mut self) {
++        self.activate_modal(modal::ModalSurface::Recovery);
++        self.recovery.open = true;
++        self.recovery.allow_auto_open = true;
++        self.toasts.resolve(&toast::NotificationId::from("recovery-discovery"));
++    }
++
++    fn publish_closed_discovery(&mut self, token: &DiscoveryToken, documents: usize, failure: Option<String>) {
++        if self.recovery.completion_notice_generation == Some(token.generation) {
++            return;
++        }
++        self.recovery.completion_notice_generation = Some(token.generation);
++        self.toasts.resolve(&toast::NotificationId::from("recovery-discovery"));
++        if self.recovery.open {
++            return;
++        }
++        if documents > 0 {
++            self.toasts.push_typed(
++                "recovery-discovery",
++                token.generation,
++                bareline_ui::theme::ToastLevel::Info,
++                toast::NotificationKind::Outcome,
++                format!("{documents} document(s) with recovery checkpoints available."),
++                Some("Open Recovery Center to inspect the current checkpoint list.".into()),
++                None,
++                toast::NotificationLifetime::Transient,
++                Instant::now(),
++            );
++        } else if let Some(error) = failure {
++            self.toasts.push_typed(
++                "recovery-discovery",
++                token.generation,
++                bareline_ui::theme::ToastLevel::Error,
++                toast::NotificationKind::Outcome,
++                "Recovery discovery unavailable.",
++                Some(error),
++                None,
++                toast::NotificationLifetime::Persistent,
++                Instant::now(),
++            );
++        }
++    }
++
+     fn recovery_auto_open_blocked(&self) -> bool {
+         self.modal.is_some()
+             || self.palette.open
+@@ -254,10 +444,7 @@ impl Shell {
+                 if !self.ensure_workspace(el) {
+                     return true;
+                 }
+-                self.activate_modal(modal::ModalSurface::Recovery);
+-                self.recovery.open = true;
+-                self.recovery.allow_auto_open = true;
+-                self.recovery.started = false;
++                self.open_recovery_center();
+             }
+             "recovery.keep" => {
+                 self.dismiss_modal(modal::ModalSurface::Recovery);
+@@ -265,20 +452,36 @@ impl Shell {
+             "recovery.restore_selected" => {
+                 if let Some(directory) = self
+                     .recovery
+-                    .rows
++                    .rows()
+                     .get(self.recovery.selected)
+                     .map(|row| row.directory.clone())
+                     && self.ensure_workspace(el)
+                 {
+-                    self.workspace.as_mut().unwrap().restore_paged_recovery(directory);
+-                    self.dismiss_modal(modal::ModalSurface::Recovery);
++                    let token = self.recovery.token();
++                    match self
++                        .workspace
++                        .as_mut()
++                        .unwrap()
++                        .restore_paged_recovery_tracked(directory.clone())
++                    {
++                        Ok(request_id) => {
++                            self.recovery.pending_restore = Some(PendingRestore {
++                                directory,
++                                token,
++                                request_id,
++                            });
++                            (self.notify)();
++                            self.dismiss_modal(modal::ModalSurface::Recovery);
++                        }
++                        Err(error) => self.publish_restore_failure(&directory, error),
++                    }
+                 }
+             }
+             "recovery.compare" => {
+                 if self.recovery.pending_compare.is_some() {
+                     return true;
+                 }
+-                if let Some(row) = self.recovery.rows.get(self.recovery.selected).cloned()
++                if let Some(row) = self.recovery.rows().get(self.recovery.selected).cloned()
+                     && self.ensure_workspace(el)
+                 {
+                     let directory = row.directory.clone();
+@@ -330,7 +533,7 @@ impl Shell {
+                     self.recovery.confirm_discard.take().unwrap_or_default()
+                 } else {
+                     self.recovery
+-                        .rows
++                        .rows()
+                         .get(self.recovery.selected)
+                         .map(|row| vec![row.directory.clone()])
+                         .unwrap_or_default()
+@@ -442,13 +645,20 @@ impl Shell {
+                     );
+                 }
+             }
++            "recovery.discovery_retry" => {
++                self.toasts.resolve(&toast::NotificationId::from("recovery-discovery"));
++                self.recovery.request_discovery();
++                (self.notify)();
++            }
+             "recovery.save_as" => self.dispatch(el, Action::SaveAs),
+             _ => {
+                 if let Some(index) = id
+                     .strip_prefix("recovery.select.")
+                     .and_then(|s| s.parse::<usize>().ok())
+                 {
+-                    self.recovery.selected = index.min(self.recovery.rows.len().saturating_sub(1));
++                    let last = self.recovery.rows().len().saturating_sub(1);
++                    self.recovery.selected = index.min(last);
++                    self.recovery.remember_selection();
+                     self.recovery.confirm_discard = None;
+                 } else {
+                     return false;
+@@ -503,7 +713,55 @@ impl Shell {
+         }
+     }
+ 
++    fn publish_restore_failure(&mut self, directory: &std::path::Path, error: String) {
++        self.recovery.notice_revision = self.recovery.notice_revision.wrapping_add(1);
++        self.toasts.push_typed(
++            "recovery-restore",
++            self.recovery.notice_revision,
++            bareline_ui::theme::ToastLevel::Error,
++            toast::NotificationKind::Outcome,
++            "Recovered copy could not be opened; checkpoint retained.",
++            Some(format!("{error}\nRecovery directory: {}", directory.display())),
++            None,
++            toast::NotificationLifetime::Persistent,
++            Instant::now(),
++        );
++    }
++
++    fn finish_pending_restore(
++        &mut self,
++        pending: PendingRestore,
++        outcome: bareline_app::workspace::RecoveryRestoreOutcome,
++    ) {
++        if pending.token != self.recovery.token() {
++            return;
++        }
++        match outcome {
++            bareline_app::workspace::RecoveryRestoreOutcome::Restored { request_id, .. }
++                if request_id == pending.request_id =>
++            {
++                self.recovery.refresh_after_operation(&[]);
++                (self.notify)();
++            }
++            bareline_app::workspace::RecoveryRestoreOutcome::Failed { request_id, error }
++                if request_id == pending.request_id =>
++            {
++                self.publish_restore_failure(&pending.directory, error);
++            }
++            _ => {}
++        }
++    }
++
+     pub(super) fn recovery_pump(&mut self, _el: &ActiveEventLoop) {
++        if let Some(request_id) = self.recovery.pending_restore.as_ref().map(|pending| pending.request_id)
++            && let Some(outcome) = self
++                .workspace
++                .as_mut()
++                .and_then(|workspace| workspace.take_recovery_restore_outcome(request_id))
++        {
++            let pending = self.recovery.pending_restore.take().unwrap();
++            self.finish_pending_restore(pending, outcome);
++        }
+         if self.recovery.pending_compare.is_some() && self.workspace.as_ref().is_some_and(|w| !w.io_busy()) {
+             let mut pending = self.recovery.pending_compare.take().unwrap();
+             let workspace = self.workspace.as_mut().unwrap();
+@@ -633,8 +891,7 @@ impl Shell {
+                     self.recovery.operation = None;
+                     let (level, lifetime, message, details) = match result {
+                         Ok(Ok(removed)) if !removed.is_empty() => {
+-                            self.recovery.entries.retain(|(entry, _)| !removed.contains(entry));
+-                            self.recovery.rebuild_rows();
++                            self.recovery.refresh_after_operation(&removed);
+                             if removed.len() == 1 {
+                                 (
+                                     bareline_ui::theme::ToastLevel::Info,
+@@ -651,12 +908,15 @@ impl Shell {
+                                 )
+                             }
+                         }
+-                        Ok(Ok(_)) => (
+-                            bareline_ui::theme::ToastLevel::Info,
+-                            toast::NotificationLifetime::Transient,
+-                            "Saved edits exported with gaps.json in the selected folder.".into(),
+-                            None,
+-                        ),
++                        Ok(Ok(_)) => {
++                            self.recovery.refresh_after_operation(&[]);
++                            (
++                                bareline_ui::theme::ToastLevel::Info,
++                                toast::NotificationLifetime::Transient,
++                                "Saved edits exported with gaps.json in the selected folder.".into(),
++                                None,
++                            )
++                        }
+                         Ok(Err(error)) => (
+                             bareline_ui::theme::ToastLevel::Error,
+                             toast::NotificationLifetime::Persistent,
+@@ -682,16 +942,19 @@ impl Shell {
+                         lifetime,
+                         Instant::now(),
+                     );
+-                    self.recovery.selected = self.recovery.selected.min(self.recovery.rows.len().saturating_sub(1));
++                    let last = self.recovery.rows().len().saturating_sub(1);
++                    self.recovery.selected = self.recovery.selected.min(last);
+                 }
+             }
+         }
+         if !self.recovery.started {
+             self.recovery.started = true;
+-            if let Some(root) = self.recovery.root.clone() {
++            let token = self.recovery.token();
++            if let Some(root) = token.root.clone() {
+                 let (tx, rx) = mpsc::sync_channel(1);
+-                let cancel = self.recovery.cancellation.clone();
++                let cancel = self.recovery.discovery_cancellation.clone();
+                 let notify = self.notify.clone();
++                let worker_token = token.clone();
+                 let referenced: std::collections::HashSet<PathBuf> = self
+                     .workspace
+                     .as_ref()
+@@ -703,7 +966,7 @@ impl Shell {
+                             .collect()
+                     })
+                     .unwrap_or_default();
+-                if std::thread::Builder::new()
++                let launched = std::thread::Builder::new()
+                     .name("recovery-discovery".into())
+                     .spawn(move || {
+                         let result = (|| -> Result<Vec<_>, String> {
+@@ -752,13 +1015,19 @@ impl Shell {
+                             });
+                             Ok(entries)
+                         })();
+-                        let _ = tx.send(result);
++                        let _ = tx.send((worker_token, result));
+                         notify();
+-                    })
+-                    .is_ok()
+-                {
+-                    self.recovery.pending = Some(rx);
++                    });
++                match launched {
++                    Ok(_) => self.recovery.pending = Some(rx),
++                    Err(error) => {
++                        let error = error.to_string();
++                        self.recovery.content = RecoveryContent::Failed(error.clone());
++                        self.publish_closed_discovery(&token, 0, Some(error));
++                    }
+                 }
++            } else {
++                let _ = self.recovery.accept_discovery(&token, Ok(Vec::new()));
+             }
+         }
+         if let Some(receiver) = &self.recovery.pending {
+@@ -767,51 +1036,38 @@ impl Shell {
+                 result => {
+                     self.recovery.pending = None;
+                     match result {
+-                        Ok(Ok(entries)) => {
+-                            self.recovery.entries = entries;
+-                            self.recovery.rebuild_rows();
+-                            let documents = self.recovery.rows.len();
+-                            let open_center = should_auto_open(
+-                                documents,
+-                                self.recovery.allow_auto_open,
+-                                self.recovery.open,
+-                                self.recovery_auto_open_blocked(),
+-                            );
+-                            if open_center {
+-                                self.ensure_workspace(_el);
+-                                self.activate_modal(modal::ModalSurface::Recovery);
+-                                self.recovery.open = true;
+-                            }
+-                            if documents > 0 {
+-                                self.recovery.notice_revision = self.recovery.notice_revision.wrapping_add(1);
+-                                self.toasts.push_typed(
+-                                    "recovery-discovery",
+-                                    self.recovery.notice_revision,
+-                                    bareline_ui::theme::ToastLevel::Info,
+-                                    toast::NotificationKind::Outcome,
+-                                    format!("{documents} document(s) with recovery checkpoints available."),
+-                                    Some("Use Restore Latest Recovery or Open Recovery Folder.".into()),
+-                                    None,
+-                                    toast::NotificationLifetime::Transient,
+-                                    Instant::now(),
++                        Ok((token, discovery)) => {
++                            if self.recovery.accept_discovery(&token, discovery) {
++                                let (documents, failure) = match &self.recovery.content {
++                                    RecoveryContent::Ready(rows) => (rows.len(), None),
++                                    RecoveryContent::Failed(error) => (0, Some(error.clone())),
++                                    RecoveryContent::Discovering => (0, None),
++                                };
++                                let open_center = should_auto_open(
++                                    documents,
++                                    self.recovery.allow_auto_open,
++                                    self.recovery.open,
++                                    self.recovery_auto_open_blocked(),
+                                 );
++                                if open_center {
++                                    self.ensure_workspace(_el);
++                                    self.open_recovery_center();
++                                }
++                                self.publish_closed_discovery(&token, documents, failure);
++                                if self.recovery.open && documents > 0 {
++                                    // Discovery completion occurs after the preview
++                                    // phase in this pump; schedule one deterministic
++                                    // pass to attach the selected row's preview.
++                                    (self.notify)();
++                                }
+                             }
+                         }
+-                        Ok(Err(error)) => {
+-                            self.recovery.notice_revision = self.recovery.notice_revision.wrapping_add(1);
+-                            self.toasts.push_typed(
+-                                "recovery-discovery",
+-                                self.recovery.notice_revision,
+-                                bareline_ui::theme::ToastLevel::Error,
+-                                toast::NotificationKind::Outcome,
+-                                "Recovery discovery unavailable.",
+-                                Some(error),
+-                                None,
+-                                toast::NotificationLifetime::Persistent,
+-                                Instant::now(),
+-                            );
++                        Err(_) => {
++                            let token = self.recovery.token();
++                            let error = "Recovery discovery worker stopped before reporting a result.".to_string();
++                            let _ = self.recovery.accept_discovery(&token, Err(error.clone()));
++                            self.publish_closed_discovery(&token, 0, Some(error));
+                         }
+-                        Err(_) => {}
+                     }
+                 }
+             }
+@@ -851,6 +1107,9 @@ impl Shell {
+         if let Some((document, state)) = recovery_notice {
+             self.publish_recovery_notice(document, state);
+         }
++        if let Some(window) = &self.window {
++            window.request_redraw();
++        }
+     }
+     pub(super) fn recovery_event(&mut self, el: &ActiveEventLoop, event: &WindowEvent) -> bool {
+         if !self.recovery.open || !center_consumes_event(event) {
+@@ -882,12 +1141,14 @@ impl Shell {
+                     }
+                     Key::Named(NamedKey::ArrowDown) => {
+                         self.recovery.focus = None;
+-                        self.recovery.selected =
+-                            (self.recovery.selected + 1).min(self.recovery.rows.len().saturating_sub(1))
++                        let last = self.recovery.rows().len().saturating_sub(1);
++                        self.recovery.selected = (self.recovery.selected + 1).min(last);
++                        self.recovery.remember_selection();
+                     }
+                     Key::Named(NamedKey::ArrowUp) => {
+                         self.recovery.focus = None;
+-                        self.recovery.selected = self.recovery.selected.saturating_sub(1)
++                        self.recovery.selected = self.recovery.selected.saturating_sub(1);
++                        self.recovery.remember_selection();
+                     }
+                     Key::Named(NamedKey::Tab) => {
+                         let enabled: Vec<_> = self
+@@ -899,13 +1160,8 @@ impl Shell {
+                         self.recovery.focus =
+                             next_recovery_focus(self.recovery.focus, &enabled, self.modifiers.shift_key());
+                     }
+-                    Key::Named(NamedKey::Enter) | Key::Named(NamedKey::Space) => {
+-                        let id = self
+-                            .recovery
+-                            .focus
+-                            .and_then(|index| self.recovery.hits.get(index))
+-                            .map(|(_, id)| id.clone())
+-                            .unwrap_or_else(|| "recovery.restore_selected".into());
++                    key if activates_recovery_command(key) => {
++                        let id = self.recovery.focused_command();
+                         self.recovery_dispatch(el, &id);
+                     }
+                     _ => {}
+@@ -936,10 +1192,40 @@ impl RecoveryRuntime {
+             13.0,
+             theme.text,
+         );
+-        let visible = ((height - 380.0).max(40.0) / 42.0) as usize;
++        match &self.content {
++            RecoveryContent::Discovering => text(
++                ops,
++                24.0,
++                78.0,
++                "Searching for recovery checkpoints… Actions are available when discovery completes.",
++                13.0,
++                theme.muted,
++            ),
++            RecoveryContent::Failed(error) => {
++                text(ops, 24.0, 78.0, "Recovery checkpoint search failed.", 13.0, theme.text);
++                let error: String = error.chars().take(180).collect();
++                text(ops, 24.0, 100.0, &error, 12.0, theme.muted);
++            }
++            RecoveryContent::Ready(rows) if rows.is_empty() => {
++                text(ops, 24.0, 100.0, "No recovery checkpoints found.", 14.0, theme.text);
++            }
++            RecoveryContent::Ready(rows) => text(
++                ops,
++                24.0,
++                78.0,
++                &format!("{} recoverable document(s) found.", rows.len()),
++                12.0,
++                theme.muted,
++            ),
++        }
++        let rows = match &self.content {
++            RecoveryContent::Ready(rows) => rows.as_slice(),
++            RecoveryContent::Discovering | RecoveryContent::Failed(_) => &[],
++        };
++        let visible = ((height - 412.0).max(40.0) / 42.0) as usize;
+         let start = self.selected.saturating_sub(visible.saturating_sub(1));
+-        for (row, (index, entry)) in self.rows.iter().enumerate().skip(start).take(visible).enumerate() {
+-            let bounds = rect(20.0, 90.0 + row as f32 * 42.0, width - 40.0, 38.0);
++        for (row, (index, entry)) in rows.iter().enumerate().skip(start).take(visible).enumerate() {
++            let bounds = rect(20.0, 122.0 + row as f32 * 42.0, width - 40.0, 38.0);
+             if index == self.selected {
+                 ops.push(DrawOp::Stroke(bounds, theme.focus, 1.0));
+             }
+@@ -975,18 +1261,20 @@ impl RecoveryRuntime {
+             );
+             self.hits.push((bounds, format!("recovery.select.{index}")));
+         }
+-        let preview_y = (height - 270.0).max(145.0);
+-        text(ops, 24.0, preview_y, "Recovered copy — first 8 KiB", 14.0, theme.text);
+-        for (index, line) in self.preview_text.lines().take(6).enumerate() {
+-            let line: String = line.chars().take(120).collect();
+-            text(
+-                ops,
+-                24.0,
+-                preview_y + 24.0 + index as f32 * 18.0,
+-                &line,
+-                12.0,
+-                theme.text,
+-            );
++        if !rows.is_empty() {
++            let preview_y = (height - 270.0).max(145.0);
++            text(ops, 24.0, preview_y, "Recovered copy — first 8 KiB", 14.0, theme.text);
++            for (index, line) in self.preview_text.lines().take(6).enumerate() {
++                let line: String = line.chars().take(120).collect();
++                text(
++                    ops,
++                    24.0,
++                    preview_y + 24.0 + index as f32 * 18.0,
++                    &line,
++                    12.0,
++                    theme.text,
++                );
++            }
+         }
+         let y = (height - 70.0).max(140.0);
+         if let Some(paths) = &self.confirm_discard {
+@@ -999,7 +1287,7 @@ impl RecoveryRuntime {
+                 )
+             };
+             text(ops, 24.0, y - 30.0, &message, 13.0, theme.text);
+-        } else if let Some(entry) = self.rows.get(self.selected) {
++        } else if let Some(entry) = rows.get(self.selected) {
+             let warning = match entry.status {
+                 bareline_file_io::recovery::RecoveryStatus::Complete => {
+                     "Open recovered copy preserves the original file. Save As chooses a new destination."
+@@ -1008,7 +1296,9 @@ impl RecoveryRuntime {
+             };
+             text(ops, 24.0, y - 30.0, warning, 13.0, theme.text);
+         }
+-        let actions = if self.confirm_discard.is_some() {
++        let actions = if matches!(&self.content, RecoveryContent::Failed(_)) {
++            vec![("Retry", "recovery.discovery_retry"), ("Close", "recovery.keep")]
++        } else if self.confirm_discard.is_some() {
+             vec![
+                 ("Confirm irreversible discard", "recovery.confirm_discard"),
+                 ("Keep recovery", "recovery.keep"),
+@@ -1045,7 +1335,7 @@ impl RecoveryRuntime {
+         if let Some((bounds, _)) = self.focus.and_then(|index| self.hits.get(index)) {
+             ops.push(DrawOp::Stroke(*bounds, theme.focus, 2.0));
+         }
+-        if self.entries.len() == 256 {
++        if matches!(&self.content, RecoveryContent::Ready(_)) && self.entries.len() == 256 {
+             text(
+                 ops,
+                 24.0,
+@@ -1055,9 +1345,6 @@ impl RecoveryRuntime {
+                 theme.muted,
+             );
+         }
+-        if self.rows.is_empty() {
+-            text(ops, 24.0, 100.0, "No recovery checkpoints found.", 14.0, theme.text);
+-        }
+     }
+ }
+ 
+@@ -1087,6 +1374,10 @@ fn center_consumes_event(event: &WindowEvent) -> bool {
+             | WindowEvent::MouseWheel { .. }
+     )
+ }
++fn activates_recovery_command(key: &Key) -> bool {
++    matches!(key, Key::Named(NamedKey::Enter) | Key::Named(NamedKey::Space))
++        || matches!(key, Key::Character(value) if value == " ")
++}
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+@@ -1137,6 +1428,39 @@ mod tests {
+             "x".into()
+         ))));
+     }
++    #[test]
++    fn open_transition_and_initial_command_match_keyboard_and_accessibility() {
++        let mut shell = super::super::accessibility::tests::headless_shell();
++        assert!(shell.recovery.action_enabled("recovery.open"));
++        shell.open_recovery_center();
++        shell.recovery.draw(Default::default(), 900.0, 600.0, &mut Vec::new());
++        assert!(shell.recovery.open);
++        assert!(
++            shell
++                .modal
++                .is_some_and(|modal| modal.surface == modal::ModalSurface::Recovery)
++        );
++        assert_eq!(shell.recovery.focused_command(), "recovery.keep");
++        assert_eq!(
++            shell.recovery.accessibility_focus(),
++            Some(recovery_action_id(&shell.recovery.focused_command()))
++        );
++        assert!(activates_recovery_command(&Key::Named(NamedKey::Enter)));
++        assert!(activates_recovery_command(&Key::Character(" ".into())));
++
++        let token = shell.recovery.token();
++        assert!(shell.recovery.accept_discovery(&token, Err("unavailable".into())));
++        assert!(shell.recovery.action_enabled("recovery.open"));
++        assert!(shell.recovery.action_enabled("recovery.keep"));
++        assert!(shell.recovery.action_enabled("recovery.discovery_retry"));
++        assert!(!shell.recovery.action_enabled("recovery.restore_selected"));
++        shell.recovery.draw(Default::default(), 900.0, 600.0, &mut Vec::new());
++        assert_eq!(shell.recovery.focused_command(), "recovery.discovery_retry");
++        assert_eq!(
++            shell.recovery.accessibility_focus(),
++            Some(recovery_action_id("recovery.discovery_retry"))
++        );
++    }
+     fn inspection(
+         original: Option<&str>,
+         protected_unix_ms: u64,
+@@ -1193,6 +1517,221 @@ mod tests {
+         assert!(rows.iter().all(|row| row.name == "Untitled document" && row.count == 1));
+     }
+ 
++    #[test]
++    fn delayed_discovery_is_loading_until_a_tagged_terminal_result() {
++        let mut runtime = RecoveryRuntime::default();
++        runtime.configure(Some(PathBuf::from("root-a")), true);
++        runtime.open = true;
++        runtime.draw(Default::default(), 900.0, 600.0, &mut Vec::new());
++        let loading = runtime.accessibility_nodes(rect(0.0, 0.0, 900.0, 600.0));
++        assert!(
++            loading
++                .iter()
++                .any(|node| node.id == 100_902 && node.name.contains("Searching"))
++        );
++        assert!(!loading.iter().any(|node| node.name.contains("No recovery checkpoints")));
++
++        let token = runtime.token();
++        assert!(runtime.accept_discovery(
++            &token,
++            Ok(vec![(
++                PathBuf::from("checkpoint-a"),
++                inspection(Some("/docs/a.txt"), 10, 4)
++            )])
++        ));
++        runtime.draw(Default::default(), 900.0, 600.0, &mut Vec::new());
++        let ready = runtime.accessibility_nodes(rect(0.0, 0.0, 900.0, 600.0));
++        assert_eq!(runtime.rows().len(), 1);
++        assert_eq!(ready.iter().filter(|node| node.id == 100_902).count(), 1);
++        assert!(
++            ready
++                .iter()
++                .any(|node| node.id == 100_902 && node.name.contains("1 recoverable"))
++        );
++
++        runtime.request_discovery();
++        let empty_token = runtime.token();
++        assert!(runtime.accept_discovery(&empty_token, Ok(Vec::new())));
++        runtime.draw(Default::default(), 900.0, 600.0, &mut Vec::new());
++        assert!(
++            runtime
++                .accessibility_nodes(rect(0.0, 0.0, 900.0, 600.0))
++                .iter()
++                .any(|node| node.id == 100_902 && node.name == "No recovery checkpoints found.")
++        );
++    }
++
++    #[test]
++    fn discovery_rejects_obsolete_root_and_preserves_selection_identity() {
++        let mut runtime = RecoveryRuntime::default();
++        runtime.configure(Some(PathBuf::from("root-a")), true);
++        let obsolete = runtime.token();
++        runtime.configure(Some(PathBuf::from("root-b")), true);
++        assert!(!runtime.accept_discovery(&obsolete, Ok(Vec::new())));
++        assert!(matches!(&runtime.content, RecoveryContent::Discovering));
++
++        let current = runtime.token();
++        assert!(runtime.accept_discovery(
++            &current,
++            Ok(vec![
++                (PathBuf::from("a-old"), inspection(Some("/docs/a.txt"), 20, 4)),
++                (PathBuf::from("b-old"), inspection(Some("/docs/b.txt"), 10, 4)),
++            ])
++        ));
++        runtime.selected = 1;
++        runtime.remember_selection();
++        runtime.request_discovery();
++        let refresh = runtime.token();
++        assert!(runtime.accept_discovery(
++            &refresh,
++            Ok(vec![
++                (PathBuf::from("b-new"), inspection(Some("/docs/b.txt"), 40, 4)),
++                (PathBuf::from("a-old"), inspection(Some("/docs/a.txt"), 20, 4)),
++            ])
++        ));
++        assert_eq!(
++            runtime.rows()[runtime.selected].identity(),
++            RecoveryRowId::Original(PathBuf::from("/docs/b.txt"))
++        );
++    }
++
++    #[test]
++    fn restore_refresh_waits_for_matching_terminal_publication_and_fences_stale_results() {
++        let mut shell = super::super::accessibility::tests::headless_shell();
++        shell.recovery.configure(Some(PathBuf::from("root-a")), true);
++        let token = shell.recovery.token();
++        let generation = token.generation;
++        assert!(shell.recovery.accept_discovery(
++            &token,
++            Ok(vec![(
++                PathBuf::from("checkpoint-a"),
++                inspection(Some("/docs/a.txt"), 10, 4),
++            )]),
++        ));
++        shell.recovery.pending_restore = Some(PendingRestore {
++            directory: PathBuf::from("checkpoint-a"),
++            token: token.clone(),
++            request_id: 41,
++        });
++        assert_eq!(
++            shell.recovery.discovery_generation, generation,
++            "submission does not refresh"
++        );
++        for command in [
++            "recovery.restore_selected",
++            "recovery.compare",
++            "recovery.export",
++            "recovery.discard",
++            "recovery.delete_old",
++        ] {
++            assert!(!shell.recovery.action_enabled(command), "{command} raced restore");
++        }
++        assert!(shell.recovery.action_enabled("recovery.open"));
++        assert!(shell.recovery.action_enabled("recovery.keep"));
++        assert!(shell.recovery.action_enabled("recovery.select.0"));
++        assert_eq!(shell.recovery.default_command(), "recovery.keep");
++        let pending = shell.recovery.pending_restore.take().unwrap();
++        shell.finish_pending_restore(
++            pending,
++            bareline_app::workspace::RecoveryRestoreOutcome::Restored {
++                request_id: 41,
++                document: (9, 3),
++            },
++        );
++        assert_eq!(shell.recovery.discovery_generation, generation + 1);
++        assert!(matches!(&shell.recovery.content, RecoveryContent::Discovering));
++
++        shell.recovery.configure(Some(PathBuf::from("root-b")), true);
++        let stale = PendingRestore {
++            directory: PathBuf::from("checkpoint-a"),
++            token,
++            request_id: 42,
++        };
++        let current_generation = shell.recovery.discovery_generation;
++        shell.finish_pending_restore(
++            stale,
++            bareline_app::workspace::RecoveryRestoreOutcome::Failed {
++                request_id: 42,
++                error: "old root failed".into(),
++            },
++        );
++        assert_eq!(shell.recovery.discovery_generation, current_generation);
++        assert!(
++            shell.toasts.is_empty(),
++            "stale failures do not escape their root/generation"
++        );
++
++        let current = PendingRestore {
++            directory: PathBuf::from("checkpoint-current"),
++            token: shell.recovery.token(),
++            request_id: 43,
++        };
++        shell.finish_pending_restore(
++            current,
++            bareline_app::workspace::RecoveryRestoreOutcome::Failed {
++                request_id: 43,
++                error: "full restore failure".into(),
++            },
++        );
++        assert_eq!(shell.recovery.discovery_generation, current_generation);
++        assert_eq!(
++            shell.toasts.persistent_len(),
++            1,
++            "failure retains its checkpoint and details"
++        );
++    }
++
++    #[test]
++    fn failed_discovery_exposes_full_error_retry_and_keeps_global_worker_on_close() {
++        let mut runtime = RecoveryRuntime::default();
++        runtime.configure(Some(PathBuf::from("root")), true);
++        runtime.open = true;
++        let token = runtime.token();
++        let full_error = "access denied at C:\\recovery\\private";
++        assert!(runtime.accept_discovery(&token, Err(full_error.into())));
++        assert!(runtime.rows().is_empty(), "failure cannot reuse stale ready rows");
++        runtime.draw(Default::default(), 900.0, 600.0, &mut Vec::new());
++        let nodes = runtime.accessibility_nodes(rect(0.0, 0.0, 900.0, 600.0));
++        assert!(
++            nodes
++                .iter()
++                .any(|node| node.id == 100_902 && node.value.as_deref() == Some(full_error))
++        );
++        assert!(
++            runtime
++                .hits
++                .iter()
++                .any(|(_, command)| command == "recovery.discovery_retry")
++        );
++
++        runtime.request_discovery();
++        let (_tx, rx) = mpsc::sync_channel(1);
++        runtime.pending = Some(rx);
++        runtime.started = true;
++        runtime.preview_path = Some(PathBuf::from("preview"));
++        runtime.dismiss();
++        assert!(
++            runtime.pending.is_some(),
++            "closing only detaches preview, not global discovery"
++        );
++        assert!(
++            runtime.preview_path.is_none(),
++            "closing detaches the preview worker and its result"
++        );
++    }
++
++    #[test]
++    fn closed_discovery_completion_notifies_once_per_generation() {
++        let mut shell = super::super::accessibility::tests::headless_shell();
++        let token = DiscoveryToken {
++            generation: 12,
++            root: Some(PathBuf::from("root")),
++        };
++        shell.publish_closed_discovery(&token, 2, None);
++        shell.publish_closed_discovery(&token, 2, None);
++        assert_eq!(shell.toasts.persistent_len(), 1);
++    }
++
+     #[test]
+     fn removed_rows_select_the_nearest_survivor_and_closed_discovery_stays_closed() {
+         let mut runtime = RecoveryRuntime::default();
+@@ -1202,10 +1741,14 @@ mod tests {
+         ];
+         runtime.rebuild_rows();
+         runtime.selected = 1;
++        runtime.remember_selection();
+         runtime.focus = Some(0);
+-        runtime.entries.truncate(1);
+-        runtime.rebuild_rows();
++        let generation = runtime.discovery_generation;
++        runtime.refresh_after_operation(&[PathBuf::from("two")]);
+         assert_eq!(runtime.selected, 0);
++        assert_eq!(runtime.entries.len(), 1);
++        assert_eq!(runtime.discovery_generation, generation + 1);
++        assert!(matches!(&runtime.content, RecoveryContent::Discovering));
+         assert_eq!(runtime.focus, None);
+ 
+         runtime.dismiss();
+@@ -1260,6 +1803,7 @@ fn recovery_action_id(command: &str) -> u64 {
+             "recovery.keep" => 4,
+             "recovery.confirm_discard" => 5,
+             "recovery.delete_old" => 6,
++            "recovery.discovery_retry" => 7,
+             _ => 99,
+         }
+ }
+@@ -1345,12 +1889,31 @@ impl RecoveryRuntime {
+             focusable: false,
+             invokable: false,
+         }];
++        let (status_name, status_value) = match &self.content {
++            RecoveryContent::Discovering => ("Searching for recovery checkpoints…".into(), None),
++            RecoveryContent::Ready(rows) if rows.is_empty() => ("No recovery checkpoints found.".into(), None),
++            RecoveryContent::Ready(rows) => (format!("{} recoverable document(s) found.", rows.len()), None),
++            RecoveryContent::Failed(error) => ("Recovery checkpoint search failed.".into(), Some(error.clone())),
++        };
++        nodes.push(AccessibilityNode {
++            id: 100_902,
++            parent: 100_900,
++            role: AccessibilityRole::Status,
++            name: status_name,
++            value: status_value,
++            bounds: [origin.x as f64, (origin.y + 70.0) as f64, origin.width as f64, 48.0],
++            disabled: false,
++            selected: false,
++            expanded: None,
++            focusable: false,
++            invokable: false,
++        });
+         for (bounds, command) in &self.hits {
+             let row = command
+                 .strip_prefix("recovery.select.")
+                 .and_then(|s| s.parse::<usize>().ok());
+             let name = if let Some(index) = row {
+-                self.rows
++                self.rows()
+                     .get(index)
+                     .map(|entry| {
+                         let original = entry
+@@ -1377,6 +1940,7 @@ impl RecoveryRuntime {
+                     "recovery.delete_old" => "Delete all recoveries older than 7 days",
+                     "recovery.keep" => "Close Recovery Center",
+                     "recovery.confirm_discard" => "Confirm irreversible discard",
++                    "recovery.discovery_retry" => "Retry recovery checkpoint search",
+                     _ => "Recovery action",
+                 }
+                 .into()
+@@ -1404,43 +1968,42 @@ impl RecoveryRuntime {
+                 invokable: self.action_enabled(command),
+             });
+         }
+-        nodes.push(AccessibilityNode {
+-            id: 100_901,
+-            parent: 100_900,
+-            role: AccessibilityRole::Status,
+-            name: if let Some(paths) = &self.confirm_discard {
+-                format!(
+-                    "Permanently discard {} recovery checkpoint(s)? This cannot be undone.",
+-                    paths.len()
+-                )
+-            } else {
+-                "Recovered copy preview".into()
+-            },
+-            value: Some(self.preview_text.clone()),
+-            bounds: [
+-                origin.x as f64,
+-                (origin.y + origin.height - 270.0).max(origin.y) as f64,
+-                origin.width as f64,
+-                150.0,
+-            ],
+-            disabled: false,
+-            selected: false,
+-            expanded: None,
+-            focusable: false,
+-            invokable: false,
+-        });
++        if matches!(&self.content, RecoveryContent::Ready(_)) {
++            nodes.push(AccessibilityNode {
++                id: 100_901,
++                parent: 100_900,
++                role: AccessibilityRole::Status,
++                name: if let Some(paths) = &self.confirm_discard {
++                    format!(
++                        "Permanently discard {} recovery checkpoint(s)? This cannot be undone.",
++                        paths.len()
++                    )
++                } else {
++                    "Recovered copy preview".into()
++                },
++                value: Some(self.preview_text.clone()),
++                bounds: [
++                    origin.x as f64,
++                    (origin.y + origin.height - 270.0).max(origin.y) as f64,
++                    origin.width as f64,
++                    150.0,
++                ],
++                disabled: false,
++                selected: false,
++                expanded: None,
++                focusable: false,
++                invokable: false,
++            });
++        }
+         nodes
+     }
+     pub(super) fn accessibility_focus(&self) -> Option<u64> {
+         self.open.then(|| {
+-            self.focus.and_then(|index| self.hits.get(index)).map_or(
+-                if self.entries.is_empty() {
+-                    100_504
+-                } else {
+-                    100_000 + self.selected as u64
+-                },
+-                |(_, command)| recovery_action_id(command),
+-            )
++            self.focus
++                .and_then(|index| self.hits.get(index))
++                .map_or(recovery_action_id(self.default_command()), |(_, command)| {
++                    recovery_action_id(command)
++                })
+         })
+     }
+ }
+@@ -1465,6 +2028,9 @@ pub(super) fn accessibility_test_cases() -> Vec<(
+     ] {
+         let mut runtime = RecoveryRuntime::default();
+         runtime.open = scenario != "closed";
++        if scenario == "open_empty" {
++            runtime.content = RecoveryContent::Ready(Vec::new());
++        }
+         if !matches!(scenario, "closed" | "open_empty") {
+             runtime.entries.push((
+                 PathBuf::from("checkpoint-1"),
+diff --git a/crates/app/src/workspace.rs b/crates/app/src/workspace.rs
+index bd1fb30..8e3090c 100644
+--- a/crates/app/src/workspace.rs
++++ b/crates/app/src/workspace.rs
+@@ -637,6 +637,8 @@ pub struct Workspace {
+     io: Option<IoService>,
+     pending_io: Vec<PendingIo>,
+     open_outcomes: Vec<LaunchOpenOutcome>,
++    next_recovery_restore_request: u64,
++    recovery_restore_outcomes: Vec<RecoveryRestoreOutcome>,
+     pending_save_recovery: Vec<(PathBuf, IoTicket)>,
+     pending_save_cleanup: Vec<(PathBuf, IoTicket)>,
+     scanned_save_recovery: std::collections::BTreeSet<PathBuf>,
+@@ -698,6 +700,7 @@ struct PendingIo {
+     copy_only: bool,
+     open_path: Option<PathBuf>,
+     launch_request: Option<u64>,
++    recovery_restore_request: Option<u64>,
+     allow_duplicate: bool,
+     preview: Option<bareline_document::DocumentSnapshot>,
+     reload: Option<bareline_document::DocumentSnapshot>,
+@@ -708,6 +711,11 @@ pub enum LaunchOpenOutcome {
+     Failed { request_id: u64, error: String },
+ }
+ #[derive(Clone, Debug, PartialEq, Eq)]
++pub enum RecoveryRestoreOutcome {
++    Restored { request_id: u64, document: (u64, u64) },
++    Failed { request_id: u64, error: String },
++}
++#[derive(Clone, Debug, PartialEq, Eq)]
+ pub enum CloseError {
+     Busy,
+     Unsaved,
+@@ -839,6 +847,8 @@ impl Workspace {
+             io: None,
+             pending_io: Vec::new(),
+             open_outcomes: Vec::new(),
++            next_recovery_restore_request: 1,
++            recovery_restore_outcomes: Vec::new(),
+             pending_save_recovery: Vec::new(),
+             pending_save_cleanup: Vec::new(),
+             scanned_save_recovery: std::collections::BTreeSet::new(),
+@@ -1180,6 +1190,10 @@ impl Workspace {
+                     let failed = self.pending_io.remove(i);
+                     self.discard_preview(failed.preview.as_ref());
+                     self.record_launch_open(failed.launch_request, Err(error));
++                    self.record_recovery_restore(
++                        failed.recovery_restore_request,
++                        Err("Recovery restore worker stopped.".into()),
++                    );
+                     changed = true;
+                     continue;
+                 }
+@@ -1210,7 +1224,8 @@ impl Workspace {
+                         self.discard_preview(pending.preview.as_ref());
+                         let error = format!("File admission failed: {error}");
+                         self.message = Some(error.clone());
+-                        self.record_launch_open(pending.launch_request, Err(error));
++                        self.record_launch_open(pending.launch_request, Err(error.clone()));
++                        self.record_recovery_restore(pending.recovery_restore_request, Err(error));
+                         changed = true;
+                         continue;
+                     }
+@@ -1220,6 +1235,7 @@ impl Workspace {
+             };
+             let pending = self.pending_io.remove(i);
+             let launch_request = pending.launch_request;
++            let recovery_restore_request = pending.recovery_restore_request;
+             changed = true;
+             match result {
+                 IoCompletion::Open(Ok(opened)) => {
+@@ -1412,6 +1428,8 @@ impl Workspace {
+                     }
+                     if opened.recovery_origin.is_some() && self.adopt_recovered_resident(&mut opened) {
+                         self.discard_preview(pending.preview.as_ref());
++                        let document = self.editors.last().unwrap().document_identity();
++                        self.record_recovery_restore(recovery_restore_request, Ok(document));
+                         continue;
+                     }
+                     self.discard_preview(pending.preview.as_ref());
+@@ -1434,10 +1452,12 @@ impl Workspace {
+                             self.message = None;
+                             let document = self.editors.last().unwrap().document_identity();
+                             self.record_launch_open(launch_request, Ok(document));
++                            self.record_recovery_restore(recovery_restore_request, Ok(document));
+                         }
+                         Err(error) => {
+                             self.message = Some(error.clone());
+-                            self.record_launch_open(launch_request, Err(error));
++                            self.record_launch_open(launch_request, Err(error.clone()));
++                            self.record_recovery_restore(recovery_restore_request, Err(error));
+                         }
+                     }
+                 }
+@@ -1448,7 +1468,8 @@ impl Workspace {
+                         paused.error
+                     );
+                     self.message = Some(error.clone());
+-                    self.record_launch_open(launch_request, Err(error));
++                    self.record_launch_open(launch_request, Err(error.clone()));
++                    self.record_recovery_restore(recovery_restore_request, Err(error));
+                     self.paused_reload = pending.reload.clone();
+                     self.paused_transcode = Some(paused);
+                 }
+@@ -1457,7 +1478,8 @@ impl Workspace {
+                     self.discard_preview(pending.preview.as_ref());
+                     let error = file_error(error);
+                     self.message = Some(error.clone());
+-                    self.record_launch_open(launch_request, Err(error));
++                    self.record_launch_open(launch_request, Err(error.clone()));
++                    self.record_recovery_restore(recovery_restore_request, Err(error));
+                 }
+                 IoCompletion::ResidentSpilled { captured, result } => {
+                     self.spill_pending = false;
+@@ -1725,6 +1747,7 @@ impl Workspace {
+             copy_only: false,
+             open_path: None,
+             launch_request: None,
++            recovery_restore_request: None,
+             allow_duplicate: false,
+             preview: None,
+             reload: None,
+@@ -1796,6 +1819,7 @@ impl Workspace {
+                     copy_only: false,
+                     open_path: None,
+                     launch_request: None,
++                    recovery_restore_request: None,
+                     allow_duplicate: false,
+                     preview: None,
+                     reload: None,
+@@ -1872,6 +1896,7 @@ impl Workspace {
+                     copy_only: false,
+                     open_path: Some(path),
+                     launch_request,
++                    recovery_restore_request: None,
+                     allow_duplicate,
+                     preview: None,
+                     reload: None,
+@@ -2130,6 +2155,7 @@ impl Workspace {
+                     copy_only: false,
+                     open_path: Some(path),
+                     launch_request,
++                    recovery_restore_request: None,
+                     allow_duplicate,
+                     preview: None,
+                     reload: None,
+@@ -2189,6 +2215,40 @@ impl Workspace {
+         true
+     }
+     pub fn restore_paged_recovery(&mut self, directory: PathBuf) {
++        self.submit_paged_recovery(directory);
++    }
++    /// Submit a recovery restore whose exact terminal publication must be
++    /// observed by an owning controller. At most 32 unfinished or unconsumed
++    /// tracked restores are retained; untracked restore callers do not occupy
++    /// this queue.
++    pub fn restore_paged_recovery_tracked(&mut self, directory: PathBuf) -> Result<u64, String> {
++        let retained = self.recovery_restore_outcomes.len()
++            + self
++                .pending_io
++                .iter()
++                .filter(|pending| pending.recovery_restore_request.is_some())
++                .count();
++        if retained >= 32 {
++            return Err("Too many recovery restore results are waiting to be handled.".into());
++        }
++        let request_id = self.next_recovery_restore_request;
++        self.next_recovery_restore_request = self.next_recovery_restore_request.wrapping_add(1).max(1);
++        let before = self.pending_io.len();
++        self.submit_paged_recovery(directory);
++        if self.pending_io.len() > before {
++            self.pending_io.last_mut().unwrap().recovery_restore_request = Some(request_id);
++        } else {
++            self.recovery_restore_outcomes.push(RecoveryRestoreOutcome::Failed {
++                request_id,
++                error: self
++                    .message
++                    .clone()
++                    .unwrap_or_else(|| "Recovery restore could not be queued.".into()),
++            });
++        }
++        Ok(request_id)
++    }
++    fn submit_paged_recovery(&mut self, directory: PathBuf) {
+         self.submit_paged(
+             IoRequest::RestorePagedRecovery {
+                 directory: directory.clone(),
+@@ -2201,6 +2261,17 @@ impl Workspace {
+             false,
+         );
+     }
++    /// Take only the requested result, preserving every other controller's
++    /// still-observable terminal outcome.
++    pub fn take_recovery_restore_outcome(&mut self, request_id: u64) -> Option<RecoveryRestoreOutcome> {
++        let index = self.recovery_restore_outcomes.iter().position(|outcome| {
++            matches!(outcome,
++                RecoveryRestoreOutcome::Restored { request_id: known, .. }
++                    | RecoveryRestoreOutcome::Failed { request_id: known, .. }
++                    if *known == request_id)
++        })?;
++        Some(self.recovery_restore_outcomes.remove(index))
++    }
+     pub fn paused_transcode_info(&self) -> Option<(&std::path::Path, u64, u64, u64)> {
+         let paused = self.paused_transcode.as_ref()?;
+         if let bareline_file_io::codecs::disk::DiskError::Quota { used, required, limit } = paused.error {
+@@ -2287,6 +2358,15 @@ impl Workspace {
+             Err(error) => LaunchOpenOutcome::Failed { request_id, error },
+         });
+     }
++    fn record_recovery_restore(&mut self, request_id: Option<u64>, result: Result<(u64, u64), String>) {
++        let Some(request_id) = request_id else {
++            return;
++        };
++        self.recovery_restore_outcomes.push(match result {
++            Ok(document) => RecoveryRestoreOutcome::Restored { request_id, document },
++            Err(error) => RecoveryRestoreOutcome::Failed { request_id, error },
++        });
++    }
+     pub fn fingerprint(&self, index: usize) -> Option<&Fingerprint> {
+         self.files
+             .get(index)
+@@ -2332,6 +2412,7 @@ impl Workspace {
+             copy_only: false,
+             open_path: Some(path),
+             launch_request: None,
++            recovery_restore_request: None,
+             allow_duplicate: false,
+             preview: None,
+             reload: Some(captured),
+@@ -2691,6 +2772,7 @@ impl Workspace {
+                     copy_only,
+                     open_path: None,
+                     launch_request: None,
++                    recovery_restore_request: None,
+                     allow_duplicate: false,
+                     preview: None,
+                     reload: None,
+@@ -4375,9 +4457,17 @@ mod tests {
+         );
+         drop(preview);
+         let mut restored = Workspace::new(Arc::new(|| {}), Arc::new(PagedFileSystem)).unwrap();
+-        restored.restore_paged_recovery(directory.clone());
++        let restore_request = restored.restore_paged_recovery_tracked(directory.clone()).unwrap();
+         settle(&mut restored);
+         assert_eq!(restored.editors.len(), 1, "{:?}", restored.message);
++        let restored_document = restored.editors[0].document_identity();
++        assert_eq!(
++            restored.take_recovery_restore_outcome(restore_request),
++            Some(RecoveryRestoreOutcome::Restored {
++                request_id: restore_request,
++                document: restored_document,
++            })
++        );
+         assert!(restored.editors[0].dirty());
+         assert!(restored.path(0).is_none());
+         assert!(restored.recent_paths().is_empty(), "recovery pseudo-path entered MRU");
+@@ -4517,9 +4607,17 @@ mod tests {
+             );
+             drop(preview);
+             let mut restored = Workspace::new(Arc::new(|| {}), Arc::new(PagedFileSystem)).unwrap();
+-            restored.restore_paged_recovery(directory);
++            let restore_request = restored.restore_paged_recovery_tracked(directory).unwrap();
+             settle(&mut restored);
+             assert_eq!(restored.editors.len(), 1, "{:?}", restored.message);
++            let restored_document = restored.editors[0].document_identity();
++            assert_eq!(
++                restored.take_recovery_restore_outcome(restore_request),
++                Some(RecoveryRestoreOutcome::Restored {
++                    request_id: restore_request,
++                    document: restored_document,
++                })
++            );
+             let saved = root.join(if resident {
+                 "resident-restored.txt"
+             } else {
+@@ -5323,6 +5421,62 @@ mod tests {
+         workspace.replace(0, true);
+         assert!(workspace.pending_replace.is_none());
+     }
++
++    #[test]
++    fn tracked_recovery_restore_results_are_selective_and_bounded() {
++        let mut workspace = Workspace::new(Arc::new(|| {}), Arc::new(PagedFileSystem)).unwrap();
++        for request_id in 1..=32 {
++            workspace.record_recovery_restore(Some(request_id), Err(format!("failure {request_id}")));
++        }
++        assert_eq!(
++            workspace.take_recovery_restore_outcome(17),
++            Some(RecoveryRestoreOutcome::Failed {
++                request_id: 17,
++                error: "failure 17".into(),
++            })
++        );
++        assert!(workspace.take_recovery_restore_outcome(17).is_none());
++        assert_eq!(workspace.recovery_restore_outcomes.len(), 31);
++        workspace.record_recovery_restore(Some(33), Err("failure 33".into()));
++        assert!(
++            workspace
++                .restore_paged_recovery_tracked(PathBuf::from("checkpoint-over-capacity"))
++                .is_err()
++        );
++        assert_eq!(workspace.recovery_restore_outcomes.len(), 32);
++    }
++
++    #[test]
++    fn tracked_recovery_restore_worker_failure_publishes_a_consumable_terminal() {
++        let mut workspace = Workspace::new(Arc::new(|| {}), Arc::new(PagedFileSystem)).unwrap();
++        let request_id = workspace
++            .restore_paged_recovery_tracked(std::env::temp_dir().join(format!(
++                "bareline-missing-recovery-{}-{}",
++                std::process::id(),
++                std::time::SystemTime::now()
++                    .duration_since(std::time::UNIX_EPOCH)
++                    .unwrap()
++                    .as_nanos()
++            )))
++            .unwrap();
++        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
++        let outcome = loop {
++            workspace.pump();
++            if let Some(outcome) = workspace.take_recovery_restore_outcome(request_id) {
++                break outcome;
++            }
++            assert!(std::time::Instant::now() < deadline, "tracked restore stayed pending");
++            std::thread::sleep(std::time::Duration::from_millis(2));
++        };
++        assert!(matches!(
++            outcome,
++            RecoveryRestoreOutcome::Failed {
++                request_id: failed,
++                ref error,
++            } if failed == request_id && !error.is_empty()
++        ));
++        assert!(workspace.take_recovery_restore_outcome(request_id).is_none());
++    }
+ }
+ 
+ pub mod extensions;
+diff --git a/docs/implementation/2026-09-12-audit-implementation/PR-U05.md b/docs/implementation/2026-09-12-audit-implementation/PR-U05.md
+new file mode 100644
+index 0000000..b3581d7
+--- /dev/null
++++ b/docs/implementation/2026-09-12-audit-implementation/PR-U05.md
+@@ -0,0 +1,32 @@
++# PR-U05 — Recovery Center loading and live refresh
++
++## Scope
++
++Finding UX-06 on accepted U02 baseline `81d98190e8ba995dba656d5ce4247260bd537e6a`, plus isolated U02 compile correction `3a2fc582b11ec300306c5f35d1779c04dccc227b`. This package changes the Recovery Center discovery, rows, preview, actions, and accessibility status in `apps/bareline/src/windows_app/recovery.rs`. Its small `crates/app/src/workspace.rs` interface assigns tracked recovery restores a request ID and publishes a bounded typed terminal result only after the recovered editor is published or the owned worker fails. The shared modal and typed notification contracts accepted in U02 remain authoritative.
++
++The current blueprint reference is `docs/blueprint/mockups/bareline-recovery-center.png`: a clear Recovery Center heading, document rows as the primary content, a bounded selected-row preview, consequential actions at the bottom, and status/error information inside the modal.
++
++## Intended behavior
++
++Recovery content has explicit `Discovering`, `Ready(rows)`, and `Failed(error)` states. Every worker completion carries the discovery generation and root identity that launched it; stale completions cannot replace current content. Empty text appears only in terminal `Ready`.
++
++Opening and closing the center attaches or detaches only the preview worker. Global discovery continues independently. A ready result replaces rows while the center is open, preserves selection by recovery identity, and restarts preview only when the selected representative changes. A failed result exposes Retry and Close with the full error in UI Automation. Open and Close remain available while discovery is loading or failed; only checkpoint-dependent mutations are gated. The initial keyboard command and UI Automation focus identify the same visible action, and both the named activation keys and the character-space event route through it.
++
++When a discovery with rows completes while the center is closed, U02 publishes one transient completion notice for that generation. Export and delete terminal outcomes request a fresh fenced discovery. Restore records its request ID, checkpoint directory, root, and discovery generation, then waits for the matching Workspace terminal result. A matching successful editor publication starts refresh; a matching failure retains the checkpoint and publishes the full error; an old root or generation cannot refresh or surface stale failure. Tracked terminal results are bounded and selectively consumed. A removed selection moves to the nearest survivor and clears its preview.
++
++## Controlled evidence
++
++Deterministic controller tests publish tagged completions without timing sleeps and cover loading-to-ready live rows, terminal empty, stale root/generation rejection, failed retry semantics with full UIA error, identity-preserving selection, nearest-survivor refresh, closed one-time notification, preview/discovery lifetime separation, loading/failed opening, initial command focus, character-space activation, checkpoint-action gating during restore, and restore submission-to-terminal refresh/failure fencing. Existing resident/untitled and paged Workspace recovery fixtures now submit tracked restores and assert that the published terminal document identity matches the inserted editor; a missing-directory worker fixture asserts a full failure is consumable and does not remain pending. A bounded selective-retention test verifies another request's result is not removed. `rustfmt --check` parses the touched Rust modules and `git diff --check` verifies the patch.
++
++Root-owned contained commands requested:
++
++```text
++cargo test -p bareline recovery::tests -- --nocapture
++cargo test -p bareline-app tracked_recovery_restore -- --nocapture
++cargo test -p bareline-app paged_recovery_restart_preserves_opaque_undo_and_recovers_stale_pointer -- --nocapture
++cargo test -p bareline-app resident_and_untitled_automatic_recovery_restore_current_text -- --nocapture
++cargo test -p bareline accessibility::tests::complete_native_semantic_json_golden -- --nocapture
++cargo check -p bareline
++```
++
++The native acceptance journey remains root-owned: open during delayed discovery, verify that final empty never appears in flight, publish an Untitled checkpoint, observe the live row without reopening, exercise failure Retry through keyboard and UIA, and confirm refresh after the actual terminal restore, export, and delete outcomes. The semantic fixture will need regeneration/review because Recovery Center now includes its explicit status node and failure action set.

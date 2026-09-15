@@ -1,0 +1,279 @@
+diff --git a/crates/editor-surface/src/paged_navigation.rs b/crates/editor-surface/src/paged_navigation.rs
+index 3bfc493..be2f725 100644
+--- a/crates/editor-surface/src/paged_navigation.rs
++++ b/crates/editor-surface/src/paged_navigation.rs
+@@ -8,7 +8,7 @@ use bareline_document::{
+     paged::{PagedSnapshot, SparseLineIndex},
+ };
+ use std::sync::{
+-    Arc, Mutex,
++    Arc, Mutex, RwLock,
+     atomic::{AtomicBool, Ordering},
+     mpsc::{self, Receiver, TryRecvError},
+ };
+@@ -176,11 +176,28 @@ struct Active {
+     cancel: Arc<AtomicBool>,
+     result: Receiver<Result<NavigationResult, String>>,
+ }
++#[derive(Clone)]
++struct IndexReceipt {
++    snapshot: PagedSnapshot,
++    scanned: usize,
++    lines: Option<usize>,
++}
++
++#[cfg(test)]
++struct ScanHook {
++    entered: std::sync::mpsc::SyncSender<()>,
++    release: Receiver<()>,
++}
++
+ #[derive(Default)]
+ pub struct GlobalNavigation {
+     active: Option<Active>,
+     queued: Option<Job>,
+     index: Arc<Mutex<Option<(PagedSnapshot, SparseLineIndex)>>>,
++    receipt: Arc<RwLock<Option<IndexReceipt>>>,
++    observed_receipt: std::cell::RefCell<Option<IndexReceipt>>,
++    #[cfg(test)]
++    scan_hook: Option<ScanHook>,
+ }
+ impl GlobalNavigation {
+     pub fn new() -> Self {
+@@ -192,27 +209,40 @@ impl GlobalNavigation {
+     /// Fraction of the document the retained sparse line index has scanned, for
+     /// the status strip's determinate progress while line numbers are resolving.
+     pub fn index_progress(&self, expected: &PagedSnapshot) -> Option<f32> {
+-        let guard = self.index.lock().ok()?;
+-        let (snapshot, index) = guard.as_ref()?;
+-        if !snapshot.same_document(expected) || snapshot.content_state != expected.content_state {
+-            return None;
+-        }
+-        let total = snapshot.len();
++        let receipt = self.observed_index_receipt(expected)?;
++        let total = receipt.snapshot.len();
+         if total == 0 {
+             return Some(1.0);
+         }
+-        Some((index.scanned_to().0.min(total) as f32 / total as f32).clamp(0.0, 1.0))
++        Some((receipt.scanned.min(total) as f32 / total as f32).clamp(0.0, 1.0))
+     }
+     pub fn indexed_line_count(&self, expected: &PagedSnapshot) -> Option<usize> {
+-        let guard = self.index.lock().ok()?;
+-        let (snapshot, index) = guard.as_ref()?;
+-        if !snapshot.same_document(expected) || snapshot.content_state != expected.content_state {
+-            return None;
+-        }
+-        match index.line_count() {
+-            bareline_document::paged::LineCount::Known(count) => Some(count),
+-            bareline_document::paged::LineCount::Unknown => None,
++        self.observed_index_receipt(expected)?.lines
++    }
++    fn observed_index_receipt(&self, expected: &PagedSnapshot) -> Option<IndexReceipt> {
++        if let Ok(receipt) = self.receipt.try_read() {
++            *self.observed_receipt.borrow_mut() = receipt.clone();
+         }
++        self.observed_receipt.borrow().clone().filter(|receipt| {
++            receipt.snapshot.same_document(expected) && receipt.snapshot.content_state == expected.content_state
++        })
++    }
++    #[cfg(test)]
++    pub(crate) fn hold_next_scan(&mut self, entered: std::sync::mpsc::SyncSender<()>, release: Receiver<()>) {
++        self.scan_hook = Some(ScanHook { entered, release });
++    }
++    #[cfg(test)]
++    pub(crate) fn hold_receipt_write(
++        &self,
++        entered: std::sync::mpsc::SyncSender<()>,
++        release: Receiver<()>,
++    ) -> std::thread::JoinHandle<()> {
++        let receipt = self.receipt.clone();
++        std::thread::spawn(move || {
++            let _receipt = receipt.write().unwrap_or_else(|error| error.into_inner());
++            let _ = entered.send(());
++            let _ = release.recv_timeout(std::time::Duration::from_secs(5));
++        })
+     }
+     pub fn cancel(&mut self) {
+         self.queued = None;
+@@ -263,6 +293,9 @@ impl GlobalNavigation {
+         let snapshot = job.handle.snapshot().clone();
+         let target = job.target;
+         let retained = self.index.clone();
++        let receipt = self.receipt.clone();
++        #[cfg(test)]
++        let scan_hook = self.scan_hook.take();
+         let (tx, result) = mpsc::sync_channel(1);
+         std::thread::Builder::new()
+             .name("bareline-global-line".into())
+@@ -279,12 +312,19 @@ impl GlobalNavigation {
+                             .map_err(|e| format!("Global line index: {e:?}"))?;
+                         *retained = Some((job.handle.snapshot().clone(), index));
+                     }
++                    publish_index_receipt(&receipt, &retained.as_ref().unwrap().0, &retained.as_ref().unwrap().1);
++                    #[cfg(test)]
++                    if let Some(scan_hook) = scan_hook {
++                        let _ = scan_hook.entered.send(());
++                        let _ = scan_hook.release.recv_timeout(std::time::Duration::from_secs(5));
++                    }
+                     resolve(
+                         &job.handle,
+                         &mut retained.as_mut().unwrap().1,
+                         job.target,
+                         job.budget,
+                         &worker_cancel,
++                        &receipt,
+                     )
+                 })();
+                 let _ = tx.send(outcome);
+@@ -314,6 +354,20 @@ impl GlobalNavigation {
+         if cancelled { None } else { Some(result) }
+     }
+ }
++
++fn publish_index_receipt(receipt: &RwLock<Option<IndexReceipt>>, snapshot: &PagedSnapshot, index: &SparseLineIndex) {
++    let lines = match index.line_count() {
++        bareline_document::paged::LineCount::Known(count) => Some(count),
++        bareline_document::paged::LineCount::Unknown => None,
++    };
++    if let Ok(mut receipt) = receipt.write() {
++        *receipt = Some(IndexReceipt {
++            snapshot: snapshot.clone(),
++            scanned: index.scanned_to().0,
++            lines,
++        });
++    }
++}
+ impl Drop for GlobalNavigation {
+     fn drop(&mut self) {
+         self.cancel();
+@@ -326,6 +380,7 @@ fn lookup(
+     target: LineTarget,
+     budget: Budget,
+     cancelled: &AtomicBool,
++    receipt: &RwLock<Option<IndexReceipt>>,
+ ) -> Result<LineLookupPoll, String> {
+     let mut lookup = index
+         .lookup(target, budget)
+@@ -339,6 +394,7 @@ fn lookup(
+         index
+             .retain_lookup_progress(&lookup)
+             .map_err(|e| format!("Global line checkpoint: {e:?}"))?;
++        publish_index_receipt(receipt, handle.snapshot(), index);
+         match result {
+             result @ (LineLookupPoll::Line(_) | LineLookupPoll::Range(_)) => return Ok(result),
+             LineLookupPoll::Pending(ticket) => {
+@@ -364,6 +420,7 @@ fn resolve(
+     target: NavigationTarget,
+     budget: Budget,
+     cancelled: &AtomicBool,
++    receipt: &RwLock<Option<IndexReceipt>>,
+ ) -> Result<NavigationResult, String> {
+     let snapshot = handle.snapshot().clone();
+     let line = match target {
+@@ -371,13 +428,21 @@ fn resolve(
+             usize::try_from(line).map_err(|_| "Logical line exceeds this platform's range")?
+         }
+         NavigationTarget::Byte(offset) => {
+-            match lookup(handle, index, LineTarget::Byte(offset), budget.clone(), cancelled)? {
++            match lookup(
++                handle,
++                index,
++                LineTarget::Byte(offset),
++                budget.clone(),
++                cancelled,
++                receipt,
++            )? {
+                 LineLookupPoll::Line(line) => line,
+                 _ => return Err("Global byte lookup returned no line".into()),
+             }
+         }
+     };
+-    let LineLookupPoll::Range(range) = lookup(handle, index, LineTarget::Line(line), budget, cancelled)? else {
++    let LineLookupPoll::Range(range) = lookup(handle, index, LineTarget::Line(line), budget, cancelled, receipt)?
++    else {
+         return Err("Global line lookup returned no range".into());
+     };
+     let offset = match target {
+diff --git a/crates/editor-surface/src/paged_view.rs b/crates/editor-surface/src/paged_view.rs
+index 654c4b2..7224859 100644
+--- a/crates/editor-surface/src/paged_view.rs
++++ b/crates/editor-surface/src/paged_view.rs
+@@ -4406,6 +4406,46 @@ mod peer_tests {
+                 .any(|segment| segment.contains("estimated"))
+         );
+ 
++        // Hold a real scan after it acquires the mutable sparse index. UI pump,
++        // status reads and cancellation must all complete before the worker is
++        // released; the coordinator releases on timeout so a regression fails
++        // instead of hanging the test process.
++        let (held_tx, held_rx) = mpsc::sync_channel(1);
++        let (release_tx, release_rx) = mpsc::sync_channel(1);
++        view.navigation.hold_next_scan(held_tx, release_rx);
++        let handle = view.read_handle();
++        let navigation_budget = view.budget.clone();
++        view.navigation
++            .request(
++                handle,
++                crate::paged_navigation::NavigationTarget::Byte(TextOffset(view.snapshot().len() / 2)),
++                navigation_budget,
++                Arc::new(|| {}),
++            )
++            .unwrap();
++        held_rx.recv_timeout(Duration::from_secs(5)).unwrap();
++        let (ui_done_tx, ui_done_rx) = mpsc::sync_channel(1);
++        let coordinator = std::thread::spawn(move || {
++            let completed_before_release = ui_done_rx.recv_timeout(Duration::from_secs(2)).is_ok();
++            let _ = release_tx.send(());
++            completed_before_release
++        });
++        view.pump();
++        assert_eq!(view.index_fraction(), Some(0.0));
++        assert!(
++            view.surface
++                .status_segments("Plain text")
++                .iter()
++                .any(|segment| segment.contains("estimated"))
++        );
++        view.request_byte_scroll_in_view(0.0, 400.0).unwrap();
++        ui_done_tx.send(()).unwrap();
++        assert!(
++            coordinator.join().unwrap(),
++            "UI pump/status/cancel waited for the held line scan"
++        );
++        drain(&mut view);
++
+         // Scan almost all of the real retained sparse index. Approximate progress
+         // is deliberately above the former 99.9% threshold, but EOF has not been
+         // observed and the line count must remain estimated.
+@@ -4465,6 +4505,14 @@ mod peer_tests {
+             !view.refresh_gutter_accuracy(),
+             "exact transition repeated without a state change"
+         );
++        let (receipt_held_tx, receipt_held_rx) = mpsc::sync_channel(1);
++        let (receipt_release_tx, receipt_release_rx) = mpsc::sync_channel(1);
++        let receipt_guard = view.navigation.hold_receipt_write(receipt_held_tx, receipt_release_rx);
++        receipt_held_rx.recv_timeout(Duration::from_secs(5)).unwrap();
++        assert!(!view.refresh_gutter_accuracy());
++        assert!(!view.gutter_lines_estimated());
++        receipt_release_tx.send(()).unwrap();
++        receipt_guard.join().unwrap();
+         let mut exact_ops = Vec::new();
+         view.surface.draw(&mut backend, 800.0, 400.0, &mut exact_ops).unwrap();
+         let exact_label = exact_ops
+diff --git a/docs/implementation/2026-09-12-audit-implementation/PR-U13.md b/docs/implementation/2026-09-12-audit-implementation/PR-U13.md
+index c4be9b0..02a5ca9 100644
+--- a/docs/implementation/2026-09-12-audit-implementation/PR-U13.md
++++ b/docs/implementation/2026-09-12-audit-implementation/PR-U13.md
+@@ -7,9 +7,10 @@
+ ## Evidence
+ 
+ - Paged views now carry explicit estimated/exact gutter state tied to a known terminal line count in the retained sparse index for the same document/content generation. Progress percentages remain presentation only and cannot establish exactness. A change only requests a repaint; it does not invalidate shaped text, alter byte navigation, or rebuild global mappings.
++- The line worker publishes short-lock, generation-qualified progress/count receipts while retaining exclusive ownership of the mutable sparse index through page waits. UI pump/status reads use a nonblocking receipt observation and preserve the last matching terminal receipt during brief publication contention. New generations filter old receipts, and cancellation only touches the active atomic owner.
+ - While incomplete, every visible label keeps its verified global number and paints a separate `~` cue in a fixed gutter column plus the existing muted color. The fixed column preserves numeral alignment at scaled DPI and does not depend on italic font availability.
+ - The status strip says line numbers are estimated and prefixes its line value with `~`. Accessibility describes the visible gutter range and caret line as estimated; the stable status nodes change to exact text once when the index reaches completion.
+-- `peer_tests::go_to_end_resolves_to_the_last_line_once_the_index_is_complete` now paints an actual forced-paged viewport while its retained index is incomplete, proves an index above 99.9% remains estimated until EOF establishes its line count, and verifies the same row then loses the marker, retains its global number, reports the exact count, and does not repeat the transition. Installing a later complete resident viewport slice must preserve the full paged index's exact state.
++- `peer_tests::go_to_end_resolves_to_the_last_line_once_the_index_is_complete` now holds an actual scan after mutable-index acquisition and proves UI pump, progress/status reads and cancellation finish before release. It then proves an index above 99.9% remains estimated until EOF establishes its line count, preserves exact state during a held receipt publication lock, and verifies the same row loses the marker, retains its global number, reports the exact count, and does not repeat the transition. Installing a later complete resident viewport slice must preserve the full paged index's exact state.
+ - Static checks in the private worktree: direct `rustfmt --edition 2024` on all four changed Rust files and `git diff --check`. Cargo remains central by policy.
+ 
+ ## Proposed contained integration command

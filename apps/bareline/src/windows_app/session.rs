@@ -6,7 +6,7 @@ use bareline_app::{
     session_ui::{RestoreQueue, RestoreState},
 };
 use bareline_document::{DocumentSnapshot, TextOffset};
-use bareline_file_io::session::{SessionDocument, SessionManifest, SessionTab, ViewState};
+use bareline_file_io::session::{SessionDocument, SessionManifest, SessionTab, SessionWindow, ViewState};
 use bareline_platform::{SerializedPath, TrustedRead};
 use std::{
     collections::{HashMap, HashSet},
@@ -24,20 +24,15 @@ enum CapturedDocument {
 impl CapturedDocument {
     fn new(editor: &bareline_app::workspace::WorkspaceEditor) -> Self {
         match editor {
-            bareline_app::workspace::WorkspaceEditor::Resident(editor) => {
-                Self::Resident(editor.snapshot().clone())
-            }
-            bareline_app::workspace::WorkspaceEditor::Paged(editor) => {
-                Self::Paged(editor.snapshot().clone())
-            }
+            bareline_app::workspace::WorkspaceEditor::Resident(editor) => Self::Resident(editor.snapshot().clone()),
+            bareline_app::workspace::WorkspaceEditor::Paged(editor) => Self::Paged(editor.snapshot().clone()),
         }
     }
     fn same_editor(&self, editor: &bareline_app::workspace::WorkspaceEditor) -> bool {
         match (self, editor) {
-            (
-                Self::Resident(snapshot),
-                bareline_app::workspace::WorkspaceEditor::Resident(editor),
-            ) => snapshot.same_document(editor.snapshot()),
+            (Self::Resident(snapshot), bareline_app::workspace::WorkspaceEditor::Resident(editor)) => {
+                snapshot.same_document(editor.snapshot())
+            }
             (Self::Paged(snapshot), bareline_app::workspace::WorkspaceEditor::Paged(editor)) => {
                 snapshot.same_document(editor.snapshot())
             }
@@ -46,10 +41,9 @@ impl CapturedDocument {
     }
     fn same_state(&self, editor: &bareline_app::workspace::WorkspaceEditor) -> bool {
         match (self, editor) {
-            (
-                Self::Resident(snapshot),
-                bareline_app::workspace::WorkspaceEditor::Resident(editor),
-            ) => snapshot.content_state == editor.snapshot().content_state,
+            (Self::Resident(snapshot), bareline_app::workspace::WorkspaceEditor::Resident(editor)) => {
+                snapshot.content_state == editor.snapshot().content_state
+            }
             (Self::Paged(snapshot), bareline_app::workspace::WorkspaceEditor::Paged(editor)) => {
                 snapshot.content_state == editor.snapshot().content_state
             }
@@ -63,6 +57,8 @@ struct Restored {
 }
 pub(super) struct SessionRuntime {
     path: Option<PathBuf>,
+    restore_path: Option<PathBuf>,
+    restore_authorized: bool,
     restore: bool,
     started: bool,
     service: Option<SessionService>,
@@ -81,8 +77,9 @@ pub(super) struct SessionRuntime {
 impl Default for SessionRuntime {
     fn default() -> Self {
         Self {
-            path: std::env::var_os("APPDATA")
-                .map(|root| PathBuf::from(root).join("Bareline/session.json")),
+            path: std::env::var_os("APPDATA").map(|root| PathBuf::from(root).join("Bareline/session.json")),
+            restore_path: None,
+            restore_authorized: false,
             restore: true,
             started: false,
             service: None,
@@ -101,9 +98,20 @@ impl Default for SessionRuntime {
     }
 }
 impl SessionRuntime {
-    pub(super) fn configure(&mut self, path: Option<PathBuf>, restore: bool) {
+    pub(super) fn configure(&mut self, path: Option<PathBuf>, restore_path: Option<PathBuf>, restore: bool) {
         self.path = path;
+        self.restore_path = restore_path;
+        self.restore_authorized = self.restore_path.is_some();
         self.restore = restore;
+    }
+    pub(super) fn set_restore_path(&mut self, path: Option<PathBuf>) -> bool {
+        if !self.started {
+            self.restore_authorized = path.is_some();
+            self.restore_path = path;
+            true
+        } else {
+            false
+        }
     }
     pub(super) fn startup_pending(&self) -> bool {
         self.load.is_some() || self.queue.as_ref().is_some_and(RestoreQueue::pending)
@@ -135,7 +143,10 @@ impl Shell {
         {
             return;
         }
-        let Some(path) = self.session.path.clone() else {
+        if !self.session.restore_authorized {
+            return;
+        }
+        let Some(path) = self.session.restore_path.clone() else {
             return;
         };
         self.ledger.record(StartupAction::SpawnWorker);
@@ -149,11 +160,19 @@ impl Shell {
         }
     }
     fn session_message(&mut self, message: String) {
-        if let Some(workspace) = &mut self.workspace {
-            workspace.message = Some(message);
-        } else {
-            eprintln!("event=session message={message}");
-        }
+        eprintln!("event=session message={message}");
+        let revision = toast::next_revision();
+        self.toasts.push_typed(
+            format!("session-outcome-{revision}"),
+            revision,
+            bareline_ui::theme::ToastLevel::Error,
+            toast::NotificationKind::Outcome,
+            message,
+            None,
+            None,
+            toast::NotificationLifetime::Persistent,
+            Instant::now(),
+        );
         if let Some(window) = &self.window {
             window.request_redraw();
         }
@@ -162,14 +181,10 @@ impl Shell {
         if !self.first_frame {
             return;
         }
-        let loaded = self
-            .session
-            .load
-            .as_ref()
-            .and_then(|ticket| match ticket.try_recv() {
-                Err(TryRecvError::Empty) => None,
-                result => Some(result),
-            });
+        let loaded = self.session.load.as_ref().and_then(|ticket| match ticket.try_recv() {
+            Err(TryRecvError::Empty) => None,
+            result => Some(result),
+        });
         if let Some(result) = loaded {
             self.session.load = None;
             if let Some(window) = &self.window {
@@ -177,9 +192,25 @@ impl Shell {
             }
             match result {
                 Ok(SessionCompletion::Loaded(Ok(loaded))) => {
-                    let diagnostic_warning=(!loaded.diagnostics.is_empty()).then(||format!("{}{}",if loaded.recovered_previous {"Recovered the previous session generation. "}else{""},loaded.diagnostics.summary()));
+                    if let Some(saved) = loaded.manifest.window {
+                        self.restore_window(saved);
+                    }
+                    let diagnostic_warning = (!loaded.diagnostics.is_empty()).then(|| {
+                        format!(
+                            "{}{}",
+                            if loaded.recovered_previous {
+                                "Recovered the previous session generation. "
+                            } else {
+                                ""
+                            },
+                            loaded.diagnostics.summary()
+                        )
+                    });
                     if !loaded.manifest.recent.is_empty() && self.ensure_workspace(el) {
-                        self.workspace.as_mut().unwrap().restore_recent_paths(&loaded.manifest.recent);
+                        self.workspace
+                            .as_mut()
+                            .unwrap()
+                            .restore_recent_paths(&loaded.manifest.recent);
                     }
                     if !loaded.manifest.documents.is_empty() && self.ensure_workspace(el) {
                         let warning = loaded.recovered_previous;
@@ -201,13 +232,7 @@ impl Shell {
                                         .iter()
                                         .filter(|tab| tab.document_id == id)
                                         .find(|tab| Some(tab.id) == active)
-                                        .or_else(|| {
-                                            queue
-                                                .manifest()
-                                                .tabs
-                                                .iter()
-                                                .find(|tab| tab.document_id == id)
-                                        })
+                                        .or_else(|| queue.manifest().tabs.iter().find(|tab| tab.document_id == id))
                                         .cloned();
                                     if let Some(tab) = tab {
                                         let workspace = self.workspace.as_mut().unwrap();
@@ -216,9 +241,7 @@ impl Shell {
                                             apply_view(workspace, index, &tab.view);
                                             self.session.restored.push(Restored {
                                                 tab,
-                                                snapshot: CapturedDocument::new(
-                                                    &workspace.editors[index],
-                                                ),
+                                                snapshot: CapturedDocument::new(&workspace.editors[index]),
                                             });
                                         }
                                     } else {
@@ -228,24 +251,23 @@ impl Shell {
                                 }
                                 self.session.queue = Some(queue);
                                 if warning {
-                                    self.session_message("Recovered the previous session manifest; the latest was unavailable.".into());
+                                    self.session_message(
+                                        "Recovered the previous session manifest; the latest was unavailable.".into(),
+                                    );
                                 }
                             }
-                            Err(error) => {
-                                self.session_message(format!("Session restore refused: {error}"))
-                            }
+                            Err(error) => self.session_message(format!("Session restore refused: {error}")),
                         }
                     }
-                    if let Some(warning)=diagnostic_warning {self.session_message(warning);}
+                    if let Some(warning) = diagnostic_warning {
+                        self.session_message(warning);
+                    }
                 }
-                Ok(SessionCompletion::Loaded(Err(error)))
-                    if error.kind() == std::io::ErrorKind::NotFound => {}
+                Ok(SessionCompletion::Loaded(Err(error))) if error.kind() == std::io::ErrorKind::NotFound => {}
                 Ok(SessionCompletion::Loaded(Err(error))) => {
                     self.session_message(format!("Session restore unavailable: {error}"))
                 }
-                _ => {
-                    self.session_message("Session worker stopped before restore completed.".into())
-                }
+                _ => self.session_message("Session worker stopped before restore completed.".into()),
             }
         }
         let resolved = self
@@ -272,21 +294,14 @@ impl Shell {
                                 if let Some(queue) = &mut self.session.queue {
                                     queue.reject(id, error.to_string());
                                 }
-                                self.session_message(format!(
-                                    "A session file could not be restored: {error}"
-                                ));
+                                self.session_message(format!("A session file could not be restored: {error}"));
                             }
                         }
                     }
                 }
                 _ => {
                     if let Some(queue) = &mut self.session.queue {
-                        let ids: Vec<_> = queue
-                            .manifest()
-                            .documents
-                            .iter()
-                            .map(|doc| doc.id)
-                            .collect();
+                        let ids: Vec<_> = queue.manifest().documents.iter().map(|doc| doc.id).collect();
                         for id in ids {
                             queue.reject(id, "Session trust worker stopped".into());
                         }
@@ -301,9 +316,9 @@ impl Shell {
             .iter()
             .filter_map(|(id, pending)| {
                 let workspace = self.workspace.as_ref()?;
-                if let Some(index) = (0..workspace.editors.len()).find(|index| {
-                    workspace.path(*index) == Some(pending.guard.trust.canonical.as_path())
-                }) {
+                if let Some(index) = (0..workspace.editors.len())
+                    .find(|index| workspace.path(*index) == Some(pending.guard.trust.canonical.as_path()))
+                {
                     if workspace.editors[index].busy() {
                         return None;
                     }
@@ -319,11 +334,7 @@ impl Shell {
             let pending = self.session.opening.remove(&id).unwrap();
             let success = index.is_some();
             if let Some(index) = index {
-                let active = self
-                    .session
-                    .queue
-                    .as_ref()
-                    .and_then(|q| q.manifest().active_tab);
+                let active = self.session.queue.as_ref().and_then(|q| q.manifest().active_tab);
                 if let Some(tab) = pending
                     .tabs
                     .iter()
@@ -365,14 +376,7 @@ impl Shell {
                         .into_iter()
                         .filter(|id| matches!(queue.state(*id), Some(RestoreState::AwaitingTrust)))
                         .take(2 - self.session.opening.len())
-                        .filter_map(|id| {
-                            queue
-                                .manifest()
-                                .documents
-                                .iter()
-                                .find(|doc| doc.id == id)
-                                .cloned()
-                        })
+                        .filter_map(|id| queue.manifest().documents.iter().find(|doc| doc.id == id).cloned())
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default();
@@ -387,76 +391,63 @@ impl Shell {
                     .and_then(|service| service.submit(request))
                 {
                     Ok(ticket) => self.session.resolve = Some(ticket),
-                    Err(error) => {
-                        self.session_message(format!("Session trust unavailable: {error}"))
-                    }
+                    Err(error) => self.session_message(format!("Session trust unavailable: {error}")),
                 }
             }
         }
-        while let Some(open) = self
-            .session
-            .queue
-            .as_mut()
-            .and_then(RestoreQueue::next_open)
-        {
+        while let Some(open) = self.session.queue.as_mut().and_then(RestoreQueue::next_open) {
             let Some(guard) = self.session.guards.remove(&open.document_id) else {
                 if let Some(queue) = &mut self.session.queue {
-                    queue.completed(
-                        open.document_id,
-                        Err("Missing retained trust capability".into()),
-                    );
+                    queue.completed(open.document_id, Err("Missing retained trust capability".into()));
                 }
                 continue;
             };
             if let Some(workspace) = &mut self.workspace {
                 self.ledger.record(StartupAction::ReadDocument);
                 workspace.open(open.path);
-                self.session.opening.insert(
-                    open.document_id,
-                    Restoring {
-                        guard,
-                        tabs: open.tabs,
-                    },
-                );
+                self.session
+                    .opening
+                    .insert(open.document_id, Restoring { guard, tabs: open.tabs });
             }
         }
         self.session_finish_restore();
         self.session_resolve_languages();
-        let saved = self
-            .session
-            .save
-            .as_ref()
-            .and_then(|ticket| match ticket.try_recv() {
-                Err(TryRecvError::Empty) => None,
-                result => Some(result),
-            });
+        let saved = self.session.save.as_ref().and_then(|ticket| match ticket.try_recv() {
+            Err(TryRecvError::Empty) => None,
+            result => Some(result),
+        });
         if let Some(result) = saved {
             self.session.save = None;
             match result {
                 Ok(SessionCompletion::Written(Ok(()))) => {
                     if self.session.exit_requested {
-                        let unchanged = self.workspace.as_ref().is_some_and(|workspace| {
-                            exit_unchanged(workspace, &self.session.exit_snapshots)
-                        });
+                        let unchanged = self
+                            .workspace
+                            .as_ref()
+                            .is_some_and(|workspace| exit_unchanged(workspace, &self.session.exit_snapshots));
                         if unchanged {
                             el.exit();
                         } else {
                             self.session.exit_requested = false;
-                            self.session_message("Documents changed while saving the session. Close again to review unsaved changes.".into());
+                            self.session_message(
+                                "Documents changed while saving the session. Close again to review unsaved changes."
+                                    .into(),
+                            );
                         }
                     }
                 }
                 Ok(SessionCompletion::Written(Err(error))) => {
                     self.session.exit_requested = false;
                     self.session.exit_failed = true;
-                    self.session_message(format!("Session could not be saved: {error}. Close again to exit without session persistence."));
+                    self.session_message(format!(
+                        "Session could not be saved: {error}. Close again to exit without session persistence."
+                    ));
                 }
                 _ => {
                     self.session.exit_requested = false;
                     self.session.exit_failed = true;
                     self.session_message(
-                        "Session worker stopped. Close again to exit without session persistence."
-                            .into(),
+                        "Session worker stopped. Close again to exit without session persistence.".into(),
                     );
                 }
             }
@@ -467,8 +458,7 @@ impl Shell {
         }
     }
     fn session_finish_restore(&mut self) {
-        if self.session.finalized || self.session.startup_pending() || self.session.queue.is_none()
-        {
+        if self.session.finalized || self.session.startup_pending() || self.session.queue.is_none() {
             return;
         }
         self.session.finalized = true;
@@ -485,10 +475,7 @@ impl Shell {
                 .restored
                 .iter()
                 .find(|r| r.tab.document_id == tab.document_id)
-                && let Some(index) = workspace
-                    .editors
-                    .iter()
-                    .position(|e| restored.snapshot.same_editor(e))
+                && let Some(index) = workspace.editors.iter().position(|e| restored.snapshot.same_editor(e))
                 && !order.contains(&index)
             {
                 order.push(index);
@@ -526,15 +513,10 @@ impl Shell {
                 .restored
                 .iter()
                 .find(|r| r.tab.document_id == active.document_id)
-            && let Some(index) = workspace
-                .editors
-                .iter()
-                .position(|e| restored.snapshot.same_editor(e))
+            && let Some(index) = workspace.editors.iter().position(|e| restored.snapshot.same_editor(e))
         {
             self.app.active = index;
         }
-        self.views
-            .restore_session(workspace, &mut self.app, queue.manifest(), &view_tabs);
         if let Some(compare) = &queue.manifest().compare {
             let documents: Vec<_> = view_tabs
                 .iter()
@@ -547,25 +529,32 @@ impl Shell {
                         .map(|tab| (tab.document_id, *index))
                 })
                 .collect();
-            match self.compare.restore(
-                workspace,
-                &mut self.views,
-                compare,
-                &documents,
-                self.notify.clone(),
-            ) {
+            match self
+                .compare
+                .restore(workspace, &mut self.views, compare, &documents, self.notify.clone())
+            {
                 Ok(index) => self.app.active = index,
                 Err(error) => workspace.message = Some(error),
             }
         }
+        // Comparison setup assigns documents and reinstalls panes. Restore the
+        // persisted views last so it cannot replace their carets or active pane.
+        self.views
+            .restore_session(workspace, &mut self.app, queue.manifest(), &view_tabs);
+        let panel = match queue.manifest().layout.bottom_panel.as_deref() {
+            Some("search") => Some(super::dock::DockTab::Search),
+            Some("compare") => Some(super::dock::DockTab::Compare),
+            Some("output") => Some(super::dock::DockTab::Output),
+            _ => None,
+        };
+        self.dock.restore(
+            panel,
+            queue.manifest().layout.bottom_panel_collapsed,
+            f32::from_bits(queue.manifest().layout.bottom_panel_height_bits),
+        );
     }
     pub(super) fn session_before_exit(&mut self, _el: &ActiveEventLoop) -> bool {
-        if !self.first_frame
-            || self.smoke
-            || self.perf
-            || self.prototype.is_some()
-            || self.session.exit_failed
-        {
+        if !self.first_frame || self.smoke || self.perf || self.prototype.is_some() || self.session.exit_failed {
             return false;
         }
         if self.session.exit_requested {
@@ -584,36 +573,82 @@ impl Shell {
         };
         let manifest = self.capture_session();
         match manifest.and_then(|manifest| {
-            self.session
-                .service(self.notify.clone())
-                .and_then(|service| {
-                    service.submit(SessionRequest::Save {
-                        path,
-                        manifest: Box::new(manifest),
-                    })
+            self.session.service(self.notify.clone()).and_then(|service| {
+                service.submit(SessionRequest::Save {
+                    path,
+                    manifest: Box::new(manifest),
                 })
+            })
         }) {
             Ok(ticket) => {
                 self.session.save = Some(ticket);
                 self.session.exit_snapshots = self
                     .workspace
                     .as_ref()
-                    .map(|workspace| {
-                        workspace
-                            .editors
-                            .iter()
-                            .map(CapturedDocument::new)
-                            .collect()
-                    })
+                    .map(|workspace| workspace.editors.iter().map(CapturedDocument::new).collect())
                     .unwrap_or_default();
                 self.session.exit_requested = true;
                 true
             }
             Err(error) => {
                 self.session.exit_failed = true;
-                self.session_message(format!("Session could not be saved: {error}. Close again to exit without session persistence."));
+                self.session_message(format!(
+                    "Session could not be saved: {error}. Close again to exit without session persistence."
+                ));
                 true
             }
+        }
+    }
+    /// Records where the window is so the next launch opens in the same place.
+    /// A minimized window keeps whatever placement was saved before.
+    fn capture_window(&self) -> Option<SessionWindow> {
+        let window = self.window.as_ref()?;
+        if window.is_minimized().unwrap_or(false) {
+            return self.session.queue.as_ref().and_then(|queue| queue.manifest().window);
+        }
+        // Inner size pairs with `request_inner_size` on restore so the window
+        // does not grow by the frame width on every restart.
+        let size = window.inner_size();
+        if size.width == 0 || size.height == 0 {
+            return None;
+        }
+        let position = window.outer_position().ok()?;
+        Some(SessionWindow {
+            x: position.x,
+            y: position.y,
+            width: size.width,
+            height: size.height,
+            maximized: window.is_maximized(),
+        })
+    }
+    /// Restores a saved placement, but only when it still lands on a connected
+    /// monitor: an unplugged second screen must not hide the window.
+    fn restore_window(&self, saved: SessionWindow) {
+        let Some(window) = self.window.as_ref() else {
+            return;
+        };
+        if saved.width == 0 || saved.height == 0 {
+            return;
+        }
+        let left = saved.x;
+        let top = saved.y;
+        let right = left.saturating_add(saved.width as i32);
+        let bottom = top.saturating_add(saved.height as i32);
+        let visible = window.available_monitors().any(|monitor| {
+            let origin = monitor.position();
+            let size = monitor.size();
+            let m_right = origin.x.saturating_add(size.width as i32);
+            let m_bottom = origin.y.saturating_add(size.height as i32);
+            // Require a real overlap, not a single shared pixel row.
+            left < m_right - 64 && right > origin.x + 64 && top < m_bottom - 32 && bottom > origin.y
+        });
+        if !visible {
+            return;
+        }
+        let _ = window.request_inner_size(winit::dpi::PhysicalSize::new(saved.width, saved.height));
+        window.set_outer_position(winit::dpi::PhysicalPosition::new(saved.x, saved.y));
+        if saved.maximized {
+            window.set_maximized(true);
         }
     }
     fn capture_session(&self) -> std::io::Result<SessionManifest> {
@@ -654,10 +689,7 @@ impl Shell {
             } else {
                 let id = next;
                 next = next.checked_add(1).ok_or_else(|| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        "session identity exhausted",
-                    )
+                    std::io::Error::new(std::io::ErrorKind::InvalidData, "session identity exhausted")
                 })?;
                 SessionTab {
                     id,
@@ -667,27 +699,20 @@ impl Shell {
                 }
             };
             used.insert(tab.id);
-            if let Some((_, id)) = captured
-                .iter()
-                .find(|(snapshot, _)| snapshot.same_editor(editor))
-            {
+            if let Some((_, id)) = captured.iter().find(|(snapshot, _)| snapshot.same_editor(editor)) {
                 tab.document_id = *id;
             }
             tab.view.language = editor.session_language_selection();
-            tab.view.caret = editor.selection.caret as u64;
-            tab.view.anchor = editor.selection.anchor as u64;
+            tab.view.caret = editor.viewport().selection.caret as u64;
+            tab.view.anchor = editor.viewport().selection.anchor as u64;
             if let bareline_app::workspace::WorkspaceEditor::Paged(paged) = editor {
-                let selection=paged.global_selection();
-                tab.view.caret=selection.1.0 as u64;
-                tab.view.anchor=selection.0.0 as u64;
+                let selection = paged.global_selection();
+                tab.view.caret = selection.1.0 as u64;
+                tab.view.anchor = selection.0.0 as u64;
             }
-            tab.view.scroll_y_bits = editor.scroll_y.max(0.0).to_bits();
+            tab.view.scroll_y_bits = editor.viewport().scroll_y.max(0.0).to_bits();
             tab.view.folds = editor.persisted_folds();
-            if !manifest
-                .documents
-                .iter()
-                .any(|doc| doc.id == tab.document_id)
-            {
+            if !manifest.documents.iter().any(|doc| doc.id == tab.document_id) {
                 manifest.documents.push(SessionDocument {
                     id: tab.document_id,
                     path: workspace.path(index).map(SerializedPath::from_native),
@@ -704,12 +729,7 @@ impl Shell {
         }
         if let Some(queue) = &self.session.queue {
             for tab in &queue.manifest().tabs {
-                if !used.contains(&tab.id)
-                    && manifest
-                        .documents
-                        .iter()
-                        .any(|doc| doc.id == tab.document_id)
-                {
+                if !used.contains(&tab.id) && manifest.documents.iter().any(|doc| doc.id == tab.document_id) {
                     manifest.tabs.push(tab.clone());
                 }
             }
@@ -736,15 +756,12 @@ impl Shell {
             if Some(tab.id) == manifest.active_tab {
                 manifest.layout.active_pane = tab.view.split;
             }
-            if manifest.layout.active_tabs[tab.view.split as usize].is_none()
-                || Some(tab.id) == manifest.active_tab
-            {
+            if manifest.layout.active_tabs[tab.view.split as usize].is_none() || Some(tab.id) == manifest.active_tab {
                 manifest.layout.active_tabs[tab.view.split as usize] = Some(tab.id);
             }
         }
         // Preserve pinned partition without changing relative order inside each partition.
-        self.views
-            .capture_session(workspace, &mut manifest, &view_tabs);
+        self.views.capture_session(workspace, &mut manifest, &view_tabs);
         let documents: Vec<_> = view_tabs
             .iter()
             .filter_map(|(index, id)| {
@@ -756,8 +773,20 @@ impl Shell {
             })
             .collect();
         manifest.compare = self.compare.capture(workspace, &documents);
+        let (panel, collapsed, height) = self.dock.persisted();
+        manifest.layout.bottom_panel = panel.map(|panel| {
+            match panel {
+                super::dock::DockTab::Search => "search",
+                super::dock::DockTab::Compare => "compare",
+                super::dock::DockTab::Output => "output",
+            }
+            .into()
+        });
+        manifest.layout.bottom_panel_collapsed = collapsed;
+        manifest.layout.bottom_panel_height_bits = height.to_bits();
         manifest.tabs.sort_by_key(|tab| !tab.pinned);
         manifest.recent = workspace.recent_paths().to_vec();
+        manifest.window = self.capture_window();
         manifest.validate()?;
         Ok(manifest)
     }
@@ -769,9 +798,7 @@ fn exit_unchanged(workspace: &Workspace, captured: &[CapturedDocument]) -> bool 
             .editors
             .iter()
             .zip(captured)
-            .all(|(editor, captured)| {
-                !editor.busy() && captured.same_editor(editor) && captured.same_state(editor)
-            })
+            .all(|(editor, captured)| !editor.busy() && captured.same_editor(editor) && captured.same_state(editor))
 }
 
 fn apply_view(workspace: &mut Workspace, index: usize, view: &ViewState) {
@@ -789,9 +816,7 @@ fn apply_view(workspace: &mut Workspace, index: usize, view: &ViewState) {
         return;
     }
     let bound = |raw: u64| {
-        let mut offset = usize::try_from(raw)
-            .unwrap_or(usize::MAX)
-            .min(editor.snapshot().len());
+        let mut offset = usize::try_from(raw).unwrap_or(usize::MAX).min(editor.snapshot().len());
         while !editor.snapshot().is_boundary(TextOffset(offset)) {
             offset -= 1;
         }
@@ -799,9 +824,9 @@ fn apply_view(workspace: &mut Workspace, index: usize, view: &ViewState) {
     };
     let caret = bound(view.caret);
     let anchor = bound(view.anchor);
-    editor.selection.caret = caret;
-    editor.selection.anchor = anchor;
-    editor.scroll_y = f64::from_bits(view.scroll_y_bits);
+    editor.viewport_mut().selection.caret = caret;
+    editor.viewport_mut().selection.anchor = anchor;
+    editor.viewport_mut().scroll_y = f64::from_bits(view.scroll_y_bits);
     editor.restore_folds(&view.folds);
 }
 
@@ -810,11 +835,8 @@ mod close_tests {
     use super::*;
     #[test]
     fn deferred_session_write_cannot_exit_after_an_intervening_edit_or_new_tab() {
-        let mut workspace = Workspace::new(
-            Arc::new(|| {}),
-            Arc::new(bareline_platform_windows::WindowsFileSystem),
-        )
-        .unwrap();
+        let mut workspace =
+            Workspace::new(Arc::new(|| {}), Arc::new(bareline_platform_windows::WindowsFileSystem)).unwrap();
         workspace.new_document().unwrap();
         let captured = vec![CapturedDocument::new(&workspace.editors[0])];
         assert!(exit_unchanged(&workspace, &captured));
@@ -835,19 +857,38 @@ mod close_tests {
 }
 
 impl Shell {
-    fn session_resolve_languages(&mut self){
-        if !self.language.controller.catalog_ready(){return;}
-        let catalog=&self.language.controller;
-        let resolve=|editor:&mut bareline_editor_surface::EditorSurface|{
-            let Some(selection)=editor.pending_session_language.take()else{return;};
+    fn session_resolve_languages(&mut self) {
+        if !self.language.controller.catalog_ready() {
+            return;
+        }
+        let catalog = &self.language.controller;
+        let resolve = |editor: &mut bareline_editor_surface::EditorSurface| {
+            let Some(selection) = editor.pending_session_language.take() else {
+                return;
+            };
             // An explicit selection made after restore supersedes its deferred catalog lookup.
-            if editor.udl.is_some()||editor.language_override.is_some(){return;}
-            if let bareline_file_io::session::LanguageSelection::Udl(id)=selection{
-                if let Some(definition)=catalog.definition_by_id(&id){editor.udl=Some(definition);}
-                else{editor.language=bareline_syntax::Language::PlainText;editor.language_override=Some(bareline_syntax::Language::PlainText);editor.error=Some(format!("Saved user language {id} is unavailable; using plain text. Import its definition explicitly to select it again."));}
+            if editor.udl.is_some() || editor.language_override.is_some() {
+                return;
+            }
+            if let bareline_file_io::session::LanguageSelection::Udl(id) = selection {
+                if let Some(definition) = catalog.definition_by_id(&id) {
+                    editor.udl = Some(definition);
+                } else {
+                    editor.language = bareline_syntax::Language::PlainText;
+                    editor.language_override = Some(bareline_syntax::Language::PlainText);
+                    editor.error = Some(format!(
+                        "Saved user language {id} is unavailable; using plain text. Import its definition explicitly to select it again."
+                    ));
+                }
             }
         };
-        if let Some(workspace)=&mut self.workspace{for editor in &mut workspace.editors{resolve(editor);}}
-        if let Some(editor)=&mut self.views.secondary{resolve(editor);}
+        if let Some(workspace) = &mut self.workspace {
+            for editor in &mut workspace.editors {
+                resolve(editor.viewport_mut());
+            }
+        }
+        if let Some(editor) = &mut self.views.secondary {
+            resolve(editor.viewport_mut());
+        }
     }
 }

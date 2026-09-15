@@ -1,0 +1,12 @@
+{
+  "arguments": [
+    "fmt",
+    "--all",
+    "--check"
+  ],
+  "completed_utc": "2026-09-12T14:18:22.6720472Z",
+  "integration_snapshot": "56e5934f81764ec2a2bf11c9cc06938144106e32",
+  "exit_code": 0,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\final-format-central-r3.log"
+}

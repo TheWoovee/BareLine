@@ -110,7 +110,9 @@ pub struct WorkspacePanel {
 }
 impl Drop for WorkspacePanel {
     fn drop(&mut self) {
-        if let Some(pending) = &self.pending { pending.cancel.store(true, Ordering::Relaxed); }
+        if let Some(pending) = &self.pending {
+            pending.cancel.store(true, Ordering::Relaxed);
+        }
     }
 }
 impl WorkspacePanel {
@@ -154,9 +156,12 @@ impl WorkspacePanel {
     pub fn watch_roots(&self) -> Vec<PathBuf> {
         let mut ids: Vec<_> = self.expanded.iter().copied().collect();
         ids.sort_by_key(|id| (Some(NodeId(*id)) != self.selected, *id));
-        ids.into_iter().filter_map(|id| self.model.nodes.get(&id))
+        ids.into_iter()
+            .filter_map(|id| self.model.nodes.get(&id))
             .filter(|n| n.directory && n.children.is_some())
-            .take(256).map(|n| n.path.clone()).collect()
+            .take(256)
+            .map(|n| n.path.clone())
+            .collect()
     }
     /// Invalidate only the changed directory; unaffected path/node IDs survive.
     pub fn directory_changed(&mut self, directory: &std::path::Path) {
@@ -167,15 +172,21 @@ impl WorkspacePanel {
         }
     }
     fn release_children(&mut self, id: NodeId) {
-        let mut pending = self.model.nodes.get_mut(&id.0)
-            .and_then(|n| n.children.take()).unwrap_or_default();
+        let mut pending = self
+            .model
+            .nodes
+            .get_mut(&id.0)
+            .and_then(|n| n.children.take())
+            .unwrap_or_default();
         while let Some(child) = pending.pop() {
             if let Some(node) = self.model.nodes.remove(&child.0) {
                 pending.extend(node.children.unwrap_or_default());
             }
             self.dirty.remove(&child.0);
             self.expanded.remove(&child.0);
-            if self.selected == Some(child) { self.selected = Some(id); }
+            if self.selected == Some(child) {
+                self.selected = Some(id);
+            }
         }
         self.tree.update_child_count(id, 0);
     }
@@ -183,8 +194,16 @@ impl WorkspacePanel {
         Some(&self.model.nodes.get(&self.selected?.0)?.path)
     }
     pub fn refresh_tree(&mut self) {
-        if let Some(pending) = &self.pending { pending.cancel.store(true, Ordering::Relaxed); }
-        self.dirty.extend(self.model.nodes.iter().filter(|(_, n)| n.directory && n.children.is_some()).map(|(&id, _)| id));
+        if let Some(pending) = &self.pending {
+            pending.cancel.store(true, Ordering::Relaxed);
+        }
+        self.dirty.extend(
+            self.model
+                .nodes
+                .iter()
+                .filter(|(_, n)| n.directory && n.children.is_some())
+                .map(|(&id, _)| id),
+        );
         self.message = Some("Refreshing loaded folders…".into());
     }
     pub fn width(&self) -> f32 {
@@ -195,7 +214,9 @@ impl WorkspacePanel {
     }
     pub fn hide(&mut self) {
         self.open = false;
-        if let Some(pending) = &self.pending { pending.cancel.store(true, Ordering::Relaxed); }
+        if let Some(pending) = &self.pending {
+            pending.cancel.store(true, Ordering::Relaxed);
+        }
     }
     /// Caller must authorize the actual path before adding; this does no I/O.
     pub fn add_root(&mut self, path: PathBuf) {
@@ -204,12 +225,7 @@ impl WorkspacePanel {
             self.message = Some("Workspace root limit reached".into());
             return;
         }
-        if self
-            .model
-            .roots
-            .iter()
-            .any(|id| self.model.nodes[&id.0].path == path)
-        {
+        if self.model.roots.iter().any(|id| self.model.nodes[&id.0].path == path) {
             return;
         }
         let id = self.model.insert(path, true);
@@ -220,28 +236,64 @@ impl WorkspacePanel {
             self.message = Some("Folder discovery busy; try again when ready".into());
             return;
         }
-        if self.model.nodes.get(&id.0).is_none_or(|node| !node.directory || (!replace && node.children.is_some() && node.cursor.is_none())) { return; }
+        if self
+            .model
+            .nodes
+            .get(&id.0)
+            .is_none_or(|node| !node.directory || (!replace && node.children.is_some() && node.cursor.is_none()))
+        {
+            return;
+        }
         // Continuation replaces the previous page at the resident-node ceiling.
         // The live ReadDir cursor advances, so every entry remains reachable.
-        let Some(target) = self.model.nodes.get(&id.0).map(|n| n.path.clone()) else { return; };
-        let root = self.model.roots.iter().filter_map(|id| self.model.nodes.get(&id.0)).filter(|n| target.starts_with(&n.path)).max_by_key(|n| n.path.components().count()).map(|n| n.path.clone()).unwrap_or_else(|| target.clone());
+        let Some(target) = self.model.nodes.get(&id.0).map(|n| n.path.clone()) else {
+            return;
+        };
+        let root = self
+            .model
+            .roots
+            .iter()
+            .filter_map(|id| self.model.nodes.get(&id.0))
+            .filter(|n| target.starts_with(&n.path))
+            .max_by_key(|n| n.path.components().count())
+            .map(|n| n.path.clone())
+            .unwrap_or_else(|| target.clone());
         while NODE_LIMIT.saturating_sub(self.model.nodes.len()) < ENTRY_LIMIT {
-            let candidate = self.model.nodes.iter()
-                .filter(|(candidate, n)| **candidate != id.0 && !target.starts_with(&n.path) && n.children.as_ref().is_some_and(|c| !c.is_empty()))
-                .min_by_key(|(candidate, _)| (self.expanded.contains(candidate), **candidate)).map(|(&candidate, _)| NodeId(candidate));
-            let Some(candidate) = candidate else { break; };
+            let candidate = self
+                .model
+                .nodes
+                .iter()
+                .filter(|(candidate, n)| {
+                    **candidate != id.0
+                        && !target.starts_with(&n.path)
+                        && n.children.as_ref().is_some_and(|c| !c.is_empty())
+                })
+                .min_by_key(|(candidate, _)| (self.expanded.contains(candidate), **candidate))
+                .map(|(&candidate, _)| NodeId(candidate));
+            let Some(candidate) = candidate else {
+                break;
+            };
             self.release_children(candidate);
-            if let Some(node) = self.model.nodes.get_mut(&candidate.0) { node.cursor = None; }
+            if let Some(node) = self.model.nodes.get_mut(&candidate.0) {
+                node.cursor = None;
+            }
             self.expanded.remove(&candidate.0);
         }
         if !replace && NODE_LIMIT.saturating_sub(self.model.nodes.len()) < ENTRY_LIMIT {
             self.release_children(id);
         }
-        let replaced = if replace { self.model.nodes.get(&id.0).and_then(|n| n.children.as_ref()).map_or(0, Vec::len) } else { 0 };
+        let replaced = if replace {
+            self.model
+                .nodes
+                .get(&id.0)
+                .and_then(|n| n.children.as_ref())
+                .map_or(0, Vec::len)
+        } else {
+            0
+        };
         let capacity = ENTRY_LIMIT.min(NODE_LIMIT.saturating_sub(self.model.nodes.len()) + replaced);
         if capacity == 0 {
-            self.message =
-                Some("Tree budget reached; Refresh Workspace to release loaded branches".into());
+            self.message = Some("Tree budget reached; Refresh Workspace to release loaded branches".into());
             return;
         }
         let Some(node) = self.model.nodes.get_mut(&id.0) else {
@@ -250,7 +302,12 @@ impl WorkspacePanel {
         if !node.directory || (!replace && node.children.is_some() && node.cursor.is_none()) {
             return;
         }
-        let cursor = if replace { node.cursor = None; None } else { node.cursor.take() };
+        let cursor = if replace {
+            node.cursor = None;
+            None
+        } else {
+            node.cursor.take()
+        };
         let path = node.path.clone();
         let guard = self.directory_guard.clone();
         let excludes = self.excludes.clone();
@@ -288,7 +345,11 @@ impl WorkspacePanel {
                 notify();
             }) {
             Ok(_) => {
-                self.pending = Some(PendingListing { receiver: rx, cancel, replace });
+                self.pending = Some(PendingListing {
+                    receiver: rx,
+                    cancel,
+                    replace,
+                });
                 self.message = Some("Loading folder…".into());
             }
             Err(error) => self.message = Some(error.to_string()),
@@ -323,18 +384,35 @@ impl WorkspacePanel {
         true
     }
     fn apply_listing(&mut self, listing: Listing, replace: bool) {
-        if !self.model.nodes.contains_key(&listing.parent.0) { return; }
+        if !self.model.nodes.contains_key(&listing.parent.0) {
+            return;
+        }
         self.message = listing.status;
         let old = self.model.nodes[&listing.parent.0].children.clone().unwrap_or_default();
-        let mut resident: BTreeMap<_, _> = old.iter().filter_map(|id| self.model.nodes.get(&id.0).map(|n| (n.path.clone(), (*id, n.directory)))).collect();
+        let mut resident: BTreeMap<_, _> = old
+            .iter()
+            .filter_map(|id| {
+                self.model
+                    .nodes
+                    .get(&id.0)
+                    .map(|n| (n.path.clone(), (*id, n.directory)))
+            })
+            .collect();
         if replace {
             let incoming: BTreeSet<_> = listing.entries.iter().map(|(path, _)| path).collect();
-            let removed: Vec<_> = resident.iter().filter(|(path, _)| !incoming.contains(path)).map(|(path, (id, _))| (path.clone(), *id)).collect();
+            let removed: Vec<_> = resident
+                .iter()
+                .filter(|(path, _)| !incoming.contains(path))
+                .map(|(path, (id, _))| (path.clone(), *id))
+                .collect();
             for (path, id) in removed {
                 self.release_children(id);
                 self.model.nodes.remove(&id.0);
-                self.dirty.remove(&id.0); self.expanded.remove(&id.0);
-                if self.selected == Some(id) { self.selected = Some(listing.parent); }
+                self.dirty.remove(&id.0);
+                self.expanded.remove(&id.0);
+                if self.selected == Some(id) {
+                    self.selected = Some(listing.parent);
+                }
                 resident.remove(&path);
             }
         }
@@ -342,23 +420,33 @@ impl WorkspacePanel {
         let mut retained: BTreeSet<_> = children.iter().map(|id| id.0).collect();
         let mut page_paths = BTreeSet::new();
         for (path, directory) in listing.entries {
-            if !page_paths.insert(path.clone()) { continue; }
+            if !page_paths.insert(path.clone()) {
+                continue;
+            }
             let id = if let Some((id, old_directory)) = resident.remove(&path) {
                 if old_directory != directory {
                     self.release_children(id);
                     let node = self.model.nodes.get_mut(&id.0).unwrap();
-                    node.directory = directory; node.cursor = None;
+                    node.directory = directory;
+                    node.cursor = None;
                 }
                 id
-            } else { self.model.insert(path, directory) };
-            if retained.insert(id.0) { children.push(id); }
+            } else {
+                self.model.insert(path, directory)
+            };
+            if retained.insert(id.0) {
+                children.push(id);
+            }
         }
         if replace {
             for (_, (id, _)) in resident {
                 self.release_children(id);
                 self.model.nodes.remove(&id.0);
-                self.dirty.remove(&id.0); self.expanded.remove(&id.0);
-                if self.selected == Some(id) { self.selected = Some(listing.parent); }
+                self.dirty.remove(&id.0);
+                self.expanded.remove(&id.0);
+                if self.selected == Some(id) {
+                    self.selected = Some(listing.parent);
+                }
             }
         }
         self.tree.replace_child_ids(listing.parent, &old, &children);
@@ -379,8 +467,14 @@ impl WorkspacePanel {
                 self.expanded.insert(id.0);
                 self.request(id, false);
             }
-            Some(TreeAction::Expanded(id)) => { self.selected = Some(id); self.expanded.insert(id.0); }
-            Some(TreeAction::Collapsed(id)) => { self.selected = Some(id); self.expanded.remove(&id.0); }
+            Some(TreeAction::Expanded(id)) => {
+                self.selected = Some(id);
+                self.expanded.insert(id.0);
+            }
+            Some(TreeAction::Collapsed(id)) => {
+                self.selected = Some(id);
+                self.expanded.remove(&id.0);
+            }
             Some(TreeAction::Activated(id)) => {
                 let node = self.model.nodes.get(&id.0)?;
                 if !node.directory {
@@ -402,16 +496,37 @@ impl WorkspacePanel {
         self.action(action)
     }
     pub fn semantics(&self, parent: bareline_ui::ViewId, prefix: u64) -> Vec<bareline_ui::semantics::SemanticEntry> {
-        if !self.open { return Vec::new(); }
-        let mut entries = self.tree.visible_semantics(&self.model, parent, |id| bareline_ui::ViewId(prefix + id.0), "workspace.activateEntry");
-        for entry in &mut entries { entry.node.actions.push(bareline_ui::widgets::SemanticAction::Focus); }
+        if !self.open {
+            return Vec::new();
+        }
+        let mut entries = self.tree.visible_semantics(
+            &self.model,
+            parent,
+            |id| bareline_ui::ViewId(prefix + id.0),
+            "workspace.activateEntry",
+        );
+        for entry in &mut entries {
+            entry.node.actions.push(bareline_ui::widgets::SemanticAction::Focus);
+        }
         entries
     }
-    pub fn accessibility_action(&mut self, id: NodeId, action: bareline_ui::widgets::SemanticAction) -> Option<PanelAction> {
+    pub fn accessibility_action(
+        &mut self,
+        id: NodeId,
+        action: bareline_ui::widgets::SemanticAction,
+    ) -> Option<PanelAction> {
         self.tree.state.focused = true;
-        let action = if action == bareline_ui::widgets::SemanticAction::Invoke && self.model.nodes.get(&id.0).is_some_and(|n| n.directory) {
-            if self.expanded.contains(&id.0) { bareline_ui::widgets::SemanticAction::Collapse } else { bareline_ui::widgets::SemanticAction::Expand }
-        } else { action };
+        let action = if action == bareline_ui::widgets::SemanticAction::Invoke
+            && self.model.nodes.get(&id.0).is_some_and(|n| n.directory)
+        {
+            if self.expanded.contains(&id.0) {
+                bareline_ui::widgets::SemanticAction::Collapse
+            } else {
+                bareline_ui::widgets::SemanticAction::Expand
+            }
+        } else {
+            action
+        };
         let action = self.tree.accessibility_action(&self.model, id, action);
         self.action(action)
     }
@@ -438,9 +553,7 @@ impl WorkspacePanel {
         let selected = self.tree.event(UiEvent::PointerDown(point), &self.model);
         let toggled = matches!(
             selected,
-            Some(
-                TreeAction::Expanded(_) | TreeAction::Collapsed(_) | TreeAction::RequestChildren(_)
-            )
+            Some(TreeAction::Expanded(_) | TreeAction::Collapsed(_) | TreeAction::RequestChildren(_))
         );
         self.action(selected);
         if toggled {
@@ -456,6 +569,16 @@ impl WorkspacePanel {
         height: f32,
         ops: &mut Vec<DrawOp>,
     ) -> Result<Option<Rect>, LayoutError> {
+        self.draw_with_theme(_backend, _width, height, Theme::default(), ops)
+    }
+    pub fn draw_with_theme(
+        &mut self,
+        _backend: &mut impl TextBackend,
+        _width: f32,
+        height: f32,
+        theme: Theme,
+        ops: &mut Vec<DrawOp>,
+    ) -> Result<Option<Rect>, LayoutError> {
         if !self.open {
             return Ok(None);
         }
@@ -465,7 +588,6 @@ impl WorkspacePanel {
             width: self.width(),
             height,
         };
-        let theme = Theme::default();
         ops.push(DrawOp::Fill(bounds, theme.surface));
         ops.push(DrawOp::Text {
             origin: Point { x: 16.0, y: 8.0 },
@@ -479,14 +601,11 @@ impl WorkspacePanel {
             ..bounds
         };
         self.tree.paint(&self.model, theme, ops);
-        let status = self
-            .message
-            .as_deref()
-            .unwrap_or(if self.model.roots.is_empty() {
-                "Open a folder to browse files"
-            } else {
-                ""
-            });
+        let status = self.message.as_deref().unwrap_or(if self.model.roots.is_empty() {
+            "Open a folder to browse files"
+        } else {
+            ""
+        });
         ops.push(DrawOp::PushClip(bounds));
         ops.push(DrawOp::Text {
             origin: Point {
@@ -518,20 +637,17 @@ fn enumerate_page(
     // Count visited entries, not only matches: an excluded million-entry folder
     // still yields after one page and exposes continuation to the user.
     for _ in 0..capacity {
-        if cancel.load(Ordering::Relaxed) { break; }
+        if cancel.load(Ordering::Relaxed) {
+            break;
+        }
         let Some(entry) = cursor.entries.next() else {
             exhausted = true;
             break;
         };
         match entry.and_then(|e| Ok((e.path(), e.file_type()?))) {
             Ok((path, kind)) => {
-                if !excludes
-                    .iter()
-                    .any(|s| excluded(s, &path, &cursor.root))
-                {
-                    result
-                        .entries
-                        .push((path, kind.is_dir() && !kind.is_symlink()));
+                if !excludes.iter().any(|s| excluded(s, &path, &cursor.root)) {
+                    result.entries.push((path, kind.is_dir() && !kind.is_symlink()));
                 }
             }
             Err(error) => result.status = Some(format!("Partial folder: {error}")),
@@ -541,17 +657,25 @@ fn enumerate_page(
         result.cursor = Some(cursor);
         result.status = Some("Partial folder · Load More Entries to continue".into());
     }
-    result
-        .entries
-        .sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    result.entries.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
     result
 }
 fn excluded(pattern: &str, path: &std::path::Path, root: &std::path::Path) -> bool {
     if pattern.contains(['/', '\\']) {
-        let relative = path.strip_prefix(root).unwrap_or(path).to_string_lossy().replace('\\', "/");
+        let relative = path
+            .strip_prefix(root)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .replace('\\', "/");
         let pattern = pattern.replace('\\', "/");
-        glob_matches(&pattern, &relative) || pattern.strip_suffix("/**").is_some_and(|folder| glob_matches(folder, &relative))
-    } else { path.file_name().is_some_and(|name| glob_matches(pattern, &name.to_string_lossy())) }
+        glob_matches(&pattern, &relative)
+            || pattern
+                .strip_suffix("/**")
+                .is_some_and(|folder| glob_matches(folder, &relative))
+    } else {
+        path.file_name()
+            .is_some_and(|name| glob_matches(pattern, &name.to_string_lossy()))
+    }
 }
 fn glob_matches(pattern: &str, name: &str) -> bool {
     let pattern: Vec<_> = pattern.chars().collect();
@@ -559,14 +683,23 @@ fn glob_matches(pattern: &str, name: &str) -> bool {
     let (mut p, mut n, mut star, mut retry) = (0, 0, None, 0);
     while n < name.len() {
         if p < pattern.len() && (pattern[p] == '?' || pattern[p] == name[n]) {
-            p += 1; n += 1;
+            p += 1;
+            n += 1;
         } else if p < pattern.len() && pattern[p] == '*' {
-            star = Some(p); p += 1; retry = n;
+            star = Some(p);
+            p += 1;
+            retry = n;
         } else if let Some(s) = star {
-            retry += 1; n = retry; p = s + 1;
-        } else { return false; }
+            retry += 1;
+            n = retry;
+            p = s + 1;
+        } else {
+            return false;
+        }
     }
-    while p < pattern.len() && pattern[p] == '*' { p += 1; }
+    while p < pattern.len() && pattern[p] == '*' {
+        p += 1;
+    }
     p == pattern.len()
 }
 #[cfg(test)]
@@ -595,7 +728,12 @@ fn enumerate(parent: NodeId, path: PathBuf, capacity: usize) -> Listing {
 mod tests {
     use super::*;
     fn listing(parent: NodeId, entries: Vec<(PathBuf, bool)>) -> Listing {
-        Listing { parent, entries, status: None, cursor: None }
+        Listing {
+            parent,
+            entries,
+            status: None,
+            cursor: None,
+        }
     }
     #[test]
     fn incremental_refresh_preserves_survivors_and_other_branches() {
@@ -605,11 +743,17 @@ mod tests {
         panel.add_root(PathBuf::from("other"));
         let parent = panel.model.roots[0];
         let other = panel.model.roots[1];
-        panel.apply_listing(listing(parent, vec![(root.join("a"), false), (root.join("b"), true)]), false);
+        panel.apply_listing(
+            listing(parent, vec![(root.join("a"), false), (root.join("b"), true)]),
+            false,
+        );
         let survivor = panel.model.nodes[&parent.0].children.as_ref().unwrap()[1];
         panel.apply_listing(listing(survivor, vec![(root.join("b/child"), false)]), false);
         let child = panel.model.nodes[&survivor.0].children.as_ref().unwrap()[0];
-        panel.apply_listing(listing(parent, vec![(root.join("b"), true), (root.join("c"), false)]), true);
+        panel.apply_listing(
+            listing(parent, vec![(root.join("b"), true), (root.join("c"), false)]),
+            true,
+        );
         assert_eq!(panel.model.nodes[&parent.0].children.as_ref().unwrap()[0], survivor);
         assert!(panel.model.nodes.contains_key(&child.0));
         assert!(panel.model.nodes.contains_key(&other.0));
@@ -625,11 +769,19 @@ mod tests {
         let parent = panel.model.roots[0];
         let (sender, receiver) = mpsc::sync_channel(1);
         let cancel = Arc::new(AtomicBool::new(false));
-        panel.pending = Some(PendingListing { receiver, cancel: cancel.clone(), replace: false });
+        panel.pending = Some(PendingListing {
+            receiver,
+            cancel: cancel.clone(),
+            replace: false,
+        });
         panel.hide();
         assert!(cancel.load(Ordering::Relaxed));
         assert!(panel.pending.is_some());
-        assert!(sender.send(listing(parent, vec![(PathBuf::from("stale"), false)])).is_ok());
+        assert!(
+            sender
+                .send(listing(parent, vec![(PathBuf::from("stale"), false)]))
+                .is_ok()
+        );
         assert!(panel.pump());
         assert_eq!(panel.model.nodes.len(), 1);
         assert!(panel.dirty.contains(&parent.0));
@@ -638,8 +790,14 @@ mod tests {
     fn continuation_visits_excluded_entries_and_retains_position() {
         let root = std::env::temp_dir().join(format!("bareline-explorer-pages-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
-        for index in 0..9 { std::fs::write(root.join(format!("file{index}.tmp")), []).unwrap(); }
-        let cursor = DirectoryCursor { entries: std::fs::read_dir(&root).unwrap(), _guard: None, root: root.clone() };
+        for index in 0..9 {
+            std::fs::write(root.join(format!("file{index}.tmp")), []).unwrap();
+        }
+        let cursor = DirectoryCursor {
+            entries: std::fs::read_dir(&root).unwrap(),
+            _guard: None,
+            root: root.clone(),
+        };
         let first = enumerate_page(NodeId(1), cursor, 3, &["*.tmp".into()], &AtomicBool::new(false));
         assert!(first.entries.is_empty());
         assert!(first.cursor.is_some());
@@ -647,7 +805,9 @@ mod tests {
         let mut seen = BTreeSet::new();
         while let Some(next) = cursor {
             let page = enumerate_page(NodeId(1), next, 3, &[], &AtomicBool::new(false));
-            for (path, _) in page.entries { assert!(seen.insert(path)); }
+            for (path, _) in page.entries {
+                assert!(seen.insert(path));
+            }
             cursor = page.cursor;
         }
         assert_eq!(seen.len(), 6);
@@ -668,47 +828,43 @@ mod tests {
         let result = enumerate(NodeId(1), root.clone(), 3);
         assert_eq!(result.entries.len(), 3);
         assert!(result.status.unwrap().contains("Partial"));
-        assert!(
-            result
-                .entries
-                .iter()
-                .all(|(p, _)| p.parent() == Some(root.as_path()))
-        );
-        assert!(
-            enumerate(NodeId(1), root.join("missing"), 3)
-                .status
-                .is_some()
-        );
+        assert!(result.entries.iter().all(|(p, _)| p.parent() == Some(root.as_path())));
+        assert!(enumerate(NodeId(1), root.join("missing"), 3).status.is_some());
         std::fs::remove_dir_all(root).unwrap();
     }
 }
 
 pub const TOGGLE: bareline_commands::CommandId = bareline_commands::CommandId("view.workspace");
-pub const OPEN_FOLDER: bareline_commands::CommandId =
-    bareline_commands::CommandId("workspace.openFolder");
+pub const OPEN_FOLDER: bareline_commands::CommandId = bareline_commands::CommandId("workspace.openFolder");
 pub fn register_commands(registry: &mut bareline_commands::CommandRegistry) {
     for (id, title) in [
         (TOGGLE, "Toggle Workspace"),
         (OPEN_FOLDER, "Open Workspace Folder…"),
         (bareline_commands::CommandId("workspace.loadMore"), "Load More Entries"),
         (bareline_commands::CommandId("workspace.refresh"), "Refresh Workspace"),
-        (bareline_commands::CommandId("workspace.undoDelete"), "Undo Workspace Delete"),
-        (bareline_commands::CommandId("outline.importFunctionList"), "Import Notepad++ Function List…"),
-        (bareline_commands::CommandId("outline.loadDefinition"), "Load Outline Definition…"),
-        (bareline_commands::CommandId("outline.exportDefinition"), "Export Outline Definition…"),
-        (bareline_commands::CommandId("outline.cancelImport"), "Cancel Outline Import"),
         (
-            bareline_commands::CommandId("view.documents"),
-            "Toggle Document List",
+            bareline_commands::CommandId("workspace.undoDelete"),
+            "Undo Workspace Delete",
         ),
         (
-            bareline_commands::CommandId("view.outline"),
-            "Toggle Outline",
+            bareline_commands::CommandId("outline.importFunctionList"),
+            "Import Notepad++ Function List…",
         ),
         (
-            bareline_commands::CommandId("view.documentMap"),
-            "Toggle Document Map",
+            bareline_commands::CommandId("outline.loadDefinition"),
+            "Load Outline Definition…",
         ),
+        (
+            bareline_commands::CommandId("outline.exportDefinition"),
+            "Export Outline Definition…",
+        ),
+        (
+            bareline_commands::CommandId("outline.cancelImport"),
+            "Cancel Outline Import",
+        ),
+        (bareline_commands::CommandId("view.documents"), "Toggle Document List"),
+        (bareline_commands::CommandId("view.outline"), "Toggle Outline"),
+        (bareline_commands::CommandId("view.documentMap"), "Toggle Document Map"),
         (
             bareline_commands::CommandId("documents.sortName"),
             "Sort Documents by Name",
@@ -721,22 +877,13 @@ pub fn register_commands(registry: &mut bareline_commands::CommandRegistry) {
             bareline_commands::CommandId("documents.sortTabOrder"),
             "Sort Documents by Tab Order",
         ),
-        (
-            bareline_commands::CommandId("documents.save"),
-            "Save Selected Document",
-        ),
+        (bareline_commands::CommandId("documents.save"), "Save Selected Document"),
         (
             bareline_commands::CommandId("documents.close"),
             "Close Selected Document",
         ),
-        (
-            bareline_commands::CommandId("workspace.createFile"),
-            "Create File…",
-        ),
-        (
-            bareline_commands::CommandId("workspace.createFolder"),
-            "Create Folder…",
-        ),
+        (bareline_commands::CommandId("workspace.createFile"), "Create File…"),
+        (bareline_commands::CommandId("workspace.createFolder"), "Create Folder…"),
         (
             bareline_commands::CommandId("workspace.rename"),
             "Rename Selected Entry…",

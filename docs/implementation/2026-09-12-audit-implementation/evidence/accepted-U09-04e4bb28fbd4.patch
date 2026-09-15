@@ -1,0 +1,1294 @@
+diff --git a/apps/bareline/src/windows_app/accessibility.rs b/apps/bareline/src/windows_app/accessibility.rs
+index 5a8520e..faa372e 100644
+--- a/apps/bareline/src/windows_app/accessibility.rs
++++ b/apps/bareline/src/windows_app/accessibility.rs
+@@ -1527,6 +1527,7 @@ impl Shell {
+                             let (handled, active) = super::search::accessibility_invoke_panel(workspace, id);
+                             if handled && let Some(index) = active {
+                                 self.app.active = index;
++                                workspace.bind_find_to(index);
+                             }
+                         }
+                     }
+diff --git a/apps/bareline/src/windows_app/search.rs b/apps/bareline/src/windows_app/search.rs
+index 17806cf..22ae906 100644
+--- a/apps/bareline/src/windows_app/search.rs
++++ b/apps/bareline/src/windows_app/search.rs
+@@ -152,22 +152,11 @@ impl Shell {
+         if id == "search.scope.selection" || id == "search.scope.current" {
+             if let Some(workspace) = &mut self.workspace {
+                 let scope = if id.ends_with("selection") {
+-                    let Some(editor) = workspace.editors.get(self.app.active) else {
+-                        return true;
+-                    };
+-                    if editor.busy()
+-                        || matches!(editor, WorkspaceEditor::Paged(paged) if !paged.paged_frame_state().ready)
+-                    {
++                    let Some(selection) = self.views.active_selection(workspace, self.app.active) else {
+                         workspace.message = Some("Wait for the current selection before searching it.".into());
+                         return true;
+-                    }
+-                    let (anchor, caret) = match editor {
+-                        WorkspaceEditor::Paged(paged) => paged.global_selection(),
+-                        WorkspaceEditor::Resident(editor) => {
+-                            (TextOffset(editor.selection.anchor), TextOffset(editor.selection.caret))
+-                        }
+                     };
+-                    Some(anchor.min(caret)..anchor.max(caret))
++                    Some(selection)
+                 } else {
+                     None
+                 };
+@@ -216,6 +205,9 @@ impl Shell {
+             .and_then(|workspace| workspace.take_paged_search_activation())
+         {
+             self.app.active = index;
++            if let Some(workspace) = &mut self.workspace {
++                workspace.bind_find_to(index);
++            }
+             replacement_changed = true;
+         }
+         let Some(workspace) = &mut self.workspace else {
+@@ -261,6 +253,7 @@ impl Shell {
+             }
+         }
+         self.app.active = index;
++        workspace.bind_find_to(index);
+         self.search.navigation = None;
+         true
+     }
+diff --git a/apps/bareline/src/windows_app/views.rs b/apps/bareline/src/windows_app/views.rs
+index 2324a8f..f0e30a0 100644
+--- a/apps/bareline/src/windows_app/views.rs
++++ b/apps/bareline/src/windows_app/views.rs
+@@ -74,7 +74,7 @@ pub(super) fn accessibility_test_setup(shell: &mut Shell, scenario: &str) {
+                 Some(rect(0.0, 404.0, 1000.0, 372.0)),
+             ]
+         };
+-        shell.views.activate(&workspace, &mut shell.app, 1);
++        shell.views.activate(&mut workspace, &mut shell.app, 1);
+     }
+     shell.app.tabs = workspace.titles();
+     shell.workspace = Some(workspace);
+@@ -123,6 +123,36 @@ pub(super) fn accessibility_test_close_split(shell: &mut Shell) -> bool {
+ mod tests {
+     use super::*;
+ 
++    #[test]
++    fn find_selection_scope_uses_the_active_split_view() {
++        let mut workspace = Workspace::new(
++            std::sync::Arc::new(|| {}),
++            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
++        )
++        .unwrap();
++        workspace.new_document().unwrap();
++        let mut views = ViewsRuntime::default();
++        views.sync_documents(&workspace);
++        views.split(&mut workspace, 0, Orientation::Vertical);
++        workspace.editors[0].viewport_mut().selection.anchor = 1;
++        workspace.editors[0].viewport_mut().selection.caret = 2;
++        let secondary = views.secondary.as_mut().unwrap();
++        secondary.viewport_mut().selection.anchor = 7;
++        secondary.viewport_mut().selection.caret = 4;
++
++        let mut app = App::default();
++        views.activate(&mut workspace, &mut app, 1);
++        assert_eq!(
++            views.active_selection(&workspace, app.active),
++            Some(bareline_document::TextOffset(4)..bareline_document::TextOffset(7))
++        );
++        views.activate(&mut workspace, &mut app, 0);
++        assert_eq!(
++            views.active_selection(&workspace, app.active),
++            Some(bareline_document::TextOffset(1)..bareline_document::TextOffset(2))
++        );
++    }
++
+     #[test]
+     fn session_capture_preserves_unavailable_tab_when_temporary_id_collides() {
+         let mut workspace = Workspace::new(
+@@ -317,6 +347,29 @@ mod tests {
+         let provider_before = views
+             .accessibility_source_identity(1, views.secondary.as_ref().unwrap())
+             .unwrap();
++        workspace.find.show_replace();
++        workspace.find.field.insert("suffix");
++        let search_handle = match views.secondary.as_ref().unwrap() {
++            WorkspaceEditor::Paged(editor) => editor.read_handle(),
++            _ => unreachable!(),
++        };
++        workspace.find.refresh_paged(search_handle, std::sync::Arc::new(|| {}));
++        let search_deadline = Instant::now() + Duration::from_secs(30);
++        while workspace.find.searching() {
++            assert!(Instant::now() < search_deadline);
++            workspace.find.pump();
++            std::thread::yield_now();
++        }
++        assert_eq!(workspace.find.completed_paged_results().unwrap().count, 1);
++        assert!(
++            !workspace
++                .find
++                .semantics(1000.0)
++                .into_iter()
++                .find(|node| node.name == "Replace All")
++                .unwrap()
++                .disabled
++        );
+         assert_eq!(views.pane_document_index(&workspace, 0), Some(0));
+         assert_eq!(views.pane_document_index(&workspace, 1), Some(0));
+         let announced = super::super::accessibility::editor_provider_name(&workspace, 1, 0);
+@@ -389,6 +442,22 @@ mod tests {
+             provider_before,
+             "a full paged document edit must retire the old pane reader"
+         );
++        let changed_source = match views.secondary.as_ref().unwrap() {
++            WorkspaceEditor::Paged(editor) => editor.snapshot().clone(),
++            _ => unreachable!(),
++        };
++        workspace.bind_find_paged(&changed_source);
++        assert_eq!(workspace.find.status, "Results changed; search again");
++        assert!(workspace.find.completed_paged_results().is_none());
++        assert!(
++            workspace
++                .find
++                .semantics(1000.0)
++                .into_iter()
++                .find(|node| node.name == "Replace All")
++                .unwrap()
++                .disabled
++        );
+         assert_eq!(
+             views.secondary.as_ref().unwrap().viewport().snapshot().revision,
+             viewport_revision,
+@@ -708,7 +777,7 @@ mod tests {
+         }
+         let mut views = ViewsRuntime::default();
+         views.split(&mut workspace, 0, Orientation::Vertical);
+-        views.activate(&workspace, &mut App::default(), 1);
++        views.activate(&mut workspace, &mut App::default(), 1);
+         assert_eq!(
+             bareline_app::accessibility::source_identity(views.secondary.as_ref().unwrap()),
+             bareline_app::accessibility::source_identity(&workspace.editors[0])
+@@ -752,7 +821,7 @@ mod tests {
+             super::super::language::completion_target(&views, &workspace, 0),
+             Some(requested.clone())
+         );
+-        views.activate(&workspace, &mut App::default(), 0);
++        views.activate(&mut workspace, &mut App::default(), 0);
+         assert_ne!(
+             super::super::language::completion_target(&views, &workspace, 0),
+             Some(requested),
+@@ -778,7 +847,7 @@ mod tests {
+         views.split(&mut workspace, 0, Orientation::Vertical);
+         views.record_fold_target();
+         let source = workspace.editors[0].snapshot().clone();
+-        views.activate(&workspace, &mut App::default(), 0);
++        views.activate(&mut workspace, &mut App::default(), 0);
+         views.apply_fold_result(
+             &mut workspace,
+             &source,
+@@ -1068,6 +1137,68 @@ mod tests {
+         assert!(!sources.contains_key(&closed));
+         assert!(sources.contains_key(&survivor));
+     }
++
++    #[test]
++    fn split_pane_activation_retires_the_previous_documents_find_results() {
++        let (notifier, notified) = std::sync::mpsc::channel();
++        let notify: std::sync::Arc<dyn Fn() + Send + Sync> = std::sync::Arc::new(move || {
++            let _ = notifier.send(());
++        });
++        let mut workspace = Workspace::new(
++            notify.clone(),
++            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
++        )
++        .unwrap();
++        workspace.new_document().unwrap();
++        workspace.new_document().unwrap();
++        workspace.editors[0].enqueue(Input::Insert("needle needle".into()));
++        workspace.editors[1].enqueue(Input::Insert("other".into()));
++        while workspace.editors.iter().any(WorkspaceEditor::busy) {
++            notified.recv_timeout(Duration::from_secs(5)).unwrap();
++            workspace.pump();
++        }
++        let mut views = ViewsRuntime::default();
++        views.sync_documents(&workspace);
++        let second = views.controller.as_ref().unwrap().tabs()[1].id;
++        views.controller.as_mut().unwrap().move_to_other(second).unwrap();
++        views.install_views(&mut workspace);
++        let mut app = App::default();
++        views.activate(&mut workspace, &mut app, 0);
++        workspace.find.show_replace();
++        workspace.find.field.insert("needle");
++        let mut renderer = bareline_renderer_recording::RecordingBackend::default();
++        let mut operations = Vec::new();
++        views
++            .draw(
++                &mut workspace,
++                &mut app,
++                &mut renderer,
++                1100.0,
++                700.0,
++                &mut operations,
++                notify,
++            )
++            .unwrap();
++        while workspace.find.searching() {
++            notified.recv_timeout(Duration::from_secs(5)).unwrap();
++            workspace.pump();
++        }
++        assert_eq!(workspace.find.completed_results().unwrap().count(), 2);
++
++        views.activate(&mut workspace, &mut app, 1);
++
++        assert!(workspace.find.completed_results().is_none());
++        assert_eq!(workspace.find.status, "Searching…");
++        assert!(
++            workspace
++                .find
++                .semantics(1100.0)
++                .into_iter()
++                .find(|node| node.name == "Replace All")
++                .unwrap()
++                .disabled
++        );
++    }
+ }
+ 
+ /// Fixed pool of Window-menu slots, each bound to one open document. Surplus
+@@ -1700,6 +1831,7 @@ impl ViewsRuntime {
+             if let Some(index) = self.tab_index(workspace, id) {
+                 app.active = index;
+             }
++            self.bind_find_to_active(workspace);
+             if !self.tab_hits.iter().any(|hit| hit.id == id) {
+                 if let Some(controller) = &self.controller {
+                     let pane = controller.active_pane();
+@@ -1731,6 +1863,24 @@ impl ViewsRuntime {
+             workspace.editors.get(fallback)
+         }
+     }
++    pub(super) fn active_selection(
++        &self,
++        workspace: &Workspace,
++        fallback: usize,
++    ) -> Option<std::ops::Range<bareline_document::TextOffset>> {
++        let editor = self.active_workspace_editor(workspace, fallback)?;
++        if editor.busy() || matches!(editor, WorkspaceEditor::Paged(paged) if !paged.paged_frame_state().ready) {
++            return None;
++        }
++        let (anchor, caret) = match editor {
++            WorkspaceEditor::Paged(paged) => paged.global_selection(),
++            WorkspaceEditor::Resident(editor) => (
++                bareline_document::TextOffset(editor.selection.anchor),
++                bareline_document::TextOffset(editor.selection.caret),
++            ),
++        };
++        Some(anchor.min(caret)..anchor.max(caret))
++    }
+     pub(super) fn pane_workspace_editor<'a>(
+         &'a self,
+         workspace: &'a Workspace,
+@@ -2081,6 +2231,7 @@ impl ViewsRuntime {
+         if let Some(id) = manifest.active_tab.and_then(|id| self.tab_index(workspace, id)) {
+             app.active = id;
+         }
++        self.bind_find_to_active(workspace);
+     }
+     pub(super) fn capture_session(
+         &self,
+@@ -2429,6 +2580,7 @@ impl ViewsRuntime {
+         self.bounds = [None, None];
+         self.splitter = None;
+         self.dragging = false;
++        self.bind_find_to_active(workspace);
+     }
+     fn clone_active(&mut self, workspace: &mut Workspace, app: &mut App) {
+         self.sync_documents(workspace);
+@@ -2455,6 +2607,7 @@ impl ViewsRuntime {
+         {
+             app.active = id;
+         }
++        self.bind_find_to_active(workspace);
+     }
+     fn move_active(&mut self, workspace: &mut Workspace, app: &mut App) {
+         self.sync_documents(workspace);
+@@ -2481,15 +2634,16 @@ impl ViewsRuntime {
+         {
+             app.active = index;
+         }
++        self.bind_find_to_active(workspace);
+     }
+-    pub(super) fn activate_watch_pane(&mut self, workspace: &Workspace, app: &mut App, pane: u32) -> bool {
++    pub(super) fn activate_watch_pane(&mut self, workspace: &mut Workspace, app: &mut App, pane: u32) -> bool {
+         if pane > 1 || (pane == 1 && self.secondary.is_none()) {
+             return false;
+         }
+         self.activate(workspace, app, pane);
+         true
+     }
+-    pub(super) fn activate(&mut self, workspace: &Workspace, app: &mut App, pane: u32) {
++    pub(super) fn activate(&mut self, workspace: &mut Workspace, app: &mut App, pane: u32) {
+         if let Some(controller) = &mut self.controller {
+             if let Some(id) = controller.active_tab(pane) {
+                 let _ = controller.activate(id);
+@@ -2502,11 +2656,60 @@ impl ViewsRuntime {
+         } {
+             app.active = index;
+         }
++        self.bind_find_to_active(workspace);
+     }
+-    pub(super) fn accessibility_activate_editor(&mut self, workspace: &Workspace, app: &mut App, pane: u32) {
++    pub(super) fn accessibility_activate_editor(&mut self, workspace: &mut Workspace, app: &mut App, pane: u32) {
+         self.accessibility_focus = None;
+         self.activate(workspace, app, pane);
+     }
++    fn bind_find_to_active(&self, workspace: &mut Workspace) {
++        enum Source {
++            Resident(bareline_document::DocumentSnapshot),
++            Paged(bareline_document::paged::PagedSnapshot),
++        }
++        let source = if self.pane() == 1 {
++            self.secondary.as_ref()
++        } else {
++            self.primary_index(workspace)
++                .and_then(|index| workspace.editors.get(index))
++        }
++        .map(|editor| match editor {
++            WorkspaceEditor::Resident(editor) => Source::Resident(editor.snapshot().clone()),
++            WorkspaceEditor::Paged(editor) => Source::Paged(editor.snapshot().clone()),
++        });
++        match source {
++            Some(Source::Resident(source)) => workspace.bind_find_resident(&source),
++            Some(Source::Paged(source)) => workspace.bind_find_paged(&source),
++            None => workspace.clear_find_source(),
++        }
++    }
++    fn refresh_find_to_active(&self, workspace: &mut Workspace, notify: std::sync::Arc<dyn Fn() + Send + Sync>) {
++        enum Source {
++            Resident(bareline_document::DocumentSnapshot),
++            Paged(bareline_editor_surface::paged_view::PagedReadHandle),
++        }
++        let source = if self.pane() == 1 {
++            self.secondary.as_ref()
++        } else {
++            self.primary_index(workspace)
++                .and_then(|index| workspace.editors.get(index))
++        }
++        .map(|editor| match editor {
++            WorkspaceEditor::Resident(editor) => Source::Resident(editor.snapshot().clone()),
++            WorkspaceEditor::Paged(editor) => Source::Paged(editor.read_handle()),
++        });
++        match source {
++            Some(Source::Resident(source)) => {
++                workspace.bind_find_resident(&source);
++                workspace.find.refresh(&source, notify);
++            }
++            Some(Source::Paged(handle)) => {
++                workspace.bind_find_paged(handle.snapshot());
++                workspace.find.refresh_paged(handle, notify);
++            }
++            None => workspace.clear_find_source(),
++        }
++    }
+     fn close_tab(&mut self, workspace: &mut Workspace, app: &mut App, id: u64) {
+         if self.busy(workspace) {
+             workspace.message = Some("Wait for pending edits before closing a view.".into());
+@@ -2545,6 +2748,7 @@ impl ViewsRuntime {
+         {
+             app.active = index;
+         }
++        self.bind_find_to_active(workspace);
+     }
+     fn sync_scroll(&mut self, workspace: &mut Workspace, pane: u32) {
+         self.pending_sync = self.loaded_tabs[pane as usize].map(|tab| (pane, tab));
+@@ -2692,6 +2896,7 @@ impl ViewsRuntime {
+             self.collapse(workspace, true);
+             return workspace.draw(app.active, renderer, width, height, ops);
+         };
++        self.refresh_find_to_active(workspace, notify.clone());
+         let find_height = if workspace.find.open {
+             workspace.find.height()
+         } else {
+diff --git a/apps/bareline/src/windows_app/watch.rs b/apps/bareline/src/windows_app/watch.rs
+index cfdf57e..d3c6fd2 100644
+--- a/apps/bareline/src/windows_app/watch.rs
++++ b/apps/bareline/src/windows_app/watch.rs
+@@ -998,7 +998,7 @@ impl Shell {
+                 .find(|(bounds, _, _, _)| bounds.contains(self.pointer))
+                 .copied()
+             {
+-                if let Some(w) = &self.workspace {
++                if let Some(w) = &mut self.workspace {
+                     if !self.views.activate_watch_pane(w, &mut self.app, pane) {
+                         return true;
+                     }
+diff --git a/crates/app/src/find.rs b/crates/app/src/find.rs
+index de09058..3b56907 100644
+--- a/crates/app/src/find.rs
++++ b/crates/app/src/find.rs
+@@ -1,5 +1,5 @@
+ // SPDX-License-Identifier: MPL-2.0
+-use bareline_document::{DocumentSnapshot, TextOffset};
++use bareline_document::{ContentStateId, DocumentSnapshot, TextOffset};
+ use bareline_renderer::{DrawOp, LayoutError, Point, Rect, TextBackend};
+ use bareline_search::{
+     Case, Completeness, ReplaceScope, SearchMode, SearchQuery, SearchResults,
+@@ -25,6 +25,41 @@ pub enum FindAction {
+     Mode,
+     Cancel,
+ }
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++enum FindSourceKey {
++    Resident {
++        identity: (u64, u64),
++        content: ContentStateId,
++    },
++    Paged {
++        identity: (u64, u64),
++        content: ContentStateId,
++    },
++}
++impl FindSourceKey {
++    fn resident(snapshot: &DocumentSnapshot) -> Self {
++        Self::Resident {
++            identity: snapshot.identity_token(),
++            content: snapshot.content_state,
++        }
++    }
++    fn paged(snapshot: &bareline_document::paged::PagedSnapshot) -> Self {
++        Self::Paged {
++            identity: snapshot.identity_token(),
++            content: snapshot.content_state,
++        }
++    }
++    fn same_document(self, other: Self) -> bool {
++        matches!((self, other),
++            (Self::Resident { identity: a, .. }, Self::Resident { identity: b, .. }) |
++            (Self::Paged { identity: a, .. }, Self::Paged { identity: b, .. }) if a.0 == b.0)
++    }
++}
++#[derive(Clone, Debug, PartialEq, Eq)]
++struct FindSessionKey {
++    source: FindSourceKey,
++    query: SearchQuery,
++}
+ pub struct FindController {
+     pub open: bool,
+     pub focused: bool,
+@@ -37,16 +72,17 @@ pub struct FindController {
+     pub whole_word: bool,
+     pub status: String,
+     selection_scope: Option<std::ops::Range<TextOffset>>,
+-    cancelled_query: Option<SearchQuery>,
++    cancelled_query: Option<FindSessionKey>,
+     worker: Option<SearchWorker>,
+-    pending: Option<SearchTicket>,
+-    paged_pending: Option<bareline_search::service::PagedSearchTicket>,
+-    paged_results: Option<Arc<bareline_search::paged::PagedResults>>,
+-    paged_requested: Option<(bareline_document::paged::PagedSnapshot, SearchQuery)>,
+-    results: Option<Arc<SearchResults>>,
+-    requested: Option<(DocumentSnapshot, String, bool, bool, SearchMode)>,
++    pending: Option<(u64, FindSessionKey, SearchTicket)>,
++    paged_pending: Option<(u64, FindSessionKey, bareline_search::service::PagedSearchTicket)>,
++    paged_results: Option<(FindSessionKey, Arc<bareline_search::paged::PagedResults>)>,
++    results: Option<(FindSessionKey, Arc<SearchResults>)>,
++    requested: Option<FindSessionKey>,
+     pressed: Option<FindAction>,
+     keyboard_focus: Option<FindAction>,
++    active_source: Option<FindSourceKey>,
++    request_generation: u64,
+     accessibility_revision: std::cell::Cell<u64>,
+     accessibility_fingerprint: std::cell::Cell<u64>,
+ }
+@@ -69,17 +105,79 @@ impl Default for FindController {
+             pending: None,
+             paged_pending: None,
+             paged_results: None,
+-            paged_requested: None,
+             results: None,
+             requested: None,
+             pressed: None,
+             keyboard_focus: None,
++            active_source: None,
++            request_generation: 0,
+             accessibility_revision: std::cell::Cell::new(0),
+             accessibility_fingerprint: std::cell::Cell::new(0),
+         }
+     }
+ }
+ impl FindController {
++    fn next_request_generation(&mut self) -> u64 {
++        self.request_generation = self
++            .request_generation
++            .checked_add(1)
++            .expect("find request generation exhausted");
++        self.request_generation
++    }
++    fn retire_pending(&mut self) {
++        if let Some((_, _, ticket)) = self.pending.take() {
++            ticket.job.cancel();
++        }
++        if let Some((_, _, ticket)) = self.paged_pending.take() {
++            ticket.job.cancel();
++        }
++    }
++
++    fn bind_source(&mut self, source: FindSourceKey) -> bool {
++        if self.active_source == Some(source) {
++            return false;
++        }
++        let revision_drift = self.active_source.is_some_and(|active| active.same_document(source));
++        let document_changed = self.active_source.is_some_and(|active| !active.same_document(source));
++        if document_changed {
++            // A selection scope belongs to the document that supplied its byte
++            // offsets. A cancelled query likewise must not suppress a fresh
++            // activation after visiting another document.
++            self.selection_scope = None;
++            self.cancelled_query = None;
++        }
++        self.next_request_generation();
++        self.active_source = Some(source);
++        self.retire_pending();
++        self.results = None;
++        self.paged_results = None;
++        self.requested = None;
++        self.status = if self.field.value().is_empty() {
++            "Type to find".into()
++        } else if revision_drift {
++            "Results changed; search again".into()
++        } else {
++            "Searching…".into()
++        };
++        true
++    }
++
++    fn set_terminal_status_if_current(&mut self, generation: u64, key: &FindSessionKey, status: &str) -> bool {
++        if generation != self.request_generation || !self.session_current(key) {
++            return false;
++        }
++        self.status = status.into();
++        true
++    }
++
++    pub fn bind_resident(&mut self, snapshot: &DocumentSnapshot) -> bool {
++        self.bind_source(FindSourceKey::resident(snapshot))
++    }
++
++    pub fn bind_paged(&mut self, snapshot: &bareline_document::paged::PagedSnapshot) -> bool {
++        self.bind_source(FindSourceKey::paged(snapshot))
++    }
++
+     /// Captures the selection once; later result navigation does not move its bounds.
+     pub fn set_selection_scope(&mut self, selection: Option<std::ops::Range<TextOffset>>) {
+         if self.selection_scope != selection {
+@@ -108,8 +206,9 @@ impl FindController {
+     }
+     pub fn completed_paged_results(&self) -> Option<&bareline_search::paged::PagedResults> {
+         self.paged_results
+-            .as_deref()
+-            .filter(|results| results.completeness == Completeness::Complete)
++            .as_ref()
++            .filter(|(key, results)| self.session_current(key) && results.completeness == Completeness::Complete)
++            .map(|(_, results)| results.as_ref())
+     }
+     pub fn query(&self) -> SearchQuery {
+         let mut query = SearchQuery::literal(self.field.value());
+@@ -125,8 +224,9 @@ impl FindController {
+     }
+     pub fn completed_results(&self) -> Option<&SearchResults> {
+         self.results
+-            .as_deref()
+-            .filter(|results| results.completeness() == Completeness::Complete)
++            .as_ref()
++            .filter(|(key, results)| self.session_current(key) && results.completeness() == Completeness::Complete)
++            .map(|(_, results)| results.as_ref())
+     }
+     pub fn searching(&self) -> bool {
+         self.pending.is_some() || self.paged_pending.is_some()
+@@ -136,19 +236,27 @@ impl FindController {
+         handle: bareline_editor_surface::paged_view::PagedReadHandle,
+         notify: Arc<dyn Fn() + Send + Sync>,
+     ) {
+-        if !self.open || self.field.composing() || self.cancelled_query.as_ref() == Some(&self.query()) {
++        if !self.open || self.field.composing() {
+             return;
+         }
+         let query = self.query();
+         let snapshot = handle.snapshot().clone();
+-        if self.paged_requested.as_ref().is_some_and(|(source, previous)| {
+-            source.same_document(&snapshot) && source.content_state == snapshot.content_state && previous == &query
+-        }) {
++        self.bind_paged(&snapshot);
++        let key = FindSessionKey {
++            source: FindSourceKey::paged(&snapshot),
++            query: query.clone(),
++        };
++        if self.cancelled_query.as_ref() == Some(&key) {
+             return;
+         }
+-        self.paged_pending = None;
++        if self.requested.as_ref() == Some(&key) {
++            return;
++        }
++        let generation = self.next_request_generation();
++        self.retire_pending();
+         self.paged_results = None;
+-        self.paged_requested = Some((snapshot.clone(), query.clone()));
++        self.results = None;
++        self.requested = Some(key.clone());
+         if query.pattern.is_empty() && query.mode != SearchMode::Regex {
+             self.status = "Type to find".into();
+             return;
+@@ -162,11 +270,15 @@ impl FindController {
+                 }
+             }
+         }
+-        self.paged_pending = Some(self.worker.as_ref().unwrap().submit_paged(
+-            snapshot,
+-            query,
+-            move |ticket| handle.resolve_page(ticket),
+-            notify,
++        self.paged_pending = Some((
++            generation,
++            key,
++            self.worker.as_ref().unwrap().submit_paged(
++                snapshot,
++                query,
++                move |ticket| handle.resolve_page(ticket),
++                notify,
++            ),
+         ));
+         self.status = "Searching full document…".into();
+     }
+@@ -176,16 +288,17 @@ impl FindController {
+         at: usize,
+         backwards: bool,
+     ) -> Option<std::ops::Range<TextOffset>> {
+-        if self.field.composing()
+-            || !self
+-                .paged_requested
+-                .as_ref()
+-                .is_some_and(|(_, query)| query == &self.query())
+-        {
++        if self.field.composing() {
+             return None;
+         }
+-        let results = self.paged_results.as_ref()?;
+-        if !results.source.same_document(snapshot) || results.source.content_state != snapshot.content_state {
++        let (key, results) = self.paged_results.as_ref()?;
++        if !self.session_current(key) {
++            return None;
++        }
++        if !results.source.same_document(snapshot)
++            || results.source.revision != snapshot.revision
++            || results.source.content_state != snapshot.content_state
++        {
+             return None;
+         }
+         let index = results.matches.partition_point(|matched| matched.range.start.0 < at);
+@@ -302,17 +415,19 @@ impl FindController {
+         let job = self
+             .paged_pending
+             .as_ref()
+-            .map(|ticket| ticket.job.clone())
+-            .or_else(|| self.pending.as_ref().map(|ticket| ticket.job.clone()));
++            .map(|(_, _, ticket)| ticket.job.clone())
++            .or_else(|| self.pending.as_ref().map(|(_, _, ticket)| ticket.job.clone()));
+         self.cancel_search();
+         job
+     }
+     pub fn cancel_search(&mut self) {
+-        self.cancelled_query = Some(self.query());
+-        self.paged_pending = None;
+-        self.paged_requested = None;
+-        self.pending = None;
++        self.next_request_generation();
++        let query = self.query();
++        self.cancelled_query = self.active_source.map(|source| FindSessionKey { source, query });
++        self.retire_pending();
+         self.results = None;
++        self.paged_results = None;
++        self.requested = None;
+         self.status = "Cancelled".into();
+     }
+     pub fn start_replace_paged(
+@@ -325,12 +440,16 @@ impl FindController {
+         if self.field.composing() || self.replacement.composing() {
+             return Err("Finish composing before replacing");
+         }
+-        let results = self.paged_results.as_ref().ok_or("Search the document first")?;
+-        if results.query != self.query() || results.completeness != Completeness::Complete {
++        let (key, results) = self.paged_results.as_ref().ok_or("Search the document first")?;
++        if !self.session_current(key) || results.query != self.query() || results.completeness != Completeness::Complete
++        {
+             return Err("Complete the current search before replacing");
+         }
+         let snapshot = handle.snapshot().clone();
+-        if !results.source.same_document(&snapshot) || results.source.content_state != snapshot.content_state {
++        if !results.source.same_document(&snapshot)
++            || results.source.revision != snapshot.revision
++            || results.source.content_state != snapshot.content_state
++        {
+             return Err("Search results are stale");
+         }
+         Ok(self.worker.as_ref().ok_or("Search worker unavailable")?.replace_paged(
+@@ -356,7 +475,10 @@ impl FindController {
+         if self.field.composing() || self.replacement.composing() || !self.query_current() {
+             return Err("Wait for the current search to finish.");
+         }
+-        let results = self.results.as_ref().ok_or("Run a search before replacing.")?;
++        let (key, results) = self.results.as_ref().ok_or("Run a search before replacing.")?;
++        if !self.session_current(key) {
++            return Err("Search results are stale; run it again.");
++        }
+         if !results.is_current(snapshot) || results.completeness() != Completeness::Complete {
+             return Err("Search is stale or incomplete; run it again.");
+         }
+@@ -372,29 +494,31 @@ impl FindController {
+         Ok(worker.replace(results.clone(), snapshot.clone(), replacement, scope, notify))
+     }
+     fn query_current(&self) -> bool {
+-        self.requested.as_ref().is_some_and(|(_, pattern, case, word, mode)| {
+-            pattern == self.field.value()
+-                && *case == self.case_sensitive
+-                && *word == self.whole_word
+-                && *mode == self.mode
+-        })
++        self.requested.as_ref().is_some_and(|key| self.session_current(key))
++    }
++    fn session_current(&self, key: &FindSessionKey) -> bool {
++        self.active_source == Some(key.source) && key.query == self.query()
+     }
+     fn action_enabled(&self, action: FindAction) -> bool {
+         if matches!(action, FindAction::ReplaceOne | FindAction::ReplaceAll) {
++            let resident = self.results.as_ref().is_some_and(|(key, results)| {
++                self.session_current(key) && !results.is_empty() && results.completeness() == Completeness::Complete
++            });
++            let paged = self.paged_results.as_ref().is_some_and(|(key, results)| {
++                self.session_current(key)
++                    && !results.matches.is_empty()
++                    && results.completeness == Completeness::Complete
++            });
+             return !self.field.composing()
+                 && !self.replacement.composing()
+                 && self.query_current()
+-                && self
+-                    .results
+-                    .as_ref()
+-                    .is_some_and(|results| !results.is_empty() && results.completeness() == Completeness::Complete);
++                && (resident || paged);
+         }
+         true
+     }
+     pub fn hide(&mut self) {
+-        if self.paged_pending.take().is_some() {
+-            self.paged_requested = None;
+-        }
++        let had_pending = self.pending.is_some() || self.paged_pending.is_some();
++        self.retire_pending();
+         self.open = false;
+         self.focused = false;
+         self.keyboard_focus = None;
+@@ -402,18 +526,29 @@ impl FindController {
+         self.replacement.cancel();
+         // Retain completed results for F3 after closing the bar. A cancelled
+         // in-flight query must be eligible for resubmission when reopened.
+-        if self.pending.take().is_some() {
++        if had_pending {
+             self.requested = None;
+         }
+     }
+     pub fn clear_source(&mut self) {
+-        self.paged_pending = None;
++        self.cancelled_query = None;
++        if self.active_source.is_none()
++            && self.pending.is_none()
++            && self.paged_pending.is_none()
++            && self.results.is_none()
++            && self.paged_results.is_none()
++            && self.requested.is_none()
++        {
++            self.status = "Type to find".into();
++            return;
++        }
++        self.retire_pending();
+         self.paged_results = None;
+-        self.paged_requested = None;
+         self.selection_scope = None;
+-        self.pending = None;
+         self.results = None;
+         self.requested = None;
++        self.active_source = None;
++        self.next_request_generation();
+         self.status = "Type to find".into();
+     }
+     pub fn has_focus(&self) -> bool {
+@@ -472,32 +607,26 @@ impl FindController {
+         self.keyboard_focus
+     }
+     pub fn refresh(&mut self, snapshot: &DocumentSnapshot, notify: Arc<dyn Fn() + Send + Sync>) {
+-        if !self.open || self.field.composing() || self.cancelled_query.as_ref() == Some(&self.query()) {
++        if !self.open || self.field.composing() {
+             return;
+         }
+-        if self
+-            .requested
+-            .as_ref()
+-            .is_some_and(|(source, pattern, case, word, mode)| {
+-                source.same_document(snapshot)
+-                    && source.revision == snapshot.revision
+-                    && pattern == self.field.value()
+-                    && *case == self.case_sensitive
+-                    && *word == self.whole_word
+-                    && *mode == self.mode
+-            })
+-        {
++        self.bind_resident(snapshot);
++        let query = self.query();
++        let key = FindSessionKey {
++            source: FindSourceKey::resident(snapshot),
++            query: query.clone(),
++        };
++        if self.cancelled_query.as_ref() == Some(&key) {
+             return;
+         }
+-        self.pending = None;
++        if self.requested.as_ref() == Some(&key) {
++            return;
++        }
++        let generation = self.next_request_generation();
++        self.retire_pending();
+         self.results = None;
+-        self.requested = Some((
+-            snapshot.clone(),
+-            self.field.value().into(),
+-            self.case_sensitive,
+-            self.whole_word,
+-            self.mode,
+-        ));
++        self.paged_results = None;
++        self.requested = Some(key.clone());
+         if self.field.value().is_empty() {
+             self.status = "Type to find".into();
+             return;
+@@ -511,49 +640,69 @@ impl FindController {
+                 }
+             }
+         }
+-        let query = self.query();
+-        self.pending = Some(self.worker.as_ref().unwrap().submit(snapshot.clone(), query, notify));
++        self.pending = Some((
++            generation,
++            key,
++            self.worker.as_ref().unwrap().submit(snapshot.clone(), query, notify),
++        ));
+         self.status = "Searching…".into();
+     }
+     pub fn pump(&mut self) -> bool {
+-        if let Some(ticket) = &self.paged_pending {
+-            match ticket.try_recv() {
++        if let Some((generation, key, ticket)) = &self.paged_pending {
++            let generation = *generation;
++            let key = key.clone();
++            let received = ticket.try_recv();
++            match received {
+                 Ok(Ok(results)) => {
++                    self.paged_pending = None;
++                    if generation != self.request_generation || !self.session_current(&key) {
++                        return false;
++                    }
+                     self.status = if results.count_complete {
+                         format!("{} matches", results.count)
+                     } else {
+                         format!("{} matches; {:?}", results.count, results.completeness)
+                     };
+-                    self.paged_results = Some(Arc::new(results));
+-                    self.paged_pending = None;
++                    self.paged_results = Some((key, Arc::new(results)));
+                     return true;
+                 }
+                 Ok(Err(error)) => {
+-                    self.status = format!("Search stopped: {error:?}");
+                     self.paged_pending = None;
++                    if generation != self.request_generation || !self.session_current(&key) {
++                        return false;
++                    }
++                    self.status = format!("Search stopped: {error:?}");
+                     return true;
+                 }
+                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+-                    self.status = "Search worker stopped".into();
+                     self.paged_pending = None;
++                    if generation != self.request_generation || !self.session_current(&key) {
++                        return false;
++                    }
++                    self.status = "Search worker stopped".into();
+                     return true;
+                 }
+                 Err(std::sync::mpsc::TryRecvError::Empty) => {}
+             }
+         }
+-        let Some(pending) = &self.pending else {
++        let Some((generation, key, pending)) = &self.pending else {
+             return false;
+         };
+-        let result = match pending.try_recv() {
++        let generation = *generation;
++        let key = key.clone();
++        let received = pending.try_recv();
++        let result = match received {
+             Ok(result) => result,
+             Err(std::sync::mpsc::TryRecvError::Empty) => return false,
+             Err(_) => {
+                 self.pending = None;
+-                self.status = "Search stopped".into();
+-                return true;
++                return self.set_terminal_status_if_current(generation, &key, "Search stopped");
+             }
+         };
+         self.pending = None;
++        if generation != self.request_generation || !self.session_current(&key) {
++            return false;
++        }
+         match result {
+             Ok(results) => {
+                 self.status = match results.completeness() {
+@@ -571,7 +720,7 @@ impl FindController {
+                     Completeness::InvalidQuery => "Invalid query".into(),
+                     _ => "Unsupported query".into(),
+                 };
+-                self.results = Some(Arc::new(results));
++                self.results = Some((key, Arc::new(results)));
+             }
+             Err(_) => self.status = "Search superseded".into(),
+         }
+@@ -586,7 +735,10 @@ impl FindController {
+         if self.field.composing() || !self.query_current() {
+             return None;
+         }
+-        let results = self.results.as_ref()?;
++        let (key, results) = self.results.as_ref()?;
++        if !self.session_current(key) {
++            return None;
++        }
+         if !results.is_current(snapshot) {
+             self.status = "Results are stale".into();
+             return None;
+@@ -981,6 +1133,66 @@ impl FindController {
+ #[cfg(test)]
+ mod find_bar_tests {
+     use super::*;
++    fn snapshot(text: &str) -> DocumentSnapshot {
++        bareline_document::Document::from_utf8(
++            text,
++            bareline_document::Budget::new(4096),
++            bareline_document::Budget::new(4096),
++        )
++        .unwrap()
++        .snapshot()
++    }
++
++    #[test]
++    fn document_switch_clears_byte_scope_and_restarts_a_cancelled_query() {
++        let a = snapshot("a needle");
++        let b = snapshot("b needle");
++        let mut find = FindController::default();
++        find.show();
++        assert!(find.field.insert("needle"));
++        find.bind_resident(&a);
++        find.set_selection_scope(Some(TextOffset(2)..TextOffset(8)));
++        find.cancel_search();
++        assert!(find.cancelled_query.is_some());
++
++        find.bind_resident(&b);
++        assert!(find.query().selection.is_none());
++        assert!(find.cancelled_query.is_none());
++        find.bind_resident(&a);
++        find.refresh(&a, Arc::new(|| {}));
++        assert!(find.searching());
++        assert_eq!(find.status, "Searching…");
++        find.cancel_search();
++
++        find.clear_source();
++        assert!(find.cancelled_query.is_none());
++        find.bind_resident(&a);
++        find.refresh(&a, Arc::new(|| {}));
++        assert!(find.searching());
++        assert_eq!(find.status, "Searching…");
++        find.cancel_search();
++    }
++
++    #[test]
++    fn stale_worker_disconnect_cannot_replace_the_current_document_status() {
++        let a = snapshot("a needle");
++        let b = snapshot("b needle");
++        let mut find = FindController::default();
++        find.show();
++        assert!(find.field.insert("needle"));
++        find.bind_resident(&a);
++        let generation = find.request_generation;
++        let stale = FindSessionKey {
++            source: FindSourceKey::resident(&a),
++            query: find.query(),
++        };
++        find.bind_resident(&b);
++        let status = find.status.clone();
++
++        assert!(!find.set_terminal_status_if_current(generation, &stale, "Search stopped"));
++        assert_eq!(find.status, status);
++    }
++
+     #[test]
+     fn option_toggles_map_to_query_flags() {
+         let mut find = FindController::default();
+diff --git a/crates/app/src/workspace.rs b/crates/app/src/workspace.rs
+index 8c8df56..b9884e3 100644
+--- a/crates/app/src/workspace.rs
++++ b/crates/app/src/workspace.rs
+@@ -2360,6 +2360,7 @@ impl Workspace {
+         acknowledged
+     }
+     pub fn find_next(&mut self, active: usize, backwards: bool) {
++        self.bind_find_to(active);
+         self.pump_search_acknowledgment();
+         if self.pending_search_navigation.is_some() || self.acknowledged_search_commands.len() >= 256 {
+             return;
+@@ -2479,6 +2480,7 @@ impl Workspace {
+         Some(index)
+     }
+     pub fn replace(&mut self, active: usize, all: bool) {
++        self.bind_find_to(active);
+         if self.pending_replace.is_some() || self.pending_paged_replace.is_some() {
+             return;
+         }
+@@ -2533,6 +2535,40 @@ impl Workspace {
+         self.find.cancel_search();
+         self.message = Some("Search / replacement preparation cancelled.".into());
+     }
++    pub fn bind_find_to(&mut self, active: usize) {
++        enum Source {
++            Resident(bareline_document::DocumentSnapshot),
++            Paged(bareline_document::paged::PagedSnapshot),
++        }
++        let source = self.editors.get(active).map(|editor| match editor {
++            WorkspaceEditor::Resident(editor) => Source::Resident(editor.snapshot().clone()),
++            WorkspaceEditor::Paged(editor) => Source::Paged(editor.snapshot().clone()),
++        });
++        match source {
++            Some(Source::Resident(source)) => self.bind_find_resident(&source),
++            Some(Source::Paged(source)) => self.bind_find_paged(&source),
++            None => self.clear_find_source(),
++        }
++    }
++    pub fn bind_find_resident(&mut self, source: &bareline_document::DocumentSnapshot) {
++        if self.find.bind_resident(source) {
++            self.detach_find_operations();
++        }
++    }
++    pub fn bind_find_paged(&mut self, source: &bareline_document::paged::PagedSnapshot) {
++        if self.find.bind_paged(source) {
++            self.detach_find_operations();
++        }
++    }
++    pub fn clear_find_source(&mut self) {
++        self.find.clear_source();
++        self.detach_find_operations();
++    }
++    fn detach_find_operations(&mut self) {
++        self.pending_search_navigation = None;
++        self.pending_replace = None;
++        self.pending_paged_replace = None;
++    }
+     pub fn draw(
+         &mut self,
+         active: usize,
+@@ -2575,6 +2611,7 @@ impl Workspace {
+             }
+             self.last_drawn = Some(active);
+         }
++        self.bind_find_to(active);
+         let mut result = match self.editors.get_mut(active) {
+             Some(editor) => {
+                 match editor {
+@@ -4047,6 +4084,128 @@ mod tests {
+             .unwrap();
+         assert_eq!(workspace.editors[0].viewport().top_inset, 0.0);
+     }
++
++    #[test]
++    fn find_results_and_replace_actions_follow_the_bound_document_generation() {
++        let (_release, gate) = std::sync::mpsc::channel();
++        let (notifier, notified) = std::sync::mpsc::channel();
++        let mut workspace = Workspace::new(
++            Arc::new(move || {
++                let _ = notifier.send(());
++            }),
++            Arc::new(GatedFileSystem(std::sync::Mutex::new(gate))),
++        )
++        .unwrap();
++        workspace.new_document().unwrap();
++        workspace.new_document().unwrap();
++        workspace.editors[0].enqueue(Input::Insert("needle needle".into()));
++        workspace.editors[1].enqueue(Input::Insert("nothing here".into()));
++        while workspace.editors.iter().any(WorkspaceEditor::busy) {
++            notified.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
++            workspace.pump();
++        }
++        workspace.find.show_replace();
++        workspace.find.field.insert("needle");
++        let mut renderer = bareline_renderer_recording::RecordingBackend::default();
++        let mut operations = Vec::new();
++        workspace
++            .draw(0, &mut renderer, 1100.0, 700.0, &mut operations)
++            .unwrap();
++        while workspace.find.searching() {
++            notified.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
++            workspace.pump();
++        }
++        assert_eq!(workspace.find.completed_results().unwrap().count(), 2);
++        workspace.find.case_sensitive = true;
++        assert!(workspace.find.completed_results().is_none());
++        assert!(
++            workspace
++                .find
++                .semantics(1100.0)
++                .into_iter()
++                .find(|node| node.name == "Replace All")
++                .unwrap()
++                .disabled
++        );
++        workspace.find.case_sensitive = false;
++        assert_eq!(workspace.find.completed_results().unwrap().count(), 2);
++        assert!(
++            !workspace
++                .find
++                .semantics(1100.0)
++                .into_iter()
++                .find(|node| node.name == "Replace All")
++                .unwrap()
++                .disabled
++        );
++
++        workspace.bind_find_to(1);
++        assert_eq!(workspace.find.status, "Searching…");
++        assert!(workspace.find.completed_results().is_none());
++        assert!(
++            workspace
++                .find
++                .semantics(1100.0)
++                .into_iter()
++                .find(|node| node.name == "Replace All")
++                .unwrap()
++                .disabled
++        );
++
++        operations.clear();
++        workspace
++            .draw(1, &mut renderer, 1100.0, 700.0, &mut operations)
++            .unwrap();
++        workspace.bind_find_to(0);
++        operations.clear();
++        workspace
++            .draw(0, &mut renderer, 1100.0, 700.0, &mut operations)
++            .unwrap();
++        while workspace.find.searching() {
++            notified.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
++            workspace.pump();
++        }
++        assert_eq!(workspace.find.completed_results().unwrap().count(), 2);
++
++        let source_before_detached_replace = workspace.editors[0].snapshot().content_state;
++        workspace.find.replacement.insert("replacement");
++        workspace.replace(0, true);
++        assert!(workspace.pending_replace.is_some());
++        workspace.bind_find_to(1);
++        assert!(workspace.pending_replace.is_none());
++        workspace.pump();
++        assert_eq!(
++            workspace.editors[0].snapshot().content_state,
++            source_before_detached_replace
++        );
++        workspace.bind_find_to(0);
++        operations.clear();
++        workspace
++            .draw(0, &mut renderer, 1100.0, 700.0, &mut operations)
++            .unwrap();
++        while workspace.find.searching() {
++            notified.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
++            workspace.pump();
++        }
++
++        workspace.editors[0].enqueue(Input::Insert(" changed".into()));
++        while workspace.editors[0].busy() {
++            notified.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
++            workspace.pump();
++        }
++        workspace.bind_find_to(0);
++        assert_eq!(workspace.find.status, "Results changed; search again");
++        assert!(workspace.find.completed_results().is_none());
++        assert!(
++            workspace
++                .find
++                .semantics(1100.0)
++                .into_iter()
++                .find(|node| node.name == "Replace All")
++                .unwrap()
++                .disabled
++        );
++    }
+     #[test]
+     fn replace_all_is_one_undo_and_cancelled_preparation_cannot_mutate() {
+         let (_release, gate) = std::sync::mpsc::channel();
+diff --git a/docs/implementation/2026-09-12-audit-implementation/PR-U09.md b/docs/implementation/2026-09-12-audit-implementation/PR-U09.md
+new file mode 100644
+index 0000000..7f56ad1
+--- /dev/null
++++ b/docs/implementation/2026-09-12-audit-implementation/PR-U09.md
+@@ -0,0 +1,46 @@
++# PR-U09 — Document-bound Find state
++
++## Baseline
++
++- Base commit: `ba572832716547fc0df7493003e6c7b9ab9f7e58`
++- Dependency: corrected PR-U08 split-pane accessibility provider ownership and integrated PR-U07 Search/Recovery ownership.
++- Worktree: `audit-implementation-worktrees/modal`.
++
++## Scope
++
++Bind Find query/options, results, pending navigation and replacement to the exact document source, revision and request generation for resident and paged editors. Stale results cannot affect a different document or a newer revision. Shared dock composition remains assigned to PR-U11.
++
++## Decisions
++
++- Define each request session from the resident or paged full document identity, content state/revision, complete query/options/scope, and a non-recycling controller generation.
++- Clear visible results and disable replacement synchronously when an active document, revision, query, option, or scope no longer matches. Late worker results compare their captured session and generation before changing status or results.
++- Bind Find on ordinary tab changes, split-pane activation, clone/move/close/collapse, session restore, search-result activation, drawing after revision changes, navigation, and replacement. Switching source also detaches pending navigation/replacement tickets so completion cannot target another active document.
++- Preserve query text across document changes and start the matching resident or paged request from the next active-view preparation. Shared dock layout remains assigned to PR-U11.
++- Treat selection scope as source-owned byte offsets: clear it on a document change, retain it across revisions of the same document, and capture it from the actual active split view. Visiting another document also retires a prior cancellation so returning starts a fresh request with truthful status.
++- Route source clearing through the workspace so navigation and replacement tickets retire together, and qualify disconnected-worker status by the captured session and generation.
++
++## Changed files
++
++- `crates/app/src/find.rs`
++- `crates/app/src/workspace.rs`
++- `apps/bareline/src/windows_app/accessibility.rs`
++- `apps/bareline/src/windows_app/search.rs`
++- `apps/bareline/src/windows_app/views.rs`
++- `apps/bareline/src/windows_app/watch.rs`
++- This implementation note.
++
++## Focused checks
++
++- `cargo test -p bareline-app find_results_and_replace_actions_follow_the_bound_document_generation`
++- `cargo test -p bareline split_pane_activation_retires_the_previous_documents_find_results`
++- `cargo test -p bareline folded_large_gap_keeps_independent_pane_source_layout_and_click`
++- `cargo test -p bareline-app document_switch_clears_byte_scope_and_restarts_a_cancelled_query`
++- `cargo test -p bareline-app stale_worker_disconnect_cannot_replace_the_current_document_status`
++- `cargo test -p bareline find_selection_scope_uses_the_active_split_view`
++- Existing navigation/replace regressions: `cargo test -p bareline-app find_is_worker_backed_and_navigation_preserves_document_revision` and `cargo test -p bareline-app replace_all_is_one_undo_and_cancelled_preparation_cannot_mutate`
++- Cargo and native desktop qualification are owned by root integration; no Cargo or desktop run was made in this isolated worktree.
++
++## Unresolved qualifications
++
++- Native resident↔paged and rapid pane-switch journeys remain for final integrated qualification.
++- Shared Find/Search dock composition remains assigned to PR-U11.

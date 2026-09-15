@@ -1,0 +1,343 @@
+diff --git a/docs/implementation/2026-09-12-audit-implementation/PR-T09-R5.md b/docs/implementation/2026-09-12-audit-implementation/PR-T09-R5.md
+index 930edf1..16c20f4 100644
+--- a/docs/implementation/2026-09-12-audit-implementation/PR-T09-R5.md
++++ b/docs/implementation/2026-09-12-audit-implementation/PR-T09-R5.md
+@@ -12,7 +12,9 @@
+ - R6 input correction: retained P0-7 evidence under `p0-7-27100-1789233341310762400` observed the exact visible phrase but correctly rejected the requested trailing LF. Raw Unicode LF is not the app's Enter command contract, and a single-line edit is sufficient to make P0-7 and P0-5 dirty, so those fixtures no longer request or claim a newline. Exact content matching remains unchanged.
+ - R6 Exit diagnosis: retained P0-3 evidence under `p0-3-22424-1789233242071517200` shows one dynamically resolved File > Exit command and no prompt. Menu receipts now retain the same-HWND root menu, exact matched labels/positions/id, a second observation immediately before posting, and whether that lookup changed. A stable lookup posts its dynamically resolved id once. A changed or missing second lookup returns both snapshots and explicitly records that no command was posted; the harness does not hardcode, substitute or reinject Exit.
+ - R6 Unicode diagnosis: retained P4-4 evidence under `p4-4-9172-1789233424038018700` reports successful standalone `WM_CHAR` posts and `SendInput` insertion counts while TextPattern stayed empty; sanctioned native typing immediately produced the exact emoji and colour glyphs. Winit 0.30's Windows keyboard builder explicitly ignores `WM_CHAR` without pending key-event state and collects consecutive surrogate `WM_CHAR` units after `WM_KEYDOWN`. The primary targeted injector now posts one `VK_PACKET` keydown, the scalar's one or two UTF-16 `WM_CHAR` units, and one keyup as a single ordered transaction. Exact TextPattern and colour-glyph assertions remain required; the retained failed run is not reclassified.
+-- R6 long-input correction: the framed P4-4 input subsequently passed exact text and colour checks, while retained P0-3 evidence under `p0-3-10592-1789234456492457900` queued all 1,620 messages at once and observed only 518 of 540 characters. The editor source has a confirmed 256-input bound and rejects further inputs while its async worker is pending; attribution of this exact suffix loss to that bound is evidence-backed but inferred because the accessibility receipt does not expose the transient queue error. Restoring the prior bounded 6 ms pause after each complete scalar transaction lets the event loop and worker drain during the single submission. It does not poll, retry, duplicate or weaken the exact 540-character assertion.
++- R6 long-input correction: the framed P4-4 input subsequently passed exact text and colour checks, while retained P0-3 evidence under `p0-3-10592-1789234456492457900` queued all 1,620 messages at once and observed only 518 of 540 characters. That run established burst-input loss, but did not establish the editor queue as its cause. The bounded six-millisecond cadence improved the subsequent run and remains as a realistic interval between complete input transactions; it does not poll, retry, duplicate or weaken the exact 540-character assertion.
++- R8 input correction: the later 33-character P0-7 run lost three isolated characters despite staying far below the editor's 256-input bound, retracting the earlier queue attribution as an explanation for short-input loss. The actual race is in the harness protocol: its three independent `PostMessageW` calls allowed winit 0.30.13 `platform_impl/windows/keyboard.rs` lines 115-154 to process a `VK_PACKET` keydown before the matching character was queued; lines 168-176 then discard the late `WM_CHAR` because no event state remains. Input now uses the platform's `KEYEVENTF_UNICODE` contract, with every Unicode scalar's UTF-16 down/up pairs inserted by one `SendInput` call. Exact inserted-event counts, verified foreground/editor focus, six-millisecond spacing between complete scalar batches, no second injection, and exact TextPattern content remain required. The astral batch construction is source-tested; exact native BMP and emoji delivery remain pending the R8 runs.
++- R8 review guards: because `SendInput` targets the global foreground queue, the harness rechecks the verified window immediately before every scalar batch and stops before injecting if foreground ownership changes. A complete TextPattern value is insufficient by itself: success also requires every scalar and event to have been attempted and inserted with no recorded error, preventing a missing final key-up from being reported as a pass.
+ - Prompt-observer diagnostic: the existing oracle is confirmed to depend on Win32 descendant text containing `save` and an exact Win32 `Button` for consent, so a native owned dialog implemented through another control surface could be missed. Whether such a dialog existed during the retained prompt timeouts remains unproven. Each app process now receives a unique `BARELINE_QA_COMMAND_TRACE` artifact path. Prompt waits retain at most eight same-process snapshots at the first disabled-main/owned-window topology changes and at the terminal match or timeout. Each snapshot caps Win32 descendants at 128 and UIA Control View nodes at 256, records UIA button names and Invoke availability, and excludes content from unrelated processes. The consent oracle, one-command rule, and failure classification are unchanged.
+ - Contained compilation initially found that P0-5's same-profile custom relaunch bypassed `Session::launch`. It now receives its own second-launch trace path and retains both process artifacts in the reconstructed session, matching the per-process trace contract.
+ - Root verification: focused xtask helper tests followed by isolated P0-3, P0-7 and P4-4 against the integrated native binary.
+diff --git a/xtask/src/journey.rs b/xtask/src/journey.rs
+index 80fdb31..6b8602f 100644
+--- a/xtask/src/journey.rs
++++ b/xtask/src/journey.rs
+@@ -35,14 +35,13 @@ use windows::Win32::UI::Accessibility::{
+ };
+ use windows::Win32::UI::Input::KeyboardAndMouse::{
+     INPUT, INPUT_KEYBOARD, IsWindowEnabled, KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE,
+-    SendInput, SetFocus, VIRTUAL_KEY, VK_CONTROL, VK_ESCAPE, VK_PACKET, VK_SHIFT,
++    SendInput, SetFocus, VIRTUAL_KEY, VK_CONTROL, VK_ESCAPE, VK_SHIFT,
+ };
+ use windows::Win32::UI::WindowsAndMessaging::{
+     BringWindowToTop, EnumChildWindows, EnumWindows, GW_OWNER, GetClassNameW, GetClientRect, GetDlgCtrlID,
+     GetForegroundWindow, GetMenu, GetMenuItemCount, GetMenuItemID, GetMenuStringW, GetSubMenu, GetWindow,
+     GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, HWND_TOP, IsWindowVisible, MF_BYPOSITION, PostMessageW,
+-    SW_SHOW, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SetForegroundWindow, SetWindowPos, ShowWindow, WM_CHAR,
+-    WM_COMMAND, WM_KEYDOWN, WM_KEYUP,
++    SW_SHOW, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SetForegroundWindow, SetWindowPos, ShowWindow, WM_COMMAND,
+ };
+ use windows::core::BOOL;
+ 
+@@ -1361,75 +1360,80 @@ fn send(inputs: &[INPUT]) -> serde_json::Value {
+     })
+ }
+ 
+-fn packet_message_plan(text: &str) -> Vec<(u32, usize, isize)> {
+-    let mut messages = Vec::with_capacity(text.encode_utf16().count() + text.chars().count() * 2);
++fn unicode_scalar_input_batches(text: &str) -> Vec<Vec<INPUT>> {
++    let mut batches = Vec::with_capacity(text.chars().count());
+     for character in text.chars() {
+-        messages.push((WM_KEYDOWN, VK_PACKET.0 as usize, 1));
+         let mut units = [0u16; 2];
+-        messages.extend(
+-            character
+-                .encode_utf16(&mut units)
+-                .iter()
+-                .map(|unit| (WM_CHAR, *unit as usize, 1)),
+-        );
+-        messages.push((WM_KEYUP, VK_PACKET.0 as usize, 0xC000_0001_u32 as isize));
++        let mut inputs = Vec::with_capacity(character.len_utf16() * 2);
++        for unit in character.encode_utf16(&mut units) {
++            inputs.extend([unicode_input(*unit, false), unicode_input(*unit, true)]);
++        }
++        batches.push(inputs);
+     }
+-    messages
++    batches
+ }
+ 
+-/// Post complete VK_PACKET key transactions to the target window. Winit ignores
+-/// a standalone WM_CHAR when no preceding keydown created its event state; the
+-/// framing also keeps both surrogate WM_CHAR units in one logical key event.
++/// Submit each complete Unicode scalar as one genuine keyboard-input batch. The
++/// OS owns the VK_PACKET/WM_CHAR translation, and scalar batches cannot be
++/// interleaved by another SendInput producer.
+ fn type_text(hwnd: HWND, text: &str) -> serde_json::Value {
+     const SCALAR_PACING: Duration = Duration::from_millis(6);
+-    let plan = packet_message_plan(text);
+-    let mut posted = 0usize;
+-    let mut posted_units = 0usize;
++    let batches = unicode_scalar_input_batches(text);
++    let requested_events = batches.iter().map(Vec::len).sum::<usize>();
++    let mut attempted_events = 0usize;
++    let mut inserted_events = 0usize;
++    let mut attempted_scalars = 0usize;
++    let mut completed_scalars = 0usize;
+     let mut errors = Vec::new();
+-    for (message, wparam, lparam) in &plan {
+-        // SAFETY: `hwnd` is the verified live target and each tuple is a
+-        // well-formed VK_PACKET key or character message.
+-        match unsafe { PostMessageW(Some(hwnd), *message, WPARAM(*wparam), LPARAM(*lparam)) } {
+-            Ok(()) => {
+-                posted += 1;
+-                posted_units += usize::from(*message == WM_CHAR);
+-            }
+-            Err(error) => errors.push(serde_json::json!({
+-                "message": message,
+-                "error": error.to_string(),
+-            })),
++    for (scalar_index, inputs) in batches.iter().enumerate() {
++        let foreground = unsafe { GetForegroundWindow() };
++        if foreground != hwnd {
++            errors.push(serde_json::json!({
++                "kind": "foreground_lost_before_scalar",
++                "scalar_index": scalar_index,
++                "expected_hwnd": hwnd.0 as usize,
++                "foreground_hwnd": foreground.0 as usize,
++            }));
++            break;
+         }
+-        if *message == WM_KEYUP {
+-            std::thread::sleep(SCALAR_PACING);
++        let receipt = send(inputs);
++        attempted_scalars += 1;
++        attempted_events += inputs.len();
++        inserted_events += receipt["inserted_events"].as_u64().unwrap_or(0) as usize;
++        if receipt["inserted_events"].as_u64() != Some(inputs.len() as u64) {
++            errors.push(serde_json::json!({
++                "kind": "partial_scalar_batch",
++                "scalar_index": scalar_index,
++                "requested_events": inputs.len(),
++                "inserted_events": receipt["inserted_events"],
++                "last_error": receipt["last_error"],
++            }));
++            break;
+         }
++        completed_scalars += 1;
++        std::thread::sleep(SCALAR_PACING);
+     }
+     serde_json::json!({
+-        "channel": "PostMessage VK_PACKET transaction",
+-        "framing": ["WM_KEYDOWN VK_PACKET", "WM_CHAR UTF-16 unit(s)", "WM_KEYUP VK_PACKET"],
++        "channel": "SendInput KEYEVENTF_UNICODE scalar batches",
++        "target_hwnd": hwnd.0 as usize,
++        "framing": "one SendInput call per Unicode scalar; UTF-16 unit down/up pairs",
+         "requested_scalars": text.chars().count(),
+         "requested_units": text.encode_utf16().count(),
+-        "requested_messages": plan.len(),
+-        "posted_messages": posted,
+-        "posted_units": posted_units,
++        "requested_events": requested_events,
++        "attempted_scalars": attempted_scalars,
++        "attempted_events": attempted_events,
++        "completed_scalars": completed_scalars,
++        "inserted_events": inserted_events,
+         "per_scalar_pacing_ms": SCALAR_PACING.as_millis(),
+         "errors": errors,
+     })
+ }
+ 
+-/// One fallback typing path after the editor provider has accepted focus.
+-/// The caller verifies the inserted event count and exact TextPattern result.
+-fn type_text_sendinput(text: &str) -> serde_json::Value {
+-    let mut inputs = Vec::with_capacity(text.encode_utf16().count() * 2);
+-    for ch in text.chars() {
+-        let mut units = [0u16; 2];
+-        for unit in ch.encode_utf16(&mut units) {
+-            inputs.extend([unicode_input(*unit, false), unicode_input(*unit, true)]);
+-        }
+-    }
+-    let mut receipt = send(&inputs);
+-    receipt["channel"] = serde_json::json!("SendInput Unicode");
+-    receipt["utf16_units"] = serde_json::json!(text.encode_utf16().count());
+-    receipt
++fn input_submission_complete(receipt: &serde_json::Value) -> bool {
++    receipt["errors"].as_array().is_some_and(Vec::is_empty)
++        && receipt["completed_scalars"] == receipt["requested_scalars"]
++        && receipt["attempted_events"] == receipt["requested_events"]
++        && receipt["inserted_events"] == receipt["requested_events"]
+ }
+ 
+ #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+@@ -1610,9 +1614,9 @@ fn retain_input_prerequisite_failure(
+     }
+ }
+ 
+-/// Submit one posted-text attempt, then at most one measured SendInput attempt
+-/// after the actual editor provider accepts focus. Exact TextPattern content,
+-/// rather than pixels or enqueue success, proves delivery.
++/// Submit one measured SendInput attempt after the actual editor provider owns
++/// focus. Exact TextPattern content, rather than pixels or insertion counts,
++/// proves delivery.
+ fn type_text_until_observed_change(
+     session: &Session,
+     hwnd: HWND,
+@@ -1620,7 +1624,13 @@ fn type_text_until_observed_change(
+     timeout: Duration,
+ ) -> Result<serde_json::Value, String> {
+     focus(hwnd);
+-    let before_provider = uia_provider_snapshot(hwnd);
++    let mut before_provider = uia_provider_snapshot(hwnd);
++    let mut focus_correction = None;
++    if before_provider["editor"]["has_keyboard_focus"].as_bool() != Some(true) {
++        let correction = uia_provider_snapshot_once(hwnd, true);
++        focus_correction = Some(correction);
++        before_provider = wait_for_editor_focus(hwnd, Duration::from_secs(2));
++    }
+     let before_image = capture(hwnd).map_err(|detail| {
+         retain_input_prerequisite_failure(
+             session,
+@@ -1652,32 +1662,20 @@ fn type_text_until_observed_change(
+             serde_json::json!([]),
+         ));
+     }
+-    let posted = type_text(hwnd, text);
+-    let mut attempts = vec![posted.clone()];
+-    let (mut delivery, mut after_provider) = wait_for_text_delivery(hwnd, &before_text, &expected_text, timeout);
+-    let mut focus_correction = None;
+-    let mut sendinput = None;
+-    if delivery == TextDelivery::Unchanged {
+-        let correction = uia_provider_snapshot_once(hwnd, true);
+-        focus_correction = Some(correction.clone());
+-        let focused = wait_for_editor_focus(hwnd, Duration::from_secs(2));
+-        let foreground = unsafe { GetForegroundWindow() };
+-        if let Some(current) = observed_uia_text(&focused) {
+-            delivery = text_delivery(&before_text, current, &expected_text);
+-        }
+-        if delivery == TextDelivery::Unchanged
+-            && focused["editor"]["has_keyboard_focus"].as_bool() == Some(true)
+-            && foreground == hwnd
+-        {
+-            let sent = type_text_sendinput(text);
+-            attempts.push(sent.clone());
+-            sendinput = Some(sent);
+-            (delivery, after_provider) =
+-                wait_for_text_delivery(hwnd, &before_text, &expected_text, timeout.min(Duration::from_secs(5)));
+-        } else {
+-            after_provider = focused;
+-        }
++    if before_target["editor_has_keyboard_focus"].as_bool() != Some(true) {
++        return Err(retain_input_prerequisite_failure(
++            session,
++            hwnd,
++            "editor provider does not own keyboard focus",
++            before_provider,
++            false,
++            serde_json::json!([]),
++        ));
+     }
++    let primary_input = type_text(hwnd, text);
++    let submission_complete = input_submission_complete(&primary_input);
++    let attempts = vec![primary_input.clone()];
++    let (delivery, after_provider) = wait_for_text_delivery(hwnd, &before_text, &expected_text, timeout);
+     session.settle();
+     let after_image = capture(hwnd).map_err(|detail| {
+         retain_input_prerequisite_failure(
+@@ -1707,10 +1705,10 @@ fn type_text_until_observed_change(
+         "delivery": format!("{delivery:?}"),
+         "body_region": [body.0, body.1, body.2, body.3],
+         "body_diff_fraction": body_diff,
+-        "posted_input": posted,
++        "primary_input": primary_input,
++        "input_submission_complete": submission_complete,
+         "input_attempts": attempts,
+         "focus_correction": focus_correction,
+-        "sendinput": sendinput,
+         "before_target": before_target,
+         "before_provider": before_provider,
+         "expected_text": expected_text,
+@@ -1720,13 +1718,13 @@ fn type_text_until_observed_change(
+         "utf16_units": text.encode_utf16().count(),
+         "window_title_after": window_title(hwnd),
+     });
+-    if delivery == TextDelivery::Delivered {
++    if delivery == TextDelivery::Delivered && submission_complete {
+         Ok(receipt)
+     } else {
+         let _ = shot(session, hwnd, "typing-failed");
+         let evidence = write_session_evidence(session, "typing-failed", &receipt)?;
+         Err(format!(
+-            "input delivery was {delivery:?}; evidence={}",
++            "input delivery was {delivery:?}; submission_complete={submission_complete}; evidence={}",
+             evidence.display()
+         ))
+     }
+@@ -3091,19 +3089,61 @@ mod evidence_tests {
+     }
+ 
+     #[test]
+-    fn packet_message_plan_frames_astral_text_in_one_winit_key_event() {
+-        let plan = packet_message_plan("A🎉");
++    fn unicode_sendinput_batches_keep_each_scalar_and_surrogate_pair_complete() {
++        let batches = unicode_scalar_input_batches("A🎉e\u{301}");
++        assert_eq!(batches.iter().map(Vec::len).collect::<Vec<_>>(), [2, 4, 2, 2]);
++
++        let scans = batches
++            .iter()
++            .map(|batch| {
++                batch
++                    .iter()
++                    .map(|input| unsafe { input.Anonymous.ki.wScan })
++                    .collect::<Vec<_>>()
++            })
++            .collect::<Vec<_>>();
+         assert_eq!(
+-            plan.iter().map(|(message, _, _)| *message).collect::<Vec<_>>(),
+-            [WM_KEYDOWN, WM_CHAR, WM_KEYUP, WM_KEYDOWN, WM_CHAR, WM_CHAR, WM_KEYUP,]
+-        );
+-        assert_eq!(plan[4].1, 0xD83C);
+-        assert_eq!(plan[5].1, 0xDF89);
+-        assert!(
+-            plan.iter()
+-                .filter(|(message, _, _)| *message == WM_KEYDOWN || *message == WM_KEYUP)
+-                .all(|(_, wparam, _)| *wparam == VK_PACKET.0 as usize)
++            scans,
++            [
++                vec![0x41, 0x41],
++                vec![0xD83C, 0xD83C, 0xDF89, 0xDF89],
++                vec![0x65, 0x65],
++                vec![0x0301, 0x0301]
++            ]
+         );
++        for batch in &batches {
++            for (index, input) in batch.iter().enumerate() {
++                let key = unsafe { input.Anonymous.ki };
++                assert_eq!(key.wVk, VIRTUAL_KEY(0));
++                assert!(key.dwFlags.contains(KEYEVENTF_UNICODE));
++                assert_eq!(key.dwFlags.contains(KEYEVENTF_KEYUP), index % 2 == 1);
++            }
++        }
++    }
++
++    #[test]
++    fn exact_text_cannot_override_partial_or_focus_lost_input_submission() {
++        let complete = serde_json::json!({
++            "requested_scalars": 2,
++            "completed_scalars": 2,
++            "requested_events": 4,
++            "attempted_events": 4,
++            "inserted_events": 4,
++            "errors": [],
++        });
++        assert!(input_submission_complete(&complete));
++
++        let mut missing_final_key_up = complete.clone();
++        missing_final_key_up["inserted_events"] = serde_json::json!(3);
++        missing_final_key_up["errors"] = serde_json::json!([{"kind": "partial_batch"}]);
++        assert!(!input_submission_complete(&missing_final_key_up));
++
++        let mut focus_lost = complete;
++        focus_lost["completed_scalars"] = serde_json::json!(1);
++        focus_lost["attempted_events"] = serde_json::json!(2);
++        focus_lost["inserted_events"] = serde_json::json!(2);
++        focus_lost["errors"] = serde_json::json!([{"kind": "foreground_lost_before_scalar"}]);
++        assert!(!input_submission_complete(&focus_lost));
+     }
+ 
+     #[test]

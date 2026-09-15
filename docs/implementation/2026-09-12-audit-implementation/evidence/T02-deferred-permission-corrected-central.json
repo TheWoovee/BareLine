@@ -1,0 +1,19 @@
+{
+  "arguments": [
+    "test",
+    "--offline",
+    "--locked",
+    "-p",
+    "bareline",
+    "--bin",
+    "bareline",
+    "deferred_disable_persists_against_latest_completed_manager_generation",
+    "--",
+    "--test-threads=1"
+  ],
+  "completed_utc": "2026-09-12T08:46:01.4103193Z",
+  "integration_snapshot": "d5d35cee8fa0668bc288b3383a797b626d43e76e",
+  "exit_code": 0,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\T02-deferred-permission-corrected-central.log"
+}

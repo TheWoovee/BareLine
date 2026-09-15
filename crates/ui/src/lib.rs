@@ -33,19 +33,10 @@ pub struct ViewTree {
 }
 impl ViewTree {
     pub fn hit_test(&self, point: Point) -> Option<ViewId> {
-        self.nodes
-            .iter()
-            .rev()
-            .find(|n| n.bounds.contains(point))
-            .map(|n| n.id)
+        self.nodes.iter().rev().find(|n| n.bounds.contains(point)).map(|n| n.id)
     }
     pub fn focus_next(&mut self, backwards: bool) {
-        let ids: Vec<_> = self
-            .nodes
-            .iter()
-            .filter(|n| n.focusable)
-            .map(|n| n.id)
-            .collect();
+        let ids: Vec<_> = self.nodes.iter().filter(|n| n.focusable).map(|n| n.id).collect();
         if ids.is_empty() {
             self.focus = None;
             return;
@@ -60,14 +51,7 @@ impl ViewTree {
         self.invalidated = true;
     }
 }
-pub fn text(
-    ops: &mut Vec<DrawOp>,
-    x: f32,
-    y: f32,
-    value: impl Into<String>,
-    size: f32,
-    color: Color,
-) {
+pub fn text(ops: &mut Vec<DrawOp>, x: f32, y: f32, value: impl Into<String>, size: f32, color: Color) {
     ops.push(DrawOp::Text {
         origin: Point { x, y },
         text: value.into(),
@@ -86,21 +70,8 @@ pub fn rect(x: f32, y: f32, width: f32, height: f32) -> Rect {
 
 /// Initial shell composition uses the reference's tab/editor/status hierarchy.
 /// Documents and concrete controls are owned by subsequent PRs.
-pub fn shell(
-    width: f32,
-    height: f32,
-    tabs: &[String],
-    active: usize,
-    palette: bool,
-) -> Vec<DrawOp> {
-    shell_with_theme(
-        width,
-        height,
-        tabs,
-        active,
-        palette,
-        theme::UiTheme::default(),
-    )
+pub fn shell(width: f32, height: f32, tabs: &[String], active: usize, palette: bool) -> Vec<DrawOp> {
+    shell_with_theme(width, height, tabs, active, palette, theme::UiTheme::default())
 }
 pub fn palette(width: f32, ops: &mut Vec<DrawOp>) {
     palette_with_theme(width, theme::UiTheme::default(), ops);
@@ -124,37 +95,20 @@ pub fn shell_with_theme(
         active,
     };
     let visible = strip.visible();
-    for (index, title) in tabs
-        .iter()
-        .enumerate()
-        .skip(visible.start)
-        .take(visible.len())
-    {
+    for (index, title) in tabs.iter().enumerate().skip(visible.start).take(visible.len()) {
         let x = strip.bounds(index).unwrap().x;
         ops.push(DrawOp::Fill(
             rect(x, 0.0, 150.0, TAB_HEIGHT),
-            if index == active {
-                theme.editor
-            } else {
-                theme.chrome
-            },
+            if index == active { theme.editor } else { theme.chrome },
         ));
-        ops.push(DrawOp::Stroke(
-            rect(x, 0.0, 150.0, TAB_HEIGHT),
-            theme.border,
-            1.0,
-        ));
+        ops.push(DrawOp::Stroke(rect(x, 0.0, 150.0, TAB_HEIGHT), theme.border, 1.0));
         text(
             &mut ops,
             x + 16.0,
             8.0,
             title,
             13.0,
-            if index == active {
-                theme.text
-            } else {
-                theme.muted
-            },
+            if index == active { theme.text } else { theme.muted },
         );
         if index == active {
             ops.push(DrawOp::Fill(rect(x, 32.0, 150.0, 2.0), theme.focus));
@@ -162,22 +116,14 @@ pub fn shell_with_theme(
     }
     ops.push(DrawOp::PopClip);
     let status_y = (height - STATUS_HEIGHT).max(TAB_HEIGHT);
-    ops.push(DrawOp::PushClip(rect(
-        0.0,
-        TAB_HEIGHT,
-        width,
-        status_y - TAB_HEIGHT,
-    )));
+    ops.push(DrawOp::PushClip(rect(0.0, TAB_HEIGHT, width, status_y - TAB_HEIGHT)));
     if !tabs.is_empty() {
         ops.push(DrawOp::Fill(
             rect(48.0, TAB_HEIGHT + 4.0, width - 48.0, 24.0),
             theme.elevated,
         ));
         text(&mut ops, 26.0, TAB_HEIGHT + 4.0, "1", 16.0, theme.muted);
-        ops.push(DrawOp::Fill(
-            rect(63.0, TAB_HEIGHT + 6.0, 1.5, 20.0),
-            theme.focus,
-        ));
+        ops.push(DrawOp::Fill(rect(63.0, TAB_HEIGHT + 6.0, 1.5, 20.0), theme.focus));
     }
     ops.push(DrawOp::Fill(
         rect(48.0, TAB_HEIGHT, 1.0, status_y - TAB_HEIGHT),
@@ -192,10 +138,7 @@ pub fn shell_with_theme(
         theme.muted,
     );
     ops.push(DrawOp::PopClip);
-    ops.push(DrawOp::Fill(
-        rect(0.0, status_y, width, STATUS_HEIGHT),
-        theme.chrome,
-    ));
+    ops.push(DrawOp::Fill(rect(0.0, status_y, width, STATUS_HEIGHT), theme.chrome));
     ops.push(DrawOp::Fill(rect(0.0, status_y, width, 1.0), theme.border));
     for (x, label) in [
         (16.0, "Plain text"),

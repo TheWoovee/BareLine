@@ -1,12 +1,373 @@
 # SPDX-License-Identifier: MPL-2.0
+[CmdletBinding()]
+param(
+    [ValidateSet('Fast', 'Large', 'All')]
+    [string] $Suite = 'Fast',
+    [string] $HostPath,
+    [string] $JsonPath,
+    [string] $XmlPath,
+    [string] $HexPath
+)
 $ErrorActionPreference = 'Stop'
-Push-Location (Join-Path $PSScriptRoot '..')
-try {
-    rustup target add wasm32-wasip2
-    if ($LASTEXITCODE) { throw 'WASI target installation failed' }
-    cargo build --locked --release --target wasm32-wasip2 -p bareline-json-tools -p bareline-xml-tools -p bareline-hex-view
-    if ($LASTEXITCODE) { throw 'Component build failed' }
-    cargo test --locked --release -p bareline-extension-host --test first_party -- --ignored --nocapture
-    if ($LASTEXITCODE) { throw 'Isolated component verification failed' }
-} finally { Pop-Location }
+$repository = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 
+function Resolve-QualificationArtifact {
+    param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][ValidateSet('host', 'component')][string]$Kind)
+    $item = Get-Item -LiteralPath (Resolve-Path -LiteralPath $Path).Path
+    if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+        throw "Qualification $Kind input must be a regular non-link file: $Path"
+    }
+    $stream = [IO.File]::OpenRead($item.FullName)
+    try {
+        $prefix = [byte[]]::new(8)
+        $read = $stream.Read($prefix, 0, $prefix.Length)
+    } finally { $stream.Dispose() }
+    if ($Kind -eq 'host' -and ($item.Extension -ne '.exe' -or $read -lt 2 -or $prefix[0] -ne 0x4d -or $prefix[1] -ne 0x5a)) {
+        throw "Qualification host input is not a Windows executable: $Path"
+    }
+    if ($Kind -eq 'component' -and ($read -ne 8 -or [Convert]::ToHexString($prefix) -ne '0061736D0D000100')) {
+        throw "Qualification component input lacks WASI component magic: $Path"
+    }
+    return $item.FullName
+}
+
+$providedInputs = @($HostPath, $JsonPath, $XmlPath, $HexPath) | Where-Object { ![string]::IsNullOrWhiteSpace($_) }
+if ($providedInputs.Count -notin @(0, 4)) { throw 'HostPath, JsonPath, XmlPath and HexPath are all-or-none' }
+$artifactInputMode = if ($providedInputs.Count -eq 4) { 'explicit' } else { 'default' }
+if ($artifactInputMode -eq 'explicit') {
+    $HostPath = Resolve-QualificationArtifact -Path $HostPath -Kind host
+    $JsonPath = Resolve-QualificationArtifact -Path $JsonPath -Kind component
+    $XmlPath = Resolve-QualificationArtifact -Path $XmlPath -Kind component
+    $HexPath = Resolve-QualificationArtifact -Path $HexPath -Kind component
+    $distinctInputCount = (@($HostPath, $JsonPath, $XmlPath, $HexPath) | Sort-Object -Unique).Count
+    if ($distinctInputCount -ne 4) {
+        throw 'Qualification artifact inputs must be four distinct files'
+    }
+}
+$selectedPaths = [ordered]@{
+    host = if ($artifactInputMode -eq 'explicit') { $HostPath } else { Join-Path $repository 'target/release/bareline-extension-host.exe' }
+    json = if ($artifactInputMode -eq 'explicit') { $JsonPath } else { Join-Path $repository 'target/wasm32-wasip2/release/bareline_json_tools.wasm' }
+    xml = if ($artifactInputMode -eq 'explicit') { $XmlPath } else { Join-Path $repository 'target/wasm32-wasip2/release/bareline_xml_tools.wasm' }
+    hex = if ($artifactInputMode -eq 'explicit') { $HexPath } else { Join-Path $repository 'target/wasm32-wasip2/release/bareline_hex_view.wasm' }
+}
+$runId = '{0}-{1}-{2}' -f [DateTime]::UtcNow.ToString('yyyyMMddTHHmmss.fffffffZ'), $PID, ([guid]::NewGuid().ToString('N').Substring(0, 8))
+$runDirectory = Join-Path $repository (Join-Path 'target/first-party' $runId)
+New-Item -ItemType Directory -Force $runDirectory | Out-Null
+
+function Invoke-RetainedCommand {
+    param(
+        [Parameter(Mandatory)] [string] $Name,
+        [Parameter(Mandatory)] [int] $TimeoutSeconds,
+        [Parameter(Mandatory)] [string[]] $Command
+    )
+    $receipt = Join-Path $runDirectory "$Name.json"
+    $evidenceArguments = @(
+        '.github/workflows/run_test_evidence.py',
+        '--output', $receipt,
+        '--cwd', $repository,
+        '--timeout', $TimeoutSeconds,
+        '--'
+    ) + $Command
+    & python @evidenceArguments | Out-Host
+    return $LASTEXITCODE
+}
+
+function Get-ArtifactIdentity {
+    param([Parameter(Mandatory)] [string] $Path)
+    if (!(Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return $null
+    }
+    $item = Get-Item -LiteralPath $Path
+    return [ordered]@{
+        path = $item.FullName
+        bytes = $item.Length
+        sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $item.FullName).Hash.ToLowerInvariant()
+    }
+}
+
+function Read-TestCounts {
+    param(
+        [Parameter(Mandatory)] [string] $ReceiptPath,
+        [Parameter(Mandatory)] [int] $Expected
+    )
+    $receipt = Get-Content -Raw -LiteralPath $ReceiptPath | ConvertFrom-Json
+    $raw = @(
+        Get-Content -Raw -LiteralPath $receipt.stdout.path
+        Get-Content -Raw -LiteralPath $receipt.stderr.path
+    ) -join "`n"
+    $matches = [regex]::Matches($raw, 'test result: ok\. (?<passed>\d+) passed; (?<failed>\d+) failed;')
+    if ($matches.Count -ne 1) {
+        throw "Expected exactly one successful test summary, observed $($matches.Count)"
+    }
+    $passed = [int] $matches[0].Groups['passed'].Value
+    $failed = [int] $matches[0].Groups['failed'].Value
+    if ($passed -ne $Expected -or $failed -ne 0) {
+        throw "Expected $Expected selected tests and zero failures; observed $passed passed and $failed failed"
+    }
+    return [ordered]@{ expected = $Expected; passed = $passed; failed = $failed }
+}
+
+function Assert-ReceiptSourceIdentity {
+    param(
+        [Parameter(Mandatory)] [object] $Receipt,
+        [Parameter(Mandatory)] [string] $Stage,
+        [AllowNull()] [object] $PreviousIdentity
+    )
+    $before = $Receipt.source_before
+    $after = $Receipt.source_after
+    if ($before.available -ne $true -or $after.available -ne $true) {
+        throw "$Stage did not record available source identities before and after the command"
+    }
+    foreach ($identity in @($before, $after)) {
+        if ([string]::IsNullOrWhiteSpace([string] $identity.head) -or
+            [string]::IsNullOrWhiteSpace([string] $identity.source_manifest_sha256)) {
+            throw "$Stage recorded an incomplete source identity"
+        }
+    }
+    if ($Receipt.source_changed_during_run -ne $false -or
+        $before.head -ne $after.head -or
+        $before.source_manifest_sha256 -ne $after.source_manifest_sha256) {
+        throw "$Stage source identity changed during the command"
+    }
+    if ($null -ne $PreviousIdentity -and
+        ($PreviousIdentity.head -ne $before.head -or
+         $PreviousIdentity.source_manifest_sha256 -ne $before.source_manifest_sha256)) {
+        throw "$Stage source identity does not continue from the preceding build/test stage"
+    }
+    return [pscustomobject]@{ receipt = $Receipt; before = $before; after = $after }
+}
+
+function Get-CompiledTestExecutable {
+    param([Parameter(Mandatory)] [object] $CompileReceipt)
+    $executables = @(
+        Get-Content -LiteralPath $CompileReceipt.stdout.path |
+            ForEach-Object {
+                $message = $null
+                try { $message = $_ | ConvertFrom-Json } catch {}
+                if ($message.reason -eq 'compiler-artifact' -and
+                    $message.target.name -eq 'first_party' -and
+                    ![string]::IsNullOrWhiteSpace([string] $message.executable)) {
+                    $message.executable
+                }
+            } |
+            Sort-Object -Unique
+    )
+    if ($executables.Count -ne 1 -or !(Test-Path -LiteralPath $executables[0] -PathType Leaf)) {
+        throw "Expected exactly one compiled first_party test executable; observed $($executables.Count)"
+    }
+    return (Resolve-Path -LiteralPath $executables[0]).Path
+}
+
+$startedUtc = [DateTime]::UtcNow.ToString('o')
+$failure = $null
+$observedSuites = @()
+$sourceIdentity = $null
+$lastSourceIdentity = $null
+$sourceIdentityFailure = $null
+$verifiedSourceStages = @()
+$testExecutable = $null
+$validatedArtifactInputs = $null
+$artifactEnvironment = [ordered]@{
+    BARELINE_T10_HOST_PATH = if ($artifactInputMode -eq 'explicit') { $selectedPaths.host } else { $null }
+    BARELINE_T10_JSON_COMPONENT_PATH = if ($artifactInputMode -eq 'explicit') { $selectedPaths.json } else { $null }
+    BARELINE_T10_XML_COMPONENT_PATH = if ($artifactInputMode -eq 'explicit') { $selectedPaths.xml } else { $null }
+    BARELINE_T10_HEX_COMPONENT_PATH = if ($artifactInputMode -eq 'explicit') { $selectedPaths.hex } else { $null }
+}
+$previousArtifactEnvironment = @{}
+foreach ($name in $artifactEnvironment.Keys) {
+    $previousArtifactEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
+    [Environment]::SetEnvironmentVariable($name, $artifactEnvironment[$name], 'Process')
+}
+$plans = @()
+if ($Suite -in @('Fast', 'All')) {
+    $plans += [ordered]@{ name = 'fast'; filter = 'fast_release_'; expected = 3; timeout = 300 }
+}
+if ($Suite -in @('Large', 'All')) {
+    $plans += [ordered]@{ name = 'large'; filter = 'gib'; expected = 2; timeout = 900 }
+}
+Push-Location $repository
+try {
+    $targetExit = Invoke-RetainedCommand -Name 'wasi-target' -TimeoutSeconds 300 -Command @(
+        'rustup', 'target', 'add', 'wasm32-wasip2'
+    )
+    if ($targetExit -ne 0) {
+        $failure = "WASI target installation failed with exit $targetExit"
+    }
+
+    if ($null -eq $failure) {
+        $buildExit = Invoke-RetainedCommand -Name 'component-build' -TimeoutSeconds 900 -Command @(
+            'cargo', 'build', '--locked', '--release', '--target', 'wasm32-wasip2',
+            '-p', 'bareline-json-tools', '-p', 'bareline-xml-tools', '-p', 'bareline-hex-view'
+        )
+        try {
+            $buildReceipt = Get-Content -Raw -LiteralPath (Join-Path $runDirectory 'component-build.json') | ConvertFrom-Json
+            $verified = Assert-ReceiptSourceIdentity -Receipt $buildReceipt -Stage 'component-build' -PreviousIdentity $lastSourceIdentity
+            $sourceIdentity = $verified.before
+            $lastSourceIdentity = $verified.after
+            $verifiedSourceStages += 'component-build'
+        } catch {
+            $sourceIdentityFailure = $_.Exception.Message
+            $failure = "Component build source identity verification failed: $sourceIdentityFailure"
+        }
+        if ($null -eq $failure -and $buildExit -ne 0) {
+            $failure = "Component build failed with exit $buildExit"
+        }
+    }
+
+    if ($null -eq $failure) {
+        $compileExit = Invoke-RetainedCommand -Name 'host-test-compile' -TimeoutSeconds 900 -Command @(
+            'cargo', 'test', '--locked', '--release', '-p', 'bareline-extension-host', '--test', 'first_party',
+            '--no-run', '--message-format=json'
+        )
+        try {
+            $compileReceipt = Get-Content -Raw -LiteralPath (Join-Path $runDirectory 'host-test-compile.json') | ConvertFrom-Json
+            $verified = Assert-ReceiptSourceIdentity -Receipt $compileReceipt -Stage 'host-test-compile' -PreviousIdentity $lastSourceIdentity
+            $lastSourceIdentity = $verified.after
+            $verifiedSourceStages += 'host-test-compile'
+        } catch {
+            $sourceIdentityFailure = $_.Exception.Message
+            $failure = "Host/test compile source identity verification failed: $sourceIdentityFailure"
+        }
+        if ($null -eq $failure -and $compileExit -ne 0) {
+            $failure = "Host/test compile failed with exit $compileExit"
+        }
+        if ($null -eq $failure) {
+            try {
+                $testExecutable = Get-CompiledTestExecutable -CompileReceipt $verified.receipt
+            } catch {
+                $failure = $_.Exception.Message
+            }
+        }
+    }
+
+    if ($null -eq $failure) {
+        $validatedArtifactInputs = [ordered]@{}
+        foreach ($role in $selectedPaths.Keys) {
+            $identity = Get-ArtifactIdentity $selectedPaths[$role]
+            if ($null -eq $identity) { throw "Selected $role qualification artifact is unavailable" }
+            $validatedArtifactInputs[$role] = $identity
+        }
+    }
+
+    foreach ($plan in $plans) {
+        if ($null -ne $failure) { break }
+        $testExit = Invoke-RetainedCommand -Name ("test-{0}" -f $plan.name) -TimeoutSeconds $plan.timeout -Command @(
+            $testExecutable, $plan.filter, '--ignored', '--test-threads=1', '--nocapture'
+        )
+        $receiptPath = Join-Path $runDirectory ("test-{0}.json" -f $plan.name)
+        try {
+            $testReceipt = Get-Content -Raw -LiteralPath $receiptPath | ConvertFrom-Json
+            $verified = Assert-ReceiptSourceIdentity -Receipt $testReceipt -Stage ("test-{0}" -f $plan.name) -PreviousIdentity $lastSourceIdentity
+            $lastSourceIdentity = $verified.after
+            $verifiedSourceStages += "test-$($plan.name)"
+        } catch {
+            $sourceIdentityFailure = $_.Exception.Message
+            $failure = "$($plan.name) source identity verification failed: $sourceIdentityFailure"
+            break
+        }
+        if ($testExit -ne 0) {
+            $failure = "$($plan.name) first-party component qualification failed with exit $testExit"
+            break
+        }
+        try {
+            $counts = Read-TestCounts -ReceiptPath $receiptPath -Expected $plan.expected
+            $observedSuites += [ordered]@{
+                suite = $plan.name
+                filter = $plan.filter
+                receipt = $receiptPath
+                expected = $counts.expected
+                passed = $counts.passed
+                failed = $counts.failed
+            }
+        } catch {
+            $failure = "$($plan.name) test-count verification failed: $($_.Exception.Message)"
+            break
+        }
+    }
+    if ($null -eq $failure -and $verifiedSourceStages.Count -ne (2 + $plans.Count)) {
+        $sourceIdentityFailure = "Source identity verification covered $($verifiedSourceStages.Count) of $((2 + $plans.Count)) required build/test stages"
+        $failure = $sourceIdentityFailure
+    }
+} catch {
+    $failure = $_.Exception.Message
+} finally {
+    Pop-Location
+    foreach ($name in $artifactEnvironment.Keys) {
+        [Environment]::SetEnvironmentVariable($name, $previousArtifactEnvironment[$name], 'Process')
+    }
+    if ($null -eq $sourceIdentity) {
+        $targetReceiptPath = Join-Path $runDirectory 'wasi-target.json'
+        if (Test-Path -LiteralPath $targetReceiptPath) {
+            $sourceIdentity = (Get-Content -Raw -LiteralPath $targetReceiptPath | ConvertFrom-Json).source_before
+        }
+    }
+    $commandReceipts = @(
+        Get-ChildItem -LiteralPath $runDirectory -Filter '*.json' -File |
+            Sort-Object Name |
+            ForEach-Object {
+                $receipt = Get-Content -Raw -LiteralPath $_.FullName | ConvertFrom-Json
+                [ordered]@{
+                    name = $_.BaseName
+                    path = $_.FullName
+                    command = $receipt.command
+                    status = $receipt.status
+                    exit_code = $receipt.exit_code
+                    elapsed_ms = $receipt.elapsed_ms
+                    source_before = $receipt.source_before
+                    source_after = $receipt.source_after
+                    source_changed_during_run = $receipt.source_changed_during_run
+                    stdout = $receipt.stdout
+                    stderr = $receipt.stderr
+                }
+            }
+    )
+    $artifacts = [ordered]@{
+        host = Get-ArtifactIdentity $selectedPaths.host
+        test_runner = if ($null -eq $testExecutable) { $null } else { Get-ArtifactIdentity $testExecutable }
+        json = Get-ArtifactIdentity $selectedPaths.json
+        xml = Get-ArtifactIdentity $selectedPaths.xml
+        hex = Get-ArtifactIdentity $selectedPaths.hex
+    }
+    if ($null -ne $validatedArtifactInputs) {
+        foreach ($role in $selectedPaths.Keys) {
+            if ($artifacts[$role].path -ne $validatedArtifactInputs[$role].path -or
+                $artifacts[$role].bytes -ne $validatedArtifactInputs[$role].bytes -or
+                $artifacts[$role].sha256 -ne $validatedArtifactInputs[$role].sha256) {
+                $failure = "Selected $role qualification artifact changed during execution"
+            }
+        }
+    }
+    $manifest = [ordered]@{
+        schema_version = 1
+        run_id = $runId
+        suite = $Suite.ToLowerInvariant()
+        started_utc = $startedUtc
+        completed_utc = [DateTime]::UtcNow.ToString('o')
+        status = if ($null -eq $failure) { 'passed' } else { 'failed' }
+        failure = $failure
+        expected_test_counts = [ordered]@{ fast = 3; large = 2 }
+        observed_suites = $observedSuites
+        source_identity = $sourceIdentity
+        source_identity_after = $lastSourceIdentity
+        source_identity_verified_stages = $verifiedSourceStages
+        source_identity_chain_verified = (
+            $null -eq $sourceIdentityFailure -and
+            $verifiedSourceStages.Count -eq (2 + $plans.Count)
+        )
+        command_receipts = $commandReceipts
+        artifact_inputs = [ordered]@{ mode = $artifactInputMode; validated_before_execution = $validatedArtifactInputs }
+        artifacts = $artifacts
+        artifact_note = 'Hashes identify files observed after the retained commands; a failed compile may leave a pre-existing artifact and does not qualify it.'
+        evidence_directory = $runDirectory
+    }
+    $manifestPath = Join-Path $runDirectory 'run.json'
+    [System.IO.File]::WriteAllText(
+        $manifestPath,
+        (($manifest | ConvertTo-Json -Depth 10) + "`n"),
+        [System.Text.UTF8Encoding]::new($false)
+    )
+    Write-Host "First-party qualification evidence: $manifestPath"
+}
+if ($null -ne $failure) {
+    throw $failure
+}

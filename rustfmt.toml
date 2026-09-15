@@ -1,0 +1,4 @@
+# P5-6 (ARCH-10): workspace-wide formatting contract. 120-column width matches
+# the review's guidance and keeps dense Windows FFI call sites readable without
+# forcing artificial wrapping. `cargo fmt --all --check` gates this in CI.
+max_width = 120

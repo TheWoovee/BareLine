@@ -1,0 +1,15 @@
+diff --git a/crates/editor-surface/src/paged_view.rs b/crates/editor-surface/src/paged_view.rs
+index 059b013..85b0a90 100644
+--- a/crates/editor-surface/src/paged_view.rs
++++ b/crates/editor-surface/src/paged_view.rs
+@@ -131,10 +131,6 @@ impl PagedWorker {
+     fn submit(&self, kind: WorkKind, job: Job) -> Result<(), SubmitError> {
+         self.0.submit(kind, job)
+     }
+-    #[cfg(test)]
+-    fn worker_count(&self) -> usize {
+-        self.0.worker_count()
+-    }
+ }
+ fn worker() -> &'static PagedWorker {
+     static WORKER: OnceLock<PagedWorker> = OnceLock::new();

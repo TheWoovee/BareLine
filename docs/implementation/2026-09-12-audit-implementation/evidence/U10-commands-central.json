@@ -1,0 +1,16 @@
+{
+  "arguments": [
+    "test",
+    "-p",
+    "bareline-settings",
+    "--lib",
+    "behavior_tests::only_the_settings_page_opener_is_user_facing",
+    "--offline",
+    "--locked"
+  ],
+  "completed_utc": "2026-09-12T10:08:24.3948368Z",
+  "integration_snapshot": "8d8a17afa739b235a0bc634e8aa461a8212f87e8",
+  "exit_code": 0,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\U10-commands-central.log"
+}

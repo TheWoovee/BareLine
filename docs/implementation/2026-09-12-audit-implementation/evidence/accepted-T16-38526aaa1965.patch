@@ -1,0 +1,754 @@
+diff --git a/crates/editor-surface/src/paged_view.rs b/crates/editor-surface/src/paged_view.rs
+index 2de9743..2a92a2e 100644
+--- a/crates/editor-surface/src/paged_view.rs
++++ b/crates/editor-surface/src/paged_view.rs
+@@ -2821,6 +2821,7 @@ impl PagedEditorSurface {
+                                     },
+                                     &cancellation,
+                                 );
++                                let receipt_stamp = receipt.requested;
+                                 let rebuild = match receipt.terminal.map_err(PagedOperationError::Lifecycle)? {
+                                     bareline_file_io::paged_service::PagedTerminalOutcome::RecoveryRetried {
+                                         rebuild,
+@@ -2828,6 +2829,12 @@ impl PagedEditorSurface {
+                                     _ => return Err("Unexpected recovery receipt".into()),
+                                 };
+                                 opened = actor.lock_document()?;
++                                if actor.stamp_for(&opened) != receipt_stamp {
++                                    return Err(PagedOperationError::Lifecycle(
++                                        bareline_file_io::paged_service::PagedLifecycleError::Changed,
++                                    )
++                                    .into());
++                                }
+                                 tail = actor.lock_tail()?;
+                                 if rebuild {
+                                     retry_recovery = true;
+@@ -3062,6 +3069,7 @@ impl PagedEditorSurface {
+                                     },
+                                     &cancellation,
+                                 );
++                                let saved_stamp = receipt.requested;
+                                 let applies = actor.receipt_applies(&receipt);
+                                 let result = receipt.terminal.map_err(PagedOperationError::Lifecycle)?;
+                                 if let bareline_file_io::paged_service::PagedTerminalOutcome::Saved {
+@@ -3071,14 +3079,12 @@ impl PagedEditorSurface {
+                                     && applies
+                                 {
+                                     saved = Some(fingerprint);
+-                                    if let Ok(state) = actor.state() {
+-                                        let _ = actor.execute(
+-                                            bareline_file_io::paged_service::PagedLifecycleCommand::RetireRecovery {
+-                                                requested: state.stamp,
+-                                            },
+-                                            &cancellation,
+-                                        );
+-                                    }
++                                    let _ = actor.execute(
++                                        bareline_file_io::paged_service::PagedLifecycleCommand::RetireRecovery {
++                                            requested: saved_stamp,
++                                        },
++                                        &cancellation,
++                                    );
+                                 }
+                                 opened = actor.lock_document()?;
+                                 tail = actor.lock_tail()?;
+@@ -3087,9 +3093,6 @@ impl PagedEditorSurface {
+                         let snapshot = opened.document().snapshot();
+                         let peer_epoch = {
+                             let mut peer = peer.lock().map_err(|_| "Peer state stopped")?;
+-                            if tail.is_active() {
+-                                actor.mark_saved_state(snapshot.content_state);
+-                            }
+                             if snapshot.content_state != baseline.content_state
+                                 || snapshot.revision != baseline.revision
+                                 || actor.path() != previous_path
+@@ -3229,9 +3232,6 @@ impl PagedEditorSurface {
+                 }
+                 // Peer refreshes carry the actor's new disk identity after another
+                 // clone saves. Every live view must acknowledge that same identity.
+-                if self.following {
+-                    self.actor.mark_saved_state(completed.snapshot.content_state);
+-                }
+                 self.can_undo = completed.can_undo;
+                 self.can_redo = completed.can_redo;
+                 if let Some(input) = self.pending_input.take() {
+diff --git a/crates/file-io/src/paged_service.rs b/crates/file-io/src/paged_service.rs
+index c9ccf51..5c9c182 100644
+--- a/crates/file-io/src/paged_service.rs
++++ b/crates/file-io/src/paged_service.rs
+@@ -120,12 +120,27 @@ struct PersistentState {
+     saved_state: Option<ContentStateId>,
+     save_as_required: bool,
+     recovery_origin: Option<PathBuf>,
+-    encoding_failures: std::collections::VecDeque<EncodingFailure>,
++    encoding_failure: Option<EncodingFailure>,
+     save_conflicts: std::collections::VecDeque<SaveConflict>,
+     save_cleanups: std::collections::VecDeque<SaveCleanup>,
+     active_operation: Option<u64>,
+ }
+ 
++struct OperationReservation {
++    session: Arc<SessionInner>,
++    generation: u64,
++}
++
++impl Drop for OperationReservation {
++    fn drop(&mut self) {
++        if let Ok(mut state) = self.session.state.lock()
++            && state.active_operation == Some(self.generation)
++        {
++            state.active_operation = None;
++        }
++    }
++}
++
+ struct RetiredPagedGeneration {
+     owner: Arc<()>,
+     opened: Box<PagedOpened>,
+@@ -253,6 +268,39 @@ impl PagedDocumentGuard<'_> {
+ }
+ 
+ impl PagedSession {
++    fn reserve_operation(
++        &self,
++        requested: PagedLifecycleStamp,
++        actor: &PagedDocumentGuard<'_>,
++    ) -> Result<(OperationReservation, PagedLifecycleStamp), PagedLifecycleError> {
++        let mut state = self
++            .0
++            .state
++            .lock()
++            .map_err(|_| PagedLifecycleError::SourceUnavailable("lifecycle state stopped".into()))?;
++        if self.stamp_for(actor) != requested {
++            return Err(PagedLifecycleError::Changed);
++        }
++        if state.active_operation.is_some() {
++            return Err(PagedLifecycleError::Busy);
++        }
++        let generation = self
++            .0
++            .operation_generation
++            .fetch_add(1, Ordering::AcqRel)
++            .wrapping_add(1);
++        state.active_operation = Some(generation);
++        Ok((
++            OperationReservation {
++                session: self.0.clone(),
++                generation,
++            },
++            PagedLifecycleStamp {
++                operation_generation: generation,
++                ..requested
++            },
++        ))
++    }
+     pub fn new(opened: Box<PagedOpened>) -> Self {
+         let recovered = opened.recovery_origin.is_some();
+         let saved_state = (!recovered).then_some(opened.transcoded.document.saved_content_state());
+@@ -262,7 +310,7 @@ impl PagedSession {
+             saved_state,
+             save_as_required: recovered,
+             recovery_origin: opened.recovery_origin.clone(),
+-            encoding_failures: Default::default(),
++            encoding_failure: None,
+             save_conflicts: Default::default(),
+             save_cleanups: Default::default(),
+             active_operation: None,
+@@ -377,15 +425,14 @@ impl PagedSession {
+             .recovery_origin
+             .clone()
+     }
+-    pub fn mark_saved_state(&self, content: ContentStateId) {
+-        self.0.state.lock().unwrap_or_else(|e| e.into_inner()).saved_state = Some(content);
+-    }
+     pub fn mark_recovered(&self) {
+-        self.0.state.lock().unwrap_or_else(|e| e.into_inner()).saved_state = None;
++        let mut state = self.0.state.lock().unwrap_or_else(|e| e.into_inner());
++        state.saved_state = None;
+         self.0.operation_generation.fetch_add(1, Ordering::AcqRel);
+     }
+     pub fn require_save_as(&self) {
+-        self.0.state.lock().unwrap_or_else(|e| e.into_inner()).save_as_required = true;
++        let mut state = self.0.state.lock().unwrap_or_else(|e| e.into_inner());
++        state.save_as_required = true;
+         self.0.operation_generation.fetch_add(1, Ordering::AcqRel);
+     }
+     pub fn configure_recovery(&self, root: PathBuf, platform: Arc<dyn LocalFileSystem>) {
+@@ -516,9 +563,14 @@ impl PagedSession {
+             .append(snapshot, edits)
+             .map_err(PagedLifecycleError::SourceUnavailable)
+     }
+-    fn retry_recovery_maintenance(&self, current: ContentStateId) -> Result<bool, PagedLifecycleError> {
++    fn retry_recovery_maintenance(
++        &self,
++        current: ContentStateId,
++        cancellation: &Cancellation,
++    ) -> Result<bool, PagedLifecycleError> {
++        cancellation.check().map_err(|_| PagedLifecycleError::Cancelled)?;
+         if let Some((_, platform)) = self.recovery_config() {
+-            let paths = std::mem::take(
++            let mut paths = std::mem::take(
+                 &mut *self
+                     .0
+                     .failed_retirements
+@@ -527,7 +579,18 @@ impl PagedSession {
+             );
+             let mut failed = Vec::new();
+             let mut failure = None;
+-            for path in paths {
++            while let Some(path) = paths.pop() {
++                if cancellation.check().is_err() {
++                    failed.push(path);
++                    failed.append(&mut paths);
++                    *self
++                        .0
++                        .failed_retirements
++                        .lock()
++                        .map_err(|_| PagedLifecycleError::SourceUnavailable("recovery retirement stopped".into()))? =
++                        failed;
++                    return Err(PagedLifecycleError::Cancelled);
++                }
+                 if let Err(error) = crate::recovery::discard(&path, platform.as_ref()) {
+                     failed.push(path);
+                     failure = Some(error.to_string());
+@@ -556,20 +619,42 @@ impl PagedSession {
+         }
+         Ok(rebuild)
+     }
+-    fn retire_recovery_after_save(&self) -> Result<(), PagedLifecycleError> {
++    fn detach_recovery_after_save(
++        &self,
++        actor: &PagedDocumentGuard<'_>,
++        accepted: PagedLifecycleStamp,
++        cancellation: &Cancellation,
++    ) -> Result<Option<crate::paged_recovery::PagedRecovery>, PagedLifecycleError> {
++        cancellation.check().map_err(|_| PagedLifecycleError::Cancelled)?;
++        let state = self
++            .0
++            .state
++            .lock()
++            .map_err(|_| PagedLifecycleError::SourceUnavailable("lifecycle state stopped".into()))?;
++        if self.stamp_for(actor) != accepted || state.saved_state != Some(accepted.content) {
++            return Err(PagedLifecycleError::Changed);
++        }
+         let retired = self
+             .0
+             .recovery
+             .lock()
+             .map_err(|_| PagedLifecycleError::SourceUnavailable("recovery actor stopped".into()))?
+             .take();
++        Ok(retired)
++    }
++    fn finish_recovery_retirement(
++        &self,
++        retired: Option<crate::paged_recovery::PagedRecovery>,
++    ) -> Result<(), PagedLifecycleError> {
+         let Some(retired) = retired else {
+             return Ok(());
+         };
+         let path = retired.directory().to_path_buf();
+         match retired.retire() {
+             Ok(_) => {
+-                if let Ok(status) = self.0.recovery_status.lock()
++                let no_new_recovery = self.0.recovery.lock().is_ok_and(|recovery| recovery.is_none());
++                if no_new_recovery
++                    && let Ok(status) = self.0.recovery_status.lock()
+                     && let Ok(mut status) = status.lock()
+                 {
+                     *status = Default::default();
+@@ -600,6 +685,7 @@ impl PagedSession {
+             .unwrap_or_default()
+     }
+     pub fn resume_recovery_after_discard(&self) {
++        let _state = self.0.state.lock().unwrap_or_else(|e| e.into_inner());
+         if let Ok(mut discard) = self.0.recovery_discard.lock() {
+             *discard = None;
+         }
+@@ -725,6 +811,7 @@ impl PagedSession {
+         let mut state = self.0.state.lock().unwrap_or_else(|error| error.into_inner());
+         state.path = actor.0.path.clone();
+         state.fingerprint = actor.0.fingerprint.clone();
++        state.saved_state = Some(actor.document().snapshot().content_state);
+         Ok(changed)
+     }
+     pub fn source_changed(&self) -> bool {
+@@ -845,7 +932,7 @@ impl PagedSession {
+             .state
+             .lock()
+             .ok()
+-            .and_then(|state| state.encoding_failures.front().cloned())
++            .and_then(|state| state.encoding_failure.clone())
+     }
+     pub fn take_save_conflict(&self) -> Option<SaveConflict> {
+         self.0
+@@ -871,40 +958,24 @@ impl PagedSession {
+     ) -> PagedLifecycleReceipt {
+         let reserved = (|| {
+             cancellation.check().map_err(|_| PagedLifecycleError::Cancelled)?;
+-            let (store, source_generation, snapshot, operation_generation) = {
++            let (store, source_generation, snapshot, reservation, accepted) = {
+                 let actor = self.lock_document()?;
+-                if self.stamp_for(&actor) != requested
+-                    || destination.document != actor.document().snapshot().identity_token()
+-                {
++                if destination.document != actor.document().snapshot().identity_token() {
+                     return Err(PagedLifecycleError::Changed);
+                 }
+-                let mut state = self
+-                    .0
+-                    .state
+-                    .lock()
+-                    .map_err(|_| PagedLifecycleError::SourceUnavailable("lifecycle state stopped".into()))?;
+-                if state.active_operation.is_some() {
+-                    return Err(PagedLifecycleError::Busy);
+-                }
+-                let generation = self
+-                    .0
+-                    .operation_generation
+-                    .fetch_add(1, Ordering::AcqRel)
+-                    .wrapping_add(1);
+-                state.active_operation = Some(generation);
++                let (reservation, accepted) = self.reserve_operation(requested, &actor)?;
+                 (
+                     actor.0.transcoded.store.clone(),
+                     actor.source_generation(),
+                     actor.document().snapshot(),
+-                    generation,
++                    reservation,
++                    accepted,
+                 )
+             };
+-            Ok((store, source_generation, snapshot, operation_generation))
++            Ok((store, source_generation, snapshot, reservation, accepted))
+         })();
+-        let (store, source_generation, snapshot, operation_generation) = match reserved {
+-            Ok((store, source_generation, snapshot, operation_generation)) => {
+-                (store, source_generation, snapshot, operation_generation)
+-            }
++        let (store, source_generation, snapshot, reservation, accepted) = match reserved {
++            Ok(reserved) => reserved,
+             Err(error) => {
+                 return PagedLifecycleReceipt {
+                     requested,
+@@ -912,10 +983,6 @@ impl PagedSession {
+                 };
+             }
+         };
+-        let accepted = PagedLifecycleStamp {
+-            operation_generation,
+-            ..requested
+-        };
+         let terminal = (|| {
+             let (source_path, recovered_origin) = {
+                 let state = self
+@@ -951,15 +1018,9 @@ impl PagedSession {
+                         .state
+                         .lock()
+                         .map_err(|_| PagedLifecycleError::SourceUnavailable("lifecycle state stopped".into()))?;
+-                    if let FileError::EncodingAt(failure) = &error {
+-                        state.encoding_failures.push_back(failure.clone());
+-                    }
+                     if let Some(conflict) = error.save_conflict() {
+                         state.save_conflicts.push_back(conflict);
+                     }
+-                    if state.active_operation == Some(operation_generation) {
+-                        state.active_operation = None;
+-                    }
+                     return Err(classify_file_error(error));
+                 }
+             };
+@@ -978,9 +1039,6 @@ impl PagedSession {
+                     state.saved_state = Some(snapshot.content_state);
+                     state.save_as_required = false;
+                 }
+-                if state.active_operation == Some(operation_generation) {
+-                    state.active_operation = None;
+-                }
+             }
+             // The transaction is already committed. Synchronize the legacy
+             // opened record when available, but never downgrade the durable
+@@ -995,12 +1053,13 @@ impl PagedSession {
+                 copy_only,
+             })
+         })();
+-        if terminal.is_err()
+-            && let Ok(mut state) = self.0.state.lock()
+-            && state.active_operation == Some(operation_generation)
+-        {
+-            state.active_operation = None;
++        if let Ok(mut state) = self.0.state.lock() {
++            state.encoding_failure = match &terminal {
++                Err(PagedLifecycleError::Encoding(failure)) => Some(failure.clone()),
++                _ => None,
++            };
+         }
++        drop(reservation);
+         PagedLifecycleReceipt {
+             requested: accepted,
+             terminal,
+@@ -1015,43 +1074,78 @@ impl PagedSession {
+                 platform,
+             } => self.execute_save(requested, destination, copy_only, platform.as_ref(), cancellation),
+             PagedLifecycleCommand::RetryRecovery { requested } => {
+-                let terminal = self
+-                    .state()
+-                    .and_then(|state| {
+-                        if state.stamp != requested {
+-                            return Err(PagedLifecycleError::Changed);
++                let reserved = (|| {
++                    cancellation.check().map_err(|_| PagedLifecycleError::Cancelled)?;
++                    let actor = self.lock_document()?;
++                    let (reservation, accepted) = self.reserve_operation(requested, &actor)?;
++                    let rebuild = self.retry_recovery_maintenance(accepted.content, cancellation)?;
++                    drop(actor);
++                    Ok((reservation, accepted, rebuild))
++                })();
++                match reserved {
++                    Ok((reservation, accepted, rebuild)) => {
++                        drop(reservation);
++                        PagedLifecycleReceipt {
++                            requested: accepted,
++                            terminal: Ok(PagedTerminalOutcome::RecoveryRetried { rebuild }),
+                         }
+-                        self.retry_recovery_maintenance(state.stamp.content)
+-                    })
+-                    .map(|rebuild| PagedTerminalOutcome::RecoveryRetried { rebuild });
+-                PagedLifecycleReceipt { requested, terminal }
++                    }
++                    Err(error) => PagedLifecycleReceipt {
++                        requested,
++                        terminal: Err(error),
++                    },
++                }
+             }
+             PagedLifecycleCommand::RetireRecovery { requested } => {
+-                let terminal = self
+-                    .state()
+-                    .and_then(|state| {
+-                        if state.stamp != requested {
+-                            return Err(PagedLifecycleError::Changed);
++                let reserved = (|| {
++                    cancellation.check().map_err(|_| PagedLifecycleError::Cancelled)?;
++                    let actor = self.lock_document()?;
++                    let (reservation, accepted) = self.reserve_operation(requested, &actor)?;
++                    let retired = self.detach_recovery_after_save(&actor, accepted, cancellation)?;
++                    drop(actor);
++                    let terminal = self
++                        .finish_recovery_retirement(retired)
++                        .map(|()| PagedTerminalOutcome::RecoveryRetired);
++                    Ok((reservation, accepted, terminal))
++                })();
++                match reserved {
++                    Ok((reservation, accepted, terminal)) => {
++                        drop(reservation);
++                        PagedLifecycleReceipt {
++                            requested: accepted,
++                            terminal,
+                         }
+-                        self.retire_recovery_after_save()
+-                    })
+-                    .map(|()| PagedTerminalOutcome::RecoveryRetired);
+-                PagedLifecycleReceipt { requested, terminal }
++                    }
++                    Err(error) => PagedLifecycleReceipt {
++                        requested,
++                        terminal: Err(error),
++                    },
++                }
+             }
+             PagedLifecycleCommand::Spill { requested, prepared } => {
+-                let terminal = (|| {
++                let reserved = (|| {
+                     cancellation.check().map_err(|_| PagedLifecycleError::Cancelled)?;
+                     let mut actor = self.lock_document()?;
+-                    if self.stamp_for(&actor) != requested {
+-                        return Err(PagedLifecycleError::Changed);
+-                    }
++                    let (reservation, accepted) = self.reserve_operation(requested, &actor)?;
+                     actor
+                         .document_mut()
+                         .attach_spill(prepared)
+                         .map_err(|error| PagedLifecycleError::SourceUnavailable(format!("spill: {error:?}")))?;
+-                    Ok(PagedTerminalOutcome::Spilled)
++                    Ok((reservation, accepted))
+                 })();
+-                PagedLifecycleReceipt { requested, terminal }
++                match reserved {
++                    Ok((reservation, accepted)) => {
++                        drop(reservation);
++                        PagedLifecycleReceipt {
++                            requested: accepted,
++                            terminal: Ok(PagedTerminalOutcome::Spilled),
++                        }
++                    }
++                    Err(error) => PagedLifecycleReceipt {
++                        requested,
++                        terminal: Err(error),
++                    },
++                }
+             }
+         }
+     }
+@@ -1271,7 +1365,7 @@ fn source_read_error(error: FileError, changed: &std::sync::atomic::AtomicBool)
+ mod lifecycle_contract_tests {
+     use super::*;
+     use crate::{
+-        codecs::disk::DiskOptions,
++        codecs::{Encoding, disk::DiskOptions},
+         lifecycle::{DestinationConsent, PagedOpenRequest, SaveOperation, TranscodeOutcome, open_paged_encoded},
+         source::SourceOptions,
+     };
+@@ -1316,6 +1410,54 @@ mod lifecycle_contract_tests {
+         }
+     }
+ 
++    fn replace_prefix(session: &PagedSession, removed_bytes: usize, insert: &str) {
++        let mut actor = session.lock_document().unwrap();
++        let snapshot = actor.document().snapshot();
++        let read_budget = Budget::new(4096);
++        let mut read = snapshot
++            .begin_read(TextOffset(0)..TextOffset(snapshot.len()), snapshot.len(), &read_budget)
++            .unwrap();
++        let window = loop {
++            match read.poll() {
++                WindowPoll::Pending(ticket) => actor.0.transcoded.source.read_page(ticket).unwrap(),
++                WindowPoll::Ready(window) => break window,
++                _ => panic!("unexpected read outcome"),
++            }
++        };
++        actor
++            .document_mut()
++            .apply_materialized(
++                EditTransaction {
++                    base_revision: snapshot.revision,
++                    edits: vec![Edit {
++                        range: TextOffset(0)..TextOffset(removed_bytes),
++                        insert: insert.into(),
++                    }],
++                },
++                &[window],
++            )
++            .unwrap();
++    }
++
++    fn save_as(session: &PagedSession, target: &Path, platform: Arc<dyn LocalFileSystem>) -> PagedLifecycleReceipt {
++        let state = session.state().unwrap();
++        session.execute(
++            PagedLifecycleCommand::Save {
++                requested: state.stamp,
++                destination: PreparedDestination {
++                    path: target.to_path_buf(),
++                    condition: DestinationCondition::MustBeAbsent,
++                    consent: DestinationConsent::NotRequired,
++                    document: (state.stamp.document, state.stamp.revision.0),
++                    operation: SaveOperation::SaveAs,
++                },
++                copy_only: false,
++                platform,
++            },
++            &Cancellation::default(),
++        )
++    }
++
+     struct GatedPlatform {
+         entered: mpsc::SyncSender<()>,
+         release: Mutex<mpsc::Receiver<()>>,
+@@ -1431,6 +1573,69 @@ mod lifecycle_contract_tests {
+         std::fs::remove_dir_all(root).unwrap();
+     }
+ 
++    #[test]
++    fn encoding_diagnostic_tracks_latest_save_attempt_and_clears_on_success() {
++        let root = std::env::temp_dir().join(format!(
++            "bareline-paged-session-encoding-{}-{}",
++            std::process::id(),
++            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
++        ));
++        std::fs::create_dir(&root).unwrap();
++        let source = root.join("source.txt");
++        let target = root.join("saved.txt");
++        std::fs::write(&source, "€\n".as_bytes()).unwrap();
++        let platform = Arc::new(Platform);
++        let TranscodeOutcome::Complete(opened) = open_paged_encoded(
++            PagedOpenRequest {
++                path: source,
++                bytes: Budget::new(4 * 1024 * 1024),
++                history: Budget::new(1024 * 1024),
++                cache: root.clone(),
++                options: DiskOptions {
++                    temp_quota_bytes: 4 * 1024 * 1024,
++                    interpret: None,
++                },
++                source_options: SourceOptions {
++                    resident_max_bytes: 0,
++                    page_size_bytes: 4096,
++                    page_cache_bytes: 8192,
++                },
++            },
++            platform.clone(),
++            Cancellation::default(),
++            |_| {},
++        ) else {
++            panic!("paged fixture did not open")
++        };
++        let session = PagedSession::new(opened);
++        {
++            let mut actor = session.lock_document().unwrap();
++            actor.0.transcoded.store.state.convert_to(Encoding::Latin1);
++        }
++
++        let first = save_as(&session, &target, platform.clone());
++        assert!(matches!(first.terminal, Err(PagedLifecycleError::Encoding(_))));
++        let first_failure = session.encoding_failure().expect("first encoding diagnostic");
++        let first_state = session.state().unwrap();
++        assert!(first_failure.matches((first_state.stamp.document, first_state.stamp.revision.0)));
++
++        replace_prefix(&session, "€".len(), "😀");
++        let second = save_as(&session, &target, platform.clone());
++        assert!(matches!(second.terminal, Err(PagedLifecycleError::Encoding(_))));
++        let second_state = session.state().unwrap();
++        let second_failure = session.encoding_failure().expect("replacement encoding diagnostic");
++        assert!(second_failure.matches((second_state.stamp.document, second_state.stamp.revision.0)));
++        assert_ne!(second_failure.revision, first_failure.revision);
++
++        replace_prefix(&session, "😀".len(), "A");
++        let saved = save_as(&session, &target, platform);
++        assert!(matches!(saved.terminal, Ok(PagedTerminalOutcome::Saved { .. })));
++        assert!(session.encoding_failure().is_none());
++        assert_eq!(std::fs::read(&target).unwrap(), b"A\n");
++        drop(session);
++        std::fs::remove_dir_all(root).unwrap();
++    }
++
+     #[test]
+     fn committed_save_survives_concurrent_edit_and_retains_cleanup_authority() {
+         let root = std::env::temp_dir().join(format!(
+@@ -1442,6 +1647,7 @@ mod lifecycle_contract_tests {
+         let source = root.join("source.txt");
+         let target = root.join("saved.txt");
+         let second = root.join("second.txt");
++        let recovery_root = root.join("recovery");
+         let bytes = b"\xef\xbb\xbfalpha\r\nbeta\r\n";
+         std::fs::write(&source, bytes).unwrap();
+         let (entered_tx, entered_rx) = mpsc::sync_channel(1);
+@@ -1473,6 +1679,9 @@ mod lifecycle_contract_tests {
+             panic!("paged fixture did not open")
+         };
+         let session = PagedSession::new(opened);
++        let recovery_platform = Arc::new(Platform);
++        session.configure_recovery(recovery_root, recovery_platform.clone());
++        let accepted_snapshot = session.lock_document().unwrap().document().snapshot();
+         let accepted = session.state().unwrap();
+         let accepted_stamp = accepted.stamp;
+         let request = PreparedDestination {
+@@ -1544,6 +1753,21 @@ mod lifecycle_contract_tests {
+                     &[window],
+                 )
+                 .unwrap();
++            let edited = actor.document().snapshot();
++            session
++                .protect_recovery_edits(
++                    &actor,
++                    &accepted_snapshot,
++                    &edited,
++                    &[crate::recovery::RecoveryEdit {
++                        offset: 0,
++                        removed: b"a".to_vec(),
++                        inserted: b"Z".to_vec(),
++                    }],
++                    false,
++                    Arc::new(|| {}),
++                )
++                .unwrap();
+         }
+         release_tx.send(()).unwrap();
+         let receipt = thread.join().unwrap();
+@@ -1558,7 +1782,42 @@ mod lifecycle_contract_tests {
+         assert_eq!(current.saved_state, Some(accepted_stamp.content));
+         assert_ne!(current.stamp.content, accepted_stamp.content);
+         assert!(session.take_save_cleanup().is_some());
++        let retirement = session.execute(
++            PagedLifecycleCommand::RetireRecovery {
++                requested: receipt.requested,
++            },
++            &Cancellation::default(),
++        );
++        assert!(matches!(retirement.terminal, Err(PagedLifecycleError::Changed)));
++        let recovery_directory = session
++            .recovery_status()
++            .directory
++            .expect("newer recovery journal was detached");
++        let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
++        loop {
++            let status = session.recovery_status();
++            assert!(status.error.is_none(), "recovery failed: {:?}", status.error);
++            if status.complete && status.durable.is_some() {
++                break;
++            }
++            assert!(std::time::Instant::now() < until, "recovery did not become durable");
++            std::thread::yield_now();
++        }
+         drop(session);
++        let mut restored = crate::paged_recovery::restore(
++            &recovery_directory,
++            recovery_platform,
++            Budget::new(4 * 1024 * 1024),
++            Budget::new(1024 * 1024),
++            &Cancellation::default(),
++        )
++        .unwrap();
++        assert_eq!(
++            crate::paged_recovery::preview(&mut restored, &Budget::new(4 * 1024 * 1024), &Cancellation::default(),)
++                .unwrap(),
++            "Zlpha\r\nbeta\r\n"
++        );
++        drop(restored);
+         std::fs::remove_dir_all(root).unwrap();
+     }
+ 
+diff --git a/docs/implementation/2026-09-12-audit-implementation/PR-T16.md b/docs/implementation/2026-09-12-audit-implementation/PR-T16.md
+index 2e0df66..3cecaed 100644
+--- a/docs/implementation/2026-09-12-audit-implementation/PR-T16.md
++++ b/docs/implementation/2026-09-12-audit-implementation/PR-T16.md
+@@ -10,11 +10,12 @@
+ 
+ - `file-io::paged_service::PagedSession` is the shared owner for the paged actor, path/fingerprint, opaque savepoint, encoding/conflict/cleanup state, recovery configuration/status/discard/cleanup hold, source generations, tail session, spill state, and operation generation. Its inner persistence locks are private; the surface receives a document-only edit guard plus named tail, recovery, retirement, spill and grouped-recovery transitions. `PagedEditorSurface` no longer stores duplicate path, fingerprint, saved-state, save-as, recovery, tail, retired-generation, or spill owners.
+ - `PagedReadHandle` moved to file-io. It is renderer-free, retains the session and cleanup hold transitively, resolves current and historical source pages, and exposes typed `Busy`/`Changed`/`SourceUnavailable` outcomes before the display adapter renders text.
+-- Save and Save Copy dispatch `PagedLifecycleCommand::Save`. Acceptance reserves a unique operation generation before the document guard is released. A second save receives typed `Busy`; a later document edit makes the initiating view receipt stale without rewriting the committed disk result. A committed save always publishes its accepted path/fingerprint/savepoint and retains every cleanup warning. The accepted savepoint remains the older content state when an edit races the write, so the current document stays dirty. Displaced/proposed-byte artifacts remain owned by the unchanged T04 save primitive.
+-- Recovery retry and retirement and spill attachment also dispatch concrete typed commands. Page resolution returns typed `Busy`/`Changed`/`SourceUnavailable` results. Reload and encoding reinterpretation continue to build a replacement file-io session from a sealed read handle; there is no unused same-session reload/encoding command placeholder.
++- Save and Save Copy dispatch `PagedLifecycleCommand::Save`. Acceptance installs an RAII operation reservation before the document guard is released and keeps it through authoritative state and legacy actor-mirror publication, including unwind. A second save receives typed `Busy`; a later document edit makes the initiating view receipt stale without rewriting the committed disk result. A committed save always publishes its accepted path/fingerprint/savepoint and retains every cleanup warning. The accepted savepoint remains the older content state when an edit races the write, so the current document stays dirty. Displaced/proposed-byte artifacts remain owned by the unchanged T04 save primitive.
++- Recovery retry and retirement and spill attachment also dispatch concrete typed commands under the same operation reservation and cancellation policy. Recovery retirement atomically verifies the full saved receipt and clean content state while the document actor is locked before detaching the matching journal; a newer edit therefore keeps its recovery source and restarts from that edit. A Retry receipt is checked again under the re-acquired document guard before its rebuild result changes view work. Page resolution returns typed `Busy`/`Changed`/`SourceUnavailable` results. Reload and encoding reinterpretation continue to build a replacement file-io session from a sealed read handle; there is no unused same-session reload/encoding command placeholder.
++- Encoding diagnostics are a single document-owned latest terminal result. A later encoding failure replaces the earlier revision/range, while every accepted non-encoding terminal outcome, including a successful retry, clears the stale diagnostic. Conflict and cleanup receipts retain their independent durable queues.
+ - Recovery resume installs a fresh status owner and increments the operation generation. Every peer and captured read handle owns the same session, so the T05 `CleanupHold` remains live until the final view/read owner drops; durable discard and physical cleanup remain separate in `recovery_retirement`.
+ - Cross-document transfer and linked undo still acquire all document-only session guards before publication and use the unchanged grouped recovery commit/lease primitives.
+-- Added renderer-free file-io lifecycle contracts that Save Copy preserves UTF-8 BOM/CRLF bytes exactly and that a gated committed Save As survives a concurrent document edit, rejects a second save as busy, leaves the newer content dirty, and retains post-commit cleanup authority. Ported the T09 release-gate behaviors to the file-io session: timeout, notify-before-wait, notify-during-wait, spurious notification predicate recheck, and cancellation wake.
++- Added renderer-free file-io lifecycle contracts that Save Copy preserves UTF-8 BOM/CRLF bytes exactly and that a gated committed Save As survives a concurrent document edit, rejects a second save as busy, leaves the newer content dirty, retains post-commit cleanup authority, rejects stale recovery retirement, and restores the newer edit from the retained journal after restart. Ported the T09 release-gate behaviors to the file-io session: timeout, notify-before-wait, notify-during-wait, spurious notification predicate recheck, and cancellation wake.
+ - Lightweight local evidence: direct `rustfmt --edition 2024` on changed Rust files and `git diff --check` pass. Cargo and native checks remain central by policy.
+ 
+ ## Proposed contained integration commands
+@@ -23,15 +24,16 @@ Run centrally with the shared target, `--offline --locked`, stopping on the firs
+ 
+ 1. `cargo test -p bareline-file-io paged_service::lifecycle_contract_tests::headless_client_gets_exact_copy_and_generation_fenced_terminal_receipt --offline --locked`
+ 2. `cargo test -p bareline-file-io paged_service::lifecycle_contract_tests::committed_save_survives_concurrent_edit_and_retains_cleanup_authority --offline --locked`
+-3. `cargo test -p bareline-file-io paged_service::lifecycle_contract_tests::document_release_gate_preserves_predicate_across_notification_orderings --offline --locked`
+-4. `cargo test -p bareline-editor-surface paged_view::peer_tests::peer_owns_full_document_and_survives_other_view_close --offline --locked`
+-5. `cargo test -p bareline-editor-surface paged_spill::tests::pressure_spills_existing_paged_edit_history_and_refreshes_same_identity --offline --locked`
+-6. `cargo test -p bareline-editor-surface paged_transfer::tests::opaque_cross_document_move_restart_and_linked_undo_preserve_raw_bytes --offline --locked`
+-7. `cargo test -p bareline-app workspace::tests::paged_workspace_edits_undoes_navigates_and_saves --offline --locked`
+-8. `cargo test -p bareline-app workspace::tests::readonly_paged_reload_replaces_same_tab_and_preserves_policy --offline --locked`
+-9. `cargo test -p bareline-app workspace::tests::paged_recovery_restart_preserves_opaque_undo_and_recovers_stale_pointer --offline --locked`
+-10. `cargo test -p bareline-app workspace::tests::paged_recovery_failed_retirement_is_retryable --offline --locked`
+-11. `cargo test -p bareline-file-io recovery_retirement::tests::final_cleanup_hold_drop_cannot_miss_receipt_registration --offline --locked`
++3. `cargo test -p bareline-file-io paged_service::lifecycle_contract_tests::encoding_diagnostic_tracks_latest_save_attempt_and_clears_on_success --offline --locked`
++4. `cargo test -p bareline-file-io paged_service::lifecycle_contract_tests::document_release_gate_preserves_predicate_across_notification_orderings --offline --locked`
++5. `cargo test -p bareline-editor-surface paged_view::peer_tests::peer_owns_full_document_and_survives_other_view_close --offline --locked`
++6. `cargo test -p bareline-editor-surface paged_spill::tests::pressure_spills_existing_paged_edit_history_and_refreshes_same_identity --offline --locked`
++7. `cargo test -p bareline-editor-surface paged_transfer::tests::opaque_cross_document_move_restart_and_linked_undo_preserve_raw_bytes --offline --locked`
++8. `cargo test -p bareline-app workspace::tests::paged_workspace_edits_undoes_navigates_and_saves --offline --locked`
++9. `cargo test -p bareline-app workspace::tests::readonly_paged_reload_replaces_same_tab_and_preserves_policy --offline --locked`
++10. `cargo test -p bareline-app workspace::tests::paged_recovery_restart_preserves_opaque_undo_and_recovers_stale_pointer --offline --locked`
++11. `cargo test -p bareline-app workspace::tests::paged_recovery_failed_retirement_is_retryable --offline --locked`
++12. `cargo test -p bareline-file-io recovery_retirement::tests::final_cleanup_hold_drop_cannot_miss_receipt_registration --offline --locked`
+ 
+ ## Deferred qualification
+ 

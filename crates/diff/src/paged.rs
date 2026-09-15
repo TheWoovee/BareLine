@@ -45,11 +45,7 @@ impl Reader {
             ready: None,
         }
     }
-    fn poll(
-        &mut self,
-        cap: usize,
-        budget: &Budget,
-    ) -> Result<Option<PageTicket>, CompareCompleteness> {
+    fn poll(&mut self, cap: usize, budget: &Budget) -> Result<Option<PageTicket>, CompareCompleteness> {
         if self.ready.is_some() {
             return Ok(None);
         }
@@ -75,10 +71,7 @@ impl Reader {
                 WindowPoll::InvalidUtf8 => {
                     // At most three trailing bytes can belong to a split UTF-8 scalar. Interior
                     // malformed UTF-8 fails after these bounded retries, never replacement text.
-                    if self.retries == 3
-                        || self.end <= self.cursor
-                        || self.end == self.snapshot.len()
-                    {
+                    if self.retries == 3 || self.end <= self.cursor || self.end == self.snapshot.len() {
                         return Err(CompareCompleteness::Failed);
                     }
                     self.end -= 1;
@@ -152,20 +145,14 @@ impl PagedBatch {
         {
             return Err(ApplyError::InvalidRange);
         }
-        if self
-            .left
-            .text()
-            .len()
-            .saturating_add(self.right.text().len())
-            > max_bytes
-        {
+        if self.left.text().len().saturating_add(self.right.text().len()) > max_bytes {
             return Err(ApplyError::BudgetExceeded);
         }
         let budget = Budget::new(max_bytes.saturating_mul(8).saturating_add(4096));
         let ld = Document::from_utf8(self.left.text(), budget.clone(), Budget::new(0))
             .map_err(|_| ApplyError::BudgetExceeded)?;
-        let rd = Document::from_utf8(self.right.text(), budget, Budget::new(0))
-            .map_err(|_| ApplyError::BudgetExceeded)?;
+        let rd =
+            Document::from_utf8(self.right.text(), budget, Budget::new(0)).map_err(|_| ApplyError::BudgetExceeded)?;
         let ls = ld.snapshot();
         let rs = rd.snapshot();
         let mut local = make_hunk(
@@ -177,15 +164,13 @@ impl PagedBatch {
             h.stable_id.0,
         );
         local.options = h.options.clone();
-        let mut transaction =
-            apply_hunk_with_policy(policy, direction, &local, &ls, &rs, max_bytes)?;
+        let mut transaction = apply_hunk_with_policy(policy, direction, &local, &ls, &rs, max_bytes)?;
         let (offset, revision) = match direction {
             Direction::LeftToRight => (rr.start.0, right_now.revision),
             Direction::RightToLeft => (lr.start.0, left_now.revision),
         };
         for edit in &mut transaction.edits {
-            edit.range =
-                TextOffset(edit.range.start.0 + offset)..TextOffset(edit.range.end.0 + offset);
+            edit.range = TextOffset(edit.range.start.0 + offset)..TextOffset(edit.range.end.0 + offset);
         }
         transaction.base_revision = revision;
         Ok(transaction)
@@ -208,12 +193,7 @@ pub struct PagedCompareJob {
     changed_extent: Option<(Range<TextOffset>, Range<TextOffset>)>,
 }
 impl PagedCompareJob {
-    pub fn new(
-        left: PagedSnapshot,
-        right: PagedSnapshot,
-        options: CompareOptions,
-        cancel: CancelToken,
-    ) -> Self {
+    pub fn new(left: PagedSnapshot, right: PagedSnapshot, options: CompareOptions, cancel: CancelToken) -> Self {
         let budget = Budget::new(options.limits.max_memory_bytes / 8);
         let cap = (options.limits.max_memory_bytes / 64).clamp(4, 64 * 1024);
         let terminal = if options.limits.max_memory_bytes < 8192 {
@@ -250,9 +230,7 @@ impl PagedCompareJob {
         if self.lease.load(Ordering::Acquire) {
             return PagedComparePoll::Backpressure;
         }
-        if self.left.cursor == self.left.snapshot.len()
-            && self.right.cursor == self.right.snapshot.len()
-        {
+        if self.left.cursor == self.left.snapshot.len() && self.right.cursor == self.right.snapshot.len() {
             if self.global_coarse {
                 self.global_coarse = false;
                 if self.global_equal {
@@ -260,7 +238,11 @@ impl PagedCompareJob {
                     return PagedComparePoll::Finished(CompareCompleteness::Exact);
                 }
                 self.terminal = Some(CompareCompleteness::Coarse(CoarseReason::Bytes));
-                let (left, right) = self.changed_extent.take().expect("unequal window extent");
+                // If no window pair actually differed there is nothing to report.
+                let Some((left, right)) = self.changed_extent.take() else {
+                    self.terminal = Some(CompareCompleteness::Exact);
+                    return PagedComparePoll::Finished(CompareCompleteness::Exact);
+                };
                 let kind = if left.is_empty() {
                     DiffKind::Added
                 } else if right.is_empty() {
@@ -361,8 +343,7 @@ impl PagedCompareJob {
         let rr = right.range();
         for h in &mut result.hunks {
             h.left = TextOffset(h.left.start.0 + lr.start.0)..TextOffset(h.left.end.0 + lr.start.0);
-            h.right =
-                TextOffset(h.right.start.0 + rr.start.0)..TextOffset(h.right.end.0 + rr.start.0);
+            h.right = TextOffset(h.right.start.0 + rr.start.0)..TextOffset(h.right.end.0 + rr.start.0);
             h.left_revision = self.left.snapshot.revision;
             h.right_revision = self.right.snapshot.revision;
             h.left_state = self.left.snapshot.content_state;
@@ -372,10 +353,8 @@ impl PagedCompareJob {
             h.left_line_hint = None;
             h.right_line_hint = None;
             for span in &mut h.intraline {
-                span.left = TextOffset(span.left.start.0 + lr.start.0)
-                    ..TextOffset(span.left.end.0 + lr.start.0);
-                span.right = TextOffset(span.right.start.0 + rr.start.0)
-                    ..TextOffset(span.right.end.0 + rr.start.0);
+                span.left = TextOffset(span.left.start.0 + lr.start.0)..TextOffset(span.left.end.0 + lr.start.0);
+                span.right = TextOffset(span.right.start.0 + rr.start.0)..TextOffset(span.right.end.0 + rr.start.0);
             }
         }
         self.left.cursor = lr.end.0;
@@ -442,19 +421,8 @@ mod tests {
         .unwrap();
         let snapshot = PagedSnapshot::utf8(s, 0).unwrap();
         let cancel = CancelToken::default();
-        let mut job = PagedCompareJob::new(
-            snapshot.clone(),
-            snapshot,
-            CompareOptions::default(),
-            cancel.clone(),
-        );
-        assert!(matches!(
-            job.poll(),
-            PagedComparePoll::Pending {
-                side: Side::Left,
-                ..
-            }
-        ));
+        let mut job = PagedCompareJob::new(snapshot.clone(), snapshot, CompareOptions::default(), cancel.clone());
+        assert!(matches!(job.poll(), PagedComparePoll::Pending { side: Side::Left, .. }));
         assert!(job.budget.used() <= 64 * 1024);
         let start = Instant::now();
         cancel.cancel();
@@ -466,15 +434,7 @@ mod tests {
     }
     #[test]
     fn unavailable_is_not_coarse() {
-        let (s, p) = MemorySource::new(
-            10,
-            Generation(1),
-            SourceKind::Paged,
-            4096,
-            4096,
-            Budget::new(4096),
-        )
-        .unwrap();
+        let (s, p) = MemorySource::new(10, Generation(1), SourceKind::Paged, 4096, 4096, Budget::new(4096)).unwrap();
         p.mark_changed();
         let snapshot = PagedSnapshot::utf8(s, 0).unwrap();
         let mut job = PagedCompareJob::new(
@@ -492,11 +452,8 @@ mod tests {
     fn owned_batch_backpressure_and_undoable_paged_copy() {
         let left = source("a\n");
         let right = source("b\n");
-        let mut target = bareline_document::paged::PagedDocument::new(
-            left.clone(),
-            Budget::new(10000),
-            Budget::new(10000),
-        );
+        let mut target =
+            bareline_document::paged::PagedDocument::new(left.clone(), Budget::new(10000), Budget::new(10000));
         let mut job = PagedCompareJob::new(
             left.clone(),
             right.clone(),
@@ -542,8 +499,7 @@ mod tests {
         let mut options = CompareOptions::default();
         options.limits.max_memory_bytes = 8192;
         let snapshot = source(&text);
-        let mut job =
-            PagedCompareJob::new(snapshot.clone(), snapshot, options, CancelToken::default());
+        let mut job = PagedCompareJob::new(snapshot.clone(), snapshot, options, CancelToken::default());
         let mut windows = 0;
         loop {
             match job.poll() {
@@ -596,9 +552,7 @@ mod tests {
                         Side::Left => (&lp, b'a', Generation(1)),
                         Side::Right => (&rp, b'b', Generation(2)),
                     };
-                    publisher
-                        .publish(ticket, &vec![byte; 4096], generation)
-                        .unwrap();
+                    publisher.publish(ticket, &vec![byte; 4096], generation).unwrap();
                 }
                 PagedComparePoll::Progress => {
                     assert!(job.left.cursor <= 256);
@@ -656,9 +610,7 @@ mod tests {
                         Side::Right => (&rp, &b, Generation(2)),
                     };
                     let count = (length - ticket.page as usize * bytes.len()).min(bytes.len());
-                    publisher
-                        .publish(ticket, &bytes[..count], generation)
-                        .unwrap();
+                    publisher.publish(ticket, &bytes[..count], generation).unwrap();
                     read_bytes += count;
                 }
                 PagedComparePoll::Progress => {
@@ -706,12 +658,7 @@ mod tests {
         options.limits.max_bytes_exact = 1;
         let left = "a".repeat(384);
         let right = format!("{}{}{}", "a".repeat(128), "b".repeat(128), "a".repeat(128));
-        let mut job = PagedCompareJob::new(
-            source(&left),
-            source(&right),
-            options,
-            CancelToken::default(),
-        );
+        let mut job = PagedCompareJob::new(source(&left), source(&right), options, CancelToken::default());
         let mut blocks = 0;
         loop {
             match job.poll() {
@@ -794,10 +741,7 @@ mod tests {
             }
         };
         let elapsed = acknowledged.duration_since(worker.join().unwrap());
-        assert!(
-            elapsed < std::time::Duration::from_millis(50),
-            "{elapsed:?}"
-        );
+        assert!(elapsed < std::time::Duration::from_millis(50), "{elapsed:?}");
         eprintln!("active multi-GB cancellation acknowledged in {elapsed:?}");
     }
 }

@@ -13,11 +13,7 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         return Err("fixture must be palette|find|search".into());
     }
     let scale: f32 = args.get(1).map(|s| s.parse()).transpose()?.unwrap_or(1.0);
-    let logical_width: f32 = args
-        .get(2)
-        .map(|s| s.parse())
-        .transpose()?
-        .unwrap_or(1200.0);
+    let logical_width: f32 = args.get(2).map(|s| s.parse()).transpose()?.unwrap_or(1200.0);
     let logical_height: f32 = args.get(3).map(|s| s.parse()).transpose()?.unwrap_or(760.0);
     if !scale.is_finite()
         || !(0.5..=3.0).contains(&scale)
@@ -79,41 +75,23 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     };
     let mut operations = app.draw(logical_width, logical_height);
     workspace
-        .draw(
-            0,
-            &mut renderer,
-            logical_width,
-            logical_height,
-            &mut operations,
-        )
+        .draw(0, &mut renderer, logical_width, logical_height, &mut operations)
         .map_err(|e| format!("{e:?}"))?;
     while workspace.find.status == "Searching…" {
         notified.recv_timeout(Duration::from_secs(5))?;
         workspace.pump();
     }
     workspace.find_next(0, false);
-    workspace.editors[0].scroll_y = 0.0;
+    workspace.editors[0].viewport_mut().scroll_y = 0.0;
     operations = app.draw(logical_width, logical_height);
     workspace
-        .draw(
-            0,
-            &mut renderer,
-            logical_width,
-            logical_height,
-            &mut operations,
-        )
+        .draw(0, &mut renderer, logical_width, logical_height, &mut operations)
         .map_err(|e| format!("{e:?}"))?;
     if kind != "find" {
         workspace.find.hide();
         operations = app.draw(logical_width, logical_height);
         workspace
-            .draw(
-                0,
-                &mut renderer,
-                logical_width,
-                logical_height,
-                &mut operations,
-            )
+            .draw(0, &mut renderer, logical_width, logical_height, &mut operations)
             .map_err(|e| format!("{e:?}"))?;
     }
     if kind == "palette" {
@@ -123,12 +101,7 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         palette.show(&app.commands, &context, &keymap);
         palette.insert("sort", &app.commands, &context, &keymap);
         palette
-            .draw(
-                &mut renderer,
-                logical_width,
-                logical_height,
-                &mut operations,
-            )
+            .draw(&mut renderer, logical_width, logical_height, &mut operations)
             .map_err(|e| format!("{e:?}"))?;
     }
     if kind == "search" {

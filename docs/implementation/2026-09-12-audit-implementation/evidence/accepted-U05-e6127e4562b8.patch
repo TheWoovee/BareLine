@@ -1,0 +1,48 @@
+diff --git a/crates/app/src/workspace/encoding.rs b/crates/app/src/workspace/encoding.rs
+index c98d004..8b8d458 100644
+--- a/crates/app/src/workspace/encoding.rs
++++ b/crates/app/src/workspace/encoding.rs
+@@ -129,6 +129,7 @@ impl Workspace {
+                 copy_only: false,
+                 open_path: Some(path),
+                 launch_request: None,
++                recovery_restore_request: None,
+                 allow_duplicate: false,
+                 preview: None,
+                 reload: None,
+@@ -165,6 +166,7 @@ impl Workspace {
+             copy_only: false,
+             open_path: Some(path),
+             launch_request: None,
++            recovery_restore_request: None,
+             allow_duplicate: false,
+             preview: None,
+             reload: Some(captured),
+diff --git a/crates/app/src/workspace/remote.rs b/crates/app/src/workspace/remote.rs
+index 66cb0f7..3dec956 100644
+--- a/crates/app/src/workspace/remote.rs
++++ b/crates/app/src/workspace/remote.rs
+@@ -41,6 +41,7 @@ impl Workspace {
+             copy_only: false,
+             open_path: Some(path),
+             launch_request: None,
++            recovery_restore_request: None,
+             allow_duplicate: false,
+             preview: None,
+             reload: None,
+@@ -84,6 +85,7 @@ impl Workspace {
+             copy_only: false,
+             open_path: Some(path),
+             launch_request: None,
++            recovery_restore_request: None,
+             allow_duplicate: false,
+             preview: None,
+             reload: Some(captured),
+@@ -136,6 +138,7 @@ impl Workspace {
+             copy_only: false,
+             open_path: Some(path),
+             launch_request: None,
++            recovery_restore_request: None,
+             allow_duplicate: false,
+             preview: None,
+             reload: Some(captured),

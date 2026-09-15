@@ -1,0 +1,18 @@
+{
+  "arguments": [
+    "test",
+    "-p",
+    "bareline",
+    "--bin",
+    "bareline",
+    "windows_app::views::tests::promotion_rebinds_linked_views_without_replacing_tabs_or_history",
+    "--locked",
+    "--",
+    "--exact"
+  ],
+  "completed_utc": "2026-09-12T14:17:38.4455227Z",
+  "integration_snapshot": "77075af768f3efdc6ca99879d558eb8bddc81d7e",
+  "exit_code": 0,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\final-T01-views-promotion-central.log"
+}

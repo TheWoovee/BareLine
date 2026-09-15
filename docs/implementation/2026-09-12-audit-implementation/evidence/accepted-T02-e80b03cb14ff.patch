@@ -1,0 +1,12 @@
+diff --git a/apps/bareline/src/windows_app/launch.rs b/apps/bareline/src/windows_app/launch.rs
+index 1a67f06..a253d11 100644
+--- a/apps/bareline/src/windows_app/launch.rs
++++ b/apps/bareline/src/windows_app/launch.rs
+@@ -941,6 +941,7 @@ impl ProfileInitializationRuntime {
+ 
+     /// Retained completion receipt for PR-T02 to reconcile migrated settings and
+     /// session state against revisions created after the first frame.
++    #[cfg(test)]
+     pub(super) fn completion(&self) -> Option<&Result<ProfileInitializationResult, String>> {
+         self.completion.as_ref()
+     }

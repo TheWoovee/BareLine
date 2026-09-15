@@ -1,0 +1,1025 @@
+[
+  {
+    "case": "all_app_panels",
+    "fields": [
+      {
+        "field": "text_context",
+        "before": {
+          "composition": null,
+          "selection": [
+            0,
+            0
+          ],
+          "selections": [
+            [
+              0,
+              0
+            ]
+          ],
+          "source_identity": [
+            0,
+            0
+          ]
+        },
+        "after": null
+      },
+      {
+        "field": "text",
+        "before": {
+          "character_lengths": [],
+          "editor_id": 2,
+          "run_id": 18446744073709551615,
+          "selection": [
+            0,
+            0
+          ],
+          "start_byte": 0,
+          "value": ""
+        },
+        "after": null
+      }
+    ],
+    "added": [
+      {
+        "bounds": [
+          18.0,
+          516.0,
+          58.0,
+          34.0
+        ],
+        "disabled": true,
+        "expanded": null,
+        "focusable": false,
+        "id": 7100,
+        "invokable": false,
+        "name": "Find",
+        "parent": 90000031,
+        "role": "Tab",
+        "selected": false,
+        "value": null
+      },
+      {
+        "bounds": [
+          76.0,
+          516.0,
+          88.0,
+          34.0
+        ],
+        "disabled": true,
+        "expanded": null,
+        "focusable": false,
+        "id": 7101,
+        "invokable": false,
+        "name": "Replace",
+        "parent": 90000031,
+        "role": "Tab",
+        "selected": false,
+        "value": null
+      },
+      {
+        "bounds": [
+          164.0,
+          516.0,
+          70.0,
+          34.0
+        ],
+        "disabled": true,
+        "expanded": null,
+        "focusable": false,
+        "id": 7102,
+        "invokable": false,
+        "name": "Files",
+        "parent": 90000031,
+        "role": "Tab",
+        "selected": true,
+        "value": null
+      },
+      {
+        "bounds": [
+          18.0,
+          516.0,
+          216.0,
+          34.0
+        ],
+        "disabled": true,
+        "expanded": null,
+        "focusable": false,
+        "id": 90000031,
+        "invokable": false,
+        "name": "Search modes",
+        "parent": 1,
+        "role": "TabList",
+        "selected": false,
+        "value": null
+      }
+    ],
+    "removed": [],
+    "nodes": []
+  },
+  {
+    "case": "all_panels.modal_60000",
+    "fields": [],
+    "added": [
+      {
+        "bounds": [
+          18.0,
+          516.0,
+          58.0,
+          34.0
+        ],
+        "disabled": true,
+        "expanded": null,
+        "focusable": false,
+        "id": 7100,
+        "invokable": false,
+        "name": "Find",
+        "parent": 90000031,
+        "role": "Tab",
+        "selected": false,
+        "value": null
+      },
+      {
+        "bounds": [
+          76.0,
+          516.0,
+          88.0,
+          34.0
+        ],
+        "disabled": true,
+        "expanded": null,
+        "focusable": false,
+        "id": 7101,
+        "invokable": false,
+        "name": "Replace",
+        "parent": 90000031,
+        "role": "Tab",
+        "selected": false,
+        "value": null
+      },
+      {
+        "bounds": [
+          164.0,
+          516.0,
+          70.0,
+          34.0
+        ],
+        "disabled": true,
+        "expanded": null,
+        "focusable": false,
+        "id": 7102,
+        "invokable": false,
+        "name": "Files",
+        "parent": 90000031,
+        "role": "Tab",
+        "selected": true,
+        "value": null
+      },
+      {
+        "bounds": [
+          18.0,
+          516.0,
+          216.0,
+          34.0
+        ],
+        "disabled": true,
+        "expanded": null,
+        "focusable": false,
+        "id": 90000031,
+        "invokable": false,
+        "name": "Search modes",
+        "parent": 1,
+        "role": "TabList",
+        "selected": false,
+        "value": null
+      }
+    ],
+    "removed": [],
+    "nodes": []
+  },
+  {
+    "case": "all_panels.modal_90000002",
+    "fields": [],
+    "added": [
+      {
+        "bounds": [
+          18.0,
+          516.0,
+          58.0,
+          34.0
+        ],
+        "disabled": true,
+        "expanded": null,
+        "focusable": false,
+        "id": 7100,
+        "invokable": false,
+        "name": "Find",
+        "parent": 90000031,
+        "role": "Tab",
+        "selected": false,
+        "value": null
+      },
+      {
+        "bounds": [
+          76.0,
+          516.0,
+          88.0,
+          34.0
+        ],
+        "disabled": true,
+        "expanded": null,
+        "focusable": false,
+        "id": 7101,
+        "invokable": false,
+        "name": "Replace",
+        "parent": 90000031,
+        "role": "Tab",
+        "selected": false,
+        "value": null
+      },
+      {
+        "bounds": [
+          164.0,
+          516.0,
+          70.0,
+          34.0
+        ],
+        "disabled": true,
+        "expanded": null,
+        "focusable": false,
+        "id": 7102,
+        "invokable": false,
+        "name": "Files",
+        "parent": 90000031,
+        "role": "Tab",
+        "selected": true,
+        "value": null
+      },
+      {
+        "bounds": [
+          18.0,
+          516.0,
+          216.0,
+          34.0
+        ],
+        "disabled": true,
+        "expanded": null,
+        "focusable": false,
+        "id": 90000031,
+        "invokable": false,
+        "name": "Search modes",
+        "parent": 1,
+        "role": "TabList",
+        "selected": false,
+        "value": null
+      }
+    ],
+    "removed": [],
+    "nodes": []
+  },
+  {
+    "case": "all_panels.modal_90000004",
+    "fields": [],
+    "added": [
+      {
+        "bounds": [
+          18.0,
+          516.0,
+          58.0,
+          34.0
+        ],
+        "disabled": true,
+        "expanded": null,
+        "focusable": false,
+        "id": 7100,
+        "invokable": false,
+        "name": "Find",
+        "parent": 90000031,
+        "role": "Tab",
+        "selected": false,
+        "value": null
+      },
+      {
+        "bounds": [
+          76.0,
+          516.0,
+          88.0,
+          34.0
+        ],
+        "disabled": true,
+        "expanded": null,
+        "focusable": false,
+        "id": 7101,
+        "invokable": false,
+        "name": "Replace",
+        "parent": 90000031,
+        "role": "Tab",
+        "selected": false,
+        "value": null
+      },
+      {
+        "bounds": [
+          164.0,
+          516.0,
+          70.0,
+          34.0
+        ],
+        "disabled": true,
+        "expanded": null,
+        "focusable": false,
+        "id": 7102,
+        "invokable": false,
+        "name": "Files",
+        "parent": 90000031,
+        "role": "Tab",
+        "selected": true,
+        "value": null
+      },
+      {
+        "bounds": [
+          18.0,
+          516.0,
+          216.0,
+          34.0
+        ],
+        "disabled": true,
+        "expanded": null,
+        "focusable": false,
+        "id": 90000031,
+        "invokable": false,
+        "name": "Search modes",
+        "parent": 1,
+        "role": "TabList",
+        "selected": false,
+        "value": null
+      }
+    ],
+    "removed": [],
+    "nodes": []
+  },
+  {
+    "case": "all_panels.modal_90000006",
+    "fields": [],
+    "added": [
+      {
+        "bounds": [
+          18.0,
+          516.0,
+          58.0,
+          34.0
+        ],
+        "disabled": true,
+        "expanded": null,
+        "focusable": false,
+        "id": 7100,
+        "invokable": false,
+        "name": "Find",
+        "parent": 90000031,
+        "role": "Tab",
+        "selected": false,
+        "value": null
+      },
+      {
+        "bounds": [
+          76.0,
+          516.0,
+          88.0,
+          34.0
+        ],
+        "disabled": true,
+        "expanded": null,
+        "focusable": false,
+        "id": 7101,
+        "invokable": false,
+        "name": "Replace",
+        "parent": 90000031,
+        "role": "Tab",
+        "selected": false,
+        "value": null
+      },
+      {
+        "bounds": [
+          164.0,
+          516.0,
+          70.0,
+          34.0
+        ],
+        "disabled": true,
+        "expanded": null,
+        "focusable": false,
+        "id": 7102,
+        "invokable": false,
+        "name": "Files",
+        "parent": 90000031,
+        "role": "Tab",
+        "selected": true,
+        "value": null
+      },
+      {
+        "bounds": [
+          18.0,
+          516.0,
+          216.0,
+          34.0
+        ],
+        "disabled": true,
+        "expanded": null,
+        "focusable": false,
+        "id": 90000031,
+        "invokable": false,
+        "name": "Search modes",
+        "parent": 1,
+        "role": "TabList",
+        "selected": false,
+        "value": null
+      }
+    ],
+    "removed": [],
+    "nodes": []
+  },
+  {
+    "case": "all_panels.modal_90000012",
+    "fields": [],
+    "added": [
+      {
+        "bounds": [
+          18.0,
+          516.0,
+          58.0,
+          34.0
+        ],
+        "disabled": true,
+        "expanded": null,
+        "focusable": false,
+        "id": 7100,
+        "invokable": false,
+        "name": "Find",
+        "parent": 90000031,
+        "role": "Tab",
+        "selected": false,
+        "value": null
+      },
+      {
+        "bounds": [
+          76.0,
+          516.0,
+          88.0,
+          34.0
+        ],
+        "disabled": true,
+        "expanded": null,
+        "focusable": false,
+        "id": 7101,
+        "invokable": false,
+        "name": "Replace",
+        "parent": 90000031,
+        "role": "Tab",
+        "selected": false,
+        "value": null
+      },
+      {
+        "bounds": [
+          164.0,
+          516.0,
+          70.0,
+          34.0
+        ],
+        "disabled": true,
+        "expanded": null,
+        "focusable": false,
+        "id": 7102,
+        "invokable": false,
+        "name": "Files",
+        "parent": 90000031,
+        "role": "Tab",
+        "selected": true,
+        "value": null
+      },
+      {
+        "bounds": [
+          18.0,
+          516.0,
+          216.0,
+          34.0
+        ],
+        "disabled": true,
+        "expanded": null,
+        "focusable": false,
+        "id": 90000031,
+        "invokable": false,
+        "name": "Search modes",
+        "parent": 1,
+        "role": "TabList",
+        "selected": false,
+        "value": null
+      }
+    ],
+    "removed": [],
+    "nodes": []
+  },
+  {
+    "case": "all_panels.modal_90000014",
+    "fields": [],
+    "added": [
+      {
+        "bounds": [
+          18.0,
+          516.0,
+          58.0,
+          34.0
+        ],
+        "disabled": true,
+        "expanded": null,
+        "focusable": false,
+        "id": 7100,
+        "invokable": false,
+        "name": "Find",
+        "parent": 90000031,
+        "role": "Tab",
+        "selected": false,
+        "value": null
+      },
+      {
+        "bounds": [
+          76.0,
+          516.0,
+          88.0,
+          34.0
+        ],
+        "disabled": true,
+        "expanded": null,
+        "focusable": false,
+        "id": 7101,
+        "invokable": false,
+        "name": "Replace",
+        "parent": 90000031,
+        "role": "Tab",
+        "selected": false,
+        "value": null
+      },
+      {
+        "bounds": [
+          164.0,
+          516.0,
+          70.0,
+          34.0
+        ],
+        "disabled": true,
+        "expanded": null,
+        "focusable": false,
+        "id": 7102,
+        "invokable": false,
+        "name": "Files",
+        "parent": 90000031,
+        "role": "Tab",
+        "selected": true,
+        "value": null
+      },
+      {
+        "bounds": [
+          18.0,
+          516.0,
+          216.0,
+          34.0
+        ],
+        "disabled": true,
+        "expanded": null,
+        "focusable": false,
+        "id": 90000031,
+        "invokable": false,
+        "name": "Search modes",
+        "parent": 1,
+        "role": "TabList",
+        "selected": false,
+        "value": null
+      }
+    ],
+    "removed": [],
+    "nodes": []
+  },
+  {
+    "case": "all_panels.modal_90000026",
+    "fields": [],
+    "added": [
+      {
+        "bounds": [
+          18.0,
+          516.0,
+          58.0,
+          34.0
+        ],
+        "disabled": true,
+        "expanded": null,
+        "focusable": false,
+        "id": 7100,
+        "invokable": false,
+        "name": "Find",
+        "parent": 90000031,
+        "role": "Tab",
+        "selected": false,
+        "value": null
+      },
+      {
+        "bounds": [
+          76.0,
+          516.0,
+          88.0,
+          34.0
+        ],
+        "disabled": true,
+        "expanded": null,
+        "focusable": false,
+        "id": 7101,
+        "invokable": false,
+        "name": "Replace",
+        "parent": 90000031,
+        "role": "Tab",
+        "selected": false,
+        "value": null
+      },
+      {
+        "bounds": [
+          164.0,
+          516.0,
+          70.0,
+          34.0
+        ],
+        "disabled": true,
+        "expanded": null,
+        "focusable": false,
+        "id": 7102,
+        "invokable": false,
+        "name": "Files",
+        "parent": 90000031,
+        "role": "Tab",
+        "selected": true,
+        "value": null
+      },
+      {
+        "bounds": [
+          18.0,
+          516.0,
+          216.0,
+          34.0
+        ],
+        "disabled": true,
+        "expanded": null,
+        "focusable": false,
+        "id": 90000031,
+        "invokable": false,
+        "name": "Search modes",
+        "parent": 1,
+        "role": "TabList",
+        "selected": false,
+        "value": null
+      }
+    ],
+    "removed": [],
+    "nodes": []
+  },
+  {
+    "case": "find.match_case_focus",
+    "fields": [
+      {
+        "field": "text_context",
+        "before": {
+          "composition": null,
+          "selection": [
+            0,
+            0
+          ],
+          "selections": [
+            [
+              0,
+              0
+            ]
+          ],
+          "source_identity": [
+            0,
+            0
+          ]
+        },
+        "after": null
+      },
+      {
+        "field": "text",
+        "before": {
+          "character_lengths": [],
+          "editor_id": 2,
+          "run_id": 18446744073709551615,
+          "selection": [
+            0,
+            0
+          ],
+          "start_byte": 0,
+          "value": ""
+        },
+        "after": null
+      }
+    ],
+    "added": [],
+    "removed": [],
+    "nodes": []
+  },
+  {
+    "case": "find.open",
+    "fields": [
+      {
+        "field": "text_context",
+        "before": {
+          "composition": null,
+          "selection": [
+            0,
+            0
+          ],
+          "selections": [
+            [
+              0,
+              0
+            ]
+          ],
+          "source_identity": [
+            0,
+            0
+          ]
+        },
+        "after": {
+          "composition": null,
+          "selection": [
+            6,
+            6
+          ],
+          "selections": [],
+          "source_identity": [
+            0,
+            844424930131968002
+          ]
+        }
+      },
+      {
+        "field": "text",
+        "before": {
+          "character_lengths": [],
+          "editor_id": 2,
+          "run_id": 18446744073709551615,
+          "selection": [
+            0,
+            0
+          ],
+          "start_byte": 0,
+          "value": ""
+        },
+        "after": {
+          "character_lengths": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "editor_id": 6000,
+          "run_id": 16000,
+          "selection": [
+            6,
+            6
+          ],
+          "start_byte": 0,
+          "value": "needle"
+        }
+      }
+    ],
+    "added": [],
+    "removed": [],
+    "nodes": []
+  },
+  {
+    "case": "find.replace_focus",
+    "fields": [
+      {
+        "field": "text_context",
+        "before": {
+          "composition": null,
+          "selection": [
+            0,
+            0
+          ],
+          "selections": [
+            [
+              0,
+              0
+            ]
+          ],
+          "source_identity": [
+            0,
+            0
+          ]
+        },
+        "after": {
+          "composition": null,
+          "selection": [
+            11,
+            11
+          ],
+          "selections": [],
+          "source_identity": [
+            0,
+            844565667620323330
+          ]
+        }
+      },
+      {
+        "field": "text",
+        "before": {
+          "character_lengths": [],
+          "editor_id": 2,
+          "run_id": 18446744073709551615,
+          "selection": [
+            0,
+            0
+          ],
+          "start_byte": 0,
+          "value": ""
+        },
+        "after": {
+          "character_lengths": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "editor_id": 6001,
+          "run_id": 16001,
+          "selection": [
+            11,
+            11
+          ],
+          "start_byte": 0,
+          "value": "replacement"
+        }
+      }
+    ],
+    "added": [],
+    "removed": [],
+    "nodes": []
+  },
+  {
+    "case": "search.open",
+    "fields": [
+      {
+        "field": "text_context",
+        "before": {
+          "composition": null,
+          "selection": [
+            0,
+            0
+          ],
+          "selections": [
+            [
+              0,
+              0
+            ]
+          ],
+          "source_identity": [
+            0,
+            0
+          ]
+        },
+        "after": {
+          "composition": null,
+          "selection": [
+            9,
+            9
+          ],
+          "selections": [],
+          "source_identity": [
+            0,
+            985162418487296002
+          ]
+        }
+      },
+      {
+        "field": "focus",
+        "before": 2,
+        "after": 7000
+      },
+      {
+        "field": "text",
+        "before": {
+          "character_lengths": [],
+          "editor_id": 2,
+          "run_id": 18446744073709551615,
+          "selection": [
+            0,
+            0
+          ],
+          "start_byte": 0,
+          "value": ""
+        },
+        "after": {
+          "character_lengths": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "editor_id": 7000,
+          "run_id": 17000,
+          "selection": [
+            9,
+            9
+          ],
+          "start_byte": 0,
+          "value": "workspace"
+        }
+      }
+    ],
+    "added": [
+      {
+        "bounds": [
+          18.0,
+          516.0,
+          58.0,
+          34.0
+        ],
+        "disabled": false,
+        "expanded": null,
+        "focusable": true,
+        "id": 7100,
+        "invokable": true,
+        "name": "Find",
+        "parent": 90000031,
+        "role": "Tab",
+        "selected": false,
+        "value": null
+      },
+      {
+        "bounds": [
+          76.0,
+          516.0,
+          88.0,
+          34.0
+        ],
+        "disabled": false,
+        "expanded": null,
+        "focusable": true,
+        "id": 7101,
+        "invokable": true,
+        "name": "Replace",
+        "parent": 90000031,
+        "role": "Tab",
+        "selected": false,
+        "value": null
+      },
+      {
+        "bounds": [
+          164.0,
+          516.0,
+          70.0,
+          34.0
+        ],
+        "disabled": false,
+        "expanded": null,
+        "focusable": true,
+        "id": 7102,
+        "invokable": true,
+        "name": "Files",
+        "parent": 90000031,
+        "role": "Tab",
+        "selected": true,
+        "value": null
+      },
+      {
+        "bounds": [
+          18.0,
+          516.0,
+          216.0,
+          34.0
+        ],
+        "disabled": false,
+        "expanded": null,
+        "focusable": false,
+        "id": 90000031,
+        "invokable": false,
+        "name": "Search modes",
+        "parent": 1,
+        "role": "TabList",
+        "selected": false,
+        "value": null
+      }
+    ],
+    "removed": [],
+    "nodes": []
+  }
+]

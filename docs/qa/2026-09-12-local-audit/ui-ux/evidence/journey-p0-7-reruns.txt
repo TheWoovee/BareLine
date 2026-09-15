@@ -1,0 +1,12 @@
+RUN 1
+journey p0-7 — close prompt offers Save / Don't Save / Cancel …
+journey: 1 passed
+PASS p0-7
+RUN 2
+journey p0-7 — close prompt offers Save / Don't Save / Cancel …
+PASS p0-7
+journey: 1 passed
+RUN 3
+journey p0-7 — close prompt offers Save / Don't Save / Cancel …
+PASS p0-7
+journey: 1 passed

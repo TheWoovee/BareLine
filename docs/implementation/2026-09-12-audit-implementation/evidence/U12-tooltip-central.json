@@ -1,0 +1,14 @@
+{
+  "arguments": [
+    "test",
+    "-p",
+    "bareline-app",
+    "--lib",
+    "tooltip"
+  ],
+  "completed_utc": "2026-09-12T09:25:11.6358465Z",
+  "integration_snapshot": "ca744a6b56544b5c642e87c69ad1db33d1464c1a",
+  "exit_code": 0,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\U12-tooltip-central.log"
+}

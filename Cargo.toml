@@ -7,7 +7,7 @@ default-members = ["apps/bareline"]
 version = "0.1.0"
 edition = "2024"
 license = "MPL-2.0"
-rust-version = "1.85"
+rust-version = "1.98.1"
 
 [workspace.dependencies]
 winit = "=0.30.13"

@@ -83,8 +83,7 @@ impl PagedSnapshot {
                 return Err(Error::OutOfBounds);
             }
             if index > 0
-                && (edits[index - 1].range.end > edit.range.start
-                    || edits[index - 1].range.start == edit.range.start)
+                && (edits[index - 1].range.end > edit.range.start || edits[index - 1].range.start == edit.range.start)
             {
                 return Err(Error::OverlappingEdits);
             }
@@ -95,20 +94,14 @@ impl PagedSnapshot {
                 {
                     return Err(Error::IncompleteSource);
                 }
-                usize::try_from(owned.range.end - owned.range.start)
-                    .map_err(|_| Error::BudgetExceeded)?;
+                usize::try_from(owned.range.end - owned.range.start).map_err(|_| Error::BudgetExceeded)?;
             }
-            if edit.inverse.range.end - edit.inverse.range.start
-                != (edit.range.end.0 - edit.range.start.0) as u64
-            {
+            if edit.inverse.range.end - edit.inverse.range.start != (edit.range.end.0 - edit.range.start.0) as u64 {
                 return Err(Error::OutOfBounds);
             }
             length = length
                 .checked_sub(edit.range.end.0 - edit.range.start.0)
-                .and_then(|length| {
-                    length
-                        .checked_add((edit.inserted.range.end - edit.inserted.range.start) as usize)
-                })
+                .and_then(|length| length.checked_add((edit.inserted.range.end - edit.inserted.range.start) as usize))
                 .ok_or(Error::BudgetExceeded)?;
         }
         metadata.validate(self.len(), length)?;
@@ -188,9 +181,10 @@ impl SourceTransactionRequest {
             .try_reserve_exact(ranges.len())
             .map_err(|_| Error::BudgetExceeded)?;
         for _ in &ranges {
-            claims.push(self.budget.claim(
-                std::mem::size_of::<InsertedProvenance>() + std::mem::size_of::<BudgetClaim>(),
-            )?);
+            claims.push(
+                self.budget
+                    .claim(std::mem::size_of::<InsertedProvenance>() + std::mem::size_of::<BudgetClaim>())?,
+            );
         }
         self.provenance
             .try_reserve_exact(ranges.len())
@@ -226,12 +220,7 @@ impl SourceTransactionRequest {
         let inserted = self.edits[proof.index].inserted.clone();
         let inserted_offset = proof.inserted_offset;
         if self.old.is_none() {
-            match self.window(
-                captured,
-                start,
-                (length - self.proof_cursor).min(64 * 1024),
-                false,
-            ) {
+            match self.window(captured, start, (length - self.proof_cursor).min(64 * 1024), false) {
                 Ok(Some(window)) => {
                     if window.range().start.0 != start || window.text().is_empty() {
                         return SourceTransactionPoll::Failed(Error::InvalidBoundary);
@@ -306,11 +295,7 @@ impl SourceTransactionRequest {
     ) -> Result<Option<TextWindow>, SourceTransactionPoll> {
         if self.window.is_none() {
             let request = if exact {
-                snapshot.begin_read(
-                    TextOffset(start)..TextOffset(start + length),
-                    length,
-                    &self.budget,
-                )
+                snapshot.begin_read(TextOffset(start)..TextOffset(start + length), length, &self.budget)
             } else {
                 snapshot.begin_viewport(TextOffset(start), length, &self.budget)
             };
@@ -354,9 +339,7 @@ impl SourceTransactionRequest {
                     Ok(Some(window)) => {
                         if offset < window.range().start.0
                             || offset > window.range().end.0
-                            || !window
-                                .text()
-                                .is_char_boundary(offset - window.range().start.0)
+                            || !window.text().is_char_boundary(offset - window.range().start.0)
                         {
                             return SourceTransactionPoll::Failed(Error::InvalidBoundary);
                         }
@@ -383,9 +366,7 @@ impl SourceTransactionRequest {
                     false,
                 ) {
                     Ok(Some(window)) => {
-                        if window.range().start.0 != edit.range.start.0 + self.cursor
-                            || window.text().is_empty()
-                        {
+                        if window.range().start.0 != edit.range.start.0 + self.cursor || window.text().is_empty() {
                             return SourceTransactionPoll::Failed(Error::InvalidBoundary);
                         }
                         self.old = Some(window);
@@ -396,12 +377,7 @@ impl SourceTransactionRequest {
                 return SourceTransactionPoll::Progress;
             }
             let length = self.old.as_ref().expect("old bytes").text().len();
-            match self.window(
-                owned_snapshot(&self.snapshot, &edit.inverse),
-                self.cursor,
-                length,
-                true,
-            ) {
+            match self.window(owned_snapshot(&self.snapshot, &edit.inverse), self.cursor, length, true) {
                 Ok(Some(window)) => {
                     if window.text() != self.old.as_ref().expect("old bytes").text() {
                         return SourceTransactionPoll::Failed(Error::StaleRevision);
@@ -452,11 +428,7 @@ impl PreparedSourceTransaction {
     }
     pub fn next_revision(&self) -> Result<Revision, Error> {
         Ok(Revision(
-            self.snapshot
-                .revision
-                .0
-                .checked_add(1)
-                .ok_or(Error::RevisionOverflow)?,
+            self.snapshot.revision.0.checked_add(1).ok_or(Error::RevisionOverflow)?,
         ))
     }
 }
@@ -482,9 +454,7 @@ fn inverse_root(
             let original = match node.as_ref() {
                 tree::Node::Source { source, range, .. } => Some((source.clone(), range.clone())),
                 tree::Node::OwnedSource { original, .. } => original.clone(),
-                tree::Node::Leaf(piece) => piece
-                    .origin()
-                    .map(|(source, range)| (source.clone(), range)),
+                tree::Node::Leaf(piece) => piece.origin().map(|(source, range)| (source.clone(), range)),
                 tree::Node::Branch { .. } => unreachable!(),
             };
             Ok(Some(tree::charged_node(
@@ -581,35 +551,19 @@ impl PagedDocument {
         let mut after = 0usize;
         for (edit_index, edit) in prepared.edits.iter().enumerate() {
             let start = sum(after, edit.range.start.0 - before)?;
-            let end = sum(
-                start,
-                (edit.inserted.range.end - edit.inserted.range.start) as usize,
-            )?;
-            let (prefix, _) =
-                tree::charged_split(self.current.root.clone(), edit.range.end.0, &self.bytes)?;
+            let end = sum(start, (edit.inserted.range.end - edit.inserted.range.start) as usize)?;
+            let (prefix, _) = tree::charged_split(self.current.root.clone(), edit.range.end.0, &self.bytes)?;
             let (_, removed) = tree::charged_split(prefix, edit.range.start.0, &self.bytes)?;
             edits.push(OwnedEdit {
                 before_range: edit.range.start.0..edit.range.end.0,
                 after_range: start..end,
                 inverse: inverse_root(&removed, &edit.inverse, &mut 0, &self.bytes)?,
-                inserted: if prepared
-                    .provenance
-                    .iter()
-                    .any(|proof| proof.index == edit_index)
-                {
+                inserted: if prepared.provenance.iter().any(|proof| proof.index == edit_index) {
                     let mut combined = None;
-                    for proof in prepared
-                        .provenance
-                        .iter()
-                        .filter(|proof| proof.index == edit_index)
-                    {
-                        let (prefix, _) = tree::charged_split(
-                            proof.snapshot.root.clone(),
-                            proof.range.end.0,
-                            &self.bytes,
-                        )?;
-                        let (_, selected) =
-                            tree::charged_split(prefix, proof.range.start.0, &self.bytes)?;
+                    for proof in prepared.provenance.iter().filter(|proof| proof.index == edit_index) {
+                        let (prefix, _) =
+                            tree::charged_split(proof.snapshot.root.clone(), proof.range.end.0, &self.bytes)?;
+                        let (_, selected) = tree::charged_split(prefix, proof.range.start.0, &self.bytes)?;
                         let start = edit.inserted.range.start + proof.inserted_offset as u64;
                         let owned = OwnedTextRange {
                             source: edit.inserted.source.clone(),
@@ -641,9 +595,7 @@ impl PagedDocument {
                 &self.bytes,
             )?;
         }
-        self.undo
-            .try_reserve_exact(1)
-            .map_err(|_| Error::BudgetExceeded)?;
+        self.undo.try_reserve_exact(1).map_err(|_| Error::BudgetExceeded)?;
         let state = ContentStateId(crate::unique());
         let history = PagedHistory {
             group: None,
@@ -678,10 +630,7 @@ impl PagedDocument {
         })
     }
     /// Convenience for callers without a journal. Journal owners must use the lease.
-    pub fn commit_source_transaction(
-        &mut self,
-        prepared: PreparedSourceTransaction,
-    ) -> Result<Revision, Error> {
+    pub fn commit_source_transaction(&mut self, prepared: PreparedSourceTransaction) -> Result<Revision, Error> {
         Ok(self.lease_source_transaction(prepared)?.publish())
     }
 }
@@ -769,17 +718,8 @@ impl HistoryCommitLease<'_> {
     }
 }
 impl PagedDocument {
-    pub fn prepare_source_history(
-        &self,
-        undo: bool,
-        budget: &Budget,
-    ) -> Result<PreparedSourceHistory, Error> {
-        let entry = (if undo {
-            self.undo.last()
-        } else {
-            self.redo.last()
-        })
-        .ok_or(Error::EmptyHistory)?;
+    pub fn prepare_source_history(&self, undo: bool, budget: &Budget) -> Result<PreparedSourceHistory, Error> {
+        let entry = (if undo { self.undo.last() } else { self.redo.last() }).ok_or(Error::EmptyHistory)?;
         let claim = budget.claim(sum(
             product(entry.edits.len(), std::mem::size_of::<HistorySourceEdit>())?,
             entry._reservation.reference_bytes(),
@@ -814,10 +754,7 @@ impl PagedDocument {
             _history_charge: entry._reservation.clone(),
         })
     }
-    pub fn lease_source_history(
-        &mut self,
-        prepared: PreparedSourceHistory,
-    ) -> Result<HistoryCommitLease<'_>, Error> {
+    pub fn lease_source_history(&mut self, prepared: PreparedSourceHistory) -> Result<HistoryCommitLease<'_>, Error> {
         self.lease_history_member(prepared, None)
     }
     pub(crate) fn lease_history_member(
@@ -842,8 +779,7 @@ impl PagedDocument {
         if entry.group.as_ref().map(|tag| tag.id) != expected {
             return Err(Error::LinkedUndoRequired);
         }
-        if entry.before_state != prepared.before_state || entry.after_state != prepared.after_state
-        {
+        if entry.before_state != prepared.before_state || entry.after_state != prepared.after_state {
             return Err(Error::StaleRevision);
         }
         let revision = prepared.next_revision()?;
@@ -889,13 +825,9 @@ impl PagedDocument {
             &entry.edits,
             &self.bytes,
         )?);
-        (if prepared.undo {
-            &mut self.redo
-        } else {
-            &mut self.undo
-        })
-        .try_reserve_exact(1)
-        .map_err(|_| Error::BudgetExceeded)?;
+        (if prepared.undo { &mut self.redo } else { &mut self.undo })
+            .try_reserve_exact(1)
+            .map_err(|_| Error::BudgetExceeded)?;
         Ok(HistoryCommitLease {
             document: self,
             next,
@@ -921,15 +853,8 @@ mod lease_tests {
     }
     fn source(length: u64, byte: u8, budget: &Budget) -> MemorySource {
         let generation = Generation(crate::unique());
-        let (source, _publisher) = MemorySource::new(
-            length,
-            generation,
-            SourceKind::Paged,
-            4096,
-            8192,
-            budget.clone(),
-        )
-        .unwrap();
+        let (source, _publisher) =
+            MemorySource::new(length, generation, SourceKind::Paged, 4096, 8192, budget.clone()).unwrap();
         source.attach_owned_loader(Arc::new(Repeat(byte))).unwrap();
         // Paged ownership is the immutable loader; Resident sealing requires every page.
         source
@@ -992,10 +917,7 @@ mod lease_tests {
         drop(full);
         assert_eq!(doc.snapshot().revision, before.revision);
         assert_eq!(doc.history_stats().undo_changes, 0);
-        assert_eq!(
-            history.used(),
-            doc.undo.capacity_bytes() + doc.redo.capacity_bytes()
-        );
+        assert_eq!(history.used(), doc.undo.capacity_bytes() + doc.redo.capacity_bytes());
     }
     #[test]
     fn publish_and_history_publish_need_no_remaining_budget() {
@@ -1100,8 +1022,7 @@ mod lease_tests {
         assert_eq!(left.snapshot().len(), 7);
         assert_eq!(right.snapshot().len(), 7);
         let mut members = [&mut left, &mut right];
-        let lease =
-            crate::paged_group::lease_history_group(&mut members, id, true, &bytes).unwrap();
+        let lease = crate::paged_group::lease_history_group(&mut members, id, true, &bytes).unwrap();
         let full = bytes.claim(bytes.limit() - bytes.used()).unwrap();
         lease.publish();
         drop(full);
@@ -1154,10 +1075,7 @@ mod lease_tests {
                 _ => panic!("provenance validation failed"),
             }
         };
-        destination
-            .lease_source_transaction(prepared)
-            .unwrap()
-            .publish();
+        destination.lease_source_transaction(prepared).unwrap().publish();
         assert!(destination.snapshot().pieces().any(|piece|matches!(piece,crate::paged::PagedPiece::OwnedSource {original:Some((source,range)),..} if source.generation()==raw.generation() && range==(0..2))));
         assert_eq!(destination.snapshot().len(), 4);
         assert!(destination.snapshot().pieces().any(|piece|matches!(piece,crate::paged::PagedPiece::OwnedSource {original:Some((source,range)),..} if source.generation()==raw.generation() && range==(6..8))));

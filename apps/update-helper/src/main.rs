@@ -1,11 +1,17 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Explicit local helper. Trust pins are compiled by owner-controlled release builds.
+mod build_capabilities {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../build-support/capability_assertion.rs"
+    ));
+}
 fn main() {
+    build_capabilities::retain();
     #[cfg(windows)]
     let result = run();
     #[cfg(not(windows))]
-    let result: Result<(), String> =
-        Err("Windows update helper is unavailable on this platform".into());
+    let result: Result<(), String> = Err("Windows update helper is unavailable on this platform".into());
     if let Err(error) = result {
         eprintln!("update refused: {error}");
         std::process::exit(1);
@@ -16,8 +22,8 @@ fn main() {
 fn run() -> Result<(), String> {
     use bareline_distribution::update::{TrustPolicy, verify_manifest};
     use bareline_platform_windows::update::{
-        open_update_file, open_update_read_file, rename_update_handle, replace_with_rollback,
-        update_file_sha256, verify_authenticode,
+        open_update_file, open_update_read_file, rename_update_handle, replace_with_rollback, update_file_sha256,
+        verify_authenticode,
     };
     use std::io::{Read, Write};
     let action = std::env::args_os().skip(1).collect::<Vec<_>>();
@@ -35,18 +41,18 @@ fn run() -> Result<(), String> {
                 && action[1] == "--wait-pid"
                 && action[3] == "--ready-event"))
     {
+        return Err("usage: bareline-update-helper --apply | --recover (editor must be closed)".into());
+    }
+    if env!("BARELINE_BUILD_MODE") == "preview" {
         return Err(
-            "usage: bareline-update-helper --apply | --recover (editor must be closed)".into(),
+            "updates are disabled in this unsigned preview build; use a schema-validated configured release build"
+                .into(),
         );
     }
-    let key = option_env!("BARELINE_RELEASE_PUBLIC_KEY")
-        .ok_or("owner release key was not compiled into this local build")?;
-    let publisher = option_env!("BARELINE_PUBLISHER_CERT_SHA256")
-        .ok_or("owner publisher fingerprint was not compiled into this local build")?;
-    let channel = option_env!("BARELINE_RELEASE_CHANNEL")
-        .ok_or("owner channel was not compiled into this local build")?;
-    let embedded_floor = option_env!("BARELINE_METADATA_FLOOR")
-        .ok_or("metadata floor was not compiled into this local build")?
+    let key = env!("BARELINE_RELEASE_PUBLIC_KEY");
+    let publisher = env!("BARELINE_PUBLISHER_CERT_SHA256");
+    let channel = env!("BARELINE_RELEASE_CHANNEL");
+    let embedded_floor = env!("BARELINE_METADATA_FLOOR")
         .parse::<u64>()
         .map_err(|_| "invalid embedded metadata floor")?;
     let mut certificate = [0_u8; 32];
@@ -58,9 +64,7 @@ fn run() -> Result<(), String> {
             .map_err(|_| "invalid compiled publisher fingerprint")?;
     }
     let executable = std::env::current_exe().map_err(|e| e.to_string())?;
-    let root = executable
-        .parent()
-        .ok_or("helper has no installation directory")?;
+    let root = executable.parent().ok_or("helper has no installation directory")?;
     bareline_platform_windows::update::validate_install_root(root).map_err(|e| e.to_string())?;
     // Refuse reparse ancestors and network/device roots before reading installation files.
     use std::os::windows::fs::MetadataExt;
@@ -74,12 +78,22 @@ fn run() -> Result<(), String> {
         }
     }
     let target = root.join("bareline.exe");
-    let authority_now=std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|e|e.to_string())?.as_secs();
-    let authority=bareline_platform_windows::update::resolve_release_authority(root,key,publisher,embedded_floor,authority_now).map_err(|e|e.to_string())?;
-    let key=authority.release_public_key.as_str();
-    let publisher=authority.publisher.as_str();
-    let certificate=authority.certificate;
-    let embedded_floor=authority.minimum_metadata_version;
+    let authority_now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_secs();
+    let authority = bareline_platform_windows::update::resolve_release_authority(
+        root,
+        key,
+        publisher,
+        embedded_floor,
+        authority_now,
+    )
+    .map_err(|e| e.to_string())?;
+    let key = authority.release_public_key.as_str();
+    let publisher = authority.publisher.as_str();
+    let certificate = authority.certificate;
+    let embedded_floor = authority.minimum_metadata_version;
     if action.len() == 5 && action[0] == "--apply" {
         let pid = action[2]
             .to_str()
@@ -94,8 +108,8 @@ fn run() -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     }
     let backup = root.join("bareline.rollback.exe");
-    let _installation_lock = bareline_platform_windows::update::lock_update_installation(root)
-        .map_err(|e| e.to_string())?;
+    let _installation_lock =
+        bareline_platform_windows::update::lock_update_installation(root).map_err(|e| e.to_string())?;
     let journal_path = root.join("bareline.update-journal");
     if action[0] == "--acknowledge" {
         let pid = action[2]
@@ -104,8 +118,7 @@ fn run() -> Result<(), String> {
             .parse::<u32>()
             .map_err(|_| "invalid healthy PID")?;
         let _healthy_process =
-            bareline_platform_windows::update::hold_healthy_update_process(pid, &target)
-                .map_err(|e| e.to_string())?;
+            bareline_platform_windows::update::hold_healthy_update_process(pid, &target).map_err(|e| e.to_string())?;
         bareline_platform_windows::update::signal_update_parent_ready(
             pid,
             action[4].to_str().ok_or("invalid ready event")?,
@@ -124,12 +137,10 @@ fn run() -> Result<(), String> {
         if update_file_sha256(&mut current).map_err(|e| e.to_string())? != new_hash {
             return Err("healthy target differs from receipt".into());
         }
-        verify_authenticode(&current, &certificate)
-            .map_err(|e| format!("healthy publisher: {e:?}"))?;
+        verify_authenticode(&current, &certificate).map_err(|e| format!("healthy publisher: {e:?}"))?;
         // Retain every generation by default; never delete old binaries or receipts.
         // Journal is archived last, making interrupted acknowledgement retryable.
-        bareline_platform_windows::update::retain_update_evidence(root)
-            .map_err(|e| e.to_string())?;
+        bareline_platform_windows::update::retain_update_evidence(root).map_err(|e| e.to_string())?;
         return Ok(());
     }
     // Reconcile a durable intent after helper crash without changing executable layout.
@@ -151,46 +162,34 @@ fn run() -> Result<(), String> {
                 return Err("receipt target differs; retain backup for review".into());
             }
             if hash == new_hash {
-                verify_authenticode(&current, &certificate)
-                    .map_err(|e| format!("recovery trust: {e:?}"))?;
+                verify_authenticode(&current, &certificate).map_err(|e| format!("recovery trust: {e:?}"))?;
                 if action[0] == "--recover" {
                     let mut old = open_update_file(&backup).map_err(|e| e.to_string())?;
                     if update_file_sha256(&mut old).map_err(|e| e.to_string())? != old_hash {
                         return Err("backup differs from receipt".into());
                     }
-                    verify_authenticode(&old, &certificate)
-                        .map_err(|e| format!("backup trust: {e:?}"))?;
-                    replace_with_rollback(
-                        &old,
-                        current,
-                        &target,
-                        &root.join("bareline.failed.exe"),
-                    )
-                    .map_err(|e| e.to_string())?;
-                    drop(old);
-                    bareline_platform_windows::update::retain_update_evidence(root)
+                    verify_authenticode(&old, &certificate).map_err(|e| format!("backup trust: {e:?}"))?;
+                    replace_with_rollback(&old, current, &target, &root.join("bareline.failed.exe"))
                         .map_err(|e| e.to_string())?;
+                    drop(old);
+                    bareline_platform_windows::update::retain_update_evidence(root).map_err(|e| e.to_string())?;
                 }
             } else {
                 // Original target survived an interrupted apply. Authenticate it,
                 // preserve the failed attempt and allow a fresh explicit check.
-                verify_authenticode(&current, &certificate)
-                    .map_err(|e| format!("original trust: {e:?}"))?;
+                verify_authenticode(&current, &certificate).map_err(|e| format!("original trust: {e:?}"))?;
                 drop(current);
-                bareline_platform_windows::update::retain_update_evidence(root)
-                    .map_err(|e| e.to_string())?;
+                bareline_platform_windows::update::retain_update_evidence(root).map_err(|e| e.to_string())?;
             }
         } else {
             let mut old = open_update_file(&backup).map_err(|e| e.to_string())?;
             if update_file_sha256(&mut old).map_err(|e| e.to_string())? != old_hash {
                 return Err("backup differs from receipt".into());
             }
-            verify_authenticode(&old, &certificate)
-                .map_err(|e| format!("recovery trust: {e:?}"))?;
+            verify_authenticode(&old, &certificate).map_err(|e| format!("recovery trust: {e:?}"))?;
             rename_update_handle(&old, &target).map_err(|e| e.to_string())?;
             drop(old);
-            bareline_platform_windows::update::retain_update_evidence(root)
-                .map_err(|e| e.to_string())?;
+            bareline_platform_windows::update::retain_update_evidence(root).map_err(|e| e.to_string())?;
         }
         // Retain the journal until the new app explicitly acknowledges healthy startup.
         return Ok(());
@@ -247,10 +246,8 @@ fn run() -> Result<(), String> {
         highest_metadata_version: highest,
         maximum_package_bytes: 256 * 1024 * 1024,
     };
-    let verified = verify_manifest(&manifest, signature, &policy, now)
-        .map_err(|e| format!("manifest: {e:?}"))?;
-    let mut staged =
-        open_update_file(&root.join("bareline.pending.exe")).map_err(|e| e.to_string())?;
+    let verified = verify_manifest(&manifest, signature, &policy, now).map_err(|e| format!("manifest: {e:?}"))?;
+    let mut staged = open_update_file(&root.join("bareline.pending.exe")).map_err(|e| e.to_string())?;
     verified
         .verify_package(&mut staged)
         .map_err(|e| format!("package: {e:?}"))?;
@@ -266,13 +263,7 @@ fn run() -> Result<(), String> {
         .custom_flags(0x00200000)
         .open(&ledger_path)
         .map_err(|e| e.to_string())?;
-    if ledger
-        .metadata()
-        .map_err(|e| e.to_string())?
-        .file_attributes()
-        & 0x400
-        != 0
-    {
+    if ledger.metadata().map_err(|e| e.to_string())?.file_attributes() & 0x400 != 0 {
         return Err("reparse ledger refused".into());
     }
     writeln!(ledger, "{}", verified.metadata().metadata_version).map_err(|e| e.to_string())?;

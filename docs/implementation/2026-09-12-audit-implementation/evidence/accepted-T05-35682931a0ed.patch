@@ -1,0 +1,47 @@
+diff --git a/crates/app/src/workspace.rs b/crates/app/src/workspace.rs
+index 52f6285..7baeda2 100644
+--- a/crates/app/src/workspace.rs
++++ b/crates/app/src/workspace.rs
+@@ -704,7 +704,7 @@ pub enum LaunchOpenOutcome {
+     Opened { request_id: u64, document: (u64, u64) },
+     Failed { request_id: u64, error: String },
+ }
+-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++#[derive(Clone, Debug, PartialEq, Eq)]
+ pub enum CloseError {
+     Busy,
+     Unsaved,
+@@ -4370,7 +4370,9 @@ mod tests {
+         loop {
+             match stale.close(0, true, &mut renderer) {
+                 Ok(()) => break,
+-                Err(CloseError::RecoveryPending) => stale.pump(),
++                Err(CloseError::RecoveryPending) => {
++                    stale.pump();
++                }
+                 Err(error) => panic!("recovered close failed: {error:?}"),
+             }
+             assert!(std::time::Instant::now() < deadline, "{:?}", stale.message);
+@@ -4639,7 +4641,9 @@ mod tests {
+         loop {
+             match restored.close(0, true, &mut renderer) {
+                 Ok(()) => break,
+-                Err(CloseError::RecoveryPending) => restored.pump(),
++                Err(CloseError::RecoveryPending) => {
++                    restored.pump();
++                }
+                 Err(error) => panic!("recovered close failed: {error:?}"),
+             }
+             assert!(std::time::Instant::now() < deadline, "{:?}", restored.message);
+diff --git a/crates/file-io/src/recovery_retirement.rs b/crates/file-io/src/recovery_retirement.rs
+index 632972c..7815d0c 100644
+--- a/crates/file-io/src/recovery_retirement.rs
++++ b/crates/file-io/src/recovery_retirement.rs
+@@ -747,6 +747,7 @@ mod tests {
+             );
+             std::thread::yield_now();
+         }
++        fs::remove_dir(&invalid).unwrap();
+         journal(&invalid, platform.as_ref());
+         assert_eq!(retry_pending_cleanup(), 1);
+         let deadline = Instant::now() + Duration::from_secs(5);

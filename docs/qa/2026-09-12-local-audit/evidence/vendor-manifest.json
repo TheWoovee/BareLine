@@ -1,0 +1,90 @@
+[
+  {
+    "path": "vendor/accesskit_windows-0.35.0/.cargo-ok",
+    "sha256": "afbf9d0f3560b0fd7795e81c42a0a79ee6b6fc67e064f77826aee642cad28d91"
+  },
+  {
+    "path": "vendor/accesskit_windows-0.35.0/.cargo_vcs_info.json",
+    "sha256": "626614afa72115e4aa2dbafe95d06f80f792c07390fdd8710d2e6eb214c81564"
+  },
+  {
+    "path": "vendor/accesskit_windows-0.35.0/CHANGELOG.md",
+    "sha256": "3ab9535c9d1f99f45556ef6a132ef045531ce88014804e7c79be4d4fcdd50002"
+  },
+  {
+    "path": "vendor/accesskit_windows-0.35.0/Cargo.lock",
+    "sha256": "7d706f6d5994f922669266b56a5f6174f9574d1658cfe23bec6185939c7016f3"
+  },
+  {
+    "path": "vendor/accesskit_windows-0.35.0/Cargo.toml",
+    "sha256": "e1c187025aabcfdd964cbf5c2c19059d0108fbda52a678b66ae90c6797bee948"
+  },
+  {
+    "path": "vendor/accesskit_windows-0.35.0/Cargo.toml.orig",
+    "sha256": "fad9ce89cfd61dbf1a2965a5915a7fb61cb9cdb9b733b2e34a724ed39d2532af"
+  },
+  {
+    "path": "vendor/accesskit_windows-0.35.0/PATCHES.md",
+    "sha256": "cab2fe865a7daec60cfc260450524e6e397b8101dbff40d873e03b81087f0f0b"
+  },
+  {
+    "path": "vendor/accesskit_windows-0.35.0/README.md",
+    "sha256": "622db8e92d711b64279a91e25ae9345959c82bb4d47157dbf5c3a6a53f80f6d6"
+  },
+  {
+    "path": "vendor/accesskit_windows-0.35.0/examples/hello_world.rs",
+    "sha256": "615db84f9d2de5b1188ad04beb433d471852649e6ac7a6980b51256fdc2e7009"
+  },
+  {
+    "path": "vendor/accesskit_windows-0.35.0/src/adapter.rs",
+    "sha256": "f4342311058a86cb67aa7526bce5f874dddf11c9295c160591b46781387a6376"
+  },
+  {
+    "path": "vendor/accesskit_windows-0.35.0/src/context.rs",
+    "sha256": "c03df25bdec7f70c0b2fd90ea5308d9dc27032bec73005ac57712d33f12e6a73"
+  },
+  {
+    "path": "vendor/accesskit_windows-0.35.0/src/filters.rs",
+    "sha256": "744374b547065b153123c80028f129f5c6bb53052660205e1a2f231c3e169f64"
+  },
+  {
+    "path": "vendor/accesskit_windows-0.35.0/src/lib.rs",
+    "sha256": "80a068b874f109f834a72dea068331ae280144238c39769ad6309ecad390a37c"
+  },
+  {
+    "path": "vendor/accesskit_windows-0.35.0/src/node.rs",
+    "sha256": "35dfe510e379e3ba85be49120ecd9a8cbb1ed7ef94e85fe9a1e32eb4697968ca"
+  },
+  {
+    "path": "vendor/accesskit_windows-0.35.0/src/pattern_override.rs",
+    "sha256": "7f1fa64ae35b1133a4342f14674772e7bd18a65350c951c1ecf3bb0268db2473"
+  },
+  {
+    "path": "vendor/accesskit_windows-0.35.0/src/subclass.rs",
+    "sha256": "69bb742d5451f2cff1c2110e77782948cb751aaad3302c5b1453ebf8b3d20a9e"
+  },
+  {
+    "path": "vendor/accesskit_windows-0.35.0/src/tests/mod.rs",
+    "sha256": "de33703d001a741529e6248c5165a5f3effa1115d1ef2db6f115adcc45ca5d04"
+  },
+  {
+    "path": "vendor/accesskit_windows-0.35.0/src/tests/simple.rs",
+    "sha256": "828c3c036bebb9113cb289dd033d6163345c8e746015f4b15fc80fdfc2b5479f"
+  },
+  {
+    "path": "vendor/accesskit_windows-0.35.0/src/tests/subclassed.rs",
+    "sha256": "065da83e1db3e53ccbade3eff8bbbb4891d23085a3a4ac308c513de24d8df80d"
+  },
+  {
+    "path": "vendor/accesskit_windows-0.35.0/src/text.rs",
+    "sha256": "7f2493b559f0b04884e201d897981a3cce47b2c571863d37ffddb1bb695e5c55"
+  },
+  {
+    "path": "vendor/accesskit_windows-0.35.0/src/util.rs",
+    "sha256": "dab7b1ffeccd6124cfc0dea6ff237e3ac9ba3661c0e23e04a1e433a596490656"
+  },
+  {
+    "path": "vendor/accesskit_windows-0.35.0/src/window_handle.rs",
+    "sha256": "dec1d78c81784a18c50f066e89d57d0fe02a7c9199a11e47a0833f8b9113d8c2"
+  }
+]

@@ -42,10 +42,7 @@ impl Default for ManagerIndex {
 }
 impl ManagerIndex {
     fn advance(&mut self) -> Result<u64, String> {
-        self.generation = self
-            .generation
-            .checked_add(1)
-            .ok_or("Extension generation exhausted")?;
+        self.generation = self.generation.checked_add(1).ok_or("Extension generation exhausted")?;
         Ok(self.generation)
     }
     pub fn upsert(&mut self, package: &InstalledPackage, digest: String) -> Result<(), String> {
@@ -53,11 +50,7 @@ impl ManagerIndex {
     }
     // Private to this module: callers cannot replace verified package authority
     // with a manifest or persisted index record.
-    fn upsert_manifest(
-        &mut self,
-        manifest: &ExtensionManifest,
-        digest: String,
-    ) -> Result<(), String> {
+    fn upsert_manifest(&mut self, manifest: &ExtensionManifest, digest: String) -> Result<(), String> {
         let count = self
             .entries
             .iter()
@@ -69,11 +62,7 @@ impl ManagerIndex {
         if manifest.commands.len() > 256 || count > 1024 {
             return Err("Installed command contribution limit (1024)".into());
         }
-        let old = self
-            .entries
-            .iter()
-            .find(|entry| entry.id == manifest.id)
-            .cloned();
+        let old = self.entries.iter().find(|entry| entry.id == manifest.id).cloned();
         if old.is_none() && self.entries.len() >= 64 {
             return Err("Installed extension limit (64)".into());
         }
@@ -89,9 +78,9 @@ impl ManagerIndex {
                     .collect()
             })
             .unwrap_or_default();
-        let enabled = old.as_ref().is_some_and(|old| {
-            old.enabled && requested.iter().all(|cap| old.approved.contains(cap))
-        });
+        let enabled = old
+            .as_ref()
+            .is_some_and(|old| old.enabled && requested.iter().all(|cap| old.approved.contains(cap)));
         self.entries.retain(|entry| entry.id != manifest.id);
         self.entries.push(InstalledState {
             id: manifest.id.clone(),
@@ -104,12 +93,7 @@ impl ManagerIndex {
         });
         Ok(())
     }
-    pub fn set_permission(
-        &mut self,
-        id: &str,
-        requested: &[Capability],
-        approve: bool,
-    ) -> Result<(), String> {
+    pub fn set_permission(&mut self, id: &str, requested: &[Capability], approve: bool) -> Result<(), String> {
         let generation = self.advance()?;
         let entry = self
             .entries
@@ -133,8 +117,7 @@ impl ManagerIndex {
         if bytes.len() > MAX_RECORD {
             return Err("Manager index limit".into());
         }
-        atomic_record(&root.join("manager-v1.json"), &bytes)
-            .map_err(|e| format!("Manager state: {e:?}"))
+        atomic_record(&root.join("manager-v1.json"), &bytes).map_err(|e| format!("Manager state: {e:?}"))
     }
     pub fn load(root: &Path) -> Result<Self, String> {
         let file = match fs::File::open(root.join("manager-v1.json")) {
@@ -172,21 +155,14 @@ impl ManagerIndex {
                 return Err("Invalid installed state".into());
             }
         }
-        if index
-            .runtime_digest
-            .as_deref()
-            .is_some_and(|value| !digest(value))
-        {
+        if index.runtime_digest.as_deref().is_some_and(|value| !digest(value)) {
             return Err("Invalid runtime digest".into());
         }
         Ok(index)
     }
 }
 fn digest(value: &str) -> bool {
-    value.len() == 64
-        && value
-            .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    value.len() == 64 && value.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 /// Installation is staged outside the published index; a failed index write does
 /// not replace the old active record or silently enable an update.
@@ -203,9 +179,7 @@ pub fn install(
             .map_err(|e| format!("Existing package verification: {e:?}"))?,
         Err(error) => return Err(format!("Installation: {error:?}")),
     };
-    package
-        .cache(root)
-        .map_err(|e| format!("Package receipt: {e:?}"))?;
+    package.cache(root).map_err(|e| format!("Package receipt: {e:?}"))?;
     let mut next = index.clone();
     next.upsert(&installed, package.metadata().sha256.clone())?;
     if cancel.load(std::sync::atomic::Ordering::Acquire) {
@@ -219,8 +193,7 @@ mod tests {
     use super::*;
     #[test]
     fn duplicate_or_forged_index_is_not_loaded() {
-        let root =
-            std::env::temp_dir().join(format!("bareline-manager-index-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("bareline-manager-index-{}", std::process::id()));
         let _ = fs::create_dir(&root);
         fs::write(
             root.join("manager-v1.json"),
@@ -264,11 +237,7 @@ mod lifecycle_tests {
     #[test]
     fn update_retains_only_approved_subset_and_new_capability_disables() {
         let mut index = ManagerIndex::default();
-        let mut m = manifest(
-            "fixture",
-            vec![Capability::DocumentRead, Capability::DocumentEdit],
-            1,
-        );
+        let mut m = manifest("fixture", vec![Capability::DocumentRead, Capability::DocumentEdit], 1);
         index.upsert_manifest(&m, "a".repeat(64)).unwrap();
         index
             .set_permission("fixture", &[Capability::DocumentRead], true)
@@ -279,9 +248,7 @@ mod lifecycle_tests {
         assert_eq!(index.entries[0].approved, [Capability::DocumentRead]);
         assert!(!index.entries[0].enabled);
         assert!(index.entries[0].generation > generation);
-        index
-            .set_permission("fixture", &m.capabilities, true)
-            .unwrap();
+        index.set_permission("fixture", &m.capabilities, true).unwrap();
         let generation = index.entries[0].generation;
         m.capabilities.push(Capability::Network);
         m.version = "2.0.0".into();
@@ -301,10 +268,7 @@ mod lifecycle_tests {
         index.runtime_digest = Some("f".repeat(64));
         index.runtime_metadata_version = 9;
         index
-            .upsert_manifest(
-                &manifest("fixture", vec![Capability::DocumentRead], 1),
-                "a".repeat(64),
-            )
+            .upsert_manifest(&manifest("fixture", vec![Capability::DocumentRead], 1), "a".repeat(64))
             .unwrap();
         index
             .set_permission("fixture", &[Capability::DocumentRead], true)
@@ -336,10 +300,7 @@ mod lifecycle_tests {
         let mut index = ManagerIndex::default();
         for i in 0..4 {
             index
-                .upsert_manifest(
-                    &manifest(&format!("fixture{i}"), vec![], 256),
-                    "a".repeat(64),
-                )
+                .upsert_manifest(&manifest(&format!("fixture{i}"), vec![], 256), "a".repeat(64))
                 .unwrap();
         }
         let generation = index.generation;

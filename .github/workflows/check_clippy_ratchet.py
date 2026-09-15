@@ -1,0 +1,662 @@
+#!/usr/bin/env python3
+"""Compare Clippy JSON diagnostics with a reviewed occurrence baseline."""
+
+from __future__ import annotations
+
+import argparse
+from collections import Counter
+from dataclasses import dataclass
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import tempfile
+
+
+SCHEMA_VERSION = 1
+DECLARATION = re.compile(
+    r"^\s*(?:(?:pub(?:\([^)]*\))?|async|unsafe|default)\s+|const\s+(?=fn\b)|"
+    r"extern(?:\s+\"[^\"]+\")?\s+)*"
+    r"(?:(?P<impl>impl)(?=\s|<)|"
+    r"(?P<kind>fn|struct|enum|union|trait|mod|type|const|static)\s+(?P<name>[^\s(<{=:;]+))"
+)
+VALID_PRIORITIES = {"correctness-resource", "style-design"}
+
+
+@dataclass
+class LexState:
+    block_comment_depth: int = 0
+    ordinary_string: bool = False
+    raw_hashes: str | None = None
+
+
+def normalized(value: str) -> str:
+    return " ".join(value.split())
+
+
+def git_bytes(cwd: Path, arguments: list[str]) -> bytes:
+    result = subprocess.run(
+        ["git", *arguments], cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False
+    )
+    if result.returncode:
+        raise OSError(result.stderr.decode("utf-8", "replace").strip() or "git command failed")
+    return result.stdout
+
+
+def source_identity(source_root: Path, excluded: tuple[Path, ...]) -> dict:
+    root = source_root.resolve()
+    excluded_relative: set[str] = set()
+    for path in excluded:
+        try:
+            absolute = path.resolve() if path.is_absolute() else (root / path).resolve()
+            excluded_relative.add(absolute.relative_to(root).as_posix())
+        except ValueError:
+            continue
+    listed = git_bytes(root, ["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--"])
+    names = sorted(os.fsdecode(raw) for raw in listed.split(b"\0") if raw)
+    fingerprint = hashlib.sha256()
+
+    def field(value: bytes) -> None:
+        fingerprint.update(len(value).to_bytes(8, "little"))
+        fingerprint.update(value)
+
+    for name in names:
+        relative = Path(name)
+        relative_name = relative.as_posix()
+        if relative_name in excluded_relative:
+            continue
+        path = root / relative
+        try:
+            metadata = path.lstat()
+            if path.is_symlink():
+                kind = b"symlink"
+                payload = os.fsencode(os.readlink(path))
+            elif path.is_file():
+                kind = b"file"
+                payload = None
+            else:
+                kind = b"other"
+                payload = str(metadata.st_mode).encode("ascii")
+        except FileNotFoundError:
+            kind = b"missing"
+            payload = b""
+        name_bytes = relative_name.encode("utf-8", "surrogateescape")
+        field(name_bytes)
+        field(kind)
+        if payload is not None:
+            field(payload)
+            continue
+        fingerprint.update(metadata.st_size.to_bytes(8, "little"))
+        consumed = 0
+        with path.open("rb") as stream:
+            while chunk := stream.read(64 * 1024):
+                fingerprint.update(chunk)
+                consumed += len(chunk)
+        if consumed != metadata.st_size:
+            raise OSError(f"source changed while fingerprinting: {relative_name}")
+    return {
+        "head": git_bytes(root, ["rev-parse", "HEAD"]).decode("ascii").strip(),
+        "source_manifest_sha256": fingerprint.hexdigest(),
+    }
+
+
+def qualification_key(platform: str, target: str, toolchain: str) -> tuple[str, str, str]:
+    return platform, target, toolchain
+
+
+def structural_line(line: str, state: LexState) -> str:
+    output: list[str] = []
+    index = 0
+    while index < len(line):
+        pair = line[index : index + 2]
+        if state.block_comment_depth:
+            if pair == "/*":
+                state.block_comment_depth += 1
+                index += 2
+            elif pair == "*/":
+                state.block_comment_depth -= 1
+                index += 2
+            else:
+                index += 1
+            continue
+        if state.raw_hashes is not None:
+            closing = '"' + state.raw_hashes
+            if line.startswith(closing, index):
+                state.raw_hashes = None
+                index += len(closing)
+            else:
+                index += 1
+            continue
+        if state.ordinary_string:
+            if line[index] == "\\":
+                index += 2
+            elif line[index] == '"':
+                state.ordinary_string = False
+                index += 1
+            else:
+                index += 1
+            continue
+        if pair == "//":
+            break
+        if pair == "/*":
+            state.block_comment_depth = 1
+            index += 2
+            continue
+        raw = re.match(r'(?:b|c)?r(?P<hashes>#{0,255})"', line[index:])
+        if raw and (index == 0 or not (line[index - 1].isalnum() or line[index - 1] == "_")):
+            state.raw_hashes = raw.group("hashes")
+            index += len(raw.group(0))
+            continue
+        if line[index] == '"':
+            state.ordinary_string = True
+            index += 1
+            continue
+        if line[index] == "'":
+            character = re.match(r"'(?:\\.|[^\\'])'", line[index:])
+            if character:
+                index += len(character.group(0))
+                continue
+        output.append(line[index])
+        index += 1
+    return "".join(output)
+
+
+def readable_declaration(match: re.Match[str], declaration: str) -> str:
+    kind = "impl" if match.group("impl") else match.group("kind")
+    name = match.group("name")
+    if kind == "impl":
+        return normalized(declaration)
+    return f"{kind} {name or '<anonymous>'}"
+
+
+def source_item(lines: list[str], line_index: int) -> tuple[str, str, str]:
+    active: list[tuple[int, str, str]] = []
+    pending: tuple[re.Match[str], list[str], int] | None = None
+    depth = 0
+    lexical = LexState()
+    target_scopes: list[tuple[int, str, str]] = []
+    for index, raw in enumerate(lines[: min(line_index, len(lines) - 1) + 1]):
+        line = structural_line(raw, lexical)
+        stripped = line.strip()
+        if pending is None:
+            match = DECLARATION.match(line)
+            if match:
+                pending = (match, [stripped], depth)
+        elif stripped:
+            pending[1].append(stripped)
+
+        target_pending = pending if index == line_index else None
+
+        for character in line:
+            if character == "}":
+                depth = max(0, depth - 1)
+                while active and active[-1][0] > depth:
+                    active.pop()
+            elif character == "{":
+                depth += 1
+                if pending is not None:
+                    match, parts, _ = pending
+                    declaration = normalized(" ".join(parts).split("{", 1)[0])
+                    active.append((depth, readable_declaration(match, declaration), declaration))
+                    pending = None
+                    if index == line_index:
+                        target_scopes = list(active)
+            elif character == ";" and pending is not None:
+                pending = None
+        if index == line_index and not target_scopes:
+            target_scopes = list(active)
+            if target_pending is not None:
+                match, parts, _ = target_pending
+                declaration = normalized(" ".join(parts).split("{", 1)[0].split(";", 1)[0])
+                target_scopes.append((depth + 1, readable_declaration(match, declaration), declaration))
+
+    if not target_scopes:
+        return "source-file", "crate", hashlib.sha256(b"crate\0source-file").hexdigest()
+    _, item_id, _ = target_scopes[-1]
+    owners = [scope[1] for scope in target_scopes[:-1]]
+    owner_id = " :: ".join(owners) if owners else "crate"
+    chain = "\0".join(scope[2] for scope in target_scopes)
+    return item_id, owner_id, hashlib.sha256(chain.encode()).hexdigest()
+
+
+def occurrence(message: dict, source_root: Path) -> dict:
+    code = (message.get("code") or {}).get("code")
+    if not code:
+        raise ValueError(f"compiler diagnostic has no lint code: {message.get('message', '')}")
+    if re.fullmatch(r"E\d+", code):
+        raise ValueError(f"compiler error {code}: {message.get('message', '')}")
+    primary = next((span for span in message.get("spans", []) if span.get("is_primary")), None)
+    if primary is None:
+        raise ValueError(f"diagnostic {code} has no primary source span")
+    relative = Path(primary["file_name"])
+    source = relative if relative.is_absolute() else source_root / relative
+    lines = source.read_text(encoding="utf-8").splitlines()
+    line_index = max(0, int(primary["line_start"]) - 1)
+    item_id, owner_id, source_id = source_item(lines, line_index)
+    context = [normalized(line) for line in lines[max(0, line_index - 2) : line_index + 3] if normalized(line)]
+    diagnostic = normalized(message.get("message", ""))
+    identity_input = json.dumps(
+        {
+            "lint": code,
+            "owner": owner_id,
+            "item": item_id,
+            "source_id": source_id,
+            "diagnostic": diagnostic,
+            "context": context,
+        },
+        sort_keys=True,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    return {
+        "id": hashlib.sha256(identity_input.encode()).hexdigest(),
+        "lint": code,
+        "owner_id": owner_id,
+        "item_id": item_id,
+        "source_id": source_id,
+        "diagnostic": diagnostic,
+        "context": context,
+        "evidence": {
+            "path": primary["file_name"],
+            "line": primary["line_start"],
+            "column": primary["column_start"],
+        },
+    }
+
+
+def read_diagnostics(path: Path, source_root: Path) -> tuple[list[dict], list[str]]:
+    found: list[dict] = []
+    fatal: list[str] = []
+    last_event: dict | None = None
+    for number, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        if not raw.strip():
+            continue
+        try:
+            event = json.loads(raw)
+        except json.JSONDecodeError as error:
+            fatal.append(f"line {number}: invalid Cargo JSON: {error}")
+            continue
+        last_event = event
+        if event.get("reason") != "compiler-message":
+            continue
+        message = event.get("message") or {}
+        if message.get("level") not in {"warning", "error"}:
+            continue
+        try:
+            found.append(occurrence(message, source_root))
+        except (KeyError, OSError, UnicodeError, ValueError) as error:
+            fatal.append(str(error))
+    if last_event is None:
+        fatal.append("Cargo diagnostic stream is empty")
+    elif last_event.get("reason") != "build-finished":
+        fatal.append("Cargo diagnostic stream lacks a terminal build-finished event")
+    elif last_event.get("success") is not True:
+        fatal.append("Cargo build-finished event reports failure")
+    return found, fatal
+
+
+def compact(occurrences: list[dict]) -> list[dict]:
+    by_id: dict[str, dict] = {}
+    counts = Counter(item["id"] for item in occurrences)
+    for item in occurrences:
+        by_id.setdefault(item["id"], item)
+    result = []
+    for identity in sorted(by_id):
+        item = dict(by_id[identity])
+        item["count"] = counts[identity]
+        item["priority"] = "unreviewed"
+        item["justification"] = ""
+        result.append(item)
+    return result
+
+
+def compare(current: list[dict], baseline: dict, key: tuple[str, str, str]) -> list[str]:
+    errors: list[str] = []
+    if baseline.get("schema_version") != SCHEMA_VERSION:
+        return [f"unsupported baseline schema: {baseline.get('schema_version')!r}"]
+    qualifications = baseline.get("qualifications")
+    if not isinstance(qualifications, list):
+        return ["baseline qualifications must be a list"]
+    matched = [
+        item
+        for item in qualifications
+        if qualification_key(str(item.get("platform")), str(item.get("target")), str(item.get("toolchain"))) == key
+    ]
+    if not matched:
+        return [f"missing qualified baseline for platform={key[0]}, target={key[1]}, toolchain={key[2]}"]
+    if len(matched) != 1:
+        return [f"duplicate qualified baseline for platform={key[0]}, target={key[1]}, toolchain={key[2]}"]
+    qualification = matched[0]
+    if qualification.get("review_status") != "reviewed":
+        errors.append("baseline review_status must be 'reviewed'")
+    generated = qualification.get("generated_from")
+    if not isinstance(generated, dict) or not str(generated.get("head", "")).strip() or not str(
+        generated.get("source_manifest_sha256", "")
+    ).strip():
+        errors.append("qualified baseline requires generated_from head and source_manifest_sha256")
+    reviewed = qualification.get("occurrences")
+    if not isinstance(reviewed, list):
+        return ["baseline occurrences must be a list"]
+    expected: Counter[str] = Counter()
+    for item in reviewed:
+        if item.get("priority") not in VALID_PRIORITIES or not str(item.get("justification", "")).strip():
+            errors.append(f"baseline occurrence {item.get('id', '<missing>')} lacks reviewed priority/justification")
+        identity = item.get("id")
+        if not identity:
+            errors.append("baseline occurrence lacks id")
+            continue
+        if identity in expected:
+            errors.append(f"duplicate baseline occurrence id: {identity}")
+            continue
+        try:
+            count = int(item.get("count", 1))
+        except (TypeError, ValueError):
+            count = 0
+        if count < 1:
+            errors.append(f"baseline occurrence {identity} has invalid count")
+            continue
+        expected[identity] = count
+    actual = Counter(item["id"] for item in current)
+    representatives = {item["id"]: item for item in current}
+    for identity, count in sorted((actual - expected).items()):
+        item = representatives[identity]
+        errors.append(
+            f"new lint occurrence x{count}: {item['lint']} in {item['owner_id']} :: {item['item_id']} "
+            f"({item['evidence']['path']}:{item['evidence']['line']})"
+        )
+    for identity, count in sorted((expected - actual).items()):
+        errors.append(f"resolved occurrence still in baseline x{count}: {identity}; regenerate to shrink debt")
+    return errors
+
+
+def diagnostic_event(
+    path: Path,
+    line: int,
+    message: str = "fixture lint",
+    code: str = "clippy::needless_return",
+) -> str:
+    return json.dumps(
+        {
+            "reason": "compiler-message",
+            "message": {
+                "message": message,
+                "code": {"code": code},
+                "level": "error",
+                "spans": [
+                    {
+                        "is_primary": True,
+                        "file_name": str(path),
+                        "line_start": line,
+                        "column_start": 5,
+                    }
+                ],
+            },
+        }
+    )
+
+
+def build_finished(success: bool = True) -> str:
+    return json.dumps({"reason": "build-finished", "success": success})
+
+
+def reviewed_baseline(occurrences: list[dict], key: tuple[str, str, str]) -> dict:
+    compacted = compact(occurrences)
+    for item in compacted:
+        item["priority"] = "style-design"
+        item["justification"] = "fixture debt"
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "qualifications": [
+            {
+                "platform": key[0],
+                "target": key[1],
+                "toolchain": key[2],
+                "generated_from": {"head": "fixture-head", "source_manifest_sha256": "fixture-source"},
+                "review_status": "reviewed",
+                "occurrences": compacted,
+            }
+        ],
+    }
+
+
+def self_test() -> None:
+    with tempfile.TemporaryDirectory(prefix="bareline-clippy-ratchet-") as directory:
+        root = Path(directory)
+        key = qualification_key("FixtureOS", "fixture-target", "1.0.0")
+        source = root / "old_name.rs"
+        source.write_text("fn stable() {\n    return;\n}\n", encoding="utf-8")
+        raw = root / "clippy.jsonl"
+        raw.write_text(diagnostic_event(source, 2) + "\n" + build_finished() + "\n", encoding="utf-8")
+        original, fatal = read_diagnostics(raw, root)
+        assert not fatal
+        baseline = reviewed_baseline(original, key)
+        assert not compare(original, baseline, key)
+        assert "missing qualified baseline" in compare(original, baseline, qualification_key("Other", key[1], key[2]))[0]
+        generated_path = root / "generated-baseline.json"
+        generated_from = {"head": "fixture-head", "source_manifest_sha256": "fixture-source"}
+        write_baseline(generated_path, original, key, generated_from)
+        second_key = qualification_key("Other", key[1], key[2])
+        write_baseline(generated_path, [], second_key, generated_from)
+        generated = json.loads(generated_path.read_text(encoding="utf-8"))
+        assert len(generated["qualifications"]) == 2
+        assert all(item["review_status"].startswith("draft-") for item in generated["qualifications"])
+        original_id = original[0]["id"]
+
+        source.write_text("\n\n\nfn stable() {\n    return;\n}\n", encoding="utf-8")
+        raw.write_text(diagnostic_event(source, 5) + "\n" + build_finished() + "\n", encoding="utf-8")
+        shifted, fatal = read_diagnostics(raw, root)
+        assert not fatal and shifted[0]["id"] == original_id and not compare(shifted, baseline, key)
+
+        renamed = root / "renamed.rs"
+        source.rename(renamed)
+        raw.write_text(diagnostic_event(renamed, 5) + "\n" + build_finished() + "\n", encoding="utf-8")
+        moved, fatal = read_diagnostics(raw, root)
+        assert not fatal and moved[0]["id"] == original_id and not compare(moved, baseline, key)
+
+        renamed.write_text(
+            "\n\n\nfn stable() {\n    return;\n}\n\n\nfn added() {\n    return;\n}\n",
+            encoding="utf-8",
+        )
+        raw.write_text(
+            diagnostic_event(renamed, 5)
+            + "\n"
+            + diagnostic_event(renamed, 10)
+            + "\n"
+            + build_finished()
+            + "\n",
+            encoding="utf-8",
+        )
+        added, fatal = read_diagnostics(raw, root)
+        assert not fatal
+        added_errors = compare(added, baseline, key)
+        assert any("new lint occurrence" in error for error in added_errors)
+        assert not any("resolved occurrence" in error for error in added_errors)
+        assert any("resolved occurrence" in error for error in compare([], baseline, key))
+        assert len(compact([])) < len(baseline["qualifications"][0]["occurrences"])
+
+        owners = root / "owners.rs"
+        owners.write_text(
+            "struct A;\nstruct B;\nimpl A {\n    fn same() {\n        let value = 1;\n        let other = value;\n        return;\n    }\n}\nimpl B {\n    fn same() {\n        let value = 1;\n        let other = value;\n        return;\n    }\n}\n",
+            encoding="utf-8",
+        )
+        raw.write_text(diagnostic_event(owners, 7) + "\n" + build_finished() + "\n", encoding="utf-8")
+        owner_a, fatal = read_diagnostics(raw, root)
+        assert not fatal
+        raw.write_text(diagnostic_event(owners, 14) + "\n" + build_finished() + "\n", encoding="utf-8")
+        owner_b, fatal = read_diagnostics(raw, root)
+        assert not fatal
+        assert owner_a[0]["context"] == owner_b[0]["context"]
+        assert owner_a[0]["owner_id"] != owner_b[0]["owner_id"]
+        assert owner_a[0]["id"] != owner_b[0]["id"]
+        owner_errors = compare(owner_b, reviewed_baseline(owner_a, key), key)
+        assert any("new lint occurrence" in error for error in owner_errors)
+        assert any("resolved occurrence" in error for error in owner_errors)
+
+        raw_literal = [
+            "impl A {",
+            "    fn same() {",
+            "        let value = r#\"",
+            "}",
+            "impl FalseOwner {",
+            "\"#;",
+            "        return;",
+            "    }",
+            "}",
+        ]
+        assert source_item(raw_literal, 6)[:2] == ("fn same", "impl A")
+        ordinary_literal = [
+            "impl A {",
+            "    fn same() {",
+            "        let value = \"",
+            "}",
+            "impl FalseOwner {",
+            "\";",
+            "        return;",
+            "    }",
+            "}",
+        ]
+        assert source_item(ordinary_literal, 6)[:2] == ("fn same", "impl A")
+        nested_comment_and_char = [
+            "impl A {",
+            "    fn same() {",
+            "        let brace = '}';",
+            "        /* outer { /* inner */ impl FalseOwner { */",
+            "        return;",
+            "    }",
+            "}",
+        ]
+        assert source_item(nested_comment_and_char, 4)[:2] == ("fn same", "impl A")
+
+        raw.write_text("", encoding="utf-8")
+        assert "empty" in " ".join(read_diagnostics(raw, root)[1])
+        raw.write_text(diagnostic_event(renamed, 5) + "\n", encoding="utf-8")
+        assert "terminal build-finished" in " ".join(read_diagnostics(raw, root)[1])
+        raw.write_text(build_finished(False) + "\n", encoding="utf-8")
+        assert "reports failure" in " ".join(read_diagnostics(raw, root)[1])
+        raw.write_text("{malformed}\n" + build_finished() + "\n", encoding="utf-8")
+        assert "invalid Cargo JSON" in " ".join(read_diagnostics(raw, root)[1])
+        raw.write_text(diagnostic_event(renamed, 5, code="E0308") + "\n" + build_finished(False) + "\n", encoding="utf-8")
+        assert "compiler error E0308" in " ".join(read_diagnostics(raw, root)[1])
+
+        repository = root / "repository"
+        repository.mkdir()
+        git_bytes(repository, ["init", "--quiet"])
+        git_bytes(repository, ["config", "user.email", "fixture@example.invalid"])
+        git_bytes(repository, ["config", "user.name", "Fixture"])
+        tracked = repository / "tracked.rs"
+        tracked.write_text("fn tracked() {}\n", encoding="utf-8")
+        git_bytes(repository, ["add", "tracked.rs"])
+        git_bytes(repository, ["commit", "--quiet", "-m", "fixture"])
+        baseline_path = repository / "baseline.json"
+        identity_before = source_identity(repository, (baseline_path,))
+        baseline_path.write_text("{}\n", encoding="utf-8")
+        assert source_identity(repository, (baseline_path,)) == identity_before
+        tracked.write_text("fn tracked() { let changed = true; }\n", encoding="utf-8")
+        assert source_identity(repository, (baseline_path,))["source_manifest_sha256"] != identity_before[
+            "source_manifest_sha256"
+        ]
+    print("check_clippy_ratchet self-test: passed")
+
+
+def write_baseline(path: Path, current: list[dict], key: tuple[str, str, str], generated_from: dict) -> None:
+    if path.exists():
+        document = json.loads(path.read_text(encoding="utf-8"))
+        if document.get("schema_version") != SCHEMA_VERSION or not isinstance(document.get("qualifications"), list):
+            raise ValueError("cannot update an unsupported baseline document")
+    else:
+        document = {"schema_version": SCHEMA_VERSION, "qualifications": []}
+    retained = [
+        item
+        for item in document["qualifications"]
+        if qualification_key(str(item.get("platform")), str(item.get("target")), str(item.get("toolchain"))) != key
+    ]
+    retained.append(
+        {
+            "platform": key[0],
+            "target": key[1],
+            "toolchain": key[2],
+            "generated_from": generated_from,
+            "review_status": "draft-requires-priority-and-justification",
+            "occurrences": compact(current),
+        }
+    )
+    document["qualifications"] = sorted(
+        retained, key=lambda item: (str(item.get("platform")), str(item.get("target")), str(item.get("toolchain")))
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, delete=False) as stream:
+        temporary = Path(stream.name)
+        json.dump(document, stream, indent=2, ensure_ascii=False)
+        stream.write("\n")
+    os.replace(temporary, path)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("mode", choices=("check", "write-baseline", "self-test"))
+    parser.add_argument("--diagnostics", type=Path)
+    parser.add_argument("--baseline", type=Path)
+    parser.add_argument("--source-root", type=Path, default=Path.cwd())
+    parser.add_argument("--platform")
+    parser.add_argument("--target")
+    parser.add_argument("--toolchain")
+    parser.add_argument("--exclude-source-path", type=Path, action="append", default=[])
+    args = parser.parse_args()
+    if args.mode == "self-test":
+        self_test()
+        return 0
+    if (
+        args.diagnostics is None
+        or args.baseline is None
+        or not args.platform
+        or not args.target
+        or not args.toolchain
+    ):
+        parser.error("--diagnostics, --baseline, --platform, --target, and --toolchain are required")
+    key = qualification_key(args.platform, args.target, args.toolchain)
+    try:
+        current, fatal = read_diagnostics(args.diagnostics, args.source_root)
+    except (OSError, UnicodeError) as error:
+        print(f"clippy-ratchet: cannot read diagnostics: {error}")
+        return 1
+    if fatal:
+        for error in fatal:
+            print(f"clippy-ratchet: {error}")
+        return 1
+    try:
+        identity = source_identity(args.source_root, (args.baseline, *args.exclude_source_path))
+    except (OSError, UnicodeError) as error:
+        print(f"clippy-ratchet: cannot fingerprint source: {error}")
+        return 1
+    if args.mode == "write-baseline":
+        try:
+            write_baseline(args.baseline, current, key, identity)
+        except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as error:
+            print(f"clippy-ratchet: cannot write baseline: {error}")
+            return 1
+        print(
+            f"clippy-ratchet: wrote {len(compact(current))} draft occurrences for "
+            f"platform={key[0]}, target={key[1]}, toolchain={key[2]}; source={identity['source_manifest_sha256']}"
+        )
+        return 0
+    try:
+        baseline = json.loads(args.baseline.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        print(f"clippy-ratchet: cannot read baseline: {error}")
+        return 1
+    errors = compare(current, baseline, key)
+    for error in errors:
+        print(f"clippy-ratchet: {error}")
+    if errors:
+        return 1
+    print(
+        f"clippy-ratchet: {len(current)} reviewed occurrence(s); no new or stale debt; "
+        f"source={identity['source_manifest_sha256']}"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

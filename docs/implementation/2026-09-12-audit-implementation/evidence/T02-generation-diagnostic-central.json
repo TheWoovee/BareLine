@@ -1,0 +1,20 @@
+{
+  "arguments": [
+    "test",
+    "--offline",
+    "--locked",
+    "-p",
+    "bareline-file-io",
+    "--lib",
+    "profile_migration::tests::changed_source_is_rechecked_and_retained_before_retirement",
+    "--",
+    "--exact",
+    "--nocapture",
+    "--test-threads=1"
+  ],
+  "completed_utc": "2026-09-12T08:34:28.0877093Z",
+  "integration_snapshot": "dc360ff4033b484c7d16059e606131adc4ecc2ea",
+  "exit_code": 101,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\T02-generation-diagnostic-central.log"
+}

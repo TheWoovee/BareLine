@@ -1,0 +1,2620 @@
+diff --git a/crates/app/src/task.rs b/crates/app/src/task.rs
+index 70050e8..f01ce72 100644
+--- a/crates/app/src/task.rs
++++ b/crates/app/src/task.rs
+@@ -14,8 +14,9 @@
+ //! only the runtime whose worker actually completed, instead of every runtime on
+ //! every wake.
+ 
+-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+-use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
++use bareline_platform::executor::{BoundedExecutor, SubmitError, WorkKind};
++use std::sync::atomic::{AtomicBool, Ordering};
++use std::sync::mpsc::{self, Receiver, TryRecvError};
+ use std::sync::{Arc, Mutex, OnceLock};
+ use std::time::{Duration, Instant};
+ 
+@@ -27,13 +28,13 @@ type Job = Box<dyn FnOnce() + Send + 'static>;
+ /// thread count track document/worker count.
+ const POOL_THREADS: usize = 4;
+ 
+-/// Queue depth per worker thread. Submission refuses (returns [`Busy`]) once every
+-/// thread's queue is full rather than blocking the caller — the event loop must
++/// Total pending queue depth shared by every worker. Submission refuses (returns
++/// [`Busy`]) once it is full rather than blocking the caller — the event loop must
+ /// never stall waiting for a worker.
+ const QUEUE_DEPTH: usize = 32;
+ 
+-/// The pool had no capacity to accept a job: every worker thread's bounded queue
+-/// was full, or thread creation failed so the pool has no live workers.
++/// The pool had no capacity to accept a job: its shared pending queue was full,
++/// admission was closed, or thread creation failed so it has no live workers.
+ #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+ pub struct Busy;
+ 
+@@ -74,44 +75,6 @@ impl Cancel {
+     }
+ }
+ 
+-#[derive(Default)]
+-struct Metrics {
+-    /// Jobs currently executing on a worker thread.
+-    running: AtomicUsize,
+-    /// High-water mark of concurrently executing jobs. Never exceeds the number of
+-    /// live worker threads, which is the pool bound.
+-    peak: AtomicUsize,
+-}
+-
+-struct Worker {
+-    sender: SyncSender<Job>,
+-    alive: Arc<AtomicBool>,
+-}
+-
+-struct WorkerExit(Arc<AtomicBool>);
+-
+-impl Drop for WorkerExit {
+-    fn drop(&mut self) {
+-        self.0.store(false, Ordering::SeqCst);
+-    }
+-}
+-
+-struct Running(Arc<Metrics>);
+-
+-impl Running {
+-    fn begin(metrics: Arc<Metrics>) -> Self {
+-        let running = metrics.running.fetch_add(1, Ordering::SeqCst) + 1;
+-        metrics.peak.fetch_max(running, Ordering::SeqCst);
+-        Self(metrics)
+-    }
+-}
+-
+-impl Drop for Running {
+-    fn drop(&mut self) {
+-        self.0.running.fetch_sub(1, Ordering::SeqCst);
+-    }
+-}
+-
+ struct CompletionSignal {
+     notify: Mutex<Box<dyn Fn() + Send + 'static>>,
+     fired: AtomicBool,
+@@ -141,43 +104,14 @@ impl CompletionSignal {
+ /// fewer threads (or none, in which case every submission returns [`Busy`]) rather
+ /// than panicking.
+ pub struct Pool {
+-    workers: Mutex<Vec<Worker>>,
+-    next: AtomicUsize,
+-    metrics: Arc<Metrics>,
++    executor: BoundedExecutor,
+ }
+ 
+ impl Pool {
+-    /// Build a pool with `threads` workers, each backed by a queue `depth` deep.
++    /// Build a pool with `threads` workers sharing one total queue `depth`.
+     pub fn new(threads: usize, depth: usize) -> Self {
+-        let metrics = Arc::new(Metrics::default());
+-        let mut workers = Vec::with_capacity(threads);
+-        for index in 0..threads {
+-            let (sender, receiver) = mpsc::sync_channel::<Job>(depth);
+-            let metrics = metrics.clone();
+-            let alive = Arc::new(AtomicBool::new(true));
+-            let worker_alive = alive.clone();
+-            let spawned = std::thread::Builder::new()
+-                .name(format!("bareline-task-{index}"))
+-                .spawn(move || {
+-                    let _exit = WorkerExit(worker_alive);
+-                    while let Ok(job) = receiver.recv() {
+-                        let _running = Running::begin(metrics.clone());
+-                        // Debug/test builds unwind; contain a task panic so the
+-                        // bounded worker remains available. Release deliberately
+-                        // uses panic=abort, where unwinding cannot be promised.
+-                        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job));
+-                    }
+-                });
+-            // A failed spawn drops `receiver` with the closure; we simply keep the
+-            // pool smaller. If it fails, `sender` is dropped here too.
+-            if spawned.is_ok() {
+-                workers.push(Worker { sender, alive });
+-            }
+-        }
+         Self {
+-            workers: Mutex::new(workers),
+-            next: AtomicUsize::new(0),
+-            metrics,
++            executor: BoundedExecutor::new(threads, depth, "bareline-task"),
+         }
+     }
+ 
+@@ -228,50 +162,27 @@ impl Pool {
+         })
+     }
+ 
+-    fn submit(&self, mut job: Job) -> Result<(), Busy> {
+-        let mut workers = self.workers.lock().unwrap_or_else(|error| error.into_inner());
+-        workers.retain(|worker| worker.alive.load(Ordering::SeqCst));
+-        if workers.is_empty() {
+-            return Err(Busy);
+-        }
+-        // Round-robin across workers, then try every worker once so a single busy
+-        // queue does not reject a job the pool could still take.
+-        let start = self.next.fetch_add(1, Ordering::Relaxed);
+-        for offset in 0..workers.len() {
+-            let index = (start + offset) % workers.len();
+-            match workers[index].sender.try_send(job) {
+-                Ok(()) => return Ok(()),
+-                Err(mpsc::TrySendError::Full(returned)) => job = returned,
+-                Err(mpsc::TrySendError::Disconnected(returned)) => {
+-                    workers[index].alive.store(false, Ordering::SeqCst);
+-                    job = returned;
+-                }
+-            }
+-        }
+-        workers.retain(|worker| worker.alive.load(Ordering::SeqCst));
+-        Err(Busy)
++    fn submit(&self, job: Job) -> Result<(), Busy> {
++        self.executor
++            .submit(WorkKind::General, job)
++            .map_err(|_error: SubmitError| Busy)
+     }
+ 
+     /// Number of live worker threads — the ceiling on concurrent jobs.
+     pub fn worker_count(&self) -> usize {
+-        self.workers
+-            .lock()
+-            .unwrap_or_else(|error| error.into_inner())
+-            .iter()
+-            .filter(|worker| worker.alive.load(Ordering::SeqCst))
+-            .count()
++        self.executor.worker_count()
+     }
+ 
+     /// High-water mark of jobs that have run concurrently. Bounded by
+     /// [`Pool::worker_count`]; used by tests to prove the pool does not spawn a
+     /// thread per job.
+     pub fn peak_concurrency(&self) -> usize {
+-        self.metrics.peak.load(Ordering::SeqCst)
++        self.executor.stats().peak_running
+     }
+ 
+     /// Jobs executing right now.
+     pub fn running(&self) -> usize {
+-        self.metrics.running.load(Ordering::SeqCst)
++        self.executor.stats().running
+     }
+ }
+ 
+@@ -549,6 +460,7 @@ impl Wake {
+ #[cfg(test)]
+ mod tests {
+     use super::*;
++    use std::sync::atomic::AtomicUsize;
+     use std::sync::{Condvar, Mutex};
+ 
+     /// A gate a test opens once to release every job blocked on it.
+@@ -685,6 +597,36 @@ mod tests {
+         assert_eq!(pool.peak_concurrency(), 2, "never exceeded the pool bound");
+     }
+ 
++    #[test]
++    fn short_job_uses_idle_worker_while_long_job_remains_blocked() {
++        let pool = Pool::new(2, 4);
++        let (long_started_tx, long_started_rx) = mpsc::sync_channel(1);
++        let (long_release_tx, long_release_rx) = mpsc::sync_channel(1);
++        let long = pool
++            .spawn(
++                || {},
++                move |_| {
++                    long_started_tx.send(()).unwrap();
++                    long_release_rx.recv().unwrap();
++                    1
++                },
++            )
++            .unwrap();
++        long_started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
++
++        let free = pool.spawn(|| {}, |_| 2).unwrap();
++        assert_eq!(free.wait_timeout(Duration::from_secs(5)), TaskPoll::Complete(2));
++        let short = pool.spawn(|| {}, |_| 3).unwrap();
++        assert_eq!(
++            short.wait_timeout(Duration::from_secs(5)),
++            TaskPoll::Complete(3),
++            "an idle worker must take the next shared-queue job"
++        );
++        assert_eq!(pool.worker_count(), 2);
++        long_release_tx.send(()).unwrap();
++        assert_eq!(long.wait_timeout(Duration::from_secs(5)), TaskPoll::Complete(1));
++    }
++
+     #[test]
+     fn cancel_before_dequeue_skips_work_and_reports_terminal() {
+         let pool = Pool::new(1, 4);
+@@ -813,12 +755,10 @@ mod tests {
+     }
+ 
+     #[test]
+-    fn dead_worker_entries_are_pruned_from_capacity() {
++    fn closed_pool_rejects_new_work() {
+         let pool = Pool::new(1, 1);
+-        pool.workers.lock().unwrap()[0].alive.store(false, Ordering::SeqCst);
++        pool.executor.close();
+         assert!(pool.execute(|| {}).is_err());
+-        assert_eq!(pool.worker_count(), 0);
+-        assert!(pool.workers.lock().unwrap().is_empty());
+     }
+ 
+     #[test]
+diff --git a/crates/editor-surface/src/mapped_viewport.rs b/crates/editor-surface/src/mapped_viewport.rs
+index 6c4a043..48f7ae6 100644
+--- a/crates/editor-surface/src/mapped_viewport.rs
++++ b/crates/editor-surface/src/mapped_viewport.rs
+@@ -1,12 +1,13 @@
+ // SPDX-License-Identifier: MPL-2.0
+ //! Bounded, source-identified projection; omitted fold bodies never become bytes.
+-use super::{PagedReadHandle, worker};
++use super::{JobCompletion, PagedReadHandle, worker};
+ use bareline_document::{
+     Budget, BudgetClaim, DocumentBuilder, DocumentSnapshot, TextOffset,
+     line_lookup::{LineLookupPoll, LineTarget},
+     paged::{PagedSnapshot, SparseLineIndex, WindowPoll},
+ };
+ use bareline_file_io::cancellation::Cancellation;
++use bareline_platform::executor::WorkKind;
+ use std::{
+     ops::Range,
+     sync::{
+@@ -90,20 +91,23 @@ pub fn request(
+     let cancellation = cancel.clone();
+     let (sender, result) = mpsc::sync_channel(1);
+     worker()
+-        .try_send(Box::new(move || {
+-            let result = build(
+-                &handle,
+-                start,
+-                folds,
+-                manual,
+-                rebased,
+-                generation,
+-                &budget,
+-                &cancellation,
+-            );
+-            let _ = sender.try_send(result);
+-            notify();
+-        }))
++        .submit(
++            WorkKind::Interactive,
++            Box::new(move || {
++                let completion = JobCompletion::new(sender, notify);
++                let result = build(
++                    &handle,
++                    start,
++                    folds,
++                    manual,
++                    rebased,
++                    generation,
++                    &budget,
++                    &cancellation,
++                );
++                completion.complete(result);
++            }),
++        )
+         .map_err(|_| "Viewport worker queue is full".to_owned())?;
+     Ok(MappingJob { result, cancel })
+ }
+diff --git a/crates/editor-surface/src/paged_spill.rs b/crates/editor-surface/src/paged_spill.rs
+index 7ea442d..620c16f 100644
+--- a/crates/editor-surface/src/paged_spill.rs
++++ b/crates/editor-surface/src/paged_spill.rs
+@@ -12,6 +12,34 @@ pub(super) struct SpillState {
+     attempted: Option<(u64, ContentStateId)>,
+     error: Option<String>,
+ }
++
++struct SpillCompletion {
++    state: Arc<Mutex<SpillState>>,
++    wake: JobWake,
++    finished: bool,
++}
++impl SpillCompletion {
++    fn new(state: Arc<Mutex<SpillState>>, notify: Arc<dyn Fn() + Send + Sync>) -> Self {
++        Self {
++            state,
++            wake: JobWake::new(notify),
++            finished: false,
++        }
++    }
++    fn finish(mut self) {
++        self.finished = true;
++        self.wake.fire();
++    }
++}
++impl Drop for SpillCompletion {
++    fn drop(&mut self) {
++        if !self.finished {
++            let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
++            state.pending = false;
++            state.error = Some("Paged spill worker failed".into());
++        }
++    }
++}
+ impl PagedEditorSurface {
+     pub fn configure_owned_spill(
+         &mut self,
+@@ -53,59 +81,63 @@ impl PagedEditorSurface {
+         let quota = self.streaming_quota;
+         let cancel = self.cancellation.clone();
+         let notify = self.notify.clone();
+-        let submitted = worker().try_send(Box::new(move || {
+-            let result = (|| -> Result<(), String> {
+-                cancel
+-                    .check()
+-                    .map_err(|error| format!("Paged spill cancelled: {error:?}"))?;
+-                let plan = {
+-                    let opened = actor.lock().map_err(|_| "Paged actor stopped")?;
+-                    let snapshot = opened.transcoded.document.snapshot();
+-                    if (snapshot.identity_token().0, snapshot.content_state) != stamp {
++        let submitted = worker().submit(
++            WorkKind::Maintenance,
++            Box::new(move || {
++                let completion = SpillCompletion::new(state.clone(), notify);
++                let result = (|| -> Result<(), String> {
++                    cancel
++                        .check()
++                        .map_err(|error| format!("Paged spill cancelled: {error:?}"))?;
++                    let plan = {
++                        let opened = actor.lock().map_err(|_| "Paged actor stopped")?;
++                        let snapshot = opened.transcoded.document.snapshot();
++                        if (snapshot.identity_token().0, snapshot.content_state) != stamp {
++                            return Ok(());
++                        }
++                        opened
++                            .transcoded
++                            .document
++                            .capture_spill()
++                            .map_err(|error| format!("Paged spill capture: {error:?}"))?
++                    };
++                    // Source-backed leaves are already spill-owned. Copy only deduplicated
++                    // Resident allocations, including retained undo/redo inverse leaves.
++                    let owned_bytes = plan
++                        .segments()
++                        .try_fold(0usize, |sum, segment| sum.checked_add(segment.text.len()))
++                        .ok_or("Paged spill size overflow")?;
++                    if owned_bytes == 0 {
+                         return Ok(());
+                     }
++                    let prepared = bareline_file_io::owned_store::prepare_segments(
++                        plan, None, &cache, quota, platform, options, budget, &cancel,
++                    )
++                    .map_err(|error| format!("Paged spill unavailable: {error:?}"))?;
++                    cancel
++                        .check()
++                        .map_err(|error| format!("Paged spill cancelled: {error:?}"))?;
++                    let mut opened = actor.lock().map_err(|_| "Paged actor stopped")?;
++                    // Core validates document/revision/content/saved state and both history
++                    // depths. Any concurrent change discards preparation without publication.
+                     opened
+                         .transcoded
+                         .document
+-                        .capture_spill()
+-                        .map_err(|error| format!("Paged spill capture: {error:?}"))?
+-                };
+-                // Source-backed leaves are already spill-owned. Copy only deduplicated
+-                // Resident allocations, including retained undo/redo inverse leaves.
+-                let owned_bytes = plan
+-                    .segments()
+-                    .try_fold(0usize, |sum, segment| sum.checked_add(segment.text.len()))
+-                    .ok_or("Paged spill size overflow")?;
+-                if owned_bytes == 0 {
+-                    return Ok(());
+-                }
+-                let prepared = bareline_file_io::owned_store::prepare_segments(
+-                    plan, None, &cache, quota, platform, options, budget, &cancel,
+-                )
+-                .map_err(|error| format!("Paged spill unavailable: {error:?}"))?;
+-                cancel
+-                    .check()
+-                    .map_err(|error| format!("Paged spill cancelled: {error:?}"))?;
+-                let mut opened = actor.lock().map_err(|_| "Paged actor stopped")?;
+-                // Core validates document/revision/content/saved state and both history
+-                // depths. Any concurrent change discards preparation without publication.
+-                opened
+-                    .transcoded
+-                    .document
+-                    .attach_spill(prepared)
+-                    .map_err(|error| format!("Paged spill stale or unavailable: {error:?}"))?;
+-                let mut peer = peer.lock().map_err(|_| "Paged peer state stopped")?;
+-                peer.epoch = peer.epoch.wrapping_add(1);
+-                Ok(())
+-            })();
+-            if let Ok(mut state) = state.lock() {
+-                state.pending = false;
+-                if let Err(error) = result {
+-                    state.error = Some(error);
++                        .attach_spill(prepared)
++                        .map_err(|error| format!("Paged spill stale or unavailable: {error:?}"))?;
++                    let mut peer = peer.lock().map_err(|_| "Paged peer state stopped")?;
++                    peer.epoch = peer.epoch.wrapping_add(1);
++                    Ok(())
++                })();
++                if let Ok(mut state) = state.lock() {
++                    state.pending = false;
++                    if let Err(error) = result {
++                        state.error = Some(error);
++                    }
+                 }
+-            }
+-            notify();
+-        }));
++                completion.finish();
++            }),
++        );
+         if submitted.is_err() {
+             if let Ok(mut state) = self.owned_spill.lock() {
+                 state.pending = false;
+@@ -273,9 +305,12 @@ mod tests {
+         // Drain preceding jobs before removing Windows-backed fixture files.
+         let (released, complete) = std::sync::mpsc::channel();
+         worker()
+-            .send(Box::new(move || {
+-                let _ = released.send(());
+-            }))
++            .submit(
++                WorkKind::Maintenance,
++                Box::new(move || {
++                    let _ = released.send(());
++                }),
++            )
+             .unwrap();
+         complete.recv_timeout(Duration::from_secs(15)).unwrap();
+         let release_deadline = Instant::now() + Duration::from_secs(15);
+diff --git a/crates/editor-surface/src/paged_transfer.rs b/crates/editor-surface/src/paged_transfer.rs
+index a075503..247e496 100644
+--- a/crates/editor-surface/src/paged_transfer.rs
++++ b/crates/editor-surface/src/paged_transfer.rs
+@@ -33,6 +33,77 @@ struct Published {
+     selections: Vec<crate::power::SelectionSet>,
+     installed: std::collections::BTreeSet<u64>,
+ }
++
++struct TransferCompletion<T> {
++    sender: Option<SyncSender<Result<T, String>>>,
++    wakes: Vec<JobWake>,
++}
++
++impl<T> TransferCompletion<T> {
++    fn new(sender: SyncSender<Result<T, String>>, endpoints: &[Endpoint]) -> Self {
++        Self {
++            sender: Some(sender),
++            wakes: endpoints
++                .iter()
++                .map(|endpoint| JobWake::new(endpoint.notify.clone()))
++                .collect(),
++        }
++    }
++
++    fn complete(mut self, result: Result<T, String>) {
++        if let Some(sender) = self.sender.take() {
++            let _ = sender.try_send(result);
++        }
++        for wake in self.wakes.drain(..) {
++            wake.finish();
++        }
++    }
++}
++
++impl<T> Drop for TransferCompletion<T> {
++    fn drop(&mut self) {
++        if let Some(sender) = self.sender.take() {
++            let _ = sender.try_send(Err("Transfer worker failed".into()));
++        }
++    }
++}
++
++struct HistoryCompletion {
++    output: HistoryResult,
++    wakes: Vec<JobWake>,
++    finished: bool,
++}
++
++impl HistoryCompletion {
++    fn new(output: HistoryResult, endpoints: &[Endpoint]) -> Self {
++        Self {
++            output,
++            wakes: endpoints
++                .iter()
++                .map(|endpoint| JobWake::new(endpoint.notify.clone()))
++                .collect(),
++            finished: false,
++        }
++    }
++
++    fn complete(mut self, result: Result<Published, String>) {
++        *self.output.lock().unwrap_or_else(|error| error.into_inner()) = Some(result);
++        self.finished = true;
++        for wake in self.wakes.drain(..) {
++            wake.finish();
++        }
++    }
++}
++
++impl Drop for HistoryCompletion {
++    fn drop(&mut self) {
++        if !self.finished {
++            *self.output.lock().unwrap_or_else(|error| error.into_inner()) =
++                Some(Err("Transfer history worker failed".into()));
++        }
++    }
++}
++
+ enum Phase {
+     Preparing(Receiver<Result<Staged, String>>),
+     Committing(Receiver<Result<Published, String>>),
+@@ -51,9 +122,12 @@ impl PagedTransfer {
+         let (tx, rx) = mpsc::sync_channel(1);
+         let config = options.clone();
+         worker()
+-            .try_send(Box::new(move || {
+-                let _ = tx.send(stage(capture, &config));
+-            }))
++            .submit(
++                WorkKind::Bulk,
++                Box::new(move || {
++                    let _ = tx.send(stage(capture, &config));
++                }),
++            )
+             .map_err(|_| "Transfer worker queue is full")?;
+         Ok(Self {
+             phase: Phase::Preparing(rx),
+@@ -109,13 +183,14 @@ impl PagedTransfer {
+                     let config = self.options.clone();
+                     let (tx, rx) = mpsc::sync_channel(1);
+                     if worker()
+-                        .try_send(Box::new(move || {
+-                            let result = commit(staged, &endpoints, &config);
+-                            for endpoint in &endpoints {
+-                                (endpoint.notify)();
+-                            }
+-                            let _ = tx.send(result);
+-                        }))
++                        .submit(
++                            WorkKind::Bulk,
++                            Box::new(move || {
++                                let completion = TransferCompletion::new(tx, &endpoints);
++                                let result = commit(staged, &endpoints, &config);
++                                completion.complete(result);
++                            }),
++                        )
+                         .is_err()
+                     {
+                         return Some(Err("Transfer worker queue is full".into()));
+@@ -745,19 +820,26 @@ pub(super) fn try_history(view: &mut PagedEditorSurface, undo: bool) -> Option<R
+         }
+     }
+     let output = state.clone();
+-    let queued = worker().try_send(Box::new(move || {
+-        let result = commit_history(&record, undo);
+-        if let Ok(mut output) = output.lock() {
+-            *output = Some(result);
+-        }
+-        for endpoint in &record.endpoints {
+-            (endpoint.notify)();
+-        }
+-    }));
++    let rejected_notifications = record
++        .endpoints
++        .iter()
++        .map(|endpoint| endpoint.notify.clone())
++        .collect::<Vec<_>>();
++    let queued = worker().submit(
++        WorkKind::General,
++        Box::new(move || {
++            let completion = HistoryCompletion::new(output, &record.endpoints);
++            let result = commit_history(&record, undo);
++            completion.complete(result);
++        }),
++    );
+     if queued.is_err() {
+         if let Ok(mut state) = state.lock() {
+             *state = Some(Err("Transfer history queue is full".into()));
+         }
++        for notify in rejected_notifications {
++            JobWake::new(notify).finish();
++        }
+         return Some(Err("Transfer history queue is full".into()));
+     }
+     Some(Ok(()))
+diff --git a/crates/editor-surface/src/paged_view.rs b/crates/editor-surface/src/paged_view.rs
+index 2545dad..f5dfca3 100644
+--- a/crates/editor-surface/src/paged_view.rs
++++ b/crates/editor-surface/src/paged_view.rs
+@@ -10,7 +10,10 @@ use bareline_file_io::{
+     cancellation::Cancellation,
+     lifecycle::{Fingerprint, PagedOpened},
+ };
+-use bareline_platform::LocalFileSystem;
++use bareline_platform::{
++    LocalFileSystem,
++    executor::{BoundedExecutor, SubmitError, WorkKind},
++};
+ use std::{
+     path::PathBuf,
+     sync::{
+@@ -100,7 +103,7 @@ struct ViewportMapping {
+     line: u64,
+     line_start: TextOffset,
+ }
+-type Job = Box<dyn FnOnce() + Send>;
++type Job = Box<dyn FnOnce() + Send + 'static>;
+ /// Lets a reader that finds the actor busy sleep instead of spinning on `yield_now`.
+ /// The writer signals when it releases the actor so a waiter wakes promptly; the
+ /// bounded timeout keeps the loop responsive to cancellation even if a signal is
+@@ -122,34 +125,65 @@ impl ActorGate {
+ }
+ /// How long a busy reader sleeps before re-checking the actor.
+ const ACTOR_WAIT: std::time::Duration = std::time::Duration::from_millis(5);
+-fn worker() -> &'static SyncSender<Job> {
+-    static WORKER: OnceLock<Vec<SyncSender<Job>>> = OnceLock::new();
+-    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+-    let pool = WORKER.get_or_init(|| {
+-        // A small bounded pool of I/O threads. Thread creation can fail under handle
+-        // or address-space exhaustion; a channel whose receiver was dropped along with
+-        // the failed closure surfaces the ordinary "worker queue is full" error to
+-        // callers instead of aborting, so we keep the sender either way.
+-        let mut senders = Vec::with_capacity(WORKER_POOL);
+-        for index in 0..WORKER_POOL {
+-            let (sender, receiver) = mpsc::sync_channel::<Job>(16);
+-            let spawned = std::thread::Builder::new()
+-                .name(format!("paged-view-io-{index}"))
+-                .spawn(move || {
+-                    while let Ok(job) = receiver.recv() {
+-                        job();
+-                    }
+-                });
+-            debug_assert!(spawned.is_ok(), "paged worker creation");
+-            senders.push(sender);
+-        }
+-        senders
+-    });
+-    // Distribute successive jobs across the pool. Each paged document has at most one
+-    // mutating job outstanding at a time (gated by `power_actor_busy`), so per-thread
+-    // ordering is not required for correctness; the actor mutex still serializes state.
+-    let index = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % pool.len();
+-    &pool[index]
++const PAGED_QUEUE_DEPTH: usize = 64;
++struct PagedWorker(BoundedExecutor);
++impl PagedWorker {
++    fn submit(&self, kind: WorkKind, job: Job) -> Result<(), SubmitError> {
++        self.0.submit(kind, job)
++    }
++    #[cfg(test)]
++    fn worker_count(&self) -> usize {
++        self.0.worker_count()
++    }
++}
++fn worker() -> &'static PagedWorker {
++    static WORKER: OnceLock<PagedWorker> = OnceLock::new();
++    WORKER.get_or_init(|| PagedWorker(BoundedExecutor::new(WORKER_POOL, PAGED_QUEUE_DEPTH, "paged-view-io")))
++}
++struct JobWake(Option<Arc<dyn Fn() + Send + Sync>>);
++impl JobWake {
++    fn new(notify: Arc<dyn Fn() + Send + Sync>) -> Self {
++        Self(Some(notify))
++    }
++    fn finish(mut self) {
++        self.fire();
++    }
++    fn fire(&mut self) {
++        if let Some(notify) = self.0.take() {
++            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| notify()));
++        }
++    }
++}
++impl Drop for JobWake {
++    fn drop(&mut self) {
++        self.fire();
++    }
++}
++struct JobCompletion<T> {
++    sender: Option<SyncSender<Result<T, String>>>,
++    wake: JobWake,
++}
++impl<T> JobCompletion<T> {
++    fn new(sender: SyncSender<Result<T, String>>, notify: Arc<dyn Fn() + Send + Sync>) -> Self {
++        Self {
++            sender: Some(sender),
++            wake: JobWake::new(notify),
++        }
++    }
++    fn complete(mut self, result: Result<T, String>) {
++        if let Some(sender) = self.sender.take() {
++            let _ = sender.try_send(result);
++        }
++        self.wake.fire();
++    }
++}
++impl<T> Drop for JobCompletion<T> {
++    fn drop(&mut self) {
++        if let Some(sender) = self.sender.take() {
++            let _ = sender.try_send(Err("Paged worker failed".into()));
++        }
++        self.wake.fire();
++    }
+ }
+ enum Action {
+     Tail {
+@@ -456,12 +490,16 @@ impl PagedEditorSurface {
+         let actor = self.actor.clone();
+         let notify = self.notify.clone();
+         if worker()
+-            .try_send(Box::new(move || {
+-                let mut opened = actor.lock().unwrap_or_else(|error| error.into_inner());
+-                opened.transcoded.document.set_history_limit(max_changes);
+-                drop(opened);
+-                notify();
+-            }))
++            .submit(
++                WorkKind::Maintenance,
++                Box::new(move || {
++                    let completion = JobWake::new(notify);
++                    let mut opened = actor.lock().unwrap_or_else(|error| error.into_inner());
++                    opened.transcoded.document.set_history_limit(max_changes);
++                    drop(opened);
++                    completion.finish();
++                }),
++            )
+             .is_err()
+         {
+             return false;
+@@ -2159,79 +2197,82 @@ impl PagedEditorSurface {
+         let historical = self.captured.is_some();
+         let (sender, result) = mpsc::sync_channel(1);
+         worker()
+-            .try_send(Box::new(move || {
+-                let validation = (|| {
+-                    if !historical {
+-                        loop {
+-                            cancellation
+-                                .check()
+-                                .map_err(|e| format!("Selection validation: {e:?}"))?;
+-                            match handle.acquire_store() {
+-                                Ok(_) => break,
+-                                Err(PagedError::Busy) => handle.actor_gate.wait(ACTOR_WAIT),
+-                                Err(error) => return Err(error.into()),
++            .submit(
++                WorkKind::Interactive,
++                Box::new(move || {
++                    let completion = JobCompletion::new(sender, notify);
++                    let validation = (|| {
++                        if !historical {
++                            loop {
++                                cancellation
++                                    .check()
++                                    .map_err(|e| format!("Selection validation: {e:?}"))?;
++                                match handle.acquire_store() {
++                                    Ok(_) => break,
++                                    Err(PagedError::Busy) => handle.actor_gate.wait(ACTOR_WAIT),
++                                    Err(error) => return Err(error.into()),
++                                }
+                             }
+                         }
+-                    }
+-                    for offset in [anchor, caret] {
+-                        let mut request = handle
+-                            .snapshot()
+-                            .begin_viewport(TextOffset(offset.0.saturating_sub(4)), 12, &budget)
+-                            .map_err(|e| format!("Selection validation: {e:?}"))?;
+-                        loop {
+-                            cancellation
+-                                .check()
++                        for offset in [anchor, caret] {
++                            let mut request = handle
++                                .snapshot()
++                                .begin_viewport(TextOffset(offset.0.saturating_sub(4)), 12, &budget)
+                                 .map_err(|e| format!("Selection validation: {e:?}"))?;
+-                            match request.poll() {
+-                                WindowPoll::Ready(window) => {
+-                                    let local = offset
+-                                        .0
+-                                        .checked_sub(window.range().start.0)
+-                                        .ok_or("Selection endpoint is unavailable")?;
+-                                    if local > window.text().len() || !window.text().is_char_boundary(local) {
+-                                        return Err("Selection endpoint is not a UTF-8 boundary".into());
++                            loop {
++                                cancellation
++                                    .check()
++                                    .map_err(|e| format!("Selection validation: {e:?}"))?;
++                                match request.poll() {
++                                    WindowPoll::Ready(window) => {
++                                        let local = offset
++                                            .0
++                                            .checked_sub(window.range().start.0)
++                                            .ok_or("Selection endpoint is unavailable")?;
++                                        if local > window.text().len() || !window.text().is_char_boundary(local) {
++                                            return Err("Selection endpoint is not a UTF-8 boundary".into());
++                                        }
++                                        break;
+                                     }
+-                                    break;
+-                                }
+-                                WindowPoll::Pending(ticket) => {
+-                                    let ready = if historical {
+-                                        handle.resolve_captured_page(ticket)?
+-                                    } else {
+-                                        handle.resolve_page(ticket)?
+-                                    };
+-                                    if !ready {
+-                                        handle.actor_gate.wait(ACTOR_WAIT);
++                                    WindowPoll::Pending(ticket) => {
++                                        let ready = if historical {
++                                            handle.resolve_captured_page(ticket)?
++                                        } else {
++                                            handle.resolve_page(ticket)?
++                                        };
++                                        if !ready {
++                                            handle.actor_gate.wait(ACTOR_WAIT);
++                                        }
+                                     }
++                                    _ => return Err("Selection endpoint is unavailable".into()),
+                                 }
+-                                _ => return Err("Selection endpoint is unavailable".into()),
+                             }
+                         }
+-                    }
+-                    if !historical {
+-                        loop {
+-                            cancellation
+-                                .check()
+-                                .map_err(|e| format!("Selection validation: {e:?}"))?;
+-                            match handle.acquire_store() {
+-                                Ok(_) => break,
+-                                Err(PagedError::Busy) => handle.actor_gate.wait(ACTOR_WAIT),
+-                                Err(error) => return Err(error.into()),
++                        if !historical {
++                            loop {
++                                cancellation
++                                    .check()
++                                    .map_err(|e| format!("Selection validation: {e:?}"))?;
++                                match handle.acquire_store() {
++                                    Ok(_) => break,
++                                    Err(PagedError::Busy) => handle.actor_gate.wait(ACTOR_WAIT),
++                                    Err(error) => return Err(error.into()),
++                                }
+                             }
+                         }
+-                    }
+-                    let snapped = if snap_hit {
+-                        crate::paged_navigation::snap_grapheme(&handle, caret.0, &budget, &cancellation)?
+-                    } else {
+-                        caret.0
+-                    };
+-                    Ok(Selection {
+-                        anchor: if snap_hit && !extend_hit { snapped } else { anchor.0 },
+-                        caret: snapped,
+-                    })
+-                })();
+-                let _ = sender.try_send(validation);
+-                notify();
+-            }))
++                        let snapped = if snap_hit {
++                            crate::paged_navigation::snap_grapheme(&handle, caret.0, &budget, &cancellation)?
++                        } else {
++                            caret.0
++                        };
++                        Ok(Selection {
++                            anchor: if snap_hit && !extend_hit { snapped } else { anchor.0 },
++                            caret: snapped,
++                        })
++                    })();
++                    completion.complete(validation);
++                }),
++            )
+             .map_err(|_| "Paged worker queue is full; retry.".to_owned())?;
+         self.selection_token = self.selection_token.wrapping_add(1);
+         self.selection_status = SelectionRestoreStatus::Pending;
+@@ -2843,52 +2884,57 @@ impl PagedEditorSurface {
+             let notify = self.notify.clone();
+             let (sender, receiver) = mpsc::sync_channel(1);
+             worker()
+-                .try_send(Box::new(move || {
+-                    let result = (|| {
+-                        let snapshot = displayed_snapshot;
+-                        let start = start.min(snapshot.len());
+-                        let mut request = snapshot
+-                            .begin_viewport(TextOffset(start), WINDOW, &budget)
+-                            .map_err(|e| format!("{e:?}"))?;
+-                        let window = loop {
+-                            cancellation.check().map_err(|e| format!("{e:?}"))?;
+-                            match request.poll() {
+-                                WindowPoll::Ready(window) => break Ok(window),
+-                                WindowPoll::Pending(ticket) => {
+-                                    if !captured.resolve_captured_page(ticket)? {
+-                                        captured.actor_gate.wait(ACTOR_WAIT);
++                .submit(
++                    WorkKind::Interactive,
++                    Box::new(move || {
++                        let completion = JobCompletion::new(sender, notify);
++                        let result = (|| {
++                            let snapshot = displayed_snapshot;
++                            let start = start.min(snapshot.len());
++                            let mut request = snapshot
++                                .begin_viewport(TextOffset(start), WINDOW, &budget)
++                                .map_err(|e| format!("{e:?}"))?;
++                            let window = loop {
++                                cancellation.check().map_err(|e| format!("{e:?}"))?;
++                                match request.poll() {
++                                    WindowPoll::Ready(window) => break Ok(window),
++                                    WindowPoll::Pending(ticket) => {
++                                        if !captured.resolve_captured_page(ticket)? {
++                                            captured.actor_gate.wait(ACTOR_WAIT);
++                                        }
+                                     }
++                                    WindowPoll::Unavailable(reason) => {
++                                        break Err(format!("Captured source unavailable: {reason:?}"));
++                                    }
++                                    WindowPoll::InvalidUtf8 => {
++                                        break Err("Captured source contains invalid UTF-8".into());
++                                    }
++                                    WindowPoll::Finished => break Err("Captured viewport already finished".into()),
+                                 }
+-                                WindowPoll::Unavailable(reason) => {
+-                                    break Err(format!("Captured source unavailable: {reason:?}"));
+-                                }
+-                                WindowPoll::InvalidUtf8 => break Err("Captured source contains invalid UTF-8".into()),
+-                                WindowPoll::Finished => break Err("Captured viewport already finished".into()),
+-                            }
+-                        };
+-                        Ok(Completed {
+-                            selections: None,
+-                            append_receipt: None,
+-                            generation_owner: captured._generation.clone(),
+-                            peer_epoch: 0,
+-                            saved_state: Some(snapshot.content_state),
+-                            save_as_required: false,
+-                            following: false,
+-                            tail_pending: false,
+-                            source_changed: false,
+-                            fingerprint: captured.fingerprint.clone(),
+-                            can_undo: false,
+-                            can_redo: false,
+-                            snapshot,
+-                            window,
+-                            path: captured.path.clone(),
+-                            caret: start,
+-                            saved: None,
+-                        })
+-                    })();
+-                    let _ = sender.try_send(result);
+-                    notify();
+-                }))
++                            };
++                            Ok(Completed {
++                                selections: None,
++                                append_receipt: None,
++                                generation_owner: captured._generation.clone(),
++                                peer_epoch: 0,
++                                saved_state: Some(snapshot.content_state),
++                                save_as_required: false,
++                                following: false,
++                                tail_pending: false,
++                                source_changed: false,
++                                fingerprint: captured.fingerprint.clone(),
++                                can_undo: false,
++                                can_redo: false,
++                                snapshot,
++                                window,
++                                path: captured.path.clone(),
++                                caret: start,
++                                saved: None,
++                            })
++                        })();
++                        completion.complete(result);
++                    }),
++                )
+                 .map_err(|_| "Paged worker queue is full; retry.".to_owned())?;
+             self.pending = Some(receiver);
+             return Ok(());
+@@ -2912,510 +2958,522 @@ impl PagedEditorSurface {
+         let revision = self.snapshot.revision;
+         let current_start = self.viewport_start;
+         let current_caret = self.global_selections.primary().caret;
++        let work_kind = if matches!(&action, Action::Save { .. }) {
++            WorkKind::Bulk
++        } else {
++            WorkKind::General
++        };
+         let (sender, receiver) = mpsc::sync_channel(1);
+         worker()
+-            .try_send(Box::new(move || {
+-                let result = (|| {
+-                    cancellation.check().map_err(|error| format!("{error:?}"))?;
+-                    let mut opened = actor.lock().map_err(|_| "Paged actor stopped.")?;
+-                    let mut tail = tail_arc.lock().map_err(|_| "Tail actor stopped.")?;
+-                    if tail.is_some()
+-                        && matches!(
+-                            &action,
+-                            Action::Edit { .. }
+-                                | Action::Prepared(..)
+-                                | Action::Source(..)
+-                                | Action::Metadata(_)
+-                                | Action::Undo
+-                                | Action::Redo
+-                                | Action::Save { .. }
+-                        )
+-                    {
+-                        return Err(
+-                            "Unlock and capture a fixed generation before editing or saving monitored content.".into(),
+-                        );
+-                    }
+-                    let saved_state = peer.lock().map_err(|_| "Peer state stopped")?.saved_state;
+-                    if opened.transcoded.document.snapshot().revision != revision && !matches!(&action, Action::Read(_))
+-                    {
+-                        return Err("Document changed; retry the operation.".into());
+-                    }
+-                    let mut start = current_start;
+-                    let mut caret = current_caret;
+-                    let mut saved = None;
+-                    let mut committed_selection = None;
+-                    let baseline = opened.transcoded.document.snapshot();
+-                    let previous_path = opened.path.clone();
+-                    let previous_fingerprint = opened.fingerprint.clone();
+-                    let previously_following = tail.is_some();
+-                    let mut retry_recovery = false;
+-                    let mut recovery_edits = Vec::new();
+-                    let mut streaming_protected = false;
+-                    match action {
+-                        Action::Tail {
+-                            platform,
+-                            request,
+-                            follow,
+-                        } => {
+-                            if tail.is_none() {
+-                                *tail = Some(
+-                                    bareline_file_io::tail::TailSession::new(
+-                                        &opened,
+-                                        platform,
+-                                        budget.clone(),
+-                                        cancellation.clone(),
+-                                    )
+-                                    .map_err(|e| format!("{e:?}"))?,
+-                                );
+-                                if follow {
++            .submit(
++                work_kind,
++                Box::new(move || {
++                    let completion = JobCompletion::new(sender, notify);
++                    let result = (|| {
++                        cancellation.check().map_err(|error| format!("{error:?}"))?;
++                        let mut opened = actor.lock().map_err(|_| "Paged actor stopped.")?;
++                        let mut tail = tail_arc.lock().map_err(|_| "Tail actor stopped.")?;
++                        if tail.is_some()
++                            && matches!(
++                                &action,
++                                Action::Edit { .. }
++                                    | Action::Prepared(..)
++                                    | Action::Source(..)
++                                    | Action::Metadata(_)
++                                    | Action::Undo
++                                    | Action::Redo
++                                    | Action::Save { .. }
++                            )
++                        {
++                            return Err(
++                                "Unlock and capture a fixed generation before editing or saving monitored content."
++                                    .into(),
++                            );
++                        }
++                        let saved_state = peer.lock().map_err(|_| "Peer state stopped")?.saved_state;
++                        if opened.transcoded.document.snapshot().revision != revision
++                            && !matches!(&action, Action::Read(_))
++                        {
++                            return Err("Document changed; retry the operation.".into());
++                        }
++                        let mut start = current_start;
++                        let mut caret = current_caret;
++                        let mut saved = None;
++                        let mut committed_selection = None;
++                        let baseline = opened.transcoded.document.snapshot();
++                        let previous_path = opened.path.clone();
++                        let previous_fingerprint = opened.fingerprint.clone();
++                        let previously_following = tail.is_some();
++                        let mut retry_recovery = false;
++                        let mut recovery_edits = Vec::new();
++                        let mut streaming_protected = false;
++                        match action {
++                            Action::Tail {
++                                platform,
++                                request,
++                                follow,
++                            } => {
++                                if tail.is_none() {
++                                    *tail = Some(
++                                        bareline_file_io::tail::TailSession::new(
++                                            &opened,
++                                            platform,
++                                            budget.clone(),
++                                            cancellation.clone(),
++                                        )
++                                        .map_err(|e| format!("{e:?}"))?,
++                                    );
++                                    if follow {
++                                        caret = opened.transcoded.document.snapshot().len();
++                                        start = caret.saturating_sub(WINDOW / 2);
++                                    }
++                                }
++                                let session = tail.as_mut().unwrap();
++                                if request {
++                                    session.request(&opened.path).map_err(|e| format!("{e:?}"))?;
++                                }
++                                if session.step(&mut opened).map_err(|e| format!("{e:?}"))? && follow {
+                                     caret = opened.transcoded.document.snapshot().len();
+                                     start = caret.saturating_sub(WINDOW / 2);
+                                 }
+                             }
+-                            let session = tail.as_mut().unwrap();
+-                            if request {
+-                                session.request(&opened.path).map_err(|e| format!("{e:?}"))?;
+-                            }
+-                            if session.step(&mut opened).map_err(|e| format!("{e:?}"))? && follow {
+-                                caret = opened.transcoded.document.snapshot().len();
+-                                start = caret.saturating_sub(WINDOW / 2);
++                            Action::UnlockTail => {
++                                let session = tail.as_ref().ok_or("Monitoring is not active")?;
++                                let fixed = session
++                                    .freeze(&opened)
++                                    .map_err(|e| format!("Cannot capture fixed generation: {e:?}"))?;
++                                let previous = std::mem::replace(&mut *opened, fixed);
++                                let old_owner = std::mem::replace(
++                                    &mut *generation_owner.lock().map_err(|_| "Generation owner failed")?,
++                                    Arc::new(()),
++                                );
++                                let mut retained = retired.lock().map_err(|_| "Captured generation owner failed")?;
++                                retained.retain(|generation| Arc::strong_count(&generation.owner) > 1);
++                                retained.push(RetiredGeneration {
++                                    owner: old_owner,
++                                    opened: previous,
++                                    tail: tail.take(),
++                                });
++                                saved = Some(opened.fingerprint.clone());
+                             }
+-                        }
+-                        Action::UnlockTail => {
+-                            let session = tail.as_ref().ok_or("Monitoring is not active")?;
+-                            let fixed = session
+-                                .freeze(&opened)
+-                                .map_err(|e| format!("Cannot capture fixed generation: {e:?}"))?;
+-                            let previous = std::mem::replace(&mut *opened, fixed);
+-                            let old_owner = std::mem::replace(
+-                                &mut *generation_owner.lock().map_err(|_| "Generation owner failed")?,
+-                                Arc::new(()),
+-                            );
+-                            let mut retained = retired.lock().map_err(|_| "Captured generation owner failed")?;
+-                            retained.retain(|generation| Arc::strong_count(&generation.owner) > 1);
+-                            retained.push(RetiredGeneration {
+-                                owner: old_owner,
+-                                opened: previous,
+-                                tail: tail.take(),
+-                            });
+-                            saved = Some(opened.fingerprint.clone());
+-                        }
+-                        Action::RetryRecovery => {
+-                            if let Some((_, platform)) = &recovery_config {
+-                                let paths = std::mem::take(
+-                                    &mut *failed_retirements
++                            Action::RetryRecovery => {
++                                if let Some((_, platform)) = &recovery_config {
++                                    let paths = std::mem::take(
++                                        &mut *failed_retirements
++                                            .lock()
++                                            .map_err(|_| "Recovery retirement state stopped")?,
++                                    );
++                                    let mut failed = Vec::new();
++                                    let mut failure = None;
++                                    for path in paths {
++                                        if let Err(error) =
++                                            bareline_file_io::recovery::discard(&path, platform.as_ref())
++                                        {
++                                            failed.push(path);
++                                            failure = Some(error.to_string());
++                                        }
++                                    }
++                                    *failed_retirements
+                                         .lock()
+-                                        .map_err(|_| "Recovery retirement state stopped")?,
+-                                );
+-                                let mut failed = Vec::new();
+-                                let mut failure = None;
+-                                for path in paths {
+-                                    if let Err(error) = bareline_file_io::recovery::discard(&path, platform.as_ref()) {
+-                                        failed.push(path);
+-                                        failure = Some(error.to_string());
++                                        .map_err(|_| "Recovery retirement state stopped")? = failed;
++                                    if let Some(error) = failure {
++                                        if let Ok(mut status) = recovery_status.lock() {
++                                            status.error = Some(error.clone());
++                                        }
++                                        return Err(error);
+                                     }
+                                 }
+-                                *failed_retirements
+-                                    .lock()
+-                                    .map_err(|_| "Recovery retirement state stopped")? = failed;
+-                                if let Some(error) = failure {
++                                if Some(baseline.content_state) == saved_state {
+                                     if let Ok(mut status) = recovery_status.lock() {
+-                                        status.error = Some(error.clone());
++                                        *status = Default::default();
+                                     }
+-                                    return Err(error);
++                                } else {
++                                    retry_recovery = true;
++                                    recovery_edits.push(bareline_file_io::recovery::RecoveryEdit {
++                                        offset: 0,
++                                        removed: Vec::new(),
++                                        inserted: Vec::new(),
++                                    });
+                                 }
+                             }
+-                            if Some(baseline.content_state) == saved_state {
+-                                if let Ok(mut status) = recovery_status.lock() {
+-                                    *status = Default::default();
+-                                }
+-                            } else {
+-                                retry_recovery = true;
+-                                recovery_edits.push(bareline_file_io::recovery::RecoveryEdit {
+-                                    offset: 0,
+-                                    removed: Vec::new(),
+-                                    inserted: Vec::new(),
+-                                });
++                            Action::Read(offset) => {
++                                start = offset;
++                                caret = offset;
+                             }
+-                        }
+-                        Action::Read(offset) => {
+-                            start = offset;
+-                            caret = offset;
+-                        }
+-                        Action::Metadata(metadata) => {
+-                            let revision = opened.transcoded.document.snapshot().revision;
+-                            opened
+-                                .transcoded
+-                                .document
+-                                .apply_metadata(revision, metadata)
+-                                .map_err(|error| format!("{error:?}"))?;
+-                        }
+-                        Action::Source(prepared, completion) => {
+-                            ensure_stream_recovery(
+-                                &opened,
+-                                &baseline,
+-                                &recovery_config,
+-                                &recovery,
+-                                &recovery_status,
+-                                &notify,
+-                            )?;
+-                            let lease = opened
+-                                .transcoded
+-                                .document
+-                                .lease_source_transaction(prepared)
+-                                .map_err(|e| format!("{e:?}"))?;
+-                            if let Some(journal) = recovery.lock().map_err(|_| "Recovery actor stopped")?.as_mut() {
+-                                journal.append_sources(lease.snapshot(), lease.edits(), streaming_quota)?;
+-                            }
+-                            if let Some(selection) = lease.metadata().after.first() {
+-                                caret = selection.caret.0;
+-                                start = caret.saturating_sub(WINDOW / 2);
+-                                committed_selection = Some(crate::power::SelectionSet {
+-                                    selections: lease
+-                                        .metadata()
+-                                        .after
+-                                        .iter()
+-                                        .map(|selection| Selection {
+-                                            anchor: selection.anchor.0,
+-                                            caret: selection.caret.0,
+-                                        })
+-                                        .collect(),
+-                                    primary: 0,
+-                                });
+-                            }
+-                            let revision = lease.publish();
+-                            if let Some(completion) = completion {
+-                                completion.complete_once(Ok(revision));
++                            Action::Metadata(metadata) => {
++                                let revision = opened.transcoded.document.snapshot().revision;
++                                opened
++                                    .transcoded
++                                    .document
++                                    .apply_metadata(revision, metadata)
++                                    .map_err(|error| format!("{error:?}"))?;
+                             }
+-                            streaming_protected = true;
+-                        }
+-                        Action::Prepared(transaction, completion) => {
+-                            if tail.is_some() {
+-                                return Err("Monitoring document is read-only".into());
++                            Action::Source(prepared, completion) => {
++                                ensure_stream_recovery(
++                                    &opened,
++                                    &baseline,
++                                    &recovery_config,
++                                    &recovery,
++                                    &recovery_status,
++                                    &notify,
++                                )?;
++                                let lease = opened
++                                    .transcoded
++                                    .document
++                                    .lease_source_transaction(prepared)
++                                    .map_err(|e| format!("{e:?}"))?;
++                                if let Some(journal) = recovery.lock().map_err(|_| "Recovery actor stopped")?.as_mut() {
++                                    journal.append_sources(lease.snapshot(), lease.edits(), streaming_quota)?;
++                                }
++                                if let Some(selection) = lease.metadata().after.first() {
++                                    caret = selection.caret.0;
++                                    start = caret.saturating_sub(WINDOW / 2);
++                                    committed_selection = Some(crate::power::SelectionSet {
++                                        selections: lease
++                                            .metadata()
++                                            .after
++                                            .iter()
++                                            .map(|selection| Selection {
++                                                anchor: selection.anchor.0,
++                                                caret: selection.caret.0,
++                                            })
++                                            .collect(),
++                                        primary: 0,
++                                    });
++                                }
++                                let revision = lease.publish();
++                                if let Some(completion) = completion {
++                                    completion.complete_once(Ok(revision));
++                                }
++                                streaming_protected = true;
+                             }
+-                            let snapshot = opened.transcoded.document.snapshot();
+-                            if transaction.base_revision != snapshot.revision {
+-                                return Err("Replacement source changed".into());
++                            Action::Prepared(transaction, completion) => {
++                                if tail.is_some() {
++                                    return Err("Monitoring document is read-only".into());
++                                }
++                                let snapshot = opened.transcoded.document.snapshot();
++                                if transaction.base_revision != snapshot.revision {
++                                    return Err("Replacement source changed".into());
++                                }
++                                let mut windows = Vec::new();
++                                let mut used = 0usize;
++                                for edit in &transaction.edits {
++                                    cancellation.check().map_err(|error| format!("{error:?}"))?;
++                                    let length = edit
++                                        .range
++                                        .end
++                                        .0
++                                        .checked_sub(edit.range.start.0)
++                                        .ok_or("Invalid replacement range")?;
++                                    used = used
++                                        .checked_add(length)
++                                        .and_then(|value| value.checked_add(edit.insert.len() + 128))
++                                        .ok_or("Replacement staging limit")?;
++                                    if used > 16 * 1024 * 1024 {
++                                        return Err("Replacement staging limit".into());
++                                    }
++                                    let window = read_window(
++                                        &mut opened,
++                                        &mut tail,
++                                        &snapshot,
++                                        edit.range.start.0.saturating_sub(4),
++                                        length + 8,
++                                        &budget,
++                                        &cancellation,
++                                        &source_mismatch,
++                                    )?;
++                                    let from = edit
++                                        .range
++                                        .start
++                                        .0
++                                        .checked_sub(window.range().start.0)
++                                        .ok_or("Invalid replacement boundary")?;
++                                    let to = edit
++                                        .range
++                                        .end
++                                        .0
++                                        .checked_sub(window.range().start.0)
++                                        .ok_or("Invalid replacement boundary")?;
++                                    let removed = window.text().get(from..to).ok_or("Invalid replacement boundary")?;
++                                    recovery_edits.push(bareline_file_io::recovery::RecoveryEdit {
++                                        offset: edit.range.start.0 as u64,
++                                        removed: removed.as_bytes().to_vec(),
++                                        inserted: edit.insert.as_bytes().to_vec(),
++                                    });
++                                    windows.push(window);
++                                }
++                                let revision = opened
++                                    .transcoded
++                                    .document
++                                    .apply_materialized(transaction, &windows)
++                                    .map_err(|error| format!("{error:?}"))?;
++                                if let Some(completion) = completion {
++                                    completion.complete_once(Ok(revision));
++                                }
++                                caret = caret.min(opened.transcoded.document.snapshot().len());
++                                start = start.min(caret);
+                             }
+-                            let mut windows = Vec::new();
+-                            let mut used = 0usize;
+-                            for edit in &transaction.edits {
+-                                cancellation.check().map_err(|error| format!("{error:?}"))?;
+-                                let length = edit
+-                                    .range
++                            Action::Edit { range, insert } => {
++                                let length = range
+                                     .end
+                                     .0
+-                                    .checked_sub(edit.range.start.0)
++                                    .checked_sub(range.start.0)
+                                     .ok_or("Invalid replacement range")?;
+-                                used = used
+-                                    .checked_add(length)
+-                                    .and_then(|value| value.checked_add(edit.insert.len() + 128))
+-                                    .ok_or("Replacement staging limit")?;
+-                                if used > 16 * 1024 * 1024 {
+-                                    return Err("Replacement staging limit".into());
++                                if insert.len() > WINDOW || length > WINDOW {
++                                    return Err("Edit exceeds the bounded viewport budget.".into());
+                                 }
++                                let snapshot = opened.transcoded.document.snapshot();
+                                 let window = read_window(
+                                     &mut opened,
+                                     &mut tail,
+                                     &snapshot,
+-                                    edit.range.start.0.saturating_sub(4),
+-                                    length + 8,
++                                    range.start.0.saturating_sub(4),
++                                    (length + 8).min(WINDOW + 8),
+                                     &budget,
+                                     &cancellation,
+                                     &source_mismatch,
+                                 )?;
+-                                let from = edit
+-                                    .range
++                                // Mirror the `Prepared` path: never index the read
++                                // window with unchecked arithmetic.
++                                let local_start = range
+                                     .start
+                                     .0
+                                     .checked_sub(window.range().start.0)
+                                     .ok_or("Invalid replacement boundary")?;
+-                                let to = edit
+-                                    .range
++                                let local_end = range
+                                     .end
+                                     .0
+                                     .checked_sub(window.range().start.0)
+                                     .ok_or("Invalid replacement boundary")?;
+-                                let removed = window.text().get(from..to).ok_or("Invalid replacement boundary")?;
++                                let removed = window
++                                    .text()
++                                    .get(local_start..local_end)
++                                    .ok_or("Invalid replacement boundary")?;
+                                 recovery_edits.push(bareline_file_io::recovery::RecoveryEdit {
+-                                    offset: edit.range.start.0 as u64,
++                                    offset: range.start.0 as u64,
+                                     removed: removed.as_bytes().to_vec(),
+-                                    inserted: edit.insert.as_bytes().to_vec(),
++                                    inserted: insert.as_bytes().to_vec(),
+                                 });
+-                                windows.push(window);
+-                            }
+-                            let revision = opened
+-                                .transcoded
+-                                .document
+-                                .apply_materialized(transaction, &windows)
+-                                .map_err(|error| format!("{error:?}"))?;
+-                            if let Some(completion) = completion {
+-                                completion.complete_once(Ok(revision));
++                                caret = range.start.0 + insert.len();
++                                opened
++                                    .transcoded
++                                    .document
++                                    .apply_materialized(
++                                        EditTransaction {
++                                            base_revision: revision,
++                                            edits: vec![Edit { range, insert }],
++                                        },
++                                        &[window],
++                                    )
++                                    .map_err(|error| format!("{error:?}"))?;
++                                start = start.min(caret);
+                             }
+-                            caret = caret.min(opened.transcoded.document.snapshot().len());
+-                            start = start.min(caret);
+-                        }
+-                        Action::Edit { range, insert } => {
+-                            let length = range
+-                                .end
+-                                .0
+-                                .checked_sub(range.start.0)
+-                                .ok_or("Invalid replacement range")?;
+-                            if insert.len() > WINDOW || length > WINDOW {
+-                                return Err("Edit exceeds the bounded viewport budget.".into());
++                            Action::Undo | Action::Redo => {
++                                let undo = matches!(action, Action::Undo);
++                                ensure_stream_recovery(
++                                    &opened,
++                                    &baseline,
++                                    &recovery_config,
++                                    &recovery,
++                                    &recovery_status,
++                                    &notify,
++                                )?;
++                                let prepared = opened
++                                    .transcoded
++                                    .document
++                                    .prepare_source_history(undo, &budget)
++                                    .map_err(|e| format!("{e:?}"))?;
++                                let lease = opened
++                                    .transcoded
++                                    .document
++                                    .lease_source_history(prepared)
++                                    .map_err(|e| format!("{e:?}"))?;
++                                if let Some(journal) = recovery.lock().map_err(|_| "Recovery actor stopped")?.as_mut() {
++                                    journal.append_source_history(lease.snapshot(), lease.edits(), streaming_quota)?;
++                                }
++                                let selections = if undo {
++                                    &lease.metadata().before
++                                } else {
++                                    &lease.metadata().after
++                                };
++                                if let Some(selection) = selections.first() {
++                                    caret = selection.caret.0;
++                                    start = caret.saturating_sub(WINDOW / 2);
++                                    committed_selection = Some(crate::power::SelectionSet {
++                                        selections: selections
++                                            .iter()
++                                            .map(|selection| Selection {
++                                                anchor: selection.anchor.0,
++                                                caret: selection.caret.0,
++                                            })
++                                            .collect(),
++                                        primary: 0,
++                                    });
++                                }
++                                lease.publish();
++                                streaming_protected = true;
+                             }
+-                            let snapshot = opened.transcoded.document.snapshot();
+-                            let window = read_window(
+-                                &mut opened,
+-                                &mut tail,
+-                                &snapshot,
+-                                range.start.0.saturating_sub(4),
+-                                (length + 8).min(WINDOW + 8),
+-                                &budget,
+-                                &cancellation,
+-                                &source_mismatch,
+-                            )?;
+-                            // Mirror the `Prepared` path: never index the read
+-                            // window with unchecked arithmetic.
+-                            let local_start = range
+-                                .start
+-                                .0
+-                                .checked_sub(window.range().start.0)
+-                                .ok_or("Invalid replacement boundary")?;
+-                            let local_end = range
+-                                .end
+-                                .0
+-                                .checked_sub(window.range().start.0)
+-                                .ok_or("Invalid replacement boundary")?;
+-                            let removed = window
+-                                .text()
+-                                .get(local_start..local_end)
+-                                .ok_or("Invalid replacement boundary")?;
+-                            recovery_edits.push(bareline_file_io::recovery::RecoveryEdit {
+-                                offset: range.start.0 as u64,
+-                                removed: removed.as_bytes().to_vec(),
+-                                inserted: insert.as_bytes().to_vec(),
+-                            });
+-                            caret = range.start.0 + insert.len();
+-                            opened
+-                                .transcoded
+-                                .document
+-                                .apply_materialized(
+-                                    EditTransaction {
+-                                        base_revision: revision,
+-                                        edits: vec![Edit { range, insert }],
++                            Action::Save {
++                                copy_only,
++                                destination,
++                                platform,
++                            } => {
++                                // Extract the save inputs while the actor is still
++                                // locked; the save/fingerprint policy lives in
++                                // `file-io`'s `paged_service`.
++                                let snapshot = opened.transcoded.document.snapshot();
++                                if destination.document != snapshot.identity_token() {
++                                    return Err("Save destination expired because the document changed.".into());
++                                }
++                                let store = opened.transcoded.store.clone();
++                                let generation = opened.transcoded.source.source().generation();
++                                let source_path = opened.path.clone();
++                                let recovered_origin = opened.recovery_origin.is_some();
++                                // Release the actor for the duration of the full-file write.
++                                // A Save is only reached when monitoring is off, so `tail`
++                                // is `None`; both guards drop in reverse lock order (tail
++                                // then actor) and are re-acquired in order afterwards, so
++                                // peers and the read window keep serving this document
++                                // instead of spinning on the actor throughout the write.
++                                drop(tail);
++                                drop(opened);
++                                actor_gate.signal();
++                                let write = bareline_file_io::paged_service::save(
++                                    bareline_file_io::paged_service::PagedSaveRequest {
++                                        store,
++                                        generation,
++                                        snapshot,
++                                        target: &destination.path,
++                                        condition: &destination.condition,
++                                        source_path: &source_path,
++                                        recovered_origin,
++                                        copy_only,
++                                        platform: platform.as_ref(),
++                                        cancellation: &cancellation,
++                                        encoding_failure: encoding_failure.as_ref(),
+                                     },
+-                                    &[window],
+-                                )
+-                                .map_err(|error| format!("{error:?}"))?;
+-                            start = start.min(caret);
+-                        }
+-                        Action::Undo | Action::Redo => {
+-                            let undo = matches!(action, Action::Undo);
+-                            ensure_stream_recovery(
+-                                &opened,
+-                                &baseline,
+-                                &recovery_config,
+-                                &recovery,
+-                                &recovery_status,
+-                                &notify,
+-                            )?;
+-                            let prepared = opened
+-                                .transcoded
+-                                .document
+-                                .prepare_source_history(undo, &budget)
+-                                .map_err(|e| format!("{e:?}"))?;
+-                            let lease = opened
+-                                .transcoded
+-                                .document
+-                                .lease_source_history(prepared)
+-                                .map_err(|e| format!("{e:?}"))?;
+-                            if let Some(journal) = recovery.lock().map_err(|_| "Recovery actor stopped")?.as_mut() {
+-                                journal.append_source_history(lease.snapshot(), lease.edits(), streaming_quota)?;
+-                            }
+-                            let selections = if undo {
+-                                &lease.metadata().before
+-                            } else {
+-                                &lease.metadata().after
+-                            };
+-                            if let Some(selection) = selections.first() {
+-                                caret = selection.caret.0;
+-                                start = caret.saturating_sub(WINDOW / 2);
+-                                committed_selection = Some(crate::power::SelectionSet {
+-                                    selections: selections
+-                                        .iter()
+-                                        .map(|selection| Selection {
+-                                            anchor: selection.anchor.0,
+-                                            caret: selection.caret.0,
+-                                        })
+-                                        .collect(),
+-                                    primary: 0,
+-                                });
++                                );
++                                opened = actor.lock().map_err(|_| "Paged actor stopped.")?;
++                                tail = tail_arc.lock().map_err(|_| "Tail actor stopped.")?;
++                                let result = write?;
++                                if !copy_only {
++                                    opened.fingerprint = result.fingerprint.clone();
++                                    opened.path = destination.path;
++                                    saved = Some(result.fingerprint);
++                                }
+                             }
+-                            lease.publish();
+-                            streaming_protected = true;
+                         }
+-                        Action::Save {
+-                            copy_only,
+-                            destination,
+-                            platform,
+-                        } => {
+-                            // Extract the save inputs while the actor is still
+-                            // locked; the save/fingerprint policy lives in
+-                            // `file-io`'s `paged_service`.
+-                            let snapshot = opened.transcoded.document.snapshot();
+-                            if destination.document != snapshot.identity_token() {
+-                                return Err("Save destination expired because the document changed.".into());
++                        let snapshot = opened.transcoded.document.snapshot();
++                        let (peer_epoch, shared_saved_state, shared_save_as_required) = {
++                            let mut peer = peer.lock().map_err(|_| "Peer state stopped")?;
++                            if saved.is_some() {
++                                peer.saved_state = Some(snapshot.content_state);
++                                peer.save_as_required = false;
+                             }
+-                            let store = opened.transcoded.store.clone();
+-                            let generation = opened.transcoded.source.source().generation();
+-                            let source_path = opened.path.clone();
+-                            let recovered_origin = opened.recovery_origin.is_some();
+-                            // Release the actor for the duration of the full-file write.
+-                            // A Save is only reached when monitoring is off, so `tail`
+-                            // is `None`; both guards drop in reverse lock order (tail
+-                            // then actor) and are re-acquired in order afterwards, so
+-                            // peers and the read window keep serving this document
+-                            // instead of spinning on the actor throughout the write.
+-                            drop(tail);
+-                            drop(opened);
+-                            actor_gate.signal();
+-                            let write = bareline_file_io::paged_service::save(
+-                                bareline_file_io::paged_service::PagedSaveRequest {
+-                                    store,
+-                                    generation,
+-                                    snapshot,
+-                                    target: &destination.path,
+-                                    condition: &destination.condition,
+-                                    source_path: &source_path,
+-                                    recovered_origin,
+-                                    copy_only,
+-                                    platform: platform.as_ref(),
+-                                    cancellation: &cancellation,
+-                                    encoding_failure: encoding_failure.as_ref(),
+-                                },
+-                            );
+-                            opened = actor.lock().map_err(|_| "Paged actor stopped.")?;
+-                            tail = tail_arc.lock().map_err(|_| "Tail actor stopped.")?;
+-                            let result = write?;
+-                            if !copy_only {
+-                                opened.fingerprint = result.fingerprint.clone();
+-                                opened.path = destination.path;
+-                                saved = Some(result.fingerprint);
++                            if tail.is_some() {
++                                peer.saved_state = Some(snapshot.content_state);
+                             }
+-                        }
+-                    }
+-                    let snapshot = opened.transcoded.document.snapshot();
+-                    let (peer_epoch, shared_saved_state, shared_save_as_required) = {
+-                        let mut peer = peer.lock().map_err(|_| "Peer state stopped")?;
++                            if snapshot.content_state != baseline.content_state
++                                || snapshot.revision != baseline.revision
++                                || opened.path != previous_path
++                                || opened.fingerprint != previous_fingerprint
++                                || saved.is_some()
++                                || previously_following != tail.is_some()
++                            {
++                                peer.epoch = peer.epoch.wrapping_add(1);
++                            }
++                            (peer.epoch, peer.saved_state, peer.save_as_required)
++                        };
+                         if saved.is_some() {
+-                            peer.saved_state = Some(snapshot.content_state);
+-                            peer.save_as_required = false;
+-                        }
+-                        if tail.is_some() {
+-                            peer.saved_state = Some(snapshot.content_state);
++                            let retired = recovery.lock().map_err(|_| "Recovery actor stopped")?.take();
++                            if let Some(retired) = retired {
++                                let path = retired.directory().to_path_buf();
++                                match retired.retire() {
++                                    Ok(_) => {
++                                        if let Ok(mut status) = recovery_status.lock() {
++                                            *status = Default::default();
++                                        }
++                                    }
++                                    Err(error) => {
++                                        failed_retirements
++                                            .lock()
++                                            .map_err(|_| "Recovery retirement state stopped")?
++                                            .push(path);
++                                        if let Ok(mut status) = recovery_status.lock() {
++                                            status.error = Some(error);
++                                        }
++                                    }
++                                }
++                            }
+                         }
+-                        if snapshot.content_state != baseline.content_state
+-                            || snapshot.revision != baseline.revision
+-                            || opened.path != previous_path
+-                            || opened.fingerprint != previous_fingerprint
+-                            || saved.is_some()
+-                            || previously_following != tail.is_some()
++                        if !streaming_protected
++                            && (!recovery_edits.is_empty() || snapshot.metadata() != baseline.metadata())
+                         {
+-                            peer.epoch = peer.epoch.wrapping_add(1);
+-                        }
+-                        (peer.epoch, peer.saved_state, peer.save_as_required)
+-                    };
+-                    if saved.is_some() {
+-                        let retired = recovery.lock().map_err(|_| "Recovery actor stopped")?.take();
+-                        if let Some(retired) = retired {
+-                            let path = retired.directory().to_path_buf();
+-                            match retired.retire() {
+-                                Ok(_) => {
+-                                    if let Ok(mut status) = recovery_status.lock() {
+-                                        *status = Default::default();
++                            if let Some((root, platform)) = recovery_config {
++                                let protected = (|| -> Result<(), String> {
++                                    let mut journal = recovery.lock().map_err(|_| "Recovery actor stopped")?;
++                                    if retry_recovery {
++                                        *journal = None;
+                                     }
+-                                }
+-                                Err(error) => {
+-                                    failed_retirements
+-                                        .lock()
+-                                        .map_err(|_| "Recovery retirement state stopped")?
+-                                        .push(path);
++                                    if journal.is_none() {
++                                        *journal = Some(bareline_file_io::paged_recovery::PagedRecovery::create(
++                                            &root,
++                                            opened.transcoded.store.clone(),
++                                            opened.recovery_origin.is_none().then(|| opened.path.clone()),
++                                            baseline,
++                                            platform,
++                                            recovery_status.clone(),
++                                            notify.clone(),
++                                        )?);
++                                    }
++                                    journal.as_mut().unwrap().append(&snapshot, &recovery_edits)
++                                })();
++                                if let Err(error) = protected {
+                                     if let Ok(mut status) = recovery_status.lock() {
+                                         status.error = Some(error);
+                                     }
+                                 }
+                             }
+                         }
+-                    }
+-                    if !streaming_protected
+-                        && (!recovery_edits.is_empty() || snapshot.metadata() != baseline.metadata())
+-                    {
+-                        if let Some((root, platform)) = recovery_config {
+-                            let protected = (|| -> Result<(), String> {
+-                                let mut journal = recovery.lock().map_err(|_| "Recovery actor stopped")?;
+-                                if retry_recovery {
+-                                    *journal = None;
+-                                }
+-                                if journal.is_none() {
+-                                    *journal = Some(bareline_file_io::paged_recovery::PagedRecovery::create(
+-                                        &root,
+-                                        opened.transcoded.store.clone(),
+-                                        opened.recovery_origin.is_none().then(|| opened.path.clone()),
+-                                        baseline,
+-                                        platform,
+-                                        recovery_status.clone(),
+-                                        notify.clone(),
+-                                    )?);
+-                                }
+-                                journal.as_mut().unwrap().append(&snapshot, &recovery_edits)
+-                            })();
+-                            if let Err(error) = protected {
+-                                if let Ok(mut status) = recovery_status.lock() {
+-                                    status.error = Some(error);
+-                                }
+-                            }
+-                        }
+-                    }
+-                    start = start.min(snapshot.len());
+-                    caret = caret.min(snapshot.len());
+-                    let window = read_window(
+-                        &mut opened,
+-                        &mut tail,
+-                        &snapshot,
+-                        start,
+-                        WINDOW,
+-                        &budget,
+-                        &cancellation,
+-                        &source_mismatch,
+-                    );
+-                    Ok(Completed {
+-                        selections: committed_selection,
+-                        append_receipt: tail.as_ref().and_then(|tail| tail.append_receipt()),
+-                        generation_owner: generation_owner.lock().map_err(|_| "Generation owner failed")?.clone(),
+-                        peer_epoch,
+-                        saved_state: shared_saved_state,
+-                        save_as_required: shared_save_as_required,
+-                        following: tail.is_some(),
+-                        tail_pending: tail.as_ref().is_some_and(|s| s.pending()),
+-                        source_changed: tail.as_ref().is_some_and(|s| s.source_changed),
+-                        fingerprint: opened.fingerprint.clone(),
+-                        can_undo: opened.transcoded.document.can_undo(),
+-                        can_redo: opened.transcoded.document.can_redo(),
+-                        snapshot,
+-                        window,
+-                        path: opened.path.clone(),
+-                        caret,
+-                        saved,
+-                    })
+-                })();
+-                // The actor guard has dropped with the inner closure; wake any reader
+-                // waiting on the gate so it retries immediately instead of sleeping out
+-                // its timeout.
+-                actor_gate.signal();
+-                let _ = sender.try_send(result);
+-                notify();
+-            }))
++                        start = start.min(snapshot.len());
++                        caret = caret.min(snapshot.len());
++                        let window = read_window(
++                            &mut opened,
++                            &mut tail,
++                            &snapshot,
++                            start,
++                            WINDOW,
++                            &budget,
++                            &cancellation,
++                            &source_mismatch,
++                        );
++                        Ok(Completed {
++                            selections: committed_selection,
++                            append_receipt: tail.as_ref().and_then(|tail| tail.append_receipt()),
++                            generation_owner: generation_owner.lock().map_err(|_| "Generation owner failed")?.clone(),
++                            peer_epoch,
++                            saved_state: shared_saved_state,
++                            save_as_required: shared_save_as_required,
++                            following: tail.is_some(),
++                            tail_pending: tail.as_ref().is_some_and(|s| s.pending()),
++                            source_changed: tail.as_ref().is_some_and(|s| s.source_changed),
++                            fingerprint: opened.fingerprint.clone(),
++                            can_undo: opened.transcoded.document.can_undo(),
++                            can_redo: opened.transcoded.document.can_redo(),
++                            snapshot,
++                            window,
++                            path: opened.path.clone(),
++                            caret,
++                            saved,
++                        })
++                    })();
++                    // The actor guard has dropped with the inner closure; wake any reader
++                    // waiting on the gate so it retries immediately instead of sleeping out
++                    // its timeout.
++                    actor_gate.signal();
++                    completion.complete(result);
++                }),
++            )
+             .map_err(|_| "Paged worker queue is full; retry.".to_owned())?;
+         self.pending = Some(receiver);
+         self.pending_moves_selection = moves_selection;
+@@ -3684,6 +3742,25 @@ mod peer_tests {
+         assert!(elapsed >= timeout, "returned before the timeout elapsed: {elapsed:?}");
+         assert!(elapsed < timeout * 20, "wait overran its bound: {elapsed:?}");
+     }
++    #[test]
++    fn paged_adapter_reports_terminal_failure_and_wakes_after_unwind() {
++        let (result_tx, result_rx) = mpsc::sync_channel(1);
++        let (wake_tx, wake_rx) = mpsc::sync_channel(1);
++        worker()
++            .submit(
++                WorkKind::Interactive,
++                Box::new(move || {
++                    let _completion = JobCompletion::<()>::new(result_tx, Arc::new(move || wake_tx.send(()).unwrap()));
++                    panic!("controlled paged adapter failure");
++                }),
++            )
++            .unwrap();
++        wake_rx.recv_timeout(Duration::from_secs(5)).unwrap();
++        assert_eq!(
++            result_rx.recv_timeout(Duration::from_secs(5)).unwrap(),
++            Err("Paged worker failed".into())
++        );
++    }
+     struct Platform;
+     impl LocalFileSystem for Platform {
+         fn validate_target(&self, _: &Path) -> std::io::Result<()> {
+@@ -3728,6 +3805,145 @@ mod peer_tests {
+             std::thread::yield_now();
+         }
+     }
++    struct GatedPlatform {
++        started: std::sync::mpsc::SyncSender<()>,
++        release: Mutex<std::sync::mpsc::Receiver<()>>,
++    }
++    impl LocalFileSystem for GatedPlatform {
++        fn validate_target(&self, path: &Path) -> std::io::Result<()> {
++            Platform.validate_target(path)
++        }
++        fn available_space(&self, path: &Path) -> std::io::Result<u64> {
++            Platform.available_space(path)
++        }
++        fn guard_directory(&self, path: &Path) -> std::io::Result<Arc<dyn Send + Sync>> {
++            Platform.guard_directory(path)
++        }
++        fn open_sealed_read(&self, path: &Path) -> std::io::Result<File> {
++            Platform.open_sealed_read(path)
++        }
++        fn identity(&self, file: &File) -> std::io::Result<bareline_platform::FileIdentity> {
++            Platform.identity(file)
++        }
++        fn commit(&self, staged: &Path, target: &Path, existed: bool) -> std::io::Result<()> {
++            self.started.send(()).map_err(std::io::Error::other)?;
++            self.release
++                .lock()
++                .unwrap_or_else(|error| error.into_inner())
++                .recv()
++                .map_err(std::io::Error::other)?;
++            Platform.commit(staged, target, existed)
++        }
++    }
++    struct ReleaseOnDrop(Option<std::sync::mpsc::SyncSender<()>>);
++    impl Drop for ReleaseOnDrop {
++        fn drop(&mut self) {
++            if let Some(release) = self.0.take() {
++                let _ = release.send(());
++            }
++        }
++    }
++    #[test]
++    fn paged_save_does_not_strand_another_documents_edit_and_undo() {
++        use bareline_file_io::{
++            codecs::disk::DiskOptions,
++            lifecycle::{PagedOpenRequest, TranscodeOutcome, open_paged_encoded},
++            source::SourceOptions,
++        };
++        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
++        let root = std::env::temp_dir().join(format!(
++            "bareline-shared-paged-worker-{}-{}",
++            std::process::id(),
++            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
++        ));
++        std::fs::create_dir(&root).unwrap();
++        let open = |name: &str, text: &str| {
++            let path = root.join(name);
++            std::fs::write(&path, text).unwrap();
++            let budget = Budget::new(16 << 20);
++            let TranscodeOutcome::Complete(opened) = open_paged_encoded(
++                PagedOpenRequest {
++                    path,
++                    bytes: budget.clone(),
++                    history: Budget::new(4 << 20),
++                    cache: root.join(format!("{name}-cache")),
++                    options: DiskOptions {
++                        temp_quota_bytes: 4 << 20,
++                        interpret: None,
++                    },
++                    source_options: SourceOptions {
++                        resident_max_bytes: 0,
++                        ..Default::default()
++                    },
++                },
++                Arc::new(Platform),
++                Cancellation::default(),
++                |_| {},
++            ) else {
++                panic!("paged fixture open failed")
++            };
++            PagedEditorSurface::new(opened, budget, Arc::new(|| {})).unwrap()
++        };
++        let first_text = "first document\n";
++        let second_text = "second document\n";
++        let mut first = open("first.txt", first_text);
++        let mut second = open("second.txt", second_text);
++        drain(&mut first);
++        drain(&mut second);
++
++        let (save_started_tx, save_started_rx) = mpsc::sync_channel(1);
++        let (save_release_tx, save_release_rx) = mpsc::sync_channel(1);
++        let mut release = ReleaseOnDrop(Some(save_release_tx));
++        let saved = root.join("saved.txt");
++        first
++            .save(
++                saved.clone(),
++                None,
++                Arc::new(GatedPlatform {
++                    started: save_started_tx,
++                    release: Mutex::new(save_release_rx),
++                }),
++            )
++            .unwrap();
++        save_started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
++
++        // Advance three queue positions. With the former four private queues,
++        // the following real edit was assigned behind the blocked save.
++        for _ in 0..3 {
++            let (done_tx, done_rx) = mpsc::sync_channel(1);
++            worker()
++                .submit(WorkKind::General, Box::new(move || done_tx.send(()).unwrap()))
++                .unwrap();
++            done_rx.recv_timeout(Duration::from_secs(5)).unwrap();
++        }
++        second.enqueue(Input::Insert("X".into()));
++        drain(&mut second);
++        assert_eq!(
++            second
++                .surface
++                .snapshot()
++                .read(TextOffset(0)..TextOffset(second.surface.snapshot().len()), WINDOW)
++                .unwrap(),
++            format!("X{second_text}")
++        );
++        second.enqueue(Input::Undo);
++        drain(&mut second);
++        assert_eq!(
++            second
++                .surface
++                .snapshot()
++                .read(TextOffset(0)..TextOffset(second.surface.snapshot().len()), WINDOW)
++                .unwrap(),
++            second_text
++        );
++
++        release.0.take().unwrap().send(()).unwrap();
++        drain(&mut first);
++        assert_eq!(std::fs::read(&saved).unwrap(), first_text.as_bytes());
++        drop(first);
++        drop(second);
++        std::fs::remove_dir_all(root).unwrap();
++    }
+     #[test]
+     fn staged_multicaret_input_uses_global_ranges_and_one_history_entry() {
+         use bareline_file_io::{
+diff --git a/crates/platform/src/executor.rs b/crates/platform/src/executor.rs
+new file mode 100644
+index 0000000..afd1afa
+--- /dev/null
++++ b/crates/platform/src/executor.rs
+@@ -0,0 +1,397 @@
++// SPDX-License-Identifier: MPL-2.0
++//! Small fixed-size executor with one bounded FIFO queue shared by every worker.
++
++use std::collections::VecDeque;
++use std::sync::atomic::{AtomicUsize, Ordering};
++use std::sync::{Arc, Condvar, Mutex};
++
++pub type Job = Box<dyn FnOnce() + Send + 'static>;
++
++/// Privacy-safe classification used only for aggregate scheduling diagnostics.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++#[repr(usize)]
++pub enum WorkKind {
++    General = 0,
++    Interactive = 1,
++    Bulk = 2,
++    Maintenance = 3,
++}
++
++const WORK_KIND_COUNT: usize = 4;
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum SubmitError {
++    Busy,
++    Closed,
++}
++
++#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
++pub struct KindStats {
++    pub submitted: usize,
++    pub completed: usize,
++}
++
++#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
++pub struct ExecutorStats {
++    pub submitted: usize,
++    pub running: usize,
++    pub queued: usize,
++    pub rejected: usize,
++    pub completed: usize,
++    pub peak_running: usize,
++    pub workers: usize,
++    pub by_kind: [KindStats; WORK_KIND_COUNT],
++}
++
++struct Queued {
++    kind: WorkKind,
++    job: Job,
++}
++
++#[derive(Default)]
++struct QueueState {
++    jobs: VecDeque<Queued>,
++    closed: bool,
++}
++
++#[derive(Default)]
++struct Counters {
++    submitted: AtomicUsize,
++    running: AtomicUsize,
++    rejected: AtomicUsize,
++    completed: AtomicUsize,
++    peak_running: AtomicUsize,
++    kind_submitted: [AtomicUsize; WORK_KIND_COUNT],
++    kind_completed: [AtomicUsize; WORK_KIND_COUNT],
++}
++
++struct Shared {
++    queue: Mutex<QueueState>,
++    ready: Condvar,
++    queue_capacity: usize,
++    counters: Counters,
++    live_workers: AtomicUsize,
++    worker_exited: Condvar,
++}
++
++struct WorkerExit(Arc<Shared>);
++
++impl Drop for WorkerExit {
++    fn drop(&mut self) {
++        // Pair the exit predicate transition with the mutex used by waiters so
++        // the final notification cannot land between their load and wait.
++        let _queue = self.0.queue.lock().unwrap_or_else(|error| error.into_inner());
++        self.0.live_workers.fetch_sub(1, Ordering::SeqCst);
++        self.0.worker_exited.notify_all();
++    }
++}
++
++struct Running {
++    shared: Arc<Shared>,
++    kind: WorkKind,
++}
++
++impl Running {
++    fn begin(shared: Arc<Shared>, kind: WorkKind) -> Self {
++        let running = shared.counters.running.fetch_add(1, Ordering::SeqCst) + 1;
++        shared.counters.peak_running.fetch_max(running, Ordering::SeqCst);
++        Self { shared, kind }
++    }
++}
++
++impl Drop for Running {
++    fn drop(&mut self) {
++        self.shared.counters.running.fetch_sub(1, Ordering::SeqCst);
++        self.shared.counters.completed.fetch_add(1, Ordering::SeqCst);
++        self.shared.counters.kind_completed[self.kind as usize].fetch_add(1, Ordering::SeqCst);
++    }
++}
++
++/// A fixed worker set consuming one total-capacity FIFO queue.
++///
++/// FIFO admission gives every accepted job a finite position without introducing
++/// priority starvation. Submission never blocks. Closing drains accepted jobs and
++/// rejects new work. Dropping the executor closes admission without blocking;
++/// detached workers retain shared state until accepted jobs drain and they exit.
++pub struct BoundedExecutor {
++    shared: Arc<Shared>,
++    workers: Vec<std::thread::JoinHandle<()>>,
++}
++
++impl BoundedExecutor {
++    pub fn new(threads: usize, queue_capacity: usize, thread_name: &str) -> Self {
++        Self::with_spawner(threads, queue_capacity, thread_name, |name, run| {
++            std::thread::Builder::new().name(name).spawn(run)
++        })
++    }
++
++    fn with_spawner(
++        threads: usize,
++        queue_capacity: usize,
++        thread_name: &str,
++        mut spawn: impl FnMut(String, Job) -> std::io::Result<std::thread::JoinHandle<()>>,
++    ) -> Self {
++        let shared = Arc::new(Shared {
++            queue: Mutex::new(QueueState::default()),
++            ready: Condvar::new(),
++            queue_capacity,
++            counters: Counters::default(),
++            live_workers: AtomicUsize::new(0),
++            worker_exited: Condvar::new(),
++        });
++        let mut workers = Vec::with_capacity(threads);
++        for index in 0..threads {
++            let worker_shared = shared.clone();
++            let spawned = spawn(
++                format!("{thread_name}-{index}"),
++                Box::new(move || worker_loop(worker_shared)),
++            );
++            if let Ok(handle) = spawned {
++                shared.live_workers.fetch_add(1, Ordering::SeqCst);
++                workers.push(handle);
++            }
++        }
++        Self { shared, workers }
++    }
++
++    pub fn submit(&self, kind: WorkKind, job: Job) -> Result<(), SubmitError> {
++        if self.worker_count() == 0 {
++            self.shared.counters.rejected.fetch_add(1, Ordering::SeqCst);
++            return Err(SubmitError::Closed);
++        }
++        let mut queue = self.shared.queue.lock().unwrap_or_else(|error| error.into_inner());
++        if queue.closed {
++            self.shared.counters.rejected.fetch_add(1, Ordering::SeqCst);
++            return Err(SubmitError::Closed);
++        }
++        if queue.jobs.len() >= self.shared.queue_capacity {
++            self.shared.counters.rejected.fetch_add(1, Ordering::SeqCst);
++            return Err(SubmitError::Busy);
++        }
++        queue.jobs.push_back(Queued { kind, job });
++        self.shared.counters.submitted.fetch_add(1, Ordering::SeqCst);
++        self.shared.counters.kind_submitted[kind as usize].fetch_add(1, Ordering::SeqCst);
++        drop(queue);
++        self.shared.ready.notify_one();
++        Ok(())
++    }
++
++    pub fn close(&self) {
++        let mut queue = self.shared.queue.lock().unwrap_or_else(|error| error.into_inner());
++        queue.closed = true;
++        drop(queue);
++        self.shared.ready.notify_all();
++    }
++
++    pub fn worker_count(&self) -> usize {
++        self.shared.live_workers.load(Ordering::Acquire)
++    }
++
++    pub fn stats(&self) -> ExecutorStats {
++        let queued = self
++            .shared
++            .queue
++            .lock()
++            .unwrap_or_else(|error| error.into_inner())
++            .jobs
++            .len();
++        let mut by_kind = [KindStats::default(); WORK_KIND_COUNT];
++        for (index, stats) in by_kind.iter_mut().enumerate() {
++            stats.submitted = self.shared.counters.kind_submitted[index].load(Ordering::SeqCst);
++            stats.completed = self.shared.counters.kind_completed[index].load(Ordering::SeqCst);
++        }
++        ExecutorStats {
++            submitted: self.shared.counters.submitted.load(Ordering::SeqCst),
++            running: self.shared.counters.running.load(Ordering::SeqCst),
++            queued,
++            rejected: self.shared.counters.rejected.load(Ordering::SeqCst),
++            completed: self.shared.counters.completed.load(Ordering::SeqCst),
++            peak_running: self.shared.counters.peak_running.load(Ordering::SeqCst),
++            workers: self.worker_count(),
++            by_kind,
++        }
++    }
++}
++
++impl Drop for BoundedExecutor {
++    fn drop(&mut self) {
++        self.close();
++        self.workers.clear();
++    }
++}
++
++fn worker_loop(shared: Arc<Shared>) {
++    let _exit = WorkerExit(shared.clone());
++    loop {
++        let queued = {
++            let mut queue = shared.queue.lock().unwrap_or_else(|error| error.into_inner());
++            while queue.jobs.is_empty() && !queue.closed {
++                queue = shared.ready.wait(queue).unwrap_or_else(|error| error.into_inner());
++            }
++            if queue.jobs.is_empty() && queue.closed {
++                return;
++            }
++            queue.jobs.pop_front().expect("non-empty executor queue")
++        };
++        let _running = Running::begin(shared.clone(), queued.kind);
++        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(queued.job));
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use std::sync::mpsc;
++    use std::time::Duration;
++
++    #[test]
++    fn idle_worker_takes_next_fifo_job() {
++        let executor = BoundedExecutor::new(2, 4, "shared-executor-test");
++        let (release_tx, release_rx) = mpsc::sync_channel(1);
++        let (started_tx, started_rx) = mpsc::sync_channel(2);
++        executor
++            .submit(
++                WorkKind::Bulk,
++                Box::new(move || {
++                    started_tx.send("long").unwrap();
++                    release_rx.recv().unwrap();
++                }),
++            )
++            .unwrap();
++        assert_eq!(started_rx.recv_timeout(Duration::from_secs(5)).unwrap(), "long");
++        let (second_tx, second_rx) = mpsc::sync_channel(1);
++        executor
++            .submit(WorkKind::General, Box::new(move || second_tx.send(()).unwrap()))
++            .unwrap();
++        second_rx.recv_timeout(Duration::from_secs(5)).unwrap();
++        let (short_tx, short_rx) = mpsc::sync_channel(1);
++        executor
++            .submit(WorkKind::Interactive, Box::new(move || short_tx.send(()).unwrap()))
++            .unwrap();
++        short_rx.recv_timeout(Duration::from_secs(5)).unwrap();
++        release_tx.send(()).unwrap();
++        assert_eq!(executor.stats().peak_running, 2);
++    }
++
++    #[test]
++    fn total_queue_cap_and_closed_pool_are_typed() {
++        let executor = BoundedExecutor::new(1, 1, "bounded-executor-test");
++        let (started_tx, started_rx) = mpsc::sync_channel(1);
++        let (release_tx, release_rx) = mpsc::sync_channel(1);
++        executor
++            .submit(
++                WorkKind::Bulk,
++                Box::new(move || {
++                    started_tx.send(()).unwrap();
++                    release_rx.recv().unwrap();
++                }),
++            )
++            .unwrap();
++        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
++        executor.submit(WorkKind::General, Box::new(|| {})).unwrap();
++        assert_eq!(
++            executor.submit(WorkKind::General, Box::new(|| {})),
++            Err(SubmitError::Busy)
++        );
++        release_tx.send(()).unwrap();
++        executor.close();
++        assert_eq!(
++            executor.submit(WorkKind::General, Box::new(|| {})),
++            Err(SubmitError::Closed)
++        );
++        assert_eq!(executor.stats().rejected, 2);
++    }
++
++    #[test]
++    fn failed_worker_spawn_exposes_reduced_capacity() {
++        let attempts = AtomicUsize::new(0);
++        let executor = BoundedExecutor::with_spawner(2, 4, "spawn-failure-test", |name, run| {
++            if attempts.fetch_add(1, Ordering::SeqCst) == 0 {
++                std::thread::Builder::new().name(name).spawn(run)
++            } else {
++                Err(std::io::Error::other("controlled worker spawn failure"))
++            }
++        });
++        assert_eq!(executor.worker_count(), 1);
++        let (done_tx, done_rx) = mpsc::sync_channel(1);
++        executor
++            .submit(WorkKind::General, Box::new(move || done_tx.send(()).unwrap()))
++            .unwrap();
++        done_rx.recv_timeout(Duration::from_secs(5)).unwrap();
++    }
++
++    #[test]
++    fn drop_closes_without_waiting_for_gated_work_then_worker_exits() {
++        let executor = BoundedExecutor::new(1, 2, "nonblocking-drop-test");
++        let shared = executor.shared.clone();
++        let (started_tx, started_rx) = mpsc::sync_channel(1);
++        let (release_tx, release_rx) = mpsc::sync_channel(1);
++        executor
++            .submit(
++                WorkKind::Bulk,
++                Box::new(move || {
++                    started_tx.send(()).unwrap();
++                    release_rx.recv().unwrap();
++                }),
++            )
++            .unwrap();
++        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
++
++        let (dropped_tx, dropped_rx) = mpsc::sync_channel(1);
++        std::thread::spawn(move || {
++            drop(executor);
++            dropped_tx.send(()).unwrap();
++        });
++        dropped_rx
++            .recv_timeout(Duration::from_secs(5))
++            .expect("executor drop blocked behind gated work");
++        assert_eq!(shared.live_workers.load(Ordering::SeqCst), 1);
++
++        release_tx.send(()).unwrap();
++        let mut queue = shared.queue.lock().unwrap();
++        while shared.live_workers.load(Ordering::SeqCst) != 0 {
++            let (next, timeout) = shared
++                .worker_exited
++                .wait_timeout(queue, Duration::from_secs(5))
++                .unwrap();
++            queue = next;
++            assert!(!timeout.timed_out(), "detached worker did not exit after draining");
++        }
++    }
++
++    #[test]
++    fn fifo_order_prevents_bulk_starvation() {
++        let executor = BoundedExecutor::new(1, 8, "fifo-executor-test");
++        let (release_tx, release_rx) = mpsc::sync_channel(1);
++        let (started_tx, started_rx) = mpsc::sync_channel(1);
++        executor
++            .submit(
++                WorkKind::Interactive,
++                Box::new(move || {
++                    started_tx.send(()).unwrap();
++                    release_rx.recv().unwrap();
++                }),
++            )
++            .unwrap();
++        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
++        let (order_tx, order_rx) = mpsc::sync_channel(3);
++        for (kind, value) in [
++            (WorkKind::Bulk, 1),
++            (WorkKind::Interactive, 2),
++            (WorkKind::Interactive, 3),
++        ] {
++            let order_tx = order_tx.clone();
++            executor
++                .submit(kind, Box::new(move || order_tx.send(value).unwrap()))
++                .unwrap();
++        }
++        release_tx.send(()).unwrap();
++        assert_eq!(order_rx.recv_timeout(Duration::from_secs(5)).unwrap(), 1);
++        assert_eq!(order_rx.recv_timeout(Duration::from_secs(5)).unwrap(), 2);
++        assert_eq!(order_rx.recv_timeout(Duration::from_secs(5)).unwrap(), 3);
++        let stats = executor.stats();
++        assert_eq!(stats.submitted, 4);
++        assert_eq!(stats.by_kind[WorkKind::Bulk as usize].submitted, 1);
++        assert_eq!(stats.by_kind[WorkKind::Interactive as usize].submitted, 3);
++    }
++}
+diff --git a/crates/platform/src/lib.rs b/crates/platform/src/lib.rs
+index c0eeb1c..ef6f7b3 100644
+--- a/crates/platform/src/lib.rs
++++ b/crates/platform/src/lib.rs
+@@ -1,5 +1,6 @@
+ // SPDX-License-Identifier: MPL-2.0
+ pub mod clipboard;
++pub mod executor;
+ pub mod remote_read;
+ pub use remote_read::{RemoteReadAccess, RemoteReadAction, RemoteReadGrant};
+ use std::path::{Path, PathBuf};
+diff --git a/docs/implementation/2026-09-12-audit-implementation/PR-T07.md b/docs/implementation/2026-09-12-audit-implementation/PR-T07.md
+new file mode 100644
+index 0000000..8e27615
+--- /dev/null
++++ b/docs/implementation/2026-09-12-audit-implementation/PR-T07.md
+@@ -0,0 +1,46 @@
++# PR-T07 — Shared worker scheduling
++
++Baseline: `1708befe0a119506cab01d854467cc8fc4130335`
++
++## Scope
++
++- Replace private per-worker queues with neutral shared bounded scheduling.
++- Adopt the executor in the app task pool and paged editor worker without reversing crate dependencies.
++- Preserve fixed worker limits, nonblocking admission, cancellation semantics, and document actor serialization.
++- Add deterministic scheduling, capacity, cancellation, shutdown, and paged-service regressions.
++
++## Decisions
++
++- `bareline-platform::executor::BoundedExecutor` owns one FIFO `VecDeque` with a documented total pending cap. All fixed workers consume that queue after releasing its mutex.
++- FIFO provides finite-position fairness without a priority scheduler. `WorkKind` classifies aggregate general, interactive, bulk, and maintenance counts without recording paths or document content.
++- Admission is nonblocking and returns typed `SubmitError::{Busy, Closed}`. Failed thread creation reduces reported live capacity.
++- Executor drop closes admission and detaches immediately. Accepted work drains against worker-owned shared state; UI/runtime destruction never joins a gated job.
++- The app task pool delegates scheduling and metrics to the neutral executor while retaining T06 cancellation, one-shot terminal outcomes, and sanitized panic behavior.
++- The paged worker preserves four threads and the former aggregate capacity of 64 pending jobs. Existing actor mutexes, `power_actor_busy`, cancellation, and identity/revision validation remain the mutation-order authority.
++- Paged result and linked-transfer adapters publish a sanitized failure before waking on unwind. Fire-and-forget spill cleanup clears its pending owner on unwind. Release `panic=abort` remains unchanged.
++- The T03 prepared save destination, document identity validation, and write condition remain the save boundary after rebasing onto the integrated T03 snapshot.
++
++## Changed files
++
++- `crates/platform/src/executor.rs`
++- `crates/platform/src/lib.rs`
++- `crates/app/src/task.rs`
++- `crates/editor-surface/src/paged_view.rs`
++- `crates/editor-surface/src/mapped_viewport.rs`
++- `crates/editor-surface/src/paged_transfer.rs`
++- `crates/editor-surface/src/paged_spill.rs`
++- `docs/implementation/2026-09-12-audit-implementation/PR-T07.md`
++
++## Evidence
++
++- `rustc --edition 2024 --test crates/platform/src/executor.rs -o .tmp-pr-t07-executor-tests.exe` followed by `.\\.tmp-pr-t07-executor-tests.exe --test-threads=1`: PASS, 5 passed, 0 failed. Covers idle-worker dispatch, total queue cap and typed closure, failed spawn/reduced capacity, FIFO fairness, and nonblocking drop followed by eventual worker exit. The temporary executable was removed.
++- `git diff --check`: PASS (line-ending conversion notices only).
++- Requested root-run checks after integration:
++  - `cargo test --offline --locked -p bareline-platform executor::tests -- --test-threads=1`
++  - `cargo test --offline --locked -p bareline-app task::tests -- --test-threads=1`
++  - `cargo test --offline --locked -p bareline-editor-surface paged_view::peer_tests::paged_adapter_reports_terminal_failure_and_wakes_after_unwind -- --exact`
++  - `cargo test --offline --locked -p bareline-editor-surface paged_view::peer_tests::paged_save_does_not_strand_another_documents_edit_and_undo -- --exact`
++
++## Unresolved qualification
++
++- Worker policy prohibits Cargo. Root owns the listed contained checks and integrated native qualification.

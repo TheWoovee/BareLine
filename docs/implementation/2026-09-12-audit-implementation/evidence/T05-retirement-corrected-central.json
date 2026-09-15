@@ -1,0 +1,16 @@
+{
+  "arguments": [
+    "test",
+    "-p",
+    "bareline-file-io",
+    "--lib",
+    "delayed_drain_failed_tombstone_and_retained_cleanup_are_truthful",
+    "--offline",
+    "--locked"
+  ],
+  "completed_utc": "2026-09-12T09:44:07.5850937Z",
+  "integration_snapshot": "4d2d60c011356091852571cda434817362e3e78a",
+  "exit_code": 101,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\T05-retirement-corrected-central.log"
+}

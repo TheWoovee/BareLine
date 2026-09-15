@@ -19,23 +19,74 @@ pub fn status(editor: &crate::workspace::WorkspaceEditor, width: f64, height: f6
         WorkspaceEditor::Resident(e) => {
             let snapshot = e.snapshot();
             let line = snapshot.line_at(bareline_document::TextOffset(e.selection.caret)).ok();
-            let position = line.map(|line| {
-                let column = snapshot.line_range(line).ok().and_then(|range| snapshot.read(range.start..bareline_document::TextOffset(e.selection.caret), MAX_ACCESSIBLE_TEXT_BYTES).ok()).map(|text| (text.graphemes(true).count()+1).to_string()).unwrap_or_else(|| "indexing".into());
-                format!("Line {}, column {column}", line+1)
-            }).unwrap_or_else(|| "Position unavailable".into());
-            let size = if snapshot.is_complete() { format!("{} bytes, {} lines",snapshot.len(),snapshot.line_count()) } else { format!("{} bytes loaded, indexing",snapshot.len()) };
-            (size,position,e.eol_status_label().to_owned())
+            let position = line
+                .map(|line| {
+                    let column = e.column_label();
+                    format!("Line {}, column {column}", line + 1)
+                })
+                .unwrap_or_else(|| "Position unavailable".into());
+            let size = if snapshot.is_complete() {
+                format!("{} bytes, {} lines", snapshot.len(), snapshot.line_count())
+            } else {
+                format!("{} bytes loaded, indexing", snapshot.len())
+            };
+            (size, position, e.eol_status_label().to_owned())
         }
         WorkspaceEditor::Paged(e) => {
-            let lines = match e.snapshot().line_count() { bareline_document::paged::LineCount::Known(count) => format!("{count} lines"), bareline_document::paged::LineCount::Unknown => "lines indexing".into() };
-            (format!("{} bytes, {lines}",e.snapshot().len()), format!("Byte {}, line and column indexing",e.global_selection().1.0), e.surface.eol_status_label().to_owned())
+            let estimated = e.gutter_lines_estimated();
+            let lines = match e.snapshot().line_count() {
+                bareline_document::paged::LineCount::Known(count) => format!("{count} lines"),
+                bareline_document::paged::LineCount::Unknown if !estimated => e
+                    .indexed_line_count()
+                    .map_or_else(|| "line count unavailable".into(), |count| format!("{count} lines")),
+                bareline_document::paged::LineCount::Unknown if estimated => {
+                    "lines indexing; visible gutter range estimated".into()
+                }
+                bareline_document::paged::LineCount::Unknown => "line count unavailable".into(),
+            };
+            let position = match (e.active_gutter_line(), estimated) {
+                (Some(line), true) => format!(
+                    "Byte {}, estimated line {line} while indexing",
+                    e.global_selection().1.0
+                ),
+                (Some(line), false) => format!("Byte {}, line {line}", e.global_selection().1.0),
+                (None, _) => format!("Byte {}, line and column indexing", e.global_selection().1.0),
+            };
+            (
+                format!("{} bytes, {lines}", e.snapshot().len()),
+                position,
+                e.viewport().eol_status_label().to_owned(),
+            )
         }
     };
-    let values = [("Language",editor.language.label().to_owned()),("Document size",size),("Caret position",position),("Line endings",eol),("Encoding",editor.encoding_label.clone()),("Editing mode",if editor.read_only(){"Read only"}else{"Insert"}.into())];
-    values.into_iter().enumerate().map(|(index,(name,value))| AccessibilityNode {
-        id: 90_001_000+index as u64, parent: WINDOW_ID, role: AccessibilityRole::Status,
-        name:name.into(),value:Some(value),bounds:[width*index as f64/6.0,(height-24.0).max(0.0),width/6.0,24.0],disabled:false,selected:false,expanded:None,focusable:false,invokable:false,
-    }).collect()
+    let values = [
+        ("Language", editor.viewport().language.label().to_owned()),
+        ("Document size", size),
+        ("Caret position", position),
+        ("Line endings", eol),
+        ("Encoding", editor.viewport().encoding_label.clone()),
+        (
+            "Editing mode",
+            if editor.read_only() { "Read only" } else { "Insert" }.into(),
+        ),
+    ];
+    values
+        .into_iter()
+        .enumerate()
+        .map(|(index, (name, value))| AccessibilityNode {
+            id: 90_001_000 + index as u64,
+            parent: WINDOW_ID,
+            role: AccessibilityRole::Status,
+            name: name.into(),
+            value: Some(value),
+            bounds: [width * index as f64 / 6.0, (height - 24.0).max(0.0), width / 6.0, 24.0],
+            disabled: false,
+            selected: false,
+            expanded: None,
+            focusable: false,
+            invokable: false,
+        })
+        .collect()
 }
 /// The full source identity, including for a paged editor whose rendered surface
 /// is only a local window. Recheck this immediately before applying queued UIA.
@@ -53,98 +104,170 @@ pub fn source_identity(editor: &crate::workspace::WorkspaceEditor) -> (u64, u64)
 }
 /// Immutable read bridge. Paged reads use one bounded shared worker, never UIA
 /// or the UI thread. The single cached result is at most one text window.
-pub fn text_source(editor: &crate::workspace::WorkspaceEditor, notify: std::sync::Arc<dyn Fn() + Send + Sync>) -> std::sync::Arc<dyn AccessibilityTextSource> {
+pub fn text_source(
+    editor: &crate::workspace::WorkspaceEditor,
+    notify: std::sync::Arc<dyn Fn() + Send + Sync>,
+) -> std::sync::Arc<dyn AccessibilityTextSource> {
     use crate::workspace::WorkspaceEditor;
     match editor {
         WorkspaceEditor::Resident(editor) => std::sync::Arc::new(ResidentText(editor.snapshot().clone())),
         WorkspaceEditor::Paged(editor) => std::sync::Arc::new(PagedText {
-            handle: editor.read_handle(), state: Default::default(), notify,
+            handle: editor.read_handle(),
+            state: Default::default(),
+            notify,
         }),
     }
 }
 struct ResidentText(bareline_document::DocumentSnapshot);
 impl AccessibilityTextSource for ResidentText {
-    fn identity(&self) -> (u64, u64) { self.0.identity_token() }
-    fn len(&self) -> usize { self.0.len() }
+    fn identity(&self) -> (u64, u64) {
+        self.0.identity_token()
+    }
+    fn len(&self) -> usize {
+        self.0.len()
+    }
     fn read(&self, mut start: usize, limit: usize) -> AccessibleRead {
         use bareline_document::TextOffset;
-        if start > self.len() || limit > MAX_ACCESSIBLE_TEXT_BYTES { return AccessibleRead::Unavailable; }
+        if start > self.len() || limit > MAX_ACCESSIBLE_TEXT_BYTES {
+            return AccessibleRead::Unavailable;
+        }
         let mut end = start.saturating_add(limit).min(self.len());
-        while start < end && !self.0.is_boundary(TextOffset(start)) { start += 1; }
-        while end > start && !self.0.is_boundary(TextOffset(end)) { end -= 1; }
+        while start < end && !self.0.is_boundary(TextOffset(start)) {
+            start += 1;
+        }
+        while end > start && !self.0.is_boundary(TextOffset(end)) {
+            end -= 1;
+        }
         match self.0.read(TextOffset(start)..TextOffset(end), limit) {
-            Ok(text) => AccessibleRead::Ready { start, text }, _ => AccessibleRead::Unavailable,
+            Ok(text) => AccessibleRead::Ready { start, text },
+            _ => AccessibleRead::Unavailable,
         }
     }
 }
 #[derive(Default)]
-struct ReadState { pending: bool, cached: Option<(usize, usize, AccessibleRead)> }
+struct ReadState {
+    pending: bool,
+    cached: Option<((u64, u64), usize, usize, AccessibleRead)>,
+}
+
+fn finish_paged_read(
+    state: &mut ReadState,
+    requested_identity: (u64, u64),
+    current_identity: (u64, u64),
+    start: usize,
+    limit: usize,
+    result: AccessibleRead,
+) {
+    state.pending = false;
+    if current_identity == requested_identity && result != AccessibleRead::Pending {
+        state.cached = Some((requested_identity, start, limit, result));
+    }
+}
+
+fn schedule_paged_read(
+    state: &std::sync::Arc<std::sync::Mutex<ReadState>>,
+    notify: std::sync::Arc<dyn Fn() + Send + Sync>,
+    identity: (u64, u64),
+    start: usize,
+    limit: usize,
+    read: impl FnOnce(std::sync::Weak<std::sync::Mutex<ReadState>>) -> ((u64, u64), AccessibleRead) + Send + 'static,
+) -> Result<(), crate::task::Busy> {
+    let weak = std::sync::Arc::downgrade(state);
+    crate::task::execute(move || {
+        if weak.strong_count() == 0 {
+            return;
+        }
+        // Cleanup remains outside the protected read so an unwind in a paged
+        // source is converted to an unavailable terminal result.
+        let (current_identity, result) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| read(weak.clone())))
+            .unwrap_or((identity, AccessibleRead::Unavailable));
+        if let Some(state) = weak.upgrade() {
+            let mut state = state.lock().unwrap_or_else(|error| error.into_inner());
+            finish_paged_read(&mut state, identity, current_identity, start, limit, result);
+            drop(state);
+            notify();
+        }
+    })
+}
 struct PagedText {
     handle: bareline_editor_surface::paged_view::PagedReadHandle,
     state: std::sync::Arc<std::sync::Mutex<ReadState>>,
     notify: std::sync::Arc<dyn Fn() + Send + Sync>,
 }
-type ReadJob = Box<dyn FnOnce() + Send>;
-fn text_worker() -> Option<&'static std::sync::mpsc::SyncSender<ReadJob>> {
-    static WORKER: std::sync::OnceLock<Option<std::sync::mpsc::SyncSender<ReadJob>>> = std::sync::OnceLock::new();
-    WORKER.get_or_init(|| {
-        let (tx, rx) = std::sync::mpsc::sync_channel::<ReadJob>(8);
-        std::thread::Builder::new().name("accessibility-read".into()).spawn(move || {
-            while let Ok(job) = rx.recv() { job(); }
-        }).ok().map(|_| tx)
-    }).as_ref()
-}
 impl AccessibilityTextSource for PagedText {
-    fn identity(&self) -> (u64,u64) { let s = self.handle.snapshot(); s.identity_token() }
-    fn len(&self) -> usize { self.handle.snapshot().len() }
+    fn identity(&self) -> (u64, u64) {
+        let s = self.handle.snapshot();
+        s.identity_token()
+    }
+    fn len(&self) -> usize {
+        self.handle.snapshot().len()
+    }
     fn read(&self, start: usize, limit: usize) -> AccessibleRead {
-        if start > self.len() || limit > MAX_ACCESSIBLE_TEXT_BYTES { return AccessibleRead::Unavailable; }
-        let Ok(mut state) = self.state.try_lock() else { return AccessibleRead::Pending; };
-        if let Some((at, count, value)) = &state.cached {
-            if *at == start && *count == limit { return value.clone(); }
+        let identity = self.identity();
+        if start > self.len() || limit > MAX_ACCESSIBLE_TEXT_BYTES {
+            return AccessibleRead::Unavailable;
         }
-        if state.pending { return AccessibleRead::Pending; }
-        let Some(worker) = text_worker() else { return AccessibleRead::Unavailable; };
-        let weak = std::sync::Arc::downgrade(&self.state);
+        let Ok(mut state) = self.state.try_lock() else {
+            return AccessibleRead::Pending;
+        };
+        if let Some((cached_identity, at, count, value)) = &state.cached {
+            if *cached_identity == identity && *at == start && *count == limit {
+                return value.clone();
+            }
+        }
+        if state.pending {
+            return AccessibleRead::Pending;
+        }
         let handle = self.handle.clone();
         let notify = self.notify.clone();
         state.pending = true;
-        if worker.try_send(Box::new(move || {
+        // Runs on the shared bounded pool; a full pool leaves `pending` clear so the
+        // next read retries rather than reporting a stuck request.
+        if schedule_paged_read(&self.state, notify, identity, start, limit, move |owner| {
             use bareline_document::{Budget, TextOffset, paged::WindowPoll};
-            if weak.strong_count() == 0 { return; }
             let result = (|| {
-                let mut request = handle.snapshot().begin_viewport(TextOffset(start), limit, &Budget::new(MAX_ACCESSIBLE_TEXT_BYTES)).ok()?;
+                let snapshot = handle.snapshot();
+                if snapshot.identity_token() != identity {
+                    return None;
+                }
+                let mut request = snapshot
+                    .begin_viewport(TextOffset(start), limit, &Budget::new(MAX_ACCESSIBLE_TEXT_BYTES))
+                    .ok()?;
                 // One text window and a fixed page-resolution cap per job.
                 for _ in 0..256 {
-                    if weak.strong_count() == 0 { return None; }
+                    if owner.strong_count() == 0 {
+                        return None;
+                    }
                     match request.poll() {
-                        WindowPoll::Ready(window) => return Some(AccessibleRead::Ready { start: window.range().start.0, text: window.text().to_owned() }),
+                        WindowPoll::Ready(window) => {
+                            return Some(AccessibleRead::Ready {
+                                start: window.range().start.0,
+                                text: window.text().to_owned(),
+                            });
+                        }
                         WindowPoll::Pending(ticket) => match handle.resolve_page(ticket) {
-                            Ok(true) => (), Ok(false) => return Some(AccessibleRead::Pending), Err(_) => return None,
+                            Ok(true) => (),
+                            Ok(false) => return Some(AccessibleRead::Pending),
+                            Err(_) => return None,
                         },
                         _ => return None,
                     }
                 }
                 None
-            })().unwrap_or(AccessibleRead::Unavailable);
-            if let Some(state) = weak.upgrade() {
-                let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
-                state.pending = false;
-                if result != AccessibleRead::Pending { state.cached = Some((start, limit, result)); }
-                drop(state);
-                notify();
-            }
-        })).is_err() { state.pending = false; }
+            })()
+            .unwrap_or(AccessibleRead::Unavailable);
+            (handle.snapshot().identity_token(), result)
+        })
+        .is_err()
+        {
+            state.pending = false;
+        }
         AccessibleRead::Pending
     }
 }
 pub fn selection_valid(editor: &EditorSurface, anchor: usize, caret: usize) -> bool {
-    editor
-        .snapshot()
-        .is_boundary(bareline_document::TextOffset(anchor))
-        && editor
-            .snapshot()
-            .is_boundary(bareline_document::TextOffset(caret))
+    editor.snapshot().is_boundary(bareline_document::TextOffset(anchor))
+        && editor.snapshot().is_boundary(bareline_document::TextOffset(caret))
 }
 
 pub fn tabs(app: &crate::App, width: f32) -> Vec<AccessibilityNode> {
@@ -234,23 +357,10 @@ pub fn editor_text(editor: &EditorSurface) -> Option<AccessibilityText> {
     if range.end.0.saturating_sub(range.start.0) > MAX_ACCESSIBLE_TEXT_BYTES {
         return None;
     }
-    let value = editor
-        .snapshot()
-        .read(range.clone(), MAX_ACCESSIBLE_TEXT_BYTES)
-        .ok()?;
-    bounded_text(
-        value,
-        range.start.0,
-        editor.selection.anchor,
-        editor.selection.caret,
-    )
+    let value = editor.snapshot().read(range.clone(), MAX_ACCESSIBLE_TEXT_BYTES).ok()?;
+    bounded_text(value, range.start.0, editor.selection.anchor, editor.selection.caret)
 }
-pub fn bounded_text(
-    value: String,
-    start_byte: usize,
-    anchor: usize,
-    caret: usize,
-) -> Option<AccessibilityText> {
+pub fn bounded_text(value: String, start_byte: usize, anchor: usize, caret: usize) -> Option<AccessibilityText> {
     if value.len() > MAX_ACCESSIBLE_TEXT_BYTES {
         return None;
     }
@@ -268,9 +378,7 @@ pub fn bounded_text(
         if relative == value.len() {
             return Some(character_lengths.len());
         }
-        value
-            .grapheme_indices(true)
-            .position(|(offset, _)| offset == relative)
+        value.grapheme_indices(true).position(|(offset, _)| offset == relative)
     };
     let selection = position(anchor).zip(position(caret));
     Some(AccessibilityText {
@@ -311,12 +419,7 @@ pub fn snapshot(
             role: AccessibilityRole::Editor,
             name: "Editor".into(),
             value: None,
-            bounds: [
-                0.,
-                editor.top_inset as f64,
-                width,
-                height - editor.top_inset as f64,
-            ],
+            bounds: [0., editor.top_inset as f64, width, height - editor.top_inset as f64],
             disabled: false,
             selected: false,
             expanded: None,
@@ -391,16 +494,84 @@ pub fn snapshot(
         nodes,
         text,
         text_geometry: Vec::new(),
+        text_views: Vec::new(),
         text_context: editor.map(|e| AccessibilityTextContext {
             source_identity: e.snapshot().identity_token(),
             selection: (e.selection.anchor, e.selection.caret),
-            composition: e.composition_text().filter(|s| s.len() <= MAX_ACCESSIBLE_TEXT_BYTES).map(str::to_owned),
+            selections: e
+                .selection_set()
+                .selections
+                .iter()
+                .take(1024)
+                .map(|selection| (selection.anchor, selection.caret))
+                .collect(),
+            composition: e
+                .composition_text()
+                .filter(|s| s.len() <= MAX_ACCESSIBLE_TEXT_BYTES)
+                .map(str::to_owned),
         }),
     }
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn paged_read_terminal_cleanup_rejects_stale_results() {
+        let state = std::sync::Arc::new(std::sync::Mutex::new(ReadState {
+            pending: true,
+            cached: None,
+        }));
+        let (failed_tx, failed_rx) = std::sync::mpsc::sync_channel(1);
+        schedule_paged_read(
+            &state,
+            std::sync::Arc::new(move || failed_tx.send(()).unwrap()),
+            (7, 11),
+            4,
+            8,
+            |_| panic!("controlled read failure"),
+        )
+        .unwrap();
+        failed_rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+        let state_after_failure = state.lock().unwrap();
+        assert!(
+            !state_after_failure.pending,
+            "failed scheduled read still clears pending"
+        );
+        assert!(matches!(
+            state_after_failure.cached,
+            Some(((7, 11), 4, 8, AccessibleRead::Unavailable))
+        ));
+        drop(state_after_failure);
+
+        {
+            let mut state = state.lock().unwrap();
+            state.pending = true;
+            state.cached = None;
+        }
+        let (stale_tx, stale_rx) = std::sync::mpsc::sync_channel(1);
+        schedule_paged_read(
+            &state,
+            std::sync::Arc::new(move || stale_tx.send(()).unwrap()),
+            (7, 12),
+            4,
+            8,
+            |_| {
+                (
+                    (7, 13),
+                    AccessibleRead::Ready {
+                        start: 4,
+                        text: "stale".into(),
+                    },
+                )
+            },
+        )
+        .unwrap();
+        stale_rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+        let state = state.lock().unwrap();
+        assert!(!state.pending, "stale scheduled read still clears pending");
+        assert!(state.cached.is_none(), "stale text is never published");
+    }
     /// These focused projection regressions inspect selected fields. Complete
     /// retained native hierarchy/focus/action JSON baselines live in the native
     /// composition tests, which exercise the actual owner layout fixtures.
@@ -410,42 +581,109 @@ mod tests {
     }
     #[test]
     fn default_editor_semantic_fields_regression() {
-        let document=bareline_document::Document::from_utf8("abc",bareline_document::Budget::new(1<<20),bareline_document::Budget::new(1<<20)).unwrap();
-        let mut editor=EditorSurface::loading(document.snapshot(),std::sync::Arc::new(||{}));
-        editor.visible_text=bareline_document::TextOffset(0)..bareline_document::TextOffset(3);
-        let tree=semantic_json(&snapshot("Bareline",800.0,600.0,Some(&editor),vec![],EDITOR_ID));
-        let actual:Vec<_>=tree["nodes"].as_array().unwrap().iter().map(|n|serde_json::json!([n["id"],n["parent"],n["role"],n["name"],n["focusable"],n["invokable"]])).collect();
-        assert_eq!(serde_json::Value::Array(actual),serde_json::json!([
-            [1,0,"Window","Bareline",false,false],
-            [2,1,"Editor","Editor",true,false],
-            [18446744073709551614u64,1,"Button","Previous editor viewport",false,true],
-            [18446744073709551613u64,1,"Button","Next editor viewport",false,true]
-        ]));
-        assert_eq!(tree["focus"],2);
-        assert_eq!(tree["text"]["value"],"abc");
-        assert_eq!(tree["text"]["character_lengths"],serde_json::json!([1,1,1]));
+        let document = bareline_document::Document::from_utf8(
+            "abc",
+            bareline_document::Budget::new(1 << 20),
+            bareline_document::Budget::new(1 << 20),
+        )
+        .unwrap();
+        let mut editor = EditorSurface::loading(document.snapshot(), std::sync::Arc::new(|| {}));
+        editor.visible_text = bareline_document::TextOffset(0)..bareline_document::TextOffset(3);
+        let tree = semantic_json(&snapshot("Bareline", 800.0, 600.0, Some(&editor), vec![], EDITOR_ID));
+        let actual: Vec<_> = tree["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|n| {
+                serde_json::json!([
+                    n["id"],
+                    n["parent"],
+                    n["role"],
+                    n["name"],
+                    n["focusable"],
+                    n["invokable"]
+                ])
+            })
+            .collect();
+        assert_eq!(
+            serde_json::Value::Array(actual),
+            serde_json::json!([
+                [1, 0, "Window", "Bareline", false, false],
+                [2, 1, "Editor", "Editor", true, false],
+                [
+                    18446744073709551614u64,
+                    1,
+                    "Button",
+                    "Previous editor viewport",
+                    false,
+                    true
+                ],
+                [
+                    18446744073709551613u64,
+                    1,
+                    "Button",
+                    "Next editor viewport",
+                    false,
+                    true
+                ]
+            ])
+        );
+        assert_eq!(tree["focus"], 2);
+        assert_eq!(tree["text"]["value"], "abc");
+        assert_eq!(tree["text"]["character_lengths"], serde_json::json!([1, 1, 1]));
     }
     #[test]
     fn app_control_fields_regression() {
-        let mut find=crate::find::FindController::default();find.show_replace();
-        find.field.insert("needle");find.replacement.insert("replacement");
-        let mut search=crate::search_panel::SearchPanel::default();search.open=true;search.field.insert("workspace");
-        let mut settings=crate::settings::SettingsController::new(bareline_settings::SettingsDocument::empty(bareline_settings::Scope::User),None,bareline_settings::SystemAppearance::default());settings.show();
-        let mut palette=crate::palette::PaletteController::default();palette.open=true;palette.field.insert("command");
-        let mut manager=crate::macros::MacroManager::default();manager.show(&Default::default(),None);
-        let semantics=find.semantics(1000.0).into_iter().chain(search.semantics()).chain(settings.semantics()).chain(palette.semantics()).chain(manager.semantics());
-        let chrome=semantics.map(|n|semantic_node(&n,WINDOW_ID)).collect();
-        let tree=semantic_json(&snapshot("Bareline",1000.0,800.0,None,chrome,11000));
-        let mut fields:Vec<_>=tree["nodes"].as_array().unwrap().iter().filter(|n|n["role"]=="TextField").map(|n|serde_json::json!([n["id"],n["name"],n["value"],n["focusable"]])).collect();
-        fields.sort_by_key(|row|row[0].as_u64().unwrap());
-        assert_eq!(serde_json::Value::Array(fields),serde_json::json!([
-            [6000,"Find","needle",true],[6001,"Replace with","replacement",true],
-            [7000,"Find in open documents","workspace",true],
-            [8000,"Search settings","",true],[11000,"Search commands","command",true],
-            [23100,"Macro name","",true],[23101,"Repeat count","1",true],
-            [23102,"Macro shortcut","",true],[23103,"Typing delay in milliseconds","50",true]
-        ]));
-        assert_eq!(tree["focus"],11000);
+        let mut find = crate::find::FindController::default();
+        find.show_replace();
+        find.field.insert("needle");
+        find.replacement.insert("replacement");
+        let mut search = crate::search_panel::SearchPanel::default();
+        search.open = true;
+        search.field.insert("workspace");
+        let mut settings = crate::settings::SettingsController::new(
+            bareline_settings::SettingsDocument::empty(bareline_settings::Scope::User),
+            None,
+            bareline_settings::SystemAppearance::default(),
+        );
+        settings.show();
+        let mut palette = crate::palette::PaletteController::default();
+        palette.open = true;
+        palette.field.insert("command");
+        let mut manager = crate::macros::MacroManager::default();
+        manager.show(&Default::default(), None);
+        let semantics = find
+            .semantics(1000.0)
+            .into_iter()
+            .chain(search.semantics())
+            .chain(settings.semantics())
+            .chain(palette.semantics())
+            .chain(manager.semantics());
+        let chrome = semantics.map(|n| semantic_node(&n, WINDOW_ID)).collect();
+        let tree = semantic_json(&snapshot("Bareline", 1000.0, 800.0, None, chrome, 11000));
+        let mut fields: Vec<_> = tree["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|n| n["role"] == "TextField")
+            .map(|n| serde_json::json!([n["id"], n["name"], n["value"], n["focusable"]]))
+            .collect();
+        fields.sort_by_key(|row| row[0].as_u64().unwrap());
+        assert_eq!(
+            serde_json::Value::Array(fields),
+            serde_json::json!([
+                [6000, "Find", "needle", true],
+                [6001, "Replace with", "replacement", true],
+                [7000, "Find in open documents", "workspace", true],
+                [8000, "Search settings", "", true],
+                [11000, "Search commands", "command", true],
+                [23100, "Macro name", "", true],
+                [23101, "Repeat count", "1", true],
+                [23102, "Macro shortcut", "", true],
+                [23103, "Typing delay in milliseconds", "50", true]
+            ])
+        );
+        assert_eq!(tree["focus"], 11000);
     }
     #[test]
     fn find_semantics_follow_focus_toggle_and_field_value() {
@@ -459,17 +697,9 @@ mod tests {
         assert!(field.focused);
         assert!(semantic_node(field, 1).focusable);
         assert_eq!(field.value.as_deref(), Some("needle"));
-        assert!(
-            nodes
-                .iter()
-                .any(|n| n.command_id == "search.match_case" && n.selected)
-        );
+        assert!(nodes.iter().any(|n| n.command_id == "search.match_case" && n.selected));
         find.accessibility_action(6001, true);
-        assert!(
-            find.semantics(1200.0)
-                .iter()
-                .any(|n| n.id.0 == 6001 && n.focused)
-        );
+        assert!(find.semantics(1200.0).iter().any(|n| n.id.0 == 6001 && n.focused));
         find.hide();
         assert!(find.accessibility_action(6000, true).is_none());
         assert!(!find.has_focus());
@@ -479,12 +709,7 @@ mod tests {
         let t = bounded_text("a👩‍💻e\u{301}\r\n".into(), 1_000, 1_001, 1_012).unwrap();
         assert_eq!(t.character_lengths, vec![1, 11, 3, 2]);
         assert_eq!(t.selection, Some((1, 2)));
-        assert!(
-            bounded_text("abc".into(), 1_000, 0, 2_000)
-                .unwrap()
-                .selection
-                .is_none()
-        );
+        assert!(bounded_text("abc".into(), 1_000, 0, 2_000).unwrap().selection.is_none());
         assert!(bounded_text("x".repeat(MAX_ACCESSIBLE_TEXT_BYTES + 1), 0, 0, 0).is_none());
     }
     #[test]
@@ -504,22 +729,12 @@ mod tests {
                 900.0,
                 600.0,
                 None,
-                nodes
-                    .iter()
-                    .map(|node| semantic_node(node, WINDOW_ID))
-                    .collect(),
+                nodes.iter().map(|node| semantic_node(node, WINDOW_ID)).collect(),
                 focus,
             );
             snapshot.validate().unwrap();
             assert_eq!(snapshot.focus, 6000);
-            assert!(
-                snapshot
-                    .nodes
-                    .iter()
-                    .find(|node| node.id == 6000)
-                    .unwrap()
-                    .focusable
-            );
+            assert!(snapshot.nodes.iter().find(|node| node.id == 6000).unwrap().focusable);
             assert_eq!(snapshot.nodes.iter().any(|node| node.id == 6001), replacing);
         }
     }

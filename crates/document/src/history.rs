@@ -125,11 +125,7 @@ impl<T> HistoryStack<T> {
             .capacity()
             .checked_mul(std::mem::size_of::<T>())
             .ok_or(Error::BudgetExceeded)?;
-        let capacity_charge = if bytes == 0 {
-            None
-        } else {
-            Some(budget.reserve(bytes)?)
-        };
+        let capacity_charge = if bytes == 0 { None } else { Some(budget.reserve(bytes)?) };
         Ok(Self {
             entries,
             budget,
@@ -137,9 +133,7 @@ impl<T> HistoryStack<T> {
         })
     }
     pub(crate) fn capacity_bytes(&self) -> usize {
-        self.capacity_charge
-            .as_ref()
-            .map_or(0, |charge| charge.bytes)
+        self.capacity_charge.as_ref().map_or(0, |charge| charge.bytes)
     }
     pub(crate) fn try_reserve(&mut self, additional: usize) -> Result<(), Error> {
         self.try_reserve_exact(additional)
@@ -155,12 +149,7 @@ impl<T> HistoryStack<T> {
         }
         // Geometric growth avoids copying the entire history for every edit.
         let requested = requested
-            .max(
-                self.entries
-                    .capacity()
-                    .checked_mul(2)
-                    .ok_or(Error::BudgetExceeded)?,
-            )
+            .max(self.entries.capacity().checked_mul(2).ok_or(Error::BudgetExceeded)?)
             .max(1);
         // Reserve the entire new allocation while the old allocation remains live.
         // Moving entries and swapping storage cannot fail after this preparation.
@@ -187,10 +176,16 @@ impl<T> HistoryStack<T> {
         Ok(())
     }
     pub(crate) fn push(&mut self, entry: T) {
-        assert!(
+        // Growth must be admitted (and charged) before publication. In debug this
+        // is a hard error; in release an unadmitted push drops the entry rather
+        // than aborting the process with unsaved work in it.
+        debug_assert!(
             self.entries.len() < self.entries.capacity(),
             "history growth must be admitted before publication"
         );
+        if self.entries.len() >= self.entries.capacity() {
+            return;
+        }
         self.entries.push(entry);
     }
     pub(crate) fn pop(&mut self) -> Option<T> {
@@ -199,10 +194,7 @@ impl<T> HistoryStack<T> {
     pub(crate) fn clear(&mut self) {
         self.entries.clear();
     }
-    pub(crate) fn drain<R: std::ops::RangeBounds<usize>>(
-        &mut self,
-        range: R,
-    ) -> std::vec::Drain<'_, T> {
+    pub(crate) fn drain<R: std::ops::RangeBounds<usize>>(&mut self, range: R) -> std::vec::Drain<'_, T> {
         self.entries.drain(range)
     }
 }
@@ -243,10 +235,7 @@ mod capacity_tests {
         let full = budget.claim(budget.limit() - budget.used()).unwrap();
         stack.push(7);
         assert_eq!(stack.pop(), Some(7));
-        assert!(matches!(
-            stack.try_reserve_exact(32),
-            Err(Error::BudgetExceeded)
-        ));
+        assert!(matches!(stack.try_reserve_exact(32), Err(Error::BudgetExceeded)));
         assert!(stack.is_empty());
         assert_eq!(stack.capacity_bytes(), retained);
         drop(full);

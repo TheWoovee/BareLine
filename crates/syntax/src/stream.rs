@@ -2,8 +2,7 @@
 //! Verified sequential syntax for paged sources. The caller owns source identity
 //! and resolves pages; only bounded UTF-8 windows cross this API.
 use crate::{
-    Cancellation, Checkpoint, Error, Language, LexOptions, LexerPreference, MAX_REQUEST_BYTES,
-    State, SyntaxResult,
+    Cancellation, Checkpoint, Error, Language, LexOptions, LexerPreference, MAX_REQUEST_BYTES, State, SyntaxResult,
 };
 use bareline_document::{Budget, Document, TextOffset};
 use std::sync::Arc;
@@ -42,12 +41,8 @@ impl StreamLexer {
             && definition.is_none()
             && language != Language::PlainText
         {
-            bareline_lexilla_bridge::LexerSession::new(
-                language.metadata().lexilla,
-                language.metadata().keywords,
-                mode,
-            )
-            .ok()
+            bareline_lexilla_bridge::LexerSession::new(language.metadata().lexilla, language.metadata().keywords, mode)
+                .ok()
         } else {
             None
         };
@@ -84,12 +79,8 @@ impl StreamLexer {
         }
         self.closed = true;
         cancel.check()?;
-        let document = Document::from_utf8(
-            text,
-            Budget::new(MAX_REQUEST_BYTES * 4),
-            Budget::new(MAX_REQUEST_BYTES),
-        )
-        .map_err(|_| Error::BudgetExceeded)?;
+        let document = Document::from_utf8(text, Budget::new(MAX_REQUEST_BYTES * 4), Budget::new(MAX_REQUEST_BYTES))
+            .map_err(|_| Error::BudgetExceeded)?;
         let source = document.snapshot();
         let checkpoint = Checkpoint {
             source: source.clone(),
@@ -127,9 +118,7 @@ impl StreamLexer {
             .as_bytes()
             .iter()
             .enumerate()
-            .filter(|(i, b)| {
-                **b == b'\n' || (**b == b'\r' && text.as_bytes().get(i + 1) != Some(&b'\n'))
-            })
+            .filter(|(i, b)| **b == b'\n' || (**b == b'\r' && text.as_bytes().get(i + 1) != Some(&b'\n')))
             .count();
         self.next += text.len();
         self.closed = eof;
@@ -173,10 +162,7 @@ impl ViewportProjection {
     }
     /// The caller retains the one authoritative visible-piece map; this builder
     /// only validates/copies each supplied segment and stores no second map.
-    pub fn for_projection(
-        source: bareline_document::DocumentSnapshot,
-        language: Language,
-    ) -> Result<Self, Error> {
+    pub fn for_projection(source: bareline_document::DocumentSnapshot, language: Language) -> Result<Self, Error> {
         Self::new(source, TextOffset(0), language)
     }
     pub fn accept(&mut self, window: &StreamResult) -> Result<(), Error> {
@@ -200,10 +186,7 @@ impl ViewportProjection {
             return Err(Error::InvalidRange);
         }
         let start = source.start.0.max(window.origin.0);
-        let end = source
-            .end
-            .0
-            .min(window.origin.0 + window.syntax.range.end.0);
+        let end = source.end.0.min(window.origin.0 + window.syntax.range.end.0);
         if start >= end {
             return Ok(());
         }
@@ -297,12 +280,7 @@ mod tests {
             .advance(first, TextOffset(0), false, &Cancellation::default())
             .unwrap();
         let two = lexer
-            .advance(
-                second,
-                TextOffset(first.len()),
-                true,
-                &Cancellation::default(),
-            )
+            .advance(second, TextOffset(first.len()), true, &Cancellation::default())
             .unwrap();
         assert_eq!(two.first_line, 1);
         assert!(
@@ -314,22 +292,13 @@ mod tests {
         let mut folds = crate::folding::FoldAccumulator::default();
         folds.advance_stream(&one, 32).unwrap();
         folds.advance_stream(&two, 32).unwrap();
-        let anchor = folds
-            .anchored()
-            .iter()
-            .find(|anchor| anchor.fold.header == 0)
-            .unwrap();
+        let anchor = folds.anchored().iter().find(|anchor| anchor.fold.header == 0).unwrap();
         assert_eq!(anchor.header, TextOffset(0));
         assert_eq!(
             anchor.body,
             TextOffset(first.len())..TextOffset(first.len() + second.len())
         );
-        assert!(
-            folds
-                .known()
-                .iter()
-                .any(|fold| fold.header == 0 && fold.end == 2)
-        );
+        assert!(folds.known().iter().any(|fold| fold.header == 0 && fold.end == 2));
         assert!(
             lexer
                 .advance(
@@ -373,20 +342,13 @@ mod tests {
         let two = lexer
             .advance("text */\n", TextOffset(8), true, &Cancellation::default())
             .unwrap();
-        let mut projection =
-            ViewportProjection::new(source("note\ntext"), TextOffset(3), Language::Rust).unwrap();
+        let mut projection = ViewportProjection::new(source("note\ntext"), TextOffset(3), Language::Rust).unwrap();
         projection.accept(&one).unwrap();
         projection.accept(&two).unwrap();
         let (result, line) = projection.finish().unwrap();
         assert_eq!(line, 0);
-        assert!(
-            result
-                .spans
-                .iter()
-                .all(|span| span.kind == crate::StyleKind::Comment)
-        );
-        let mut wrong =
-            ViewportProjection::new(source("wrong"), TextOffset(3), Language::Rust).unwrap();
+        assert!(result.spans.iter().all(|span| span.kind == crate::StyleKind::Comment));
+        let mut wrong = ViewportProjection::new(source("wrong"), TextOffset(3), Language::Rust).unwrap();
         assert!(wrong.accept(&one).is_err());
     }
     #[test]
@@ -417,32 +379,25 @@ mod tests {
         let window = lexer
             .advance(text, TextOffset(0), true, &Cancellation::default())
             .unwrap();
-        let mut projection =
-            ViewportProjection::for_projection(source("/*let"), Language::Rust).unwrap();
+        let mut projection = ViewportProjection::for_projection(source("/*let"), Language::Rust).unwrap();
         projection
-            .accept_segment(
-                &window,
-                TextOffset(0)..TextOffset(2),
-                TextOffset(0)..TextOffset(2),
-            )
+            .accept_segment(&window, TextOffset(0)..TextOffset(2), TextOffset(0)..TextOffset(2))
             .unwrap();
         projection
-            .accept_segment(
-                &window,
-                TextOffset(12)..TextOffset(15),
-                TextOffset(2)..TextOffset(5),
-            )
+            .accept_segment(&window, TextOffset(12)..TextOffset(15), TextOffset(2)..TextOffset(5))
             .unwrap();
         let (result, _) = projection.finish().unwrap();
         assert!(
             result
                 .spans
                 .iter()
-                .any(|span| span.kind == crate::StyleKind::Comment
-                    && span.range.end <= TextOffset(2))
+                .any(|span| span.kind == crate::StyleKind::Comment && span.range.end <= TextOffset(2))
         );
-        assert!(result.spans.iter().any(
-            |span| span.kind == crate::StyleKind::Keyword && span.range.start >= TextOffset(2)
-        ));
+        assert!(
+            result
+                .spans
+                .iter()
+                .any(|span| span.kind == crate::StyleKind::Keyword && span.range.start >= TextOffset(2))
+        );
     }
 }

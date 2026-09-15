@@ -1,0 +1,1107 @@
+diff --git a/crates/platform-windows/src/menu_bar.rs b/crates/platform-windows/src/menu_bar.rs
+index bc84689..55477cb 100644
+--- a/crates/platform-windows/src/menu_bar.rs
++++ b/crates/platform-windows/src/menu_bar.rs
+@@ -1,116 +1,202 @@
+ // SPDX-License-Identifier: MPL-2.0
+-//! Documented HMENU owner drawing for the menu bar; native popups/navigation remain owned by Windows.
+-use std::cell::Cell;
++//! Documented HMENU owner drawing; navigation and accessibility remain owned by Windows.
++use std::cell::{Cell, RefCell};
+ use windows::{
+     Win32::{
+         Foundation::*,
+         Graphics::Gdi::*,
+         UI::{
+-            Accessibility::{MSAA_MENU_SIG, MSAAMENUINFO},
++            Accessibility::{HCF_HIGHCONTRASTON, HIGHCONTRASTW, MSAA_MENU_SIG, MSAAMENUINFO},
+             Controls::*,
+             HiDpi::*,
+-            Shell::*,
+             WindowsAndMessaging::*,
+         },
+     },
+     core::PWSTR,
+ };
++
+ #[repr(C)]
+ struct Item {
++    // MSAA requires this structure to be the first field addressed by dwItemData.
+     accessible: MSAAMENUINFO,
+     text: Vec<u16>,
++    menu: HMENU,
++    position: u32,
++    id: u32,
++    original_type: MENU_ITEM_TYPE,
++    original_data: usize,
++    top_level: bool,
++    separator: bool,
++    submenu: bool,
++    radio: Cell<bool>,
+ }
++
++#[derive(Clone, Copy)]
++struct StyledMenu {
++    menu: HMENU,
++    original_background: HBRUSH,
++}
++
+ pub(crate) struct MenuBar {
+     hwnd: HWND,
+     items: Vec<Box<Item>>,
++    menus: Vec<StyledMenu>,
+     colors: Cell<(u32, u32, u32)>,
+-    brush: Cell<HBRUSH>,
++    background_brush: Cell<HBRUSH>,
++    selection_brush: Cell<HBRUSH>,
++    brushes_owned: Cell<bool>,
++    retained_brushes: RefCell<Vec<HBRUSH>>,
+     font: Cell<HFONT>,
+     dpi: Cell<u32>,
++    high_contrast: Cell<bool>,
+ }
++
+ impl MenuBar {
+     pub(crate) fn attach(hwnd: HWND) -> windows::core::Result<Box<Self>> {
+         let mut state = Box::new(Self {
+             hwnd,
+             items: Vec::new(),
++            menus: Vec::new(),
+             colors: Cell::new((0, 0, 0)),
+-            brush: Cell::new(HBRUSH::default()),
++            background_brush: Cell::new(HBRUSH::default()),
++            selection_brush: Cell::new(HBRUSH::default()),
++            brushes_owned: Cell::new(false),
++            retained_brushes: RefCell::new(Vec::new()),
+             font: Cell::new(HFONT::default()),
+             dpi: Cell::new(0),
++            high_contrast: Cell::new(false),
+         });
+-        state.refresh_font();
++        state.refresh_resources(true);
+         unsafe {
+-            let menu = GetMenu(hwnd);
+-            for position in 0..GetMenuItemCount(Some(menu)) {
+-                let mut text = vec![0u16; 256];
+-                let count = GetMenuStringW(menu, position as u32, Some(&mut text), MF_BYPOSITION);
+-                text.truncate(count.max(0) as usize + 1);
+-                let mut item = Box::new(Item {
+-                    accessible: MSAAMENUINFO {
+-                        dwMSAASignature: MSAA_MENU_SIG as u32,
+-                        cchWText: count.max(0) as u32,
+-                        pszWText: PWSTR::null(),
+-                    },
+-                    text,
+-                });
+-                item.accessible.pszWText = PWSTR(item.text.as_mut_ptr());
+-                state.items.push(item);
+-            }
++            // A subtree that cannot be styled is deliberately left as a native
++            // system menu. Other independently valid subtrees remain themed.
++            state.style_menu(GetMenu(hwnd), true);
+             SetWindowSubclass(hwnd, Some(callback), 0xBAAE1001, (&*state as *const Self) as usize).ok()?;
+-            for (position, item) in state.items.iter().enumerate() {
+-                let info = MENUITEMINFOW {
+-                    cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32,
+-                    fMask: MIIM_FTYPE | MIIM_DATA,
+-                    fType: MFT_OWNERDRAW,
+-                    dwItemData: (&**item as *const Item) as usize,
+-                    ..Default::default()
+-                };
+-                SetMenuItemInfoW(menu, position as u32, true, &info)?;
+-            }
++            state.apply_backgrounds();
+         }
+         Ok(state)
+     }
+-    pub(crate) fn name(&mut self, position: usize, text: &[u16]) {
+-        if let Some(item) = self.items.get_mut(position) {
+-            if item.text == text {
+-                return;
++
++    pub(crate) fn theme(&self) -> (u32, u32, u32) {
++        self.colors.get()
++    }
++
++    pub(crate) fn owns(&self, menu: HMENU, value: u32, by_position: bool) -> bool {
++        self.items.iter().any(|item| {
++            item.menu.0 == menu.0
++                && if by_position {
++                    item.position == value
++                } else {
++                    item.id == value
++                }
++        })
++    }
++
++    /// Keep owner-draw text and MSAA text synchronized with native label updates.
++    pub(crate) fn item(&mut self, menu: HMENU, value: u32, by_position: bool, text: &[u16], radio: bool) {
++        if let Some(item) = self.items.iter_mut().find(|item| {
++            item.menu.0 == menu.0
++                && if by_position {
++                    item.position == value
++                } else {
++                    item.id == value
++                }
++        }) {
++            if item.text != text {
++                item.text = text.to_vec();
++                item.accessible.cchWText = text.len().saturating_sub(1) as u32;
++                item.accessible.pszWText = PWSTR(item.text.as_mut_ptr());
+             }
+-            item.text = text.to_vec();
+-            item.accessible.cchWText = text.len().saturating_sub(1) as u32;
+-            item.accessible.pszWText = PWSTR(item.text.as_mut_ptr());
++            item.radio.set(radio);
+         }
+     }
+-    fn refresh_font(&self) -> bool {
++
++    pub(crate) fn colors(&self, background: u32, text: u32, selection: u32) {
++        let colors = (background, text, selection);
++        let resources_changed = self.refresh_resources(false);
++        if self.colors.replace(colors) == colors && !resources_changed {
++            return;
++        }
++        unsafe {
++            self.rebuild_brushes();
++            self.apply_backgrounds();
++            let _ = DrawMenuBar(self.hwnd);
++        }
++    }
++
++    fn refresh_resources(&self, force: bool) -> bool {
+         unsafe {
+             let dpi = GetDpiForWindow(self.hwnd).max(96);
+-            if self.dpi.get() == dpi {
+-                return false;
++            let high_contrast = system_high_contrast();
++            let dpi_changed = self.dpi.replace(dpi) != dpi;
++            let contrast_changed = self.high_contrast.replace(high_contrast) != high_contrast;
++            if force || dpi_changed {
++                let mut metrics = NONCLIENTMETRICSW {
++                    cbSize: std::mem::size_of::<NONCLIENTMETRICSW>() as u32,
++                    ..Default::default()
++                };
++                if SystemParametersInfoForDpi(
++                    SPI_GETNONCLIENTMETRICS.0,
++                    metrics.cbSize,
++                    Some((&mut metrics as *mut NONCLIENTMETRICSW).cast()),
++                    0,
++                    dpi,
++                )
++                .is_ok()
++                {
++                    let font = CreateFontIndirectW(&metrics.lfMenuFont);
++                    if !font.0.is_null() {
++                        delete_font(self.font.replace(font));
++                    }
++                }
+             }
+-            let mut metrics = NONCLIENTMETRICSW {
+-                cbSize: std::mem::size_of::<NONCLIENTMETRICSW>() as u32,
+-                ..Default::default()
++            if force || dpi_changed || contrast_changed {
++                self.rebuild_brushes();
++            }
++            force || dpi_changed || contrast_changed
++        }
++    }
++
++    unsafe fn rebuild_brushes(&self) {
++        unsafe {
++            let (background, _, selection) = self.colors.get();
++            let high_contrast = self.high_contrast.get();
++            let (background_brush, selection_brush) = if high_contrast {
++                (
++                    HBRUSH(GetSysColorBrush(COLOR_MENU).0),
++                    HBRUSH(GetSysColorBrush(COLOR_HIGHLIGHT).0),
++                )
++            } else {
++                (CreateSolidBrush(rgb(background)), CreateSolidBrush(rgb(selection)))
+             };
+-            if SystemParametersInfoForDpi(
+-                SPI_GETNONCLIENTMETRICS.0,
+-                metrics.cbSize,
+-                Some((&mut metrics as *mut NONCLIENTMETRICSW).cast()),
+-                0,
+-                dpi,
+-            )
+-            .is_ok()
+-            {
+-                let font = CreateFontIndirectW(&metrics.lfMenuFont);
+-                if !font.0.is_null() {
+-                    let old = self.font.replace(font);
+-                    if !old.0.is_null() {
+-                        let _ = DeleteObject(old.into());
+-                    }
++            if background_brush.0.is_null() || selection_brush.0.is_null() {
++                delete_brush(background_brush, !high_contrast);
++                delete_brush(selection_brush, !high_contrast);
++                return;
++            }
++            if !self.apply_background(background_brush) {
++                // Some menus may already reference the candidate. Repoint every
++                // menu to the still-live old brush, and retain the candidate if
++                // any rollback also fails so no HMENU can dangle.
++                let rollback_complete = self.apply_background(self.background_brush.get());
++                if !high_contrast && !rollback_complete {
++                    self.retained_brushes
++                        .borrow_mut()
++                        .extend([background_brush, selection_brush]);
++                } else {
++                    delete_brush(background_brush, !high_contrast);
++                    delete_brush(selection_brush, !high_contrast);
+                 }
++                return;
+             }
+-            self.dpi.set(dpi);
+-            true
++            let old_owned = self.brushes_owned.replace(!high_contrast);
++            let old_background = self.background_brush.replace(background_brush);
++            let old_selection = self.selection_brush.replace(selection_brush);
++            delete_brush(old_background, old_owned);
++            delete_brush(old_selection, old_owned);
+         }
+     }
++
+     fn font_object(&self) -> HGDIOBJ {
+         if self.font.get().0.is_null() {
+             unsafe { GetStockObject(DEFAULT_GUI_FONT) }
+@@ -118,63 +204,332 @@ impl MenuBar {
+             self.font.get().into()
+         }
+     }
+-    pub(crate) fn colors(&self, background: u32, text: u32, selection: u32) {
+-        let colors = (background, text, selection);
+-        let font_changed = self.refresh_font();
+-        if self.colors.replace(colors) == colors && !font_changed {
+-            return;
+-        }
++
++    unsafe fn style_menu(&mut self, menu: HMENU, top_level: bool) -> bool {
+         unsafe {
+-            let brush = CreateSolidBrush(rgb(background));
+-            let info = MENUINFO {
++            let count = GetMenuItemCount(Some(menu));
++            if count < 0 {
++                return false;
++            }
++            let mut pending = Vec::with_capacity(count as usize);
++            let mut original_background = MENUINFO {
+                 cbSize: std::mem::size_of::<MENUINFO>() as u32,
+                 fMask: MIM_BACKGROUND,
+-                hbrBack: brush,
+                 ..Default::default()
+             };
+-            let _ = SetMenuInfo(GetMenu(self.hwnd), &info);
+-            let old = self.brush.replace(brush);
+-            if !old.0.is_null() {
+-                let _ = DeleteObject(old.into());
++            if GetMenuInfo(menu, &mut original_background).is_err() {
++                return false;
+             }
+-            let _ = DrawMenuBar(self.hwnd);
++            for position in 0..count as u32 {
++                let mut info = MENUITEMINFOW {
++                    cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32,
++                    fMask: MIIM_FTYPE | MIIM_DATA | MIIM_SUBMENU | MIIM_ID,
++                    ..Default::default()
++                };
++                if GetMenuItemInfoW(menu, position, true, &mut info).is_err() {
++                    return false;
++                }
++                let mut text = vec![0u16; 512];
++                let length = GetMenuStringW(menu, position, Some(&mut text), MF_BYPOSITION).max(0) as usize;
++                text.truncate(length + 1);
++                let mut item = Box::new(Item {
++                    accessible: MSAAMENUINFO {
++                        dwMSAASignature: MSAA_MENU_SIG as u32,
++                        cchWText: length as u32,
++                        pszWText: PWSTR::null(),
++                    },
++                    text,
++                    menu,
++                    position,
++                    id: info.wID,
++                    original_type: info.fType,
++                    original_data: info.dwItemData,
++                    top_level,
++                    separator: info.fType.0 & MFT_SEPARATOR.0 != 0,
++                    submenu: !info.hSubMenu.0.is_null(),
++                    radio: Cell::new(info.fType.0 & MFT_RADIOCHECK.0 != 0),
++                });
++                item.accessible.pszWText = PWSTR(item.text.as_mut_ptr());
++                pending.push((item, info.hSubMenu));
++            }
++
++            for applied in 0..pending.len() {
++                let item = &pending[applied].0;
++                let info = MENUITEMINFOW {
++                    cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32,
++                    fMask: MIIM_FTYPE | MIIM_DATA,
++                    fType: MENU_ITEM_TYPE(item.original_type.0 | MFT_OWNERDRAW.0),
++                    dwItemData: (item.as_ref() as *const Item) as usize,
++                    ..Default::default()
++                };
++                if SetMenuItemInfoW(menu, item.position, true, &info).is_err() {
++                    let failed: Vec<_> = pending
++                        .iter()
++                        .take(applied)
++                        .enumerate()
++                        .filter_map(|(index, (rollback, _))| {
++                            (!restore_item(rollback) && IsMenu(rollback.menu).as_bool()).then_some(index)
++                        })
++                        .collect();
++                    for (index, (record, _)) in pending.into_iter().enumerate() {
++                        if failed.contains(&index) {
++                            // A live HMENU still has this exact dwItemData.
++                            Box::leak(record);
++                        }
++                    }
++                    return false;
++                }
++            }
++
++            self.menus.push(StyledMenu {
++                menu,
++                original_background: original_background.hbrBack,
++            });
++            let children: Vec<_> = pending
++                .iter()
++                .filter_map(|(_, submenu)| (!submenu.0.is_null()).then_some(*submenu))
++                .collect();
++            self.items.extend(pending.into_iter().map(|(item, _)| item));
++            for child in children {
++                self.style_menu(child, false);
++            }
++            true
++        }
++    }
++
++    unsafe fn apply_backgrounds(&self) {
++        unsafe {
++            self.apply_background(self.background_brush.get());
++        }
++    }
++
++    unsafe fn apply_background(&self, brush: HBRUSH) -> bool {
++        unsafe {
++            let mut complete = true;
++            for styled in &self.menus {
++                let info = MENUINFO {
++                    cbSize: std::mem::size_of::<MENUINFO>() as u32,
++                    fMask: MIM_BACKGROUND,
++                    hbrBack: brush,
++                    ..Default::default()
++                };
++                complete &= SetMenuInfo(styled.menu, &info).is_ok();
++            }
++            complete
+         }
+     }
+ }
++
+ impl Drop for MenuBar {
+     fn drop(&mut self) {
+         unsafe {
+-            let menu = GetMenu(self.hwnd);
+-            for (position, _) in self.items.iter().enumerate() {
+-                let info = MENUITEMINFOW {
+-                    cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32,
+-                    fMask: MIIM_FTYPE | MIIM_DATA,
+-                    fType: MFT_STRING,
++            for item in std::mem::take(&mut self.items) {
++                if !restore_item(&item) && IsMenu(item.menu).as_bool() {
++                    // A live HMENU still references this address. Leaking one
++                    // failed record is safer than leaving a dangling itemData.
++                    Box::leak(item);
++                }
++            }
++            let mut backgrounds_restored = true;
++            for styled in &self.menus {
++                let info = MENUINFO {
++                    cbSize: std::mem::size_of::<MENUINFO>() as u32,
++                    fMask: MIM_BACKGROUND,
++                    hbrBack: styled.original_background,
+                     ..Default::default()
+                 };
+-                let _ = SetMenuItemInfoW(menu, position as u32, true, &info);
++                if SetMenuInfo(styled.menu, &info).is_err() && IsMenu(styled.menu).as_bool() {
++                    backgrounds_restored = false;
++                }
+             }
+             let _ = RemoveWindowSubclass(self.hwnd, Some(callback), 0xBAAE1001);
+-            let info = MENUINFO {
+-                cbSize: std::mem::size_of::<MENUINFO>() as u32,
+-                fMask: MIM_BACKGROUND,
+-                ..Default::default()
+-            };
+-            let _ = SetMenuInfo(menu, &info);
+-            let font = self.font.get();
+-            if !font.0.is_null() {
+-                let _ = DeleteObject(font.into());
+-            }
+-            let brush = self.brush.get();
+-            if !brush.0.is_null() {
+-                let _ = DeleteObject(brush.into());
++            delete_font(self.font.replace(HFONT::default()));
++            if backgrounds_restored {
++                let owned = self.brushes_owned.replace(false);
++                delete_brush(self.background_brush.replace(HBRUSH::default()), owned);
++                delete_brush(self.selection_brush.replace(HBRUSH::default()), owned);
++                for brush in self.retained_brushes.get_mut().drain(..) {
++                    delete_brush(brush, true);
++                }
+             }
+         }
+     }
+ }
++
++unsafe fn restore_item(item: &Item) -> bool {
++    unsafe {
++        let info = MENUITEMINFOW {
++            cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32,
++            fMask: MIIM_FTYPE | MIIM_DATA,
++            fType: item.original_type,
++            dwItemData: item.original_data,
++            ..Default::default()
++        };
++        SetMenuItemInfoW(item.menu, item.position, true, &info).is_ok()
++    }
++}
++
++unsafe fn delete_font(font: HFONT) {
++    unsafe {
++        if !font.0.is_null() {
++            let _ = DeleteObject(font.into());
++        }
++    }
++}
++
++unsafe fn delete_brush(brush: HBRUSH, owned: bool) {
++    unsafe {
++        if owned && !brush.0.is_null() {
++            let _ = DeleteObject(brush.into());
++        }
++    }
++}
++
+ fn rgb(argb: u32) -> COLORREF {
+     COLORREF(((argb >> 16) & 255) | (argb & 0x00ff00) | ((argb & 255) << 16))
+ }
++
++fn muted(foreground: u32, background: u32) -> u32 {
++    let channel = |shift| ((((foreground >> shift) & 255) + 2 * ((background >> shift) & 255)) / 3) << shift;
++    channel(16) | channel(8) | channel(0)
++}
++
++fn system_high_contrast() -> bool {
++    let mut contrast = HIGHCONTRASTW {
++        cbSize: std::mem::size_of::<HIGHCONTRASTW>() as u32,
++        ..Default::default()
++    };
++    unsafe {
++        SystemParametersInfoW(
++            SPI_GETHIGHCONTRAST,
++            contrast.cbSize,
++            Some((&mut contrast as *mut HIGHCONTRASTW).cast()),
++            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
++        )
++        .is_ok()
++            && contrast.dwFlags.contains(HCF_HIGHCONTRASTON)
++    }
++}
++
++fn item_text(item: &Item) -> (&[u16], &[u16]) {
++    let text = &item.text[..item.text.len().saturating_sub(1)];
++    text.iter()
++        .position(|character| *character == b'\t' as u16)
++        .map_or((text, &[]), |tab| (&text[..tab], &text[tab + 1..]))
++}
++
++fn mnemonic(item: &Item) -> Option<char> {
++    let label = String::from_utf16_lossy(item_text(item).0);
++    let mut characters = label.chars();
++    let mut contains_marker = false;
++    while let Some(character) = characters.next() {
++        if character != '&' {
++            continue;
++        }
++        contains_marker = true;
++        match characters.next() {
++            Some('&') => continue,
++            key => return key,
++        }
++    }
++    // Bareline's canonical root titles are plain "File", "Search", etc.
++    // Preserve their native Alt+first-letter contract without treating escaped
++    // ampersands in popup labels as access-key markers.
++    (!contains_marker && item.top_level)
++        .then(|| label.chars().next())
++        .flatten()
++}
++
++fn menu_char_lresult(position: usize, action: u32) -> LRESULT {
++    LRESULT((position | ((action as usize) << 16)) as isize)
++}
++
++unsafe fn menu_char_result(state: &MenuBar, menu: HMENU, pressed: char) -> Option<LRESULT> {
++    unsafe {
++        if !state.menus.iter().any(|styled| styled.menu.0 == menu.0) {
++            return None;
++        }
++        let matches: Vec<_> = state
++            .items
++            .iter()
++            .filter(|item| item.menu.0 == menu.0 && !item.separator)
++            .filter(|item| {
++                let flags = GetMenuState(menu, item.position, MF_BYPOSITION);
++                flags != u32::MAX && flags & (MF_DISABLED.0 | MF_GRAYED.0) == 0
++            })
++            .filter(|item| mnemonic(item).is_some_and(|key| key.to_lowercase().eq(pressed.to_lowercase())))
++            .collect();
++        if matches.is_empty() {
++            return Some(menu_char_lresult(0, MNC_IGNORE));
++        }
++        let highlighted = matches
++            .iter()
++            .position(|item| GetMenuState(menu, item.position, MF_BYPOSITION) & MF_HILITE.0 != 0);
++        let selected = highlighted.map_or(0, |index| (index + 1) % matches.len());
++        Some(menu_char_lresult(
++            matches[selected].position as usize,
++            if matches.len() == 1 { MNC_EXECUTE } else { MNC_SELECT },
++        ))
++    }
++}
++
++#[derive(Clone, Copy)]
++enum Glyph {
++    Check,
++    Radio,
++    Arrow,
++    Separator,
++}
++
++unsafe fn draw_glyph(dc: HDC, rect: RECT, glyph: Glyph, color: COLORREF, dpi: u32) {
++    unsafe {
++        let width = ((dpi + 95) / 96).max(1) as i32;
++        let pen = CreatePen(PS_SOLID, width, color);
++        if pen.0.is_null() {
++            return;
++        }
++        let old_pen = SelectObject(dc, pen.into());
++        let center_x = (rect.left + rect.right) / 2;
++        let center_y = (rect.top + rect.bottom) / 2;
++        match glyph {
++            Glyph::Check => {
++                let radius = ((5 * dpi) / 96).max(3) as i32;
++                let _ = MoveToEx(dc, center_x - radius, center_y, None);
++                let _ = LineTo(dc, center_x - radius / 3, center_y + radius / 2);
++                let _ = LineTo(dc, center_x + radius, center_y - radius);
++            }
++            Glyph::Radio => {
++                let radius = ((3 * dpi) / 96).max(2) as i32;
++                let brush = CreateSolidBrush(color);
++                if !brush.0.is_null() {
++                    let old_brush = SelectObject(dc, brush.into());
++                    let _ = Ellipse(
++                        dc,
++                        center_x - radius,
++                        center_y - radius,
++                        center_x + radius + 1,
++                        center_y + radius + 1,
++                    );
++                    SelectObject(dc, old_brush);
++                    let _ = DeleteObject(brush.into());
++                }
++            }
++            Glyph::Arrow => {
++                let radius = ((4 * dpi) / 96).max(2) as i32;
++                let _ = MoveToEx(dc, center_x - radius / 2, center_y - radius, None);
++                let _ = LineTo(dc, center_x + radius / 2, center_y);
++                let _ = LineTo(dc, center_x - radius / 2, center_y + radius);
++            }
++            Glyph::Separator => {
++                let _ = MoveToEx(dc, rect.left, center_y, None);
++                let _ = LineTo(dc, rect.right, center_y);
++            }
++        }
++        SelectObject(dc, old_pen);
++        let _ = DeleteObject(pen.into());
++    }
++}
++
+ unsafe extern "system" fn callback(
+     hwnd: HWND,
+     message: u32,
+@@ -186,33 +541,22 @@ unsafe extern "system" fn callback(
+     // The adapter owns this pinned state and removes the subclass before releasing it.
+     let state = unsafe { &*(data as *const MenuBar) };
+     unsafe {
+-        if message == WM_SETTINGCHANGE {
+-            state.dpi.set(0);
++        if matches!(
++            message,
++            WM_SETTINGCHANGE | WM_THEMECHANGED | WM_SYSCOLORCHANGE | WM_DPICHANGED
++        ) {
++            state.refresh_resources(true);
++            state.apply_backgrounds();
++            let _ = DrawMenuBar(hwnd);
++        } else if message == WM_INITMENUPOPUP && state.refresh_resources(false) {
++            state.apply_backgrounds();
++            let _ = DrawMenuBar(hwnd);
+         }
+-        if message == WM_MENUCHAR && lparam.0 == GetMenu(hwnd).0 as isize {
++        if message == WM_MENUCHAR {
+             if let Some(pressed) = char::from_u32((wparam.0 & 0xffff) as u32) {
+-                let mut matches = Vec::new();
+-                for (position, item) in state.items.iter().enumerate() {
+-                    let label = String::from_utf16_lossy(&item.text[..item.text.len() - 1]);
+-                    let key = label
+-                        .split_once('&')
+-                        .and_then(|(_, suffix)| suffix.chars().next())
+-                        .or_else(|| label.chars().next());
+-                    if key.is_some_and(|key| key.to_lowercase().eq(pressed.to_lowercase())) {
+-                        matches.push(position);
+-                    }
+-                }
+-                if !matches.is_empty() {
+-                    let highlighted = matches.iter().copied().find(|position| {
+-                        GetMenuState(GetMenu(hwnd), *position as u32, MF_BYPOSITION) & MF_HILITE.0 != 0
+-                    });
+-                    let position = highlighted
+-                        .and_then(|old| matches.iter().copied().find(|position| *position > old))
+-                        .unwrap_or(matches[0]);
+-                    return LRESULT(
+-                        (position | (((if matches.len() == 1 { MNC_EXECUTE } else { MNC_SELECT }) as usize) << 16))
+-                            as isize,
+-                    );
++                let active_menu = HMENU(lparam.0 as *mut std::ffi::c_void);
++                if let Some(result) = menu_char_result(state, active_menu, pressed) {
++                    return result;
+                 }
+             }
+         }
+@@ -224,14 +568,22 @@ unsafe extern "system" fn callback(
+                     .iter()
+                     .find(|item| (&***item as *const Item) as usize == measure.itemData)
+                 {
++                    let dpi = state.dpi.get().max(96);
++                    if item.separator {
++                        measure.itemWidth = 1;
++                        measure.itemHeight = ((7 * dpi) / 96).max(1);
++                        return LRESULT(1);
++                    }
+                     let dc = GetDC(Some(hwnd));
+                     let old = SelectObject(dc, state.font_object());
+                     let mut size = SIZE::default();
+-                    let _ = GetTextExtentPoint32W(dc, &item.text[..item.text.len() - 1], &mut size);
++                    let _ = GetTextExtentPoint32W(dc, &item.text[..item.text.len().saturating_sub(1)], &mut size);
+                     SelectObject(dc, old);
+                     ReleaseDC(Some(hwnd), dc);
+-                    measure.itemWidth = (size.cx + ((24 * state.dpi.get()) / 96) as i32).max(1) as u32;
+-                    measure.itemHeight = GetSystemMetricsForDpi(SM_CYMENU, state.dpi.get()).max(size.cy) as u32;
++                    let gutters = if item.top_level { 24 } else { 58 };
++                    measure.itemWidth = (size.cx + ((gutters * dpi) / 96) as i32).max(1) as u32;
++                    let metric = if item.top_level { SM_CYMENU } else { SM_CYMENUSIZE };
++                    measure.itemHeight = GetSystemMetricsForDpi(metric, dpi).max(size.cy + 4) as u32;
+                     return LRESULT(1);
+                 }
+             }
+@@ -244,29 +596,94 @@ unsafe extern "system" fn callback(
+                     .iter()
+                     .find(|item| (&***item as *const Item) as usize == draw.itemData)
+                 {
+-                    let (background, text, selection) = state.colors.get();
+-                    let selected = (draw.itemState.0 & (ODS_SELECTED.0 | ODS_HOTLIGHT.0)) != 0;
+-                    let brush = CreateSolidBrush(rgb(if selected { selection } else { background }));
+-                    FillRect(draw.hDC, &draw.rcItem, brush);
+-                    let _ = DeleteObject(brush.into());
+-                    let saved = SaveDC(draw.hDC);
+-                    SelectObject(draw.hDC, state.font_object());
+-                    SetBkMode(draw.hDC, TRANSPARENT);
+-                    SetTextColor(
++                    let selected = draw.itemState.0 & (ODS_SELECTED.0 | ODS_HOTLIGHT.0) != 0;
++                    FillRect(
+                         draw.hDC,
+-                        if (draw.itemState.0 & (ODS_DISABLED.0 | ODS_GRAYED.0)) != 0 {
+-                            COLORREF(GetSysColor(COLOR_GRAYTEXT))
++                        &draw.rcItem,
++                        if selected {
++                            state.selection_brush.get()
+                         } else {
+-                            rgb(text)
++                            state.background_brush.get()
+                         },
+                     );
+-                    let mut label = item.text[..item.text.len() - 1].to_vec();
+-                    let mut rect = draw.rcItem;
+-                    let mut flags = DT_CENTER | DT_VCENTER | DT_SINGLELINE;
+-                    if (draw.itemState.0 & ODS_NOACCEL.0) != 0 {
++                    if item.separator {
++                        let mut separator = draw.rcItem;
++                        separator.left += ((28 * state.dpi.get()) / 96) as i32;
++                        let (background, text, _) = state.colors.get();
++                        let color = if state.high_contrast.get() {
++                            GetSysColor(COLOR_GRAYTEXT)
++                        } else {
++                            rgb(muted(text, background)).0
++                        };
++                        draw_glyph(draw.hDC, separator, Glyph::Separator, COLORREF(color), state.dpi.get());
++                        return LRESULT(1);
++                    }
++
++                    let saved = SaveDC(draw.hDC);
++                    SelectObject(draw.hDC, state.font_object());
++                    SetBkMode(draw.hDC, TRANSPARENT);
++                    let disabled = draw.itemState.0 & (ODS_DISABLED.0 | ODS_GRAYED.0) != 0;
++                    let (background, text, selection) = state.colors.get();
++                    let text_color = if state.high_contrast.get() {
++                        GetSysColor(if selected {
++                            COLOR_HIGHLIGHTTEXT
++                        } else if disabled {
++                            COLOR_GRAYTEXT
++                        } else {
++                            COLOR_MENUTEXT
++                        })
++                    } else if disabled {
++                        rgb(muted(text, if selected { selection } else { background })).0
++                    } else {
++                        rgb(text).0
++                    };
++                    SetTextColor(draw.hDC, COLORREF(text_color));
++                    let mut flags = DT_VCENTER | DT_SINGLELINE;
++                    if draw.itemState.0 & ODS_NOACCEL.0 != 0 {
+                         flags |= DT_HIDEPREFIX;
+                     }
+-                    DrawTextW(draw.hDC, &mut label, &mut rect, flags);
++                    let (label, shortcut) = item_text(item);
++                    if item.top_level {
++                        let mut label = label.to_vec();
++                        let mut rect = draw.rcItem;
++                        DrawTextW(draw.hDC, &mut label, &mut rect, flags | DT_CENTER);
++                    } else {
++                        let scale = state.dpi.get() as i32;
++                        let gutter = 28 * scale / 96;
++                        let arrow = 18 * scale / 96;
++                        let mut label_rect = draw.rcItem;
++                        label_rect.left += gutter;
++                        label_rect.right -= arrow;
++                        let mut label = label.to_vec();
++                        DrawTextW(draw.hDC, &mut label, &mut label_rect, flags | DT_LEFT);
++                        if !shortcut.is_empty() {
++                            let mut shortcut_rect = label_rect;
++                            let mut shortcut = shortcut.to_vec();
++                            DrawTextW(draw.hDC, &mut shortcut, &mut shortcut_rect, flags | DT_RIGHT);
++                        }
++                        if draw.itemState.0 & ODS_CHECKED.0 != 0 {
++                            let mut mark = draw.rcItem;
++                            mark.right = mark.left + gutter;
++                            draw_glyph(
++                                draw.hDC,
++                                mark,
++                                if item.radio.get() { Glyph::Radio } else { Glyph::Check },
++                                COLORREF(text_color),
++                                state.dpi.get(),
++                            );
++                        }
++                        if item.submenu {
++                            let mut arrow_rect = draw.rcItem;
++                            arrow_rect.left = arrow_rect.right - arrow;
++                            draw_glyph(
++                                draw.hDC,
++                                arrow_rect,
++                                Glyph::Arrow,
++                                COLORREF(text_color),
++                                state.dpi.get(),
++                            );
++                        }
++                    }
+                     let _ = RestoreDC(draw.hDC, saved);
+                     return LRESULT(1);
+                 }
+@@ -275,3 +692,119 @@ unsafe extern "system" fn callback(
+         DefSubclassProc(hwnd, message, wparam, lparam)
+     }
+ }
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn label_and_shortcut_are_separate_native_columns() {
++        let mut item = Item {
++            accessible: MSAAMENUINFO::default(),
++            text: "&Save\tCtrl+S\0".encode_utf16().collect(),
++            menu: HMENU::default(),
++            position: 0,
++            id: 1,
++            original_type: MENU_ITEM_TYPE(0),
++            original_data: 0,
++            top_level: false,
++            separator: false,
++            submenu: false,
++            radio: Cell::new(false),
++        };
++        item.accessible.pszWText = PWSTR(item.text.as_mut_ptr());
++        let (label, shortcut) = item_text(&item);
++        assert_eq!(String::from_utf16_lossy(label), "&Save");
++        assert_eq!(String::from_utf16_lossy(shortcut), "Ctrl+S");
++        assert_ne!(muted(0x00ffffff, 0x00000000), 0x00ffffff);
++    }
++
++    #[test]
++    fn recursive_owner_draw_enumerates_and_restores_three_levels() -> windows::core::Result<()> {
++        unsafe {
++            let root = CreateMenu()?;
++            let first = CreatePopupMenu()?;
++            let second = CreatePopupMenu()?;
++            AppendMenuW(second, MF_STRING, 41, windows::core::w!("&Alpha"))?;
++            AppendMenuW(second, MF_STRING, 42, windows::core::w!("&Again"))?;
++            AppendMenuW(second, MF_STRING, 43, windows::core::w!("Rock && Roll"))?;
++            AppendMenuW(first, MF_POPUP, second.0 as usize, windows::core::w!("Nested"))?;
++            AppendMenuW(root, MF_POPUP, first.0 as usize, windows::core::w!("File"))?;
++
++            let mut state = MenuBar {
++                hwnd: HWND::default(),
++                items: Vec::new(),
++                menus: Vec::new(),
++                colors: Cell::new((0, 0, 0)),
++                background_brush: Cell::new(HBRUSH::default()),
++                selection_brush: Cell::new(HBRUSH::default()),
++                brushes_owned: Cell::new(false),
++                retained_brushes: RefCell::new(Vec::new()),
++                font: Cell::new(HFONT::default()),
++                dpi: Cell::new(96),
++                high_contrast: Cell::new(false),
++            };
++            assert!(state.style_menu(root, true));
++            assert_eq!(state.menus.len(), 3);
++            assert_eq!(state.items.len(), 5);
++            assert!(state.items[0].top_level);
++            assert!(state.items[1].submenu);
++            assert_eq!(state.items[2].id, 41);
++
++            let root_file = menu_char_result(&state, root, 'f').unwrap().0 as usize;
++            assert_eq!(root_file >> 16, MNC_EXECUTE as usize);
++            assert_eq!(root_file & 0xffff, 0);
++
++            EnableMenuItem(second, 1, MF_BYPOSITION | MF_DISABLED);
++            let unique = menu_char_result(&state, second, 'a').unwrap().0 as usize;
++            assert_eq!(unique >> 16, MNC_EXECUTE as usize);
++            assert_eq!(unique & 0xffff, 0);
++            let escaped = menu_char_result(&state, second, 'r').unwrap().0 as usize;
++            assert_eq!(escaped >> 16, MNC_IGNORE as usize);
++
++            EnableMenuItem(second, 1, MF_BYPOSITION | MF_ENABLED);
++            let duplicate = menu_char_result(&state, second, 'a').unwrap().0 as usize;
++            assert_eq!(duplicate >> 16, MNC_SELECT as usize);
++            assert_eq!(duplicate & 0xffff, 0);
++            let highlighted = MENUITEMINFOW {
++                cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32,
++                fMask: MIIM_STATE,
++                fState: MFS_HILITE,
++                ..Default::default()
++            };
++            SetMenuItemInfoW(second, 0, true, &highlighted)?;
++            let cycled = menu_char_result(&state, second, 'a').unwrap().0 as usize;
++            assert_eq!(cycled >> 16, MNC_SELECT as usize);
++            assert_eq!(cycled & 0xffff, 1);
++
++            let changed: Vec<_> = "&Changed\tCtrl+K\0".encode_utf16().collect();
++            state.item(second, 41, false, &changed, true);
++            let radio = MENUITEMINFOW {
++                cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32,
++                fMask: MIIM_FTYPE | MIIM_DATA,
++                fType: MFT_OWNERDRAW | MFT_RADIOCHECK,
++                dwItemData: (state.items[2].as_ref() as *const Item) as usize,
++                ..Default::default()
++            };
++            SetMenuItemInfoW(second, 0, true, &radio)?;
++            assert!(state.items[2].radio.get());
++
++            for item in &state.items {
++                restore_item(item);
++            }
++            state.items.clear();
++            state.menus.clear();
++            let mut leaf = MENUITEMINFOW {
++                cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32,
++                fMask: MIIM_FTYPE | MIIM_DATA,
++                ..Default::default()
++            };
++            GetMenuItemInfoW(second, 0, true, &mut leaf)?;
++            assert_eq!(leaf.fType.0 & MFT_OWNERDRAW.0, 0);
++            assert_eq!(leaf.fType.0 & MFT_RADIOCHECK.0, 0);
++            assert_eq!(leaf.dwItemData, 0);
++            DestroyMenu(root)?;
++        }
++        Ok(())
++    }
++}
+diff --git a/crates/platform-windows/src/native.rs b/crates/platform-windows/src/native.rs
+index 698fbde..fb8a93e 100644
+--- a/crates/platform-windows/src/native.rs
++++ b/crates/platform-windows/src/native.rs
+@@ -203,12 +203,17 @@ impl WindowsPlatform {
+                 label_for(id.0, state.label.as_deref().unwrap_or(spec.title)),
+                 keymap.shortcut_label(*id)
+             ));
++            let owner_draw = self
++                .menu_bar
++                .borrow()
++                .as_ref()
++                .is_some_and(|bar| bar.owns(self.item_menus[index], (index + 1) as u32, false));
+             let info = MENUITEMINFOW {
+                 cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32,
+                 fMask: MIIM_STATE | MIIM_STRING | MIIM_FTYPE,
+                 // The active document in the Window menu shows an exclusive radio
+                 // dot rather than a check box.
+-                fType: if state.radio { MFT_RADIOCHECK } else { MENU_ITEM_TYPE(0) },
++                fType: projected_item_type(state.radio, owner_draw),
+                 fState: (if state.enabled { MFS_ENABLED } else { MFS_DISABLED })
+                     | if state.checked { MFS_CHECKED } else { MFS_UNCHECKED },
+                 dwTypeData: windows::core::PWSTR(label.as_mut_ptr()),
+@@ -216,6 +221,9 @@ impl WindowsPlatform {
+             };
+             unsafe {
+                 SetMenuItemInfoW(self.item_menus[index], (index + 1) as u32, false, &info)?;
++                if let Some(bar) = self.menu_bar.borrow_mut().as_mut() {
++                    bar.item(self.item_menus[index], (index + 1) as u32, false, &label, state.radio);
++                }
+             }
+         }
+         for (menu, position, title) in &self.submenu_labels {
+@@ -228,10 +236,8 @@ impl WindowsPlatform {
+             };
+             unsafe {
+                 SetMenuItemInfoW(*menu, *position, true, &info)?;
+-                if *menu == GetMenu(self.hwnd) {
+-                    if let Some(bar) = self.menu_bar.borrow_mut().as_mut() {
+-                        bar.name(*position as usize, &label);
+-                    }
++                if let Some(bar) = self.menu_bar.borrow_mut().as_mut() {
++                    bar.item(*menu, *position, true, &label, false);
+                 }
+             }
+         }
+@@ -456,6 +462,7 @@ impl WindowsPlatform {
+     /// that should be visible in the given context. Frees the previous menu.
+     fn build_menu(&mut self, registry: &CommandRegistry, context: &CommandContext) -> windows::core::Result<()> {
+         let visible = self.model.visible(registry, context);
++        let previous_theme = self.menu_bar.get_mut().as_ref().map(|bar| bar.theme());
+         // SAFETY: the new menu handle is transferred to the window on success and
+         // the previous one is destroyed only after the swap.
+         unsafe {
+@@ -466,6 +473,9 @@ impl WindowsPlatform {
+             self.submenu_labels.clear();
+             let result = (|| -> windows::core::Result<()> {
+                 self.append_model(menu, &visible.items, registry)?;
++                // Restore item data before the old HMENU is detached/destroyed.
++                // The replacement receives fresh stable owner-draw metadata below.
++                self.menu_bar.get_mut().take();
+                 SetMenu(self.hwnd, Some(menu))?;
+                 DrawMenuBar(self.hwnd)?;
+                 Ok(())
+@@ -479,6 +489,12 @@ impl WindowsPlatform {
+             }
+             self.menu = menu;
+         }
++        if let Some((background, text, selection)) = previous_theme
++            && let Ok(bar) = crate::menu_bar::MenuBar::attach(self.hwnd)
++        {
++            bar.colors(background, text, selection);
++            *self.menu_bar.get_mut() = Some(bar);
++        }
+         self.built = visible.command_order();
+         Ok(())
+     }
+@@ -906,3 +922,47 @@ fn display_title(name: &str) -> String {
+ fn wide(text: &str) -> Vec<u16> {
+     text.encode_utf16().chain(Some(0)).collect()
+ }
++
++fn projected_item_type(radio: bool, owner_draw: bool) -> MENU_ITEM_TYPE {
++    (if owner_draw { MFT_OWNERDRAW } else { MENU_ITEM_TYPE(0) })
++        | if radio { MFT_RADIOCHECK } else { MENU_ITEM_TYPE(0) }
++}
++
++#[cfg(test)]
++mod menu_state_tests {
++    use super::*;
++
++    #[test]
++    fn native_fallback_state_update_does_not_enable_owner_draw() -> windows::core::Result<()> {
++        unsafe {
++            let menu = CreatePopupMenu()?;
++            AppendMenuW(menu, MF_STRING, 7, w!("Fallback"))?;
++            let mut label = wide("Updated fallback");
++            let update = MENUITEMINFOW {
++                cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32,
++                fMask: MIIM_STATE | MIIM_STRING | MIIM_FTYPE,
++                fType: projected_item_type(true, false),
++                fState: MFS_DISABLED | MFS_CHECKED,
++                dwTypeData: windows::core::PWSTR(label.as_mut_ptr()),
++                ..Default::default()
++            };
++            SetMenuItemInfoW(menu, 7, false, &update)?;
++            let mut actual = MENUITEMINFOW {
++                cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32,
++                fMask: MIIM_STATE | MIIM_FTYPE,
++                ..Default::default()
++            };
++            GetMenuItemInfoW(menu, 7, false, &mut actual)?;
++            assert_eq!(actual.fType.0 & MFT_OWNERDRAW.0, 0);
++            assert_ne!(actual.fType.0 & MFT_RADIOCHECK.0, 0);
++            assert_ne!(actual.fState.0 & MFS_DISABLED.0, 0);
++            assert_ne!(actual.fState.0 & MFS_CHECKED.0, 0);
++            DestroyMenu(menu)?;
++        }
++
++        let retained = projected_item_type(false, true);
++        assert_ne!(retained.0 & MFT_OWNERDRAW.0, 0);
++        assert_eq!(retained.0 & MFT_RADIOCHECK.0, 0);
++        Ok(())
++    }
++}
+diff --git a/docs/implementation/2026-09-12-audit-implementation/PR-U03.md b/docs/implementation/2026-09-12-audit-implementation/PR-U03.md
+new file mode 100644
+index 0000000..dfdf854
+--- /dev/null
++++ b/docs/implementation/2026-09-12-audit-implementation/PR-U03.md
+@@ -0,0 +1,33 @@
++# PR-U03 — Native popup menu theme
++
++## Scope
++
++- Audit finding: UX-05
++- Baseline snapshot: `8d8a17afa739b235a0bc634e8aa461a8212f87e8`
++- Branch: `codex/audit-20260912-u03`
++- Dependencies: integrated U01/U07/U08 modal and routing fixes; existing native `MenuBar` owner-draw implementation
++
++## Intended change
++
++Extend the existing Win32 owner-draw menu implementation recursively through popup submenus. Preserve command identifiers, shortcuts, native keyboard navigation, and accessibility metadata. Map enabled, disabled, selected, checked/radio, separator, shortcut, and submenu-arrow states to the resolved theme; defer to system rendering in high contrast. Refresh DPI/theme-owned GDI resources safely and restore every modified menu item before teardown.
++
++## Evidence
++
++Implemented recursive popup enumeration with per-item original type/data ownership, per-menu original background ownership, stable boxed `MSAAMENUINFO`, themed popup layout/state drawing, high-contrast system colors, DPI/font refresh, and transactional subtree fallback. Menu rebuilds now tear down old item data before destroying the old `HMENU`, then attach fresh metadata while preserving the resolved theme. Dynamic command/submenu labels and radio state update both Win32 and the retained accessibility text.
++
++Local contained checks:
++
++- `rustfmt --edition 2024 crates/platform-windows/src/menu_bar.rs crates/platform-windows/src/native.rs` — passed.
++- `git diff --check` — passed (Git reports the repository's expected LF-to-CRLF checkout warning).
++- Added a Windows unit test that constructs and restores a synthetic three-level `HMENU`, plus label/shortcut column coverage. Per the audit coordinator's serialization rule, these tests were not run here.
++- Review correction coverage exercises nested popup mnemonics (unique execute, duplicate selection/cycling, disabled exclusion, and escaped `&&`), native-fallback type projection, and restoration after dynamic label/radio updates. Brush replacement now commits only after every live menu accepts the new brush; partial failure rolls back while retaining any brush that a live menu may still reference.
++- Root titles without explicit `&` markers retain their established Alt+first-letter access keys; failed partial item rollback retains only records still referenced by a live menu.
++
++Root-owned proposed checks after review/integration:
++
++- `cargo test -p bareline-platform-windows menu_bar::tests`
++- `cargo clippy -p bareline-platform-windows --all-targets -- -D warnings`
++- `cargo build -p bareline`
++- Native menu journey: File/Search nested popup interiors and enabled/disabled/selected/checked/radio/separator/shortcut/submenu states in light, dark, system, and Windows high contrast at 100%, 150%, and 200% DPI; verify arrows, access keys, accelerators, mouse hover, submenu expansion, UIA/MSAA names, structural rebuild, and GDI handle stability.
++
++Pending: all Cargo/build/Clippy and native desktop/DPI/accessibility checks above.

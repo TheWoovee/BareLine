@@ -70,11 +70,7 @@ impl TextField {
     }
     fn display_offset(&self, value: &str, offset: usize) -> usize {
         if self.mode == TextMode::Password {
-            value
-                .grapheme_indices(true)
-                .take_while(|(i, _)| *i < offset)
-                .count()
-                * "•".len()
+            value.grapheme_indices(true).take_while(|(i, _)| *i < offset).count() * "•".len()
         } else {
             offset
         }
@@ -84,6 +80,27 @@ impl TextField {
     }
     pub fn composing(&self) -> bool {
         self.composition.is_some()
+    }
+    /// Committed byte offsets used by the native text provider. Preedit stays
+    /// separate until IME commit, matching the field's editing contract.
+    pub fn selection(&self) -> (usize, usize) {
+        (self.anchor, self.caret)
+    }
+    pub fn composition_text(&self) -> Option<&str> {
+        self.composition.as_ref().map(|(text, _)| text.as_str())
+    }
+    pub fn set_selection(&mut self, anchor: usize, caret: usize) -> bool {
+        if anchor > self.value.len()
+            || caret > self.value.len()
+            || !self.value.is_char_boundary(anchor)
+            || !self.value.is_char_boundary(caret)
+        {
+            return false;
+        }
+        self.cancel();
+        self.anchor = anchor;
+        self.caret = caret;
+        true
     }
     fn range(&self) -> std::ops::Range<usize> {
         self.anchor.min(self.caret)..self.anchor.max(self.caret)
@@ -182,9 +199,7 @@ impl TextField {
             self.cancel();
             return;
         }
-        if value.chars().any(char::is_control)
-            || self.value.len() - self.range().len() + value.len() > LIMIT
-        {
+        if value.chars().any(char::is_control) || self.value.len() - self.range().len() + value.len() > LIMIT {
             return;
         }
         let caret = cursor
@@ -201,16 +216,9 @@ impl TextField {
             return;
         }
         if !extend && !self.range().is_empty() {
-            self.caret = if right {
-                self.range().end
-            } else {
-                self.range().start
-            };
+            self.caret = if right { self.range().end } else { self.range().start };
         } else if right {
-            self.caret += self.value[self.caret..]
-                .graphemes(true)
-                .next()
-                .map_or(0, str::len);
+            self.caret += self.value[self.caret..].graphemes(true).next().map_or(0, str::len);
         } else {
             self.caret = self.value[..self.caret]
                 .grapheme_indices(true)
@@ -244,12 +252,7 @@ impl TextField {
             backend.release_layout(id);
         }
     }
-    pub fn click(
-        &mut self,
-        backend: &impl TextBackend,
-        point: Point,
-        extend: bool,
-    ) -> Result<(), LayoutError> {
+    pub fn click(&mut self, backend: &impl TextBackend, point: Point, extend: bool) -> Result<(), LayoutError> {
         if self.composing() {
             return Ok(());
         }
@@ -293,13 +296,7 @@ impl TextField {
         focused: bool,
         ops: &mut Vec<DrawOp>,
     ) -> Result<Rect, LayoutError> {
-        self.draw_with_theme(
-            backend,
-            bounds,
-            focused,
-            crate::theme::UiTheme::default(),
-            ops,
-        )
+        self.draw_with_theme(backend, bounds, focused, crate::theme::UiTheme::default(), ops)
     }
     pub fn draw_with_theme(
         &mut self,
@@ -318,18 +315,12 @@ impl TextField {
             self.caret
         };
         let caret_offset = self.display_offset(&display, caret_offset);
-        let selected_range = self.display_offset(&self.value, range.start)
-            ..self.display_offset(&self.value, range.end);
+        let selected_range = self.display_offset(&self.value, range.start)..self.display_offset(&self.value, range.end);
         let preedit_range = self.composition.as_ref().map(|(preedit, _)| {
-            self.display_offset(&display, range.start)
-                ..self.display_offset(&display, range.start + preedit.len())
+            self.display_offset(&display, range.start)..self.display_offset(&display, range.start + preedit.len())
         });
         let display = self.display_value(&display);
-        if self
-            .layout
-            .as_ref()
-            .is_none_or(|(value, _)| value != &display)
-        {
+        if self.layout.as_ref().is_none_or(|(value, _)| value != &display) {
             self.release(backend);
             self.layout = Some((display.clone(), backend.shape(&display, 13.0, 1_000_000.0)?));
         }
@@ -360,11 +351,7 @@ impl TextField {
         ops.push(DrawOp::FillRounded(bounds, theme.editor, 4.0));
         ops.push(DrawOp::StrokeRounded(
             bounds,
-            if focused {
-                theme.focus
-            } else {
-                theme.interactive
-            },
+            if focused { theme.focus } else { theme.interactive },
             4.0,
             if focused { 2.0 } else { 1.0 },
         ));
@@ -391,14 +378,7 @@ impl TextField {
             color: theme.text,
         });
         if self.value.is_empty() && self.composition.is_none() && !self.placeholder.is_empty() {
-            crate::text(
-                ops,
-                self.origin.x,
-                self.origin.y,
-                &self.placeholder,
-                13.0,
-                theme.muted,
-            );
+            crate::text(ops, self.origin.x, self.origin.y, &self.placeholder, 13.0, theme.muted);
         }
         for line in underlines {
             ops.push(DrawOp::Line {

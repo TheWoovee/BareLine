@@ -23,10 +23,7 @@ fn nofollow(path: &Path, access: u32) -> io::Result<File> {
         .share_mode(FILE_SHARE_READ.0 | FILE_SHARE_WRITE.0)
         .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT.0 | FILE_FLAG_BACKUP_SEMANTICS.0)
         .open(path)?;
-    if file.metadata()?.file_attributes()
-        & (FILE_ATTRIBUTE_REPARSE_POINT.0 | FILE_ATTRIBUTE_OFFLINE.0)
-        != 0
-    {
+    if file.metadata()?.file_attributes() & (FILE_ATTRIBUTE_REPARSE_POINT.0 | FILE_ATTRIBUTE_OFFLINE.0) != 0 {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             "linked/offline entries require separate authorization",
@@ -46,12 +43,9 @@ fn parents(fs: &dyn LocalFileSystem, path: &Path) -> io::Result<Vec<File>> {
         ));
     }
     fs.validate_target(path)?;
-    let parent = path.parent().ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            "volume root cannot be mutated",
-        )
-    })?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::PermissionDenied, "volume root cannot be mutated"))?;
     let paths: Vec<_> = parent.ancestors().collect();
     let mut retained = Vec::new();
     for ancestor in paths.into_iter().rev() {
@@ -76,17 +70,16 @@ pub fn rename(fs: &dyn LocalFileSystem, source: &Path, target: &Path) -> io::Res
     let _source_parents = parents(fs, source)?;
     let target_parents = parents(fs, target)?;
     let file = nofollow(source, DELETE.0 | FILE_READ_ATTRIBUTES.0)?;
-    let target_parent = target_parents.last().ok_or_else(|| {
-        io::Error::new(io::ErrorKind::InvalidInput, "destination parent required")
-    })?;
-    let name: Vec<u16> = target.file_name().ok_or_else(|| {
-        io::Error::new(io::ErrorKind::InvalidInput, "destination filename required")
-    })?.encode_wide().collect();
+    let target_parent = target_parents
+        .last()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "destination parent required"))?;
+    let name: Vec<u16> = target
+        .file_name()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "destination filename required"))?
+        .encode_wide()
+        .collect();
     if name.contains(&0) || name.len() > 32767 {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "invalid destination name",
-        ));
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "invalid destination name"));
     }
     crate::rename::rename(&file, target_parent, &name, false)
 }
@@ -114,13 +107,26 @@ pub struct WorkspaceDeleteUndo {
 }
 pub fn retain_deleted_entry(fs: &dyn LocalFileSystem, path: &Path) -> io::Result<WorkspaceDeleteUndo> {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-    let parent = path.parent().ok_or_else(|| io::Error::other("Cannot delete a volume root"))?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| io::Error::other("Cannot delete a volume root"))?;
     for _ in 0..16 {
-        let retained = parent.join(format!(".bareline-deleted-{}-{}-{}", std::process::id(),
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos(),
-            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
+        let retained = parent.join(format!(
+            ".bareline-deleted-{}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
         match rename(fs, path, &retained) {
-            Ok(()) => return Ok(WorkspaceDeleteUndo { original: path.to_owned(), retained }),
+            Ok(()) => {
+                return Ok(WorkspaceDeleteUndo {
+                    original: path.to_owned(),
+                    retained,
+                });
+            }
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
             Err(error) => return Err(error),
         }
@@ -136,8 +142,7 @@ mod tests {
     use crate::files::WindowsFileSystem;
     #[test]
     fn no_replace_and_nonrecursive_deletion() {
-        let root =
-            std::env::temp_dir().join(format!("bareline-workspace-ops-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("bareline-workspace-ops-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
         let a = root.join("a");
         let b = root.join("b");

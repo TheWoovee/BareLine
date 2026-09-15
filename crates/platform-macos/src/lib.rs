@@ -55,11 +55,7 @@ mod tests {
     #[test]
     fn dialogs_and_menus_are_explicitly_unavailable() {
         let adapter = NativePlatform;
-        for result in [
-            adapter.open_file(),
-            adapter.save_file(),
-            adapter.pick_folder(),
-        ] {
+        for result in [adapter.open_file(), adapter.save_file(), adapter.pick_folder()] {
             assert!(result.unwrap_err().starts_with("Unsupported:"));
         }
         for capability in [

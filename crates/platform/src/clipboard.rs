@@ -17,7 +17,9 @@ pub fn valid_clipboard_format(format: &str) -> bool {
 
 /// Length envelope avoids exposing GlobalAlloc padding as application metadata.
 pub fn encode_clipboard_metadata(bytes: &[u8]) -> Option<Vec<u8>> {
-    if bytes.len() > MAX_CLIPBOARD_METADATA_BYTES { return None; }
+    if bytes.len() > MAX_CLIPBOARD_METADATA_BYTES {
+        return None;
+    }
     let mut envelope = Vec::with_capacity(8 + bytes.len());
     envelope.extend_from_slice(b"BLM1");
     envelope.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
@@ -25,9 +27,13 @@ pub fn encode_clipboard_metadata(bytes: &[u8]) -> Option<Vec<u8>> {
     Some(envelope)
 }
 pub fn decode_clipboard_metadata(envelope: &[u8], max_bytes: usize) -> Option<Vec<u8>> {
-    if envelope.len() < 8 || &envelope[..4] != b"BLM1" { return None; }
+    if envelope.len() < 8 || &envelope[..4] != b"BLM1" {
+        return None;
+    }
     let length = u32::from_le_bytes(envelope[4..8].try_into().ok()?) as usize;
-    if length > max_bytes.min(MAX_CLIPBOARD_METADATA_BYTES) { return None; }
+    if length > max_bytes.min(MAX_CLIPBOARD_METADATA_BYTES) {
+        return None;
+    }
     Some(envelope.get(8..8usize.checked_add(length)?)?.to_vec())
 }
 

@@ -1,0 +1,14 @@
+{
+  "arguments": [
+    "test",
+    "-p",
+    "bareline-file-io",
+    "--lib",
+    "fault_transitions"
+  ],
+  "completed_utc": "2026-09-12T09:13:50.1596710Z",
+  "integration_snapshot": "67fbae06c16e51dffa95ad3b08ef69f0ff91a725",
+  "exit_code": 0,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\T04-fault-transitions-corrected-central.log"
+}

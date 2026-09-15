@@ -56,8 +56,7 @@ pub(super) fn spawn(
                 || segment.source.start.0 < source_end
                 || segment.source.end.0 < segment.source.start.0
                 || segment.source.end.0 > handle.snapshot().len()
-                || segment.local.end.0 - segment.local.start.0
-                    != segment.source.end.0 - segment.source.start.0
+                || segment.local.end.0 - segment.local.start.0 != segment.source.end.0 - segment.source.start.0
             {
                 return Err("Invalid syntax projection map".into());
             }
@@ -88,10 +87,8 @@ pub(super) fn spawn(
                 let mut lexer = StreamLexer::new(language, preference, definition);
                 let mut folds = FoldAccumulator::default();
                 let mut folds_active = true;
-                let mut projection = Some(
-                    ViewportProjection::for_projection(local.clone(), language)
-                        .map_err(|e| format!("{e:?}"))?,
-                );
+                let mut projection =
+                    Some(ViewportProjection::for_projection(local.clone(), language).map_err(|e| format!("{e:?}"))?);
                 let mut first_line = 0;
                 loop {
                     if cancel.is_cancelled() {
@@ -134,12 +131,8 @@ pub(super) fn spawn(
                             .map_err(|e| format!("{e:?}"))?;
                         } else {
                             for segment in &segments {
-                                view.accept_segment(
-                                    &window,
-                                    segment.source.clone(),
-                                    segment.local.clone(),
-                                )
-                                .map_err(|e| format!("{e:?}"))?;
+                                view.accept_segment(&window, segment.source.clone(), segment.local.clone())
+                                    .map_err(|e| format!("{e:?}"))?;
                             }
                         }
                     }
@@ -149,11 +142,7 @@ pub(super) fn spawn(
                                 .last()
                                 .map_or(origin.0 + local.len(), |segment| segment.source.end.0)
                     {
-                        let (syntax, line) = projection
-                            .take()
-                            .unwrap()
-                            .finish()
-                            .map_err(|e| format!("{e:?}"))?;
+                        let (syntax, line) = projection.take().unwrap().finish().map_err(|e| format!("{e:?}"))?;
                         first_line = line;
                         Some(syntax)
                     } else {
@@ -226,7 +215,7 @@ pub(super) fn read(
                 return Ok(window.text().to_owned());
             }
             WindowPoll::Pending(ticket) => {
-                if !handle.resolve_page(ticket)? {
+                if !handle.resolve_page(ticket).map_err(|error| error.to_string())? {
                     std::thread::yield_now();
                 }
             }

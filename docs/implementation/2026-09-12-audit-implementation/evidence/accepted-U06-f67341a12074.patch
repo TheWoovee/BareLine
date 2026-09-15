@@ -1,0 +1,282 @@
+diff --git a/apps/bareline/src/windows_app/macros.rs b/apps/bareline/src/windows_app/macros.rs
+index dcee060..ffbc6aa 100644
+--- a/apps/bareline/src/windows_app/macros.rs
++++ b/apps/bareline/src/windows_app/macros.rs
+@@ -541,6 +541,22 @@ fn atomic_text(path: &std::path::Path, text: &str) -> Result<(), String> {
+     result
+ }
+ impl Shell {
++    fn refresh_macro_command_context(&mut self) {
++        self.macros.command_context = self.command_context();
++    }
++    fn show_macro_manager(&mut self) {
++        self.macros.controller.show_manager();
++        self.refresh_macro_command_context();
++    }
++    fn dismiss_macro_manager(&mut self) {
++        self.macros.controller.manager.dismiss();
++        if let Some(renderer) = &mut self.renderer {
++            self.macros.controller.manager.release(renderer);
++        }
++        self.macros.focused = false;
++        self.ui_focus.focus(bareline_ui::ViewId(2));
++        self.refresh_macro_command_context();
++    }
+     pub(super) fn macros_accessibility(
+         &mut self,
+         el: &ActiveEventLoop,
+@@ -581,6 +597,7 @@ impl Shell {
+                     self.dispatch(el, action);
+                 }
+             }
++            Some(bareline_app::macros::ManagerEffect::Dismiss) => self.dismiss_macro_manager(),
+             None => {}
+         }
+     }
+@@ -637,7 +654,7 @@ impl Shell {
+             && !self.macros.controller.manager.open
+         {
+             self.palette.dismiss();
+-            self.macros.controller.show_manager();
++            self.show_macro_manager();
+             if let Some(window) = &self.window {
+                 window.request_redraw();
+             }
+@@ -674,11 +691,11 @@ impl Shell {
+             }
+             "macro.manager" => {
+                 self.palette.dismiss();
+-                self.macros.controller.show_manager();
++                self.show_macro_manager();
+                 Ok(())
+             }
+             "macro.manager_close" => {
+-                self.macros.controller.manager.dismiss();
++                self.dismiss_macro_manager();
+                 Ok(())
+             }
+             "macro.save" => self.macros.save_library(self.notify.clone()),
+@@ -972,7 +989,6 @@ impl Shell {
+     pub(super) fn macros_pump(&mut self, _el: &ActiveEventLoop) {
+         self.macros.next_tick = None;
+         self.macros.theme = self.settings.ui_theme();
+-        self.macros.command_context = self.command_context();
+         self.macros_poll_location();
+         if let Err(error) = self.macros.load_library(self.notify.clone()) {
+             self.macros.controller.status = error;
+@@ -1081,6 +1097,9 @@ impl Shell {
+                     .map_or(process_tick, |tick| tick.min(process_tick)),
+             );
+         }
++        // Background load/import can open the manager during this pump. Install
++        // the resulting state before the next draw or accessibility snapshot.
++        self.refresh_macro_command_context();
+     }
+     pub(super) fn macros_event(&mut self, el: &ActiveEventLoop, event: &WindowEvent) -> bool {
+         if self.macros.controller.manager.open && !self.palette.open {
+@@ -1346,6 +1365,63 @@ mod tests {
+     use super::*;
+     use bareline_commands::{CommandContext, CommandId};
+ 
++    fn assert_open_close_enabled(runtime: &MacrosRuntime, label: &str) {
++        assert!(runtime.controller.manager.open, "{label}");
++        let mut context = CommandContext::default();
++        runtime.annotate_context(&mut context);
++        assert!(
++            context
++                .states
++                .get(&CommandId("macro.manager_close"))
++                .is_none_or(|state| state.enabled && !state.hidden),
++            "Close was unavailable in {label} state"
++        );
++    }
++
++    #[test]
++    fn manager_close_context_is_enabled_for_every_runtime_state() {
++        let mut empty = MacrosRuntime::default();
++        empty.controller.show_manager();
++        assert_open_close_enabled(&empty, "empty");
++
++        let mut selected = MacrosRuntime::default();
++        selected.controller.library.insert(
++            "Example".into(),
++            bareline_app::macros::model::Macro {
++                name: "Example".into(),
++                events: Vec::new(),
++            },
++        );
++        selected.controller.selected = Some("Example".into());
++        selected.controller.show_manager();
++        assert_open_close_enabled(&selected, "selected");
++
++        let mut loading = MacrosRuntime::default();
++        let (_sender, receiver) = mpsc::sync_channel(1);
++        loading.pending = Some(receiver);
++        loading.controller.show_manager();
++        assert_open_close_enabled(&loading, "loading");
++
++        let mut failed = MacrosRuntime::default();
++        failed.loaded = true;
++        failed.controller.status = "injected load failure".into();
++        failed.controller.show_manager();
++        assert_open_close_enabled(&failed, "failed loading");
++
++        let mut recording = MacrosRuntime::default();
++        recording.controller.record().unwrap();
++        recording.controller.show_manager();
++        assert_open_close_enabled(&recording, "recording");
++
++        let mut playback = selected;
++        playback
++            .controller
++            .play(Repeat::Once, &bareline_commands::CommandRegistry::default())
++            .unwrap();
++        playback.controller.show_manager();
++        assert_open_close_enabled(&playback, "playback");
++    }
++
+     #[test]
+     fn inapplicable_manager_and_run_commands_are_hidden_not_greyed() {
+         let mut runtime = MacrosRuntime::default();
+diff --git a/crates/app/src/macros/manager.rs b/crates/app/src/macros/manager.rs
+index 7b1fa16..2cf28fb 100644
+--- a/crates/app/src/macros/manager.rs
++++ b/crates/app/src/macros/manager.rs
+@@ -13,9 +13,53 @@ use bareline_ui::{
+ };
+ use std::collections::BTreeMap;
+ 
++#[derive(Clone, Debug, PartialEq, Eq)]
+ pub enum ManagerEffect {
+     Select(String),
+     Command(CommandId),
++    Dismiss,
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn close_ignores_cached_command_disablement_and_all_dismiss_inputs_match() {
++        let mut manager = MacroManager::default();
++        manager.show(&BTreeMap::new(), None);
++        let mut context = bareline_commands::CommandContext::default();
++        context.states.insert(
++            CommandId("macro.manager_close"),
++            bareline_commands::CommandState::disabled("stale closed-manager state"),
++        );
++        let mut backend = bareline_renderer_recording::RecordingBackend::default();
++        manager
++            .draw(
++                &mut backend,
++                1000.,
++                800.,
++                "loading failed while recording and playing",
++                UiTheme::default(),
++                &context,
++                &mut Vec::new(),
++            )
++            .unwrap();
++        let close = manager
++            .semantics()
++            .into_iter()
++            .find(|node| node.id == ViewId(23205))
++            .unwrap();
++        assert!(!close.disabled);
++        assert!(close.actions.contains(&SemanticAction::Invoke));
++        assert!(close.invalid.is_none());
++        assert_eq!(manager.accessibility(23205, true), Some(ManagerEffect::Dismiss));
++        assert_eq!(
++            manager.event(UiEvent::Key(Key::Escape), false),
++            Some(ManagerEffect::Dismiss)
++        );
++        assert!(manager.open, "the native owner applies the shared dismissal effect");
++    }
+ }
+ pub struct MacroManager {
+     pub open: bool,
+@@ -107,8 +151,7 @@ impl MacroManager {
+         }
+         match event {
+             UiEvent::Key(Key::Escape) => {
+-                self.dismiss();
+-                return None;
++                return Some(ManagerEffect::Dismiss);
+             }
+             UiEvent::Key(Key::Tab) => {
+                 let count = 5 + self.buttons.len();
+@@ -161,7 +204,11 @@ impl MacroManager {
+         for (index, (id, button)) in self.buttons.iter_mut().enumerate() {
+             button.state.focused = self.focus == index + 5;
+             if button.event(event).is_some() {
+-                return Some(ManagerEffect::Command(*id));
++                return Some(if id.0 == "macro.manager_close" {
++                    ManagerEffect::Dismiss
++                } else {
++                    ManagerEffect::Command(*id)
++                });
+             }
+         }
+         None
+@@ -182,6 +229,7 @@ impl MacroManager {
+         self.reasons = context
+             .states
+             .iter()
++            .filter(|(id, _)| id.0 != "macro.manager_close")
+             .filter_map(|(id, state)| state.disabled_reason.clone().map(|reason| (*id, reason)))
+             .collect();
+         let w = (width - 24.).clamp(1., 700.);
+@@ -263,7 +311,8 @@ impl MacroManager {
+                 bounds: r,
+                 toggle: false,
+                 state: ControlState {
+-                    disabled: context.states.get(&CommandId(id)).is_some_and(|state| !state.enabled),
++                    disabled: id != "macro.manager_close"
++                        && context.states.get(&CommandId(id)).is_some_and(|state| !state.enabled),
+                     focused: self.focus == index + 5,
+                     pressed: previous.get(index).is_some_and(|b| b.1.state.pressed),
+                     ..Default::default()
+@@ -400,7 +449,11 @@ impl MacroManager {
+         {
+             self.focus = index + 5;
+             if invoke {
+-                return Some(ManagerEffect::Command(self.buttons[index].0));
++                return Some(if self.buttons[index].0.0 == "macro.manager_close" {
++                    ManagerEffect::Dismiss
++                } else {
++                    ManagerEffect::Command(self.buttons[index].0)
++                });
+             }
+         }
+         None
+diff --git a/docs/implementation/2026-09-12-audit-implementation/PR-U06.md b/docs/implementation/2026-09-12-audit-implementation/PR-U06.md
+new file mode 100644
+index 0000000..1851173
+--- /dev/null
++++ b/docs/implementation/2026-09-12-audit-implementation/PR-U06.md
+@@ -0,0 +1,24 @@
++# PR-U06 — Keep Macro Manager Close usable in every manager state
++
++Baseline: `96f3566661cb1f397a89106f7aef00927793c0c0`
++
++## Scope
++
++Make the visible Macro Manager Close control enabled whenever the manager is open, install fresh command state before its first draw and semantic snapshot, and route pointer/UIA Invoke and Escape through one dismissal effect that restores editor focus. Recording, playback, process, and storage ownership remain unchanged.
++
++## Decisions
++
++- Manager open/close transitions rebuild command context immediately instead of waiting for the later macro pump.
++- Close applicability depends only on whether the manager is open.
++- All close inputs use the existing manager close path; dismissing the surface does not cancel recording or playback.
++
++## Evidence
++
++Focused state-table coverage includes empty, selected, loading, failed loading, recording, and playback states. A manager regression injects the stale closed-manager command state, verifies the rendered/semantic Close remains enabled with UIA Invoke, and proves UIA and Escape return the same native-owner dismissal effect.
++
++Changed files:
++
++- `apps/bareline/src/windows_app/macros.rs`: immediate open/close command-context refresh and one dismissal/focus-restoration path.
++- `crates/app/src/macros/manager.rs`: unconditional open-manager Close state and shared dismissal effect for pointer, UIA, and Escape.
++
++Worker-side checks are `rustfmt --edition 2024` on both Rust files and `git diff --check`. Root owns contained Cargo and native UIA/mouse/Escape qualification in the integration checkout.

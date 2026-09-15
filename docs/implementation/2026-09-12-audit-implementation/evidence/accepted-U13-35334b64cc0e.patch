@@ -1,0 +1,23 @@
+diff --git a/crates/editor-surface/src/paged_view.rs b/crates/editor-surface/src/paged_view.rs
+index 7224859..289d9b8 100644
+--- a/crates/editor-surface/src/paged_view.rs
++++ b/crates/editor-surface/src/paged_view.rs
+@@ -4410,6 +4410,7 @@ mod peer_tests {
+         // status reads and cancellation must all complete before the worker is
+         // released; the coordinator releases on timeout so a regression fails
+         // instead of hanging the test process.
++        let baseline_progress = view.index_fraction().unwrap_or(0.0);
+         let (held_tx, held_rx) = mpsc::sync_channel(1);
+         let (release_tx, release_rx) = mpsc::sync_channel(1);
+         view.navigation.hold_next_scan(held_tx, release_rx);
+@@ -4431,7 +4432,9 @@ mod peer_tests {
+             completed_before_release
+         });
+         view.pump();
+-        assert_eq!(view.index_fraction(), Some(0.0));
++        let held_progress = view.index_fraction().expect("held scan retained a matching receipt");
++        assert!(held_progress >= baseline_progress && held_progress < 1.0);
++        assert_eq!(view.indexed_line_count(), None);
+         assert!(
+             view.surface
+                 .status_segments("Plain text")

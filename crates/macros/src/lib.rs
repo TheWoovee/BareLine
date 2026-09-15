@@ -15,11 +15,7 @@ pub enum MacroEvent {
         arguments: BTreeMap<String, String>,
     },
     /// Text is sent through the same normal edit command, one Unicode scalar per tick.
-    TypeText {
-        id: String,
-        text: String,
-        interval_ms: u64,
-    },
+    TypeText { id: String, text: String, interval_ms: u64 },
 }
 impl MacroEvent {
     pub fn command_id(&self) -> &str {
@@ -35,10 +31,7 @@ pub struct Macro {
 }
 impl Macro {
     pub fn validate(&self, registry: &CommandRegistry) -> Result<(), String> {
-        if self.name.trim().is_empty()
-            || self.name.len() > 4096
-            || self.name.chars().any(char::is_control)
-        {
+        if self.name.trim().is_empty() || self.name.len() > 4096 || self.name.chars().any(char::is_control) {
             return Err("Macro name is empty".into());
         }
         if self.events.is_empty() || self.events.len() > MAX_EVENTS {
@@ -51,17 +44,9 @@ impl Macro {
             }
             match event {
                 MacroEvent::Command { id, arguments } => {
-                    bytes += id.len()
-                        + arguments
-                            .iter()
-                            .map(|(k, v)| k.len() + v.len())
-                            .sum::<usize>();
+                    bytes += id.len() + arguments.iter().map(|(k, v)| k.len() + v.len()).sum::<usize>();
                 }
-                MacroEvent::TypeText {
-                    id,
-                    text,
-                    interval_ms,
-                } => {
+                MacroEvent::TypeText { id, text, interval_ms } => {
                     if text.is_empty() {
                         return Err("Typing action requires nonempty text".into());
                     }
@@ -82,29 +67,24 @@ impl Macro {
     }
     // Conservative TOML escaping/framing bound, checked before serialization allocates.
     fn serialized_bound(&self, name: &str) -> usize {
-        self.events.iter().fold(
-            128usize.saturating_add(name.len().saturating_mul(6)),
-            |total, event| {
+        self.events
+            .iter()
+            .fold(128usize.saturating_add(name.len().saturating_mul(6)), |total, event| {
                 total.saturating_add(128).saturating_add(match event {
-                    MacroEvent::Command { id, arguments } => {
-                        id.len().saturating_mul(6).saturating_add(
-                            arguments
-                                .iter()
-                                .map(|(key, value)| {
-                                    key.len()
-                                        .saturating_add(value.len())
-                                        .saturating_mul(6)
-                                        .saturating_add(16)
-                                })
-                                .sum::<usize>(),
-                        )
-                    }
-                    MacroEvent::TypeText { id, text, .. } => {
-                        id.len().saturating_add(text.len()).saturating_mul(6)
-                    }
+                    MacroEvent::Command { id, arguments } => id.len().saturating_mul(6).saturating_add(
+                        arguments
+                            .iter()
+                            .map(|(key, value)| {
+                                key.len()
+                                    .saturating_add(value.len())
+                                    .saturating_mul(6)
+                                    .saturating_add(16)
+                            })
+                            .sum::<usize>(),
+                    ),
+                    MacroEvent::TypeText { id, text, .. } => id.len().saturating_add(text.len()).saturating_mul(6),
                 })
-            },
-        )
+            })
     }
     pub fn rename(&mut self, name: &str) -> Result<(), String> {
         if name.trim().is_empty() || name.len() > 4096 || name.chars().any(char::is_control) {
@@ -177,10 +157,7 @@ impl Macro {
         }
         let mut events = Vec::new();
         for table in tables {
-            let kind = table
-                .get("kind")
-                .and_then(|v| v.as_str())
-                .ok_or("Missing event kind")?;
+            let kind = table.get("kind").and_then(|v| v.as_str()).ok_or("Missing event kind")?;
             let id = table
                 .get("command")
                 .and_then(|v| v.as_str())
@@ -198,16 +175,11 @@ impl Macro {
                 "command" => {
                     let mut arguments = BTreeMap::new();
                     if let Some(value) = table.get("arguments") {
-                        let values = value
-                            .as_inline_table()
-                            .ok_or("arguments must be an inline table")?;
+                        let values = value.as_inline_table().ok_or("arguments must be an inline table")?;
                         for (key, value) in values {
                             arguments.insert(
                                 key.to_string(),
-                                value
-                                    .as_str()
-                                    .ok_or("Arguments must be strings")?
-                                    .to_string(),
+                                value.as_str().ok_or("Arguments must be strings")?.to_string(),
                             );
                         }
                     }
@@ -297,11 +269,7 @@ impl Recorder {
         }
         .saturating_add(128);
         if self.events.len() >= MAX_EVENTS
-            || self
-                .bytes
-                .saturating_add(bytes)
-                .saturating_add(128 + 4096 * 6)
-                > MAX_FILE_BYTES
+            || self.bytes.saturating_add(bytes).saturating_add(128 + 4096 * 6) > MAX_FILE_BYTES
         {
             return Err("Macro recording limit reached".into());
         }
@@ -338,11 +306,7 @@ pub trait MacroExecutor {
         Ok(true)
     }
     /// Must dispatch through normal app/document transactions; never write document bytes directly.
-    fn execute(
-        &mut self,
-        command: CommandId,
-        arguments: &BTreeMap<String, String>,
-    ) -> Result<(), String>;
+    fn execute(&mut self, command: CommandId, arguments: &BTreeMap<String, String>) -> Result<(), String>;
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Repeat {
@@ -408,18 +372,13 @@ impl Playback {
         self.location
     }
     pub fn cancel(&mut self) {
-        if matches!(
-            self.state,
-            PlaybackState::Running | PlaybackState::Waiting(_)
-        ) {
+        if matches!(self.state, PlaybackState::Running | PlaybackState::Waiting(_)) {
             self.state = PlaybackState::Cancelled;
             self.due = None;
         }
     }
     pub fn resume(&mut self) -> bool {
-        if matches!(self.state, PlaybackState::Failed { .. })
-            && self.location.event < self.definition.events.len()
-        {
+        if matches!(self.state, PlaybackState::Failed { .. }) && self.location.event < self.definition.events.len() {
             self.state = PlaybackState::Running;
             self.due = None;
             true
@@ -441,10 +400,7 @@ impl Playback {
         registry: &CommandRegistry,
         executor: &mut impl MacroExecutor,
     ) -> PlaybackState {
-        if !matches!(
-            self.state,
-            PlaybackState::Running | PlaybackState::Waiting(_)
-        ) {
+        if !matches!(self.state, PlaybackState::Running | PlaybackState::Waiting(_)) {
             return self.state.clone();
         }
         if let Some(next_text) = self.pending {
@@ -489,15 +445,9 @@ impl Playback {
         let mut next_text = None;
         let arguments = match event {
             MacroEvent::Command { arguments, .. } => arguments.clone(),
-            MacroEvent::TypeText {
-                text, interval_ms, ..
-            } => {
+            MacroEvent::TypeText { text, interval_ms, .. } => {
                 if let Some(ch) = text[self.location.text_byte..].chars().next() {
-                    next_text = Some((
-                        self.location.text_byte + ch.len_utf8(),
-                        text.len(),
-                        *interval_ms,
-                    ));
+                    next_text = Some((self.location.text_byte + ch.len_utf8(), text.len(), *interval_ms));
                     BTreeMap::from([("text".into(), ch.to_string())])
                 } else {
                     BTreeMap::from([("text".into(), String::new())])
@@ -641,8 +591,7 @@ mod tests {
             if self.failed {
                 return Err("Edit refused".into());
             }
-            self.values
-                .push(args.get("text").cloned().unwrap_or_default());
+            self.values.push(args.get("text").cloned().unwrap_or_default());
             self.progress.position += 1;
             Ok(())
         }
@@ -651,29 +600,18 @@ mod tests {
     fn persistence_recording_and_repeat_preserve_normalized_text() {
         let registry = shell_commands();
         let value = definition();
-        assert_eq!(
-            Macro::import_toml(&value.export_toml(), &registry).unwrap(),
-            value
-        );
+        assert_eq!(Macro::import_toml(&value.export_toml(), &registry).unwrap(), value);
         assert!(
             Macro::import_toml(
-                &value
-                    .export_toml()
-                    .replace("format_version = 1", "format_version = 2"),
+                &value.export_toml().replace("format_version = 1", "format_version = 2"),
                 &registry
             )
             .is_err()
         );
         let mut recorder = Recorder::default();
         recorder.start();
-        assert!(
-            !recorder
-                .executed(value.events[0].clone(), false, &registry)
-                .unwrap()
-        );
-        recorder
-            .executed(value.events[0].clone(), true, &registry)
-            .unwrap();
+        assert!(!recorder.executed(value.events[0].clone(), false, &registry).unwrap());
+        recorder.executed(value.events[0].clone(), true, &registry).unwrap();
         assert_eq!(recorder.stop("Example", &registry).unwrap(), value);
         let mut playback = Playback::new(value, Repeat::Times(2), 10, &registry).unwrap();
         let mut executor = Executor::default();
@@ -771,11 +709,7 @@ mod tests {
                     eof: false,
                 }
             }
-            fn execute(
-                &mut self,
-                _: CommandId,
-                _: &BTreeMap<String, String>,
-            ) -> Result<(), String> {
+            fn execute(&mut self, _: CommandId, _: &BTreeMap<String, String>) -> Result<(), String> {
                 Ok(())
             }
         }

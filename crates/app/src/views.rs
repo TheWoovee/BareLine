@@ -3,12 +3,14 @@
 pub use bareline_document::DocumentSnapshot as ViewSnapshot;
 pub use bareline_editor_surface::EditorSurface as SharedEditorView;
 pub use bareline_editor_surface::SyntaxView as SharedSyntaxView;
-pub use bareline_file_io::session::{
-    SessionLayout, SessionManifest, SessionTab, SplitOrientation, ViewState,
-};
+pub use bareline_file_io::session::{SessionLayout, SessionManifest, SessionTab, SplitOrientation, ViewState};
 use bareline_renderer::Rect;
 use bareline_ui::rect;
 use std::ops::Range;
+
+/// Maximum persisted tab id accepted by native view/provider projections.
+/// Each id owns a collision-free 256 KiB semantic/text-run block.
+pub const MAX_VIEW_TAB_ID: u64 = (1 << 44) - 1;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Orientation {
@@ -83,9 +85,7 @@ impl ViewController {
             .layout
             .tab_colors
             .iter()
-            .filter(|(id, color)| {
-                manifest.tabs.iter().any(|tab| tab.id == **id) && **color <= 0xffffff
-            })
+            .filter(|(id, color)| manifest.tabs.iter().any(|tab| tab.id == **id) && **color <= 0xffffff)
             .map(|(id, color)| (*id, *color))
             .collect();
         controller.vertical_tabs = manifest.layout.vertical_tabs;
@@ -117,7 +117,8 @@ impl ViewController {
         let mut ids = std::collections::HashSet::new();
         let mut unpinned = false;
         for tab in &tabs {
-            if !ids.insert(tab.id)
+            if tab.id > MAX_VIEW_TAB_ID
+                || !ids.insert(tab.id)
                 || tab.view.split > 1
                 || tab.view.folds.len() > 100_000
                 || tab.view.folds.iter().any(|r| r.start >= r.end)
@@ -168,8 +169,7 @@ impl ViewController {
     }
     pub fn retain_documents(&mut self, live: &[u64]) {
         self.tabs.retain(|tab| live.contains(&tab.document_id));
-        self.mru
-            .retain(|id| self.tabs.iter().any(|tab| tab.id == *id));
+        self.mru.retain(|id| self.tabs.iter().any(|tab| tab.id == *id));
         self.tab_colors
             .retain(|id, _| self.tabs.iter().any(|tab| tab.id == *id));
         self.repair_active();
@@ -195,10 +195,8 @@ impl ViewController {
         Ok(())
     }
     pub fn sort_by_label(&mut self, labels: &[(u64, String)], descending: bool) {
-        let labels: std::collections::HashMap<_, _> = labels
-            .iter()
-            .map(|(id, label)| (*id, label.to_lowercase()))
-            .collect();
+        let labels: std::collections::HashMap<_, _> =
+            labels.iter().map(|(id, label)| (*id, label.to_lowercase())).collect();
         self.tabs.sort_by(|a, b| {
             (!a.pinned).cmp(&(!b.pinned)).then_with(|| {
                 let a = labels.get(&a.document_id).map(String::as_str).unwrap_or("");
@@ -206,19 +204,9 @@ impl ViewController {
                 if descending { b.cmp(a) } else { a.cmp(b) }
             })
         });
-        self.tab_sort = if descending {
-            "name_descending"
-        } else {
-            "name"
-        }
-        .into();
+        self.tab_sort = if descending { "name_descending" } else { "name" }.into();
     }
-    pub fn move_to_pane(
-        &mut self,
-        id: u64,
-        pane: u32,
-        before: Option<u64>,
-    ) -> Result<(), ViewError> {
+    pub fn move_to_pane(&mut self, id: u64, pane: u32, before: Option<u64>) -> Result<(), ViewError> {
         if pane > 1 {
             return Err(ViewError::InvalidPane);
         }
@@ -232,19 +220,9 @@ impl ViewController {
             }
         }
         let old = source.view.split;
-        self.tabs
-            .iter_mut()
-            .find(|tab| tab.id == id)
-            .unwrap()
-            .view
-            .split = pane;
+        self.tabs.iter_mut().find(|tab| tab.id == id).unwrap().view.split = pane;
         if let Err(error) = self.reorder(id, before) {
-            self.tabs
-                .iter_mut()
-                .find(|tab| tab.id == id)
-                .unwrap()
-                .view
-                .split = old;
+            self.tabs.iter_mut().find(|tab| tab.id == id).unwrap().view.split = old;
             return Err(error);
         }
         self.split = self.tabs.iter().any(|tab| tab.view.split == 1);
@@ -254,16 +232,8 @@ impl ViewController {
     /// Attach a newly opened document identity to the active pane. The owner has
     /// already created the document service; this allocates view metadata only.
     /// Restore a previously closed view in this process without creating a second tab model.
-    pub fn restore_tab(
-        &mut self,
-        tab: SessionTab,
-        position: usize,
-        color: Option<u32>,
-    ) -> Result<(), ViewError> {
-        if self.tabs.len() >= 10_000
-            || tab.view.split > 1
-            || self.tabs.iter().any(|existing| existing.id == tab.id)
-        {
+    pub fn restore_tab(&mut self, tab: SessionTab, position: usize, color: Option<u32>) -> Result<(), ViewError> {
+        if self.tabs.len() >= 10_000 || tab.view.split > 1 || self.tabs.iter().any(|existing| existing.id == tab.id) {
             return Err(ViewError::InvalidState);
         }
         let mut probe = tab.clone();
@@ -289,6 +259,9 @@ impl ViewController {
             return Err(ViewError::InvalidState);
         }
         let id = self.next_id;
+        if id > MAX_VIEW_TAB_ID {
+            return Err(ViewError::IdentityExhausted);
+        }
         self.next_id = id.checked_add(1).ok_or(ViewError::IdentityExhausted)?;
         self.tabs.push(SessionTab {
             id,
@@ -329,11 +302,7 @@ impl ViewController {
                 .iter()
                 .any(|t| Some(t.id) == self.active[pane] && t.view.split == pane as u32)
             {
-                self.active[pane] = self
-                    .tabs
-                    .iter()
-                    .find(|t| t.view.split == pane as u32)
-                    .map(|t| t.id);
+                self.active[pane] = self.tabs.iter().find(|t| t.view.split == pane as u32).map(|t| t.id);
             }
         }
         if self.active[self.active_pane as usize].is_none() {
@@ -365,6 +334,9 @@ impl ViewController {
         }
         let mut tab = self.tab(id).ok_or(ViewError::Missing)?.clone();
         let new_id = self.next_id;
+        if new_id > MAX_VIEW_TAB_ID {
+            return Err(ViewError::IdentityExhausted);
+        }
         self.next_id = new_id.checked_add(1).ok_or(ViewError::IdentityExhausted)?;
         tab.id = new_id;
         tab.view.split = 1 - tab.view.split;
@@ -382,30 +354,16 @@ impl ViewController {
         Ok(new_id)
     }
     pub fn move_to_other(&mut self, id: u64) -> Result<(), ViewError> {
-        let tab = self
-            .tabs
-            .iter_mut()
-            .find(|t| t.id == id)
-            .ok_or(ViewError::Missing)?;
+        let tab = self.tabs.iter_mut().find(|t| t.id == id).ok_or(ViewError::Missing)?;
         tab.view.split = 1 - tab.view.split;
         self.split = true;
         self.repair_active();
         self.activate(id)
     }
-    pub fn close(
-        &mut self,
-        id: u64,
-        dirty: bool,
-        discard_last: bool,
-    ) -> Result<ClosedView, ViewError> {
+    pub fn close(&mut self, id: u64, dirty: bool, discard_last: bool) -> Result<ClosedView, ViewError> {
         let tab = self.tab(id).ok_or(ViewError::Missing)?;
         let document_id = tab.document_id;
-        let last_reference = self
-            .tabs
-            .iter()
-            .filter(|t| t.document_id == document_id)
-            .count()
-            == 1;
+        let last_reference = self.tabs.iter().filter(|t| t.document_id == document_id).count() == 1;
         if last_reference && dirty && !discard_last {
             return Err(ViewError::LastDirtyReference);
         }
@@ -434,17 +392,9 @@ impl ViewController {
         self.repair_active();
     }
     pub fn set_view_state(&mut self, id: u64, mut state: ViewState) -> Result<(), ViewError> {
-        let tab = self
-            .tabs
-            .iter_mut()
-            .find(|t| t.id == id)
-            .ok_or(ViewError::Missing)?;
+        let tab = self.tabs.iter_mut().find(|t| t.id == id).ok_or(ViewError::Missing)?;
         let y = f64::from_bits(state.scroll_y_bits);
-        if !y.is_finite()
-            || y < 0.0
-            || state.folds.len() > 100_000
-            || state.folds.iter().any(|r| r.start >= r.end)
-        {
+        if !y.is_finite() || y < 0.0 || state.folds.len() > 100_000 || state.folds.iter().any(|r| r.start >= r.end) {
             return Err(ViewError::InvalidState);
         }
         state.split = tab.view.split;
@@ -461,12 +411,7 @@ impl ViewController {
         if folds.len() > 100_000 || folds.iter().any(|r| r.start >= r.end) {
             return Err(ViewError::InvalidState);
         }
-        self.tabs
-            .iter_mut()
-            .find(|t| t.id == id)
-            .unwrap()
-            .view
-            .folds = folds;
+        self.tabs.iter_mut().find(|t| t.id == id).unwrap().view.folds = folds;
         Ok(())
     }
     /// Reorder within one pane/pin region. `None` moves to that region's end.
@@ -570,18 +515,8 @@ impl ViewController {
         alignment: Option<&AlignmentMap>,
     ) -> Result<Option<ScrollUpdate>, ViewError> {
         let origin = self.next_origin;
-        self.next_origin = self
-            .next_origin
-            .checked_add(1)
-            .ok_or(ViewError::IdentityExhausted)?;
-        self.receive_scroll(
-            ScrollUpdate {
-                origin,
-                pane,
-                position,
-            },
-            alignment,
-        )
+        self.next_origin = self.next_origin.checked_add(1).ok_or(ViewError::IdentityExhausted)?;
+        self.receive_scroll(ScrollUpdate { origin, pane, position }, alignment)
     }
     /// Replaying the returned update never emits an update back to its origin.
     pub fn receive_scroll(
@@ -592,22 +527,16 @@ impl ViewController {
         if update.pane > 1 {
             return Err(ViewError::InvalidPane);
         }
-        if !update.position.fraction.is_finite()
-            || !update.position.x.is_finite()
-            || update.position.x < 0.0
-        {
+        if !update.position.fraction.is_finite() || !update.position.x.is_finite() || update.position.x < 0.0 {
             return Err(ViewError::InvalidState);
         }
         let source = update.pane as usize;
         if update.origin <= self.last_origin[source] {
             return Ok(None);
         }
-        self.next_origin = self.next_origin.max(
-            update
-                .origin
-                .checked_add(1)
-                .ok_or(ViewError::IdentityExhausted)?,
-        );
+        self.next_origin = self
+            .next_origin
+            .max(update.origin.checked_add(1).ok_or(ViewError::IdentityExhausted)?);
         self.last_origin[source] = update.origin;
         self.scroll[source] = update.position;
         if !self.split || (!self.sync_vertical && !self.sync_horizontal) {
@@ -616,9 +545,7 @@ impl ViewController {
         let target = 1 - source;
         let mut position = self.scroll[target];
         if self.sync_vertical {
-            position.line = alignment.map_or(update.position.line, |map| {
-                map.map_scroll(source, update.position.line)
-            });
+            position.line = alignment.map_or(update.position.line, |map| map.map_scroll(source, update.position.line));
             position.fraction = update.position.fraction.clamp(0.0, 1.0);
         }
         if self.sync_horizontal {
@@ -638,6 +565,9 @@ impl ViewController {
     }
     pub fn write_session(&self, manifest: &mut SessionManifest) {
         self.write_tabs(manifest);
+        let bottom_panel = manifest.layout.bottom_panel.clone();
+        let bottom_panel_collapsed = manifest.layout.bottom_panel_collapsed;
+        let bottom_panel_height_bits = manifest.layout.bottom_panel_height_bits;
         manifest.layout = SessionLayout {
             tab_colors: self.tab_colors.clone(),
             vertical_tabs: self.vertical_tabs,
@@ -657,6 +587,9 @@ impl ViewController {
             active_tabs: self.active,
             sync_horizontal: self.sync_horizontal,
             sync_vertical: self.sync_vertical,
+            bottom_panel,
+            bottom_panel_collapsed,
+            bottom_panel_height_bits,
         };
         let mut seen = std::collections::HashSet::new();
         manifest.mru = self
@@ -708,12 +641,22 @@ mod tests {
                 last_reference: false
             }
         );
-        assert_eq!(
-            views.close(1, true, false),
-            Err(ViewError::LastDirtyReference)
-        );
+        assert_eq!(views.close(1, true, false), Err(ViewError::LastDirtyReference));
         assert!(views.tab(1).is_some());
         assert!(!views.split);
+    }
+
+    #[test]
+    fn restored_tab_ids_must_fit_the_native_provider_block_contract() {
+        let mut valid = tab(MAX_VIEW_TAB_ID, false);
+        valid.document_id = 1;
+        assert!(ViewController::new(vec![valid], Some(MAX_VIEW_TAB_ID)).is_ok());
+        let mut invalid = tab(MAX_VIEW_TAB_ID + 1, false);
+        invalid.document_id = 1;
+        assert!(matches!(
+            ViewController::new(vec![invalid], None),
+            Err(ViewError::InvalidState)
+        ));
     }
     #[test]
     fn five_hundred_tabs_pin_reorder_and_layout_roundtrip() {
@@ -749,9 +692,14 @@ mod tests {
                 .collect(),
             ..Default::default()
         };
+        manifest.layout.bottom_panel = Some("output".into());
+        manifest.layout.bottom_panel_collapsed = false;
+        manifest.layout.bottom_panel_height_bits = 344.0f32.to_bits();
         views.write_session(&mut manifest);
-        let restored =
-            ViewController::from_session(&decode(&encode(&manifest).unwrap()).unwrap()).unwrap();
+        assert_eq!(manifest.layout.bottom_panel.as_deref(), Some("output"));
+        assert!(!manifest.layout.bottom_panel_collapsed);
+        assert_eq!(f32::from_bits(manifest.layout.bottom_panel_height_bits), 344.0);
+        let restored = ViewController::from_session(&decode(&encode(&manifest).unwrap()).unwrap()).unwrap();
         assert_eq!(restored.tabs(), views.tabs());
         assert_eq!(restored.active_tab(1), Some(1));
         assert_eq!(restored.folds(1), [5..12]);
@@ -762,10 +710,7 @@ mod tests {
         assert!(restored.vertical_tabs);
         assert_eq!(restored.tab_colors, views.tab_colors);
         assert_eq!(restored.tab_sort, "name_descending");
-        assert_eq!(
-            restored.mru().collect::<Vec<_>>(),
-            views.mru().collect::<Vec<_>>()
-        );
+        assert_eq!(restored.mru().collect::<Vec<_>>(), views.mru().collect::<Vec<_>>());
         let geometry = restored.geometry(rect(10.0, 20.0, 900.0, 700.0));
         let first = geometry.panes[0].unwrap();
         let second = geometry.panes[1].unwrap();
@@ -779,10 +724,7 @@ mod tests {
         let mut views = ViewController::new(vec![tab(1, true), tab(2, false)], Some(1)).unwrap();
         let clone = views.clone_to_other(2).unwrap();
         let before = views.tabs().to_vec();
-        assert_eq!(
-            views.move_to_pane(1, 1, Some(clone)),
-            Err(ViewError::PinnedBoundary)
-        );
+        assert_eq!(views.move_to_pane(1, 1, Some(clone)), Err(ViewError::PinnedBoundary));
         assert_eq!(views.tabs(), before);
         views.color(1, Some(0x123456)).unwrap();
         let saved = views.tab(1).unwrap().clone();
@@ -790,14 +732,8 @@ mod tests {
         views.restore_tab(saved.clone(), 0, Some(0x123456)).unwrap();
         assert_eq!(views.tabs()[0], saved);
         assert_eq!(views.tab_colors.get(&1), Some(&0x123456));
-        assert_eq!(
-            views.restore_tab(saved, 0, None),
-            Err(ViewError::InvalidState)
-        );
-        assert_eq!(
-            views.color(1, Some(0x1000000)),
-            Err(ViewError::InvalidState)
-        );
+        assert_eq!(views.restore_tab(saved, 0, None), Err(ViewError::InvalidState));
+        assert_eq!(views.color(1, Some(0x1000000)), Err(ViewError::InvalidState));
         assert_eq!(views.tab_colors.get(&1), Some(&0x123456));
         views.move_to_pane(2, 1, Some(clone)).unwrap();
         assert_eq!(views.tab(2).unwrap().view.split, 1);
@@ -835,10 +771,7 @@ mod tests {
         assert_eq!(map.document_line(1, 11), None);
         for side in [0, 1] {
             for line in 0..30 {
-                assert_eq!(
-                    map.document_line(side, map.view_row(side, line)),
-                    Some(line)
-                );
+                assert_eq!(map.document_line(side, map.view_row(side, line)), Some(line));
             }
         }
         let mut views = ViewController::new(vec![tab(1, false)], Some(1)).unwrap();
@@ -906,12 +839,7 @@ impl AlignmentMap {
         self.spacers_in_window(side, 0, u64::MAX)
     }
     /// Project global alignment rows into a paged viewport's logical line domain.
-    pub fn spacers_in_window(
-        &self,
-        side: usize,
-        first_line: u64,
-        line_count: u64,
-    ) -> Vec<(u64, u64)> {
+    pub fn spacers_in_window(&self, side: usize, first_line: u64, line_count: u64) -> Vec<(u64, u64)> {
         let end = first_line.saturating_add(line_count);
         let mut rows: Vec<(u64, u64)> = Vec::new();
         for entry in &self.blocks {
@@ -925,9 +853,7 @@ impl AlignmentMap {
                 continue;
             }
             let line = range.end - first_line;
-            if let Some((previous, total)) =
-                rows.last_mut().filter(|(previous, _)| *previous == line)
-            {
+            if let Some((previous, total)) = rows.last_mut().filter(|(previous, _)| *previous == line) {
                 let _ = previous;
                 *total = total.saturating_add(count);
             } else {
@@ -955,8 +881,7 @@ impl AlignmentMap {
             row = row
                 .checked_add(block.left.start - end[0])
                 .ok_or(ViewError::InvalidState)?;
-            let height =
-                (block.left.end - block.left.start).max(block.right.end - block.right.start);
+            let height = (block.left.end - block.left.start).max(block.right.end - block.right.start);
             end = [block.left.end, block.right.end];
             let next = row.checked_add(height).ok_or(ViewError::InvalidState)?;
             indexed.push(IndexedBlock { block, row, height });

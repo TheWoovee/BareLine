@@ -1,0 +1,14 @@
+{
+  "arguments": [
+    "test",
+    "-p",
+    "bareline-platform-windows",
+    "--lib",
+    "replacement_race_retains_displaced_and_editor_bytes"
+  ],
+  "completed_utc": "2026-09-12T09:37:06.4386042Z",
+  "integration_snapshot": "325c7c1fb7570cea5a2aaf7042c80bae4299c77d",
+  "exit_code": 0,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\T04-native-race-lease-transfer-central.log"
+}

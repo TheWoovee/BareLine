@@ -88,9 +88,7 @@ impl Button {
                 self.state.pressed = self.bounds.contains(p);
                 false
             }
-            UiEvent::PointerUp(p) => {
-                std::mem::take(&mut self.state.pressed) && self.bounds.contains(p)
-            }
+            UiEvent::PointerUp(p) => std::mem::take(&mut self.state.pressed) && self.bounds.contains(p),
             UiEvent::Key(Key::Enter | Key::Space) => self.state.focused,
             UiEvent::Focus(focused) => {
                 self.state.focused = focused;
@@ -143,21 +141,13 @@ impl Button {
             self.bounds.y + 6.0,
             &self.label,
             13.0,
-            if self.state.disabled {
-                theme.muted
-            } else {
-                theme.text
-            },
+            if self.state.disabled { theme.muted } else { theme.text },
         );
     }
     pub fn semantic(&self) -> SemanticNode {
         SemanticNode {
             id: self.id,
-            role: if self.toggle {
-                Role::Checkbox
-            } else {
-                Role::Button
-            },
+            role: if self.toggle { Role::Checkbox } else { Role::Button },
             name: self.label.clone(),
             bounds: self.bounds,
             disabled: self.state.disabled,
@@ -176,10 +166,7 @@ impl TabStrip {
     pub const TAB_WIDTH: f32 = 150.0;
     pub fn visible(&self) -> Range<usize> {
         let count = (self.width / Self::TAB_WIDTH).floor().max(1.0) as usize;
-        let start = self
-            .active
-            .min(self.count.saturating_sub(1))
-            .saturating_sub(count - 1);
+        let start = self.active.min(self.count.saturating_sub(1)).saturating_sub(count - 1);
         start..start.saturating_add(count).min(self.count)
     }
     pub fn bounds(&self, index: usize) -> Option<Rect> {
@@ -270,8 +257,7 @@ impl ScrollbarInteraction {
                 )
             }
             UiEvent::PointerMove(p) | UiEvent::PointerUp(p) if self.grab.is_some() => {
-                let ControlAction::ScrollTo(value) = scrollbar.drag(p.y - self.grab.unwrap())
-                else {
+                let ControlAction::ScrollTo(value) = scrollbar.drag(p.y - self.grab.unwrap()) else {
                     return None;
                 };
                 scrollbar.offset = value;
@@ -288,9 +274,7 @@ impl ScrollbarInteraction {
             }
             UiEvent::Key(key) if focused => match key {
                 Key::Up | Key::Left => Some((scrollbar.offset - step.max(0.0)).max(0.0)),
-                Key::Down | Key::Right => {
-                    Some((scrollbar.offset + step.max(0.0)).min(scrollbar.maximum()))
-                }
+                Key::Down | Key::Right => Some((scrollbar.offset + step.max(0.0)).min(scrollbar.maximum())),
                 Key::Home => Some(0.0),
                 Key::End => Some(scrollbar.maximum()),
                 _ => None,
@@ -310,16 +294,13 @@ impl ScrollbarInteraction {
             return true;
         }
         let old = scrollbar.thumb();
-        let prior = scrollbar
-            .total
-            .unwrap_or(scrollbar.maximum() + scrollbar.viewport);
+        let prior = scrollbar.total.unwrap_or(scrollbar.maximum() + scrollbar.viewport);
         let target = target.max(scrollbar.viewport).max(0.0);
         let original = scrollbar.total;
         scrollbar.total = Some(target);
         let next = scrollbar.thumb();
-        let within = |thumb: Rect| {
-            (thumb.y - old.y).abs() <= old.height && (thumb.height - old.height).abs() <= old.height
-        };
+        let within =
+            |thumb: Rect| (thumb.y - old.y).abs() <= old.height && (thumb.height - old.height).abs() <= old.height;
         if within(next) {
             return true;
         }
@@ -344,10 +325,9 @@ impl ScrollbarInteraction {
 }
 impl Scrollbar {
     pub fn maximum(&self) -> f64 {
-        self.total
-            .map_or(self.offset + self.viewport.max(1.0) * 4.0, |n| {
-                (n - self.viewport).max(0.0)
-            })
+        self.total.map_or(self.offset + self.viewport.max(1.0) * 4.0, |n| {
+            (n - self.viewport).max(0.0)
+        })
     }
     pub fn thumb(&self) -> Rect {
         let extent = self
@@ -355,21 +335,21 @@ impl Scrollbar {
             .unwrap_or(self.maximum() + self.viewport)
             .max(self.viewport)
             .max(1.0);
-        let height = (self.bounds.height * (self.viewport / extent) as f32)
-            .clamp(18.0f32.min(self.bounds.height), self.bounds.height);
-        let travel = self.bounds.height - height;
+        // `clamp` panics when the bounds are NaN, so sanitize the extent first.
+        let available = if self.bounds.height.is_finite() {
+            self.bounds.height.max(0.0)
+        } else {
+            0.0
+        };
+        let height = (available * (self.viewport / extent) as f32).clamp(18.0f32.min(available), available);
+        let travel = available - height;
         let y = self.bounds.y
             + if self.maximum() > 0.0 {
                 (self.offset / self.maximum()).clamp(0.0, 1.0) as f32 * travel
             } else {
                 0.0
             };
-        rect(
-            self.bounds.x + 2.0,
-            y,
-            (self.bounds.width - 4.0).max(1.0),
-            height,
-        )
+        rect(self.bounds.x + 2.0, y, (self.bounds.width - 4.0).max(1.0), height)
     }
     pub fn drag(&self, thumb_top: f32) -> ControlAction {
         let travel = self.bounds.height - self.thumb().height;
@@ -395,15 +375,12 @@ pub fn visible_rows(
     total: Option<usize>,
     overscan: usize,
 ) -> Range<usize> {
-    if row_height <= 0.0 || !row_height.is_finite() || !offset.is_finite() || !viewport.is_finite()
-    {
+    if row_height <= 0.0 || !row_height.is_finite() || !offset.is_finite() || !viewport.is_finite() {
         return 0..0;
     }
     let first = (offset.max(0.0) / row_height).floor() as usize;
     let end = ((offset.max(0.0) + viewport.max(0.0)) / row_height).ceil() as usize;
-    let end = end
-        .saturating_add(overscan)
-        .min(total.unwrap_or(usize::MAX));
+    let end = end.saturating_add(overscan).min(total.unwrap_or(usize::MAX));
     first.saturating_sub(overscan).min(end)..end
 }
 pub struct Popover {
@@ -424,9 +401,7 @@ impl Popover {
         Self {
             anchor,
             bounds: rect(
-                rectangle
-                    .x
-                    .clamp(viewport.x, viewport.x + viewport.width - width),
+                rectangle.x.clamp(viewport.x, viewport.x + viewport.width - width),
                 y.clamp(viewport.y, viewport.y + viewport.height - height),
                 width,
                 height,
@@ -513,10 +488,7 @@ mod tests {
         };
         assert_eq!(button.event(UiEvent::Key(Key::Enter)), None);
         button.state.disabled = false;
-        assert_eq!(
-            button.event(UiEvent::Key(Key::Enter)),
-            Some(ControlAction::Activated)
-        );
+        assert_eq!(button.event(UiEvent::Key(Key::Enter)), Some(ControlAction::Activated));
         let mut popover = Popover::place(
             ViewId(1),
             rect(90.0, 95.0, 10.0, 5.0),

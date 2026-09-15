@@ -24,15 +24,11 @@ impl<T: Transport> Client<T> {
     }
     pub fn call(&mut self, request: Request) -> Result<BrokerValue, String> {
         let (capability, scope) = match &request {
-            Request::ReadTextRange { document, .. }
-            | Request::ReadOriginalBytes { document, .. } => {
+            Request::ReadTextRange { document, .. } | Request::ReadOriginalBytes { document, .. } => {
                 (Capability::DocumentRead, Scope::Document(*document))
             }
             Request::Panel { .. } => (Capability::UiPanel, Scope::Extension),
-            _ => (
-                Capability::DocumentEdit,
-                Scope::Document(self.invocation.document),
-            ),
+            _ => (Capability::DocumentEdit, Scope::Document(self.invocation.document)),
         };
         let id = self.next;
         self.next = self.next.checked_add(1).ok_or("request ID exhausted")?;
@@ -170,8 +166,7 @@ impl<T: Transport> Staged<T> {
             buffer: Vec::with_capacity(65536),
             committed: false,
         }; // postcard Vec length, TextRange, replacement string length; subsequent bytes are UTF8.
-        let prefix = postcard::to_stdvec(&(1usize, 0u64, length, output_bytes))
-            .map_err(|e| e.to_string())?;
+        let prefix = postcard::to_stdvec(&(1usize, 0u64, length, output_bytes)).map_err(|e| e.to_string())?;
         value.write_all(&prefix).map_err(|e| e.to_string())?;
         Ok(value)
     }
@@ -227,26 +222,18 @@ pub fn wasm_client() -> Result<Rc<RefCell<Client<WasmTransport>>>, String> {
         return Err("invocation limit".into());
     }
     let invocation: Invocation = postcard::from_bytes(&bytes).map_err(|e| e.to_string())?;
-    Ok(Rc::new(RefCell::new(Client::new(
-        invocation,
-        WasmTransport,
-    ))))
+    Ok(Rc::new(RefCell::new(Client::new(invocation, WasmTransport))))
 }
 
 /// Strict numeric command arguments, bounded before parsing and never interpreted
 /// as paths or code. Duplicate and unknown keys are errors.
-pub fn numeric_arguments(
-    text: &str,
-    allowed: &[&str],
-) -> Result<std::collections::BTreeMap<String, u64>, String> {
+pub fn numeric_arguments(text: &str, allowed: &[&str]) -> Result<std::collections::BTreeMap<String, u64>, String> {
     if text.len() > 4096 {
         return Err("arguments exceed 4096 bytes".into());
     }
     let mut values = std::collections::BTreeMap::new();
     for line in text.lines().filter(|line| !line.trim().is_empty()) {
-        let (key, value) = line
-            .split_once('=')
-            .ok_or("arguments use key=value, one per line")?;
+        let (key, value) = line.split_once('=').ok_or("arguments use key=value, one per line")?;
         let key = key.trim();
         let value = value.trim();
         if !allowed.contains(&key) {
@@ -327,10 +314,7 @@ mod staging_tests {
         let requests = Rc::new(RefCell::new(Vec::new()));
         let pending = Staged::new(client(requests.clone()), 2).unwrap();
         drop(pending);
-        assert!(matches!(
-            requests.borrow().last(),
-            Some(Request::Cancel { request: 7 })
-        ));
+        assert!(matches!(requests.borrow().last(), Some(Request::Cancel { request: 7 })));
         requests.borrow_mut().clear();
         let mut stage = Staged::new(client(requests.clone()), 2).unwrap();
         stage.write_all(b"{}").unwrap();

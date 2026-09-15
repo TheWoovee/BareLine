@@ -97,8 +97,7 @@ pub(super) fn verify_minisign(bytes: &[u8], signature: &str, key: &str) -> Resul
     }
     let key = PublicKey::from_base64(key).map_err(|_| VerifyError::Signature)?;
     let signature = Signature::decode(signature).map_err(|_| VerifyError::Signature)?;
-    key.verify(bytes, &signature, false)
-        .map_err(|_| VerifyError::Signature)
+    key.verify(bytes, &signature, false).map_err(|_| VerifyError::Signature)
 }
 fn validate_metadata(m: &Manifest, p: &TrustPolicy<'_>, now: u64) -> Result<(), VerifyError> {
     if m.schema_version != 1
@@ -162,10 +161,7 @@ mod tests {
     #[test]
     fn established_minisign_vector_and_tampering() {
         assert_eq!(verify_minisign(b"test", SIG, KEY), Ok(()));
-        assert_eq!(
-            verify_minisign(b"tent", SIG, KEY),
-            Err(VerifyError::Signature)
-        );
+        assert_eq!(verify_minisign(b"tent", SIG, KEY), Err(VerifyError::Signature));
         assert_eq!(
             verify_minisign(b"test", &SIG.replace("RUQf", "RUQg"), KEY),
             Err(VerifyError::Signature)
@@ -186,16 +182,10 @@ mod tests {
             validate_metadata(&metadata(), &policy(), 200),
             Err(VerifyError::Expired)
         );
-        assert_eq!(
-            validate_metadata(&metadata(), &policy(), 0),
-            Err(VerifyError::Expired)
-        );
+        assert_eq!(validate_metadata(&metadata(), &policy(), 0), Err(VerifyError::Expired));
         let mut m = metadata();
         m.metadata_version = 2;
-        assert_eq!(
-            validate_metadata(&m, &policy(), 100),
-            Err(VerifyError::Rollback)
-        );
+        assert_eq!(validate_metadata(&m, &policy(), 100), Err(VerifyError::Rollback));
         for field in ["channel", "publisher", "platform", "artifact"] {
             let mut m = metadata();
             match field {
@@ -204,25 +194,13 @@ mod tests {
                 "platform" => m.platform = "linux-x64".into(),
                 _ => m.artifact_type = "host".into(),
             }
-            assert_eq!(
-                validate_metadata(&m, &policy(), 100),
-                Err(VerifyError::Policy)
-            );
+            assert_eq!(validate_metadata(&m, &policy(), 100), Err(VerifyError::Policy));
         }
         let verified = VerifiedManifest(metadata());
         assert_eq!(verified.verify_package(&mut &b"test"[..]), Ok(()));
-        assert_eq!(
-            verified.verify_package(&mut &b"tent"[..]),
-            Err(VerifyError::Hash)
-        );
-        assert_eq!(
-            verified.verify_package(&mut &b"tes"[..]),
-            Err(VerifyError::Length)
-        );
-        assert_eq!(
-            verified.verify_package(&mut &b"tests"[..]),
-            Err(VerifyError::Length)
-        );
+        assert_eq!(verified.verify_package(&mut &b"tent"[..]), Err(VerifyError::Hash));
+        assert_eq!(verified.verify_package(&mut &b"tes"[..]), Err(VerifyError::Length));
+        assert_eq!(verified.verify_package(&mut &b"tests"[..]), Err(VerifyError::Length));
         struct Broken;
         impl Read for Broken {
             fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {

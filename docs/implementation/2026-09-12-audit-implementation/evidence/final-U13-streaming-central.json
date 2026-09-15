@@ -1,0 +1,17 @@
+{
+  "arguments": [
+    "test",
+    "-p",
+    "bareline-app",
+    "--lib",
+    "workspace::tests::streaming_prefix_is_read_only_then_same_tab_becomes_complete",
+    "--locked",
+    "--",
+    "--exact"
+  ],
+  "completed_utc": "2026-09-12T14:09:44.6792595Z",
+  "integration_snapshot": "127e99ed7bcc477015c4c698bc34347db433c53f",
+  "exit_code": 0,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\final-U13-streaming-central.log"
+}

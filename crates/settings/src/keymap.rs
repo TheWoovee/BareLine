@@ -20,8 +20,7 @@ impl KeymapDocument {
         Ok(Self { document, keymap })
     }
     pub fn defaults(registry: &CommandRegistry) -> Self {
-        Self::parse(&Keymap::defaults(registry).export_toml(), registry)
-            .expect("valid built-in keymap")
+        Self::parse(&Keymap::defaults(registry).export_toml(), registry).expect("valid built-in keymap")
     }
     pub fn to_toml(&self) -> String {
         self.document.to_string()
@@ -33,11 +32,7 @@ impl KeymapDocument {
         Ok(())
     }
     /// Change one command while retaining all unrelated binding tables and comments.
-    pub fn set_binding(
-        &mut self,
-        binding: KeyBinding,
-        registry: &CommandRegistry,
-    ) -> Result<(), String> {
+    pub fn set_binding(&mut self, binding: KeyBinding, registry: &CommandRegistry) -> Result<(), String> {
         let mut bindings = self
             .keymap
             .bindings()
@@ -51,10 +46,7 @@ impl KeymapDocument {
         let mut document = self.document.clone();
         let keys: toml_edit::Array = binding.sequence.iter().map(|key| key.label()).collect();
         let mut updated = false;
-        if let Some(tables) = document
-            .get_mut("bindings")
-            .and_then(Item::as_array_of_tables_mut)
-        {
+        if let Some(tables) = document.get_mut("bindings").and_then(Item::as_array_of_tables_mut) {
             // At most one replacement is generated even if the old map has alternate bindings.
             let mut replacement = toml_edit::ArrayOfTables::new();
             for table in tables.iter() {
@@ -97,8 +89,7 @@ impl KeymapDocument {
     }
     pub fn load(path: &Path, registry: &CommandRegistry) -> io::Result<Self> {
         let bytes = read_config(path)?;
-        let text = std::str::from_utf8(&bytes)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        let text = std::str::from_utf8(&bytes).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         Self::parse(text, registry).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
     }
     pub fn save(&self, path: &Path, platform: &dyn LocalFileSystem) -> io::Result<()> {

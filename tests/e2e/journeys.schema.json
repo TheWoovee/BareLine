@@ -4,11 +4,32 @@
   "type": "object",
   "required": [
     "schema_version",
+    "qualification_mappings",
     "journeys"
   ],
   "properties": {
     "schema_version": {
       "const": 1
+    },
+    "qualification_mappings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["journey", "evidence_id", "required_steps", "scope"],
+        "properties": {
+          "journey": {"type": "string"},
+          "evidence_id": {
+            "type": "string",
+            "pattern": "^(AC-[0-9]{3}-[0-9]{2}|command:[a-zA-Z0-9_.-]{1,160}:(success|disabled|failure))$"
+          },
+          "required_steps": {
+            "type": "array",
+            "minItems": 1,
+            "items": {"type": "string"}
+          },
+          "scope": {"type": "string", "minLength": 1}
+        }
+      }
     },
     "journeys": {
       "type": "array",

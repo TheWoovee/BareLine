@@ -11,9 +11,7 @@ fn validate_recorded_power(event: &MacroEvent) -> Result<(), String> {
         && id.starts_with("editor.")
     {
         if !bareline_editor_surface::paged_power::supports_command(id) {
-            return Err(format!(
-                "Command {id} has no deterministic power replay adapter"
-            ));
+            return Err(format!("Command {id} has no deterministic power replay adapter"));
         }
         validate_power_arguments(id, arguments)?;
     }
@@ -105,7 +103,7 @@ pub fn placeholder_context(
     if let Some(editor) = workspace.editors.get(active) {
         let needed = |name: &str| templates.iter().any(|template| template.contains(name));
         if needed("${selection}") {
-            context.selection = editor.selected_text().map_err(str::to_string)?;
+            context.selection = editor.selected_text()?;
         }
         if !needed("${line}") && !needed("${column}") {
             return Ok(context);
@@ -113,11 +111,8 @@ pub fn placeholder_context(
         if editor.paged() {
             return Err("Global line/column metadata must be prepared on the paged worker".into());
         }
-        let caret = bareline_document::TextOffset(editor.selection.caret);
-        let line = editor
-            .snapshot()
-            .line_at(caret)
-            .map_err(|error| format!("{error:?}"))?;
+        let caret = bareline_document::TextOffset(editor.viewport().selection.caret);
+        let line = editor.snapshot().line_at(caret).map_err(|error| format!("{error:?}"))?;
         let range = editor
             .snapshot()
             .line_range(line)
@@ -133,9 +128,7 @@ pub fn placeholder_context(
 }
 use bareline_macros::{
     Macro, MacroEvent, MacroExecutor, Playback, PlaybackState, Progress, Recorder, Repeat,
-    process::{
-        self, ProcessHandle, ProcessLauncher, ProcessPermission, ProcessRequest, ProcessState,
-    },
+    process::{self, ProcessHandle, ProcessLauncher, ProcessPermission, ProcessRequest, ProcessState},
 };
 use bareline_renderer::{DrawOp, Rect};
 use bareline_ui::{
@@ -235,6 +228,17 @@ pub fn register_commands(registry: &mut CommandRegistry) {
             })
             .expect("unique macro/output command");
     }
+    // F5 carries the accelerator on the spec, so the default keymap binds it.
+    let prompt = CommandId("run.prompt");
+    registry
+        .register(CommandSpec {
+            id: prompt,
+            title: "Run…",
+            category: "Run",
+            shortcut: "F5",
+            action: Action::Contributed(prompt),
+        })
+        .expect("unique run prompt command");
 }
 struct OutputRows(Vec<String>);
 impl VariableItemSource for OutputRows {
@@ -311,24 +315,18 @@ impl PowerReplayTarget {
     fn same_state(&self, editor: &crate::workspace::WorkspaceEditor) -> bool {
         match (self, editor) {
             (Self::Resident(source), crate::workspace::WorkspaceEditor::Resident(editor)) => {
-                source.same_document(editor.snapshot())
-                    && source.revision == editor.snapshot().revision
+                source.same_document(editor.snapshot()) && source.revision == editor.snapshot().revision
             }
             (Self::Paged(source), crate::workspace::WorkspaceEditor::Paged(editor)) => {
-                source.same_document(editor.snapshot())
-                    && source.revision == editor.snapshot().revision
+                source.same_document(editor.snapshot()) && source.revision == editor.snapshot().revision
             }
             _ => false,
         }
     }
     fn capture(editor: &crate::workspace::WorkspaceEditor) -> Self {
         match editor {
-            crate::workspace::WorkspaceEditor::Resident(editor) => {
-                Self::Resident(editor.snapshot().clone())
-            }
-            crate::workspace::WorkspaceEditor::Paged(editor) => {
-                Self::Paged(editor.snapshot().clone())
-            }
+            crate::workspace::WorkspaceEditor::Resident(editor) => Self::Resident(editor.snapshot().clone()),
+            crate::workspace::WorkspaceEditor::Paged(editor) => Self::Paged(editor.snapshot().clone()),
         }
     }
     fn matches(&self, editor: &crate::workspace::WorkspaceEditor) -> bool {
@@ -372,6 +370,18 @@ impl Default for MacrosController {
     }
 }
 impl MacrosController {
+    pub fn output_dock_state(&self) -> (bool, bool, u64) {
+        use std::hash::{Hash, Hasher};
+        let mut hash = std::collections::hash_map::DefaultHasher::new();
+        self.output_fingerprint.hash(&mut hash);
+        self.status.hash(&mut hash);
+        self.process_status.hash(&mut hash);
+        (
+            self.output_open,
+            self.process.is_some() || self.playback.is_some(),
+            hash.finish(),
+        )
+    }
     /// Merge independently drained producers using their process-wide completion clock.
     pub fn record_receipts(
         &mut self,
@@ -414,6 +424,19 @@ impl MacrosController {
                                 _ => "edit.move_end",
                             }
                         }
+                        Input::DocumentHome(extend)
+                        | Input::DocumentEnd(extend)
+                        | Input::WordLeft(extend)
+                        | Input::WordRight(extend) => {
+                            arguments.insert("extend".into(), extend.to_string());
+                            arguments.insert("control".into(), "true".into());
+                            match input {
+                                Input::DocumentHome(_) => "edit.move_home",
+                                Input::DocumentEnd(_) => "edit.move_end",
+                                Input::WordLeft(_) => "edit.move_left",
+                                _ => "edit.move_right",
+                            }
+                        }
                         Input::SetCaret(..) => continue,
                     };
                     MacroEvent::Command {
@@ -434,11 +457,9 @@ impl MacrosController {
         self.slots.get(index).and_then(Option::as_deref)
     }
     pub fn selected_slot(&self) -> Option<usize> {
-        self.selected.as_ref().and_then(|name| {
-            self.slots
-                .iter()
-                .position(|entry| entry.as_ref() == Some(name))
-        })
+        self.selected
+            .as_ref()
+            .and_then(|name| self.slots.iter().position(|entry| entry.as_ref() == Some(name)))
     }
     pub fn serialized_slots(&self) -> Vec<(usize, String)> {
         self.slots
@@ -451,11 +472,7 @@ impl MacrosController {
             })
             .collect()
     }
-    pub fn restore_library(
-        &mut self,
-        entries: Vec<(usize, String)>,
-        registry: &CommandRegistry,
-    ) -> Result<(), String> {
+    pub fn restore_library(&mut self, entries: Vec<(usize, String)>, registry: &CommandRegistry) -> Result<(), String> {
         let mut staged = Self::default();
         for (slot, text) in entries {
             staged.import_slot(slot, &text, registry)?;
@@ -465,12 +482,7 @@ impl MacrosController {
         self.selected = staged.selected;
         Ok(())
     }
-    pub fn import_slot(
-        &mut self,
-        slot: usize,
-        text: &str,
-        registry: &CommandRegistry,
-    ) -> Result<(), String> {
+    pub fn import_slot(&mut self, slot: usize, text: &str, registry: &CommandRegistry) -> Result<(), String> {
         if slot >= 32 || self.slots[slot].is_some() {
             return Err("Macro slot is already occupied".into());
         }
@@ -499,21 +511,13 @@ impl MacrosController {
         Ok(())
     }
     pub fn select_slot(&mut self, slot: usize) -> Result<(), String> {
-        self.selected = Some(
-            self.slot_name(slot)
-                .ok_or("Saved macro slot is empty")?
-                .to_string(),
-        );
+        self.selected = Some(self.slot_name(slot).ok_or("Saved macro slot is empty")?.to_string());
         Ok(())
     }
     pub fn show_manager(&mut self) {
         self.manager.show(&self.library, self.selected.as_deref());
     }
-    pub fn set_typing_delay(
-        &mut self,
-        interval_ms: u64,
-        registry: &CommandRegistry,
-    ) -> Result<(), String> {
+    pub fn set_typing_delay(&mut self, interval_ms: u64, registry: &CommandRegistry) -> Result<(), String> {
         if interval_ms > 60_000 {
             return Err("Typing delay must be 0–60000 ms".into());
         }
@@ -532,9 +536,7 @@ impl MacrosController {
                         changed = true;
                     }
                 }
-                MacroEvent::TypeText {
-                    interval_ms: delay, ..
-                } => {
+                MacroEvent::TypeText { interval_ms: delay, .. } => {
                     *delay = interval_ms;
                     changed = true;
                 }
@@ -549,12 +551,11 @@ impl MacrosController {
         Ok(())
     }
     pub fn record(&mut self) -> Result<(), String> {
-        if self.playback.as_ref().is_some_and(|playback| {
-            matches!(
-                playback.state(),
-                PlaybackState::Running | PlaybackState::Waiting(_)
-            )
-        }) {
+        if self
+            .playback
+            .as_ref()
+            .is_some_and(|playback| matches!(playback.state(), PlaybackState::Running | PlaybackState::Waiting(_)))
+        {
             return Err("Stop playback before recording".into());
         }
         self.recorder.start();
@@ -626,11 +627,7 @@ impl MacrosController {
             return Err("Renamed macro would exceed the 16 MiB library limit".into());
         }
         self.library.remove(old);
-        if let Some(slot) = self
-            .slots
-            .iter_mut()
-            .find(|slot| slot.as_deref() == Some(old))
-        {
+        if let Some(slot) = self.slots.iter_mut().find(|slot| slot.as_deref() == Some(old)) {
             *slot = Some(new.into());
         }
         self.library.insert(new.into(), definition);
@@ -643,12 +640,11 @@ impl MacrosController {
         if self.recorder.recording() {
             return Err("Stop recording before playback".into());
         }
-        if self.playback.as_ref().is_some_and(|playback| {
-            matches!(
-                playback.state(),
-                PlaybackState::Running | PlaybackState::Waiting(_)
-            )
-        }) {
+        if self
+            .playback
+            .as_ref()
+            .is_some_and(|playback| matches!(playback.state(), PlaybackState::Running | PlaybackState::Waiting(_)))
+        {
             return Err("Macro playback is already running".into());
         }
         let definition = self
@@ -667,22 +663,14 @@ impl MacrosController {
         self.pending_power.as_mut()?.request.take()
     }
     pub fn power_replay_active(&self, id: u64) -> bool {
-        self.pending_power
-            .as_ref()
-            .is_some_and(|pending| pending.id == id)
-            && self.playback.as_ref().is_some_and(|playback| {
-                matches!(
-                    playback.state(),
-                    PlaybackState::Running | PlaybackState::Waiting(_)
-                )
-            })
+        self.pending_power.as_ref().is_some_and(|pending| pending.id == id)
+            && self
+                .playback
+                .as_ref()
+                .is_some_and(|playback| matches!(playback.state(), PlaybackState::Running | PlaybackState::Waiting(_)))
     }
     pub fn complete_power_replay(&mut self, id: u64, completion: PowerReplayCompletion) {
-        let Some(pending) = self
-            .pending_power
-            .as_mut()
-            .filter(|pending| pending.id == id)
-        else {
+        let Some(pending) = self.pending_power.as_mut().filter(|pending| pending.id == id) else {
             return;
         };
         if pending.terminal.is_some() {
@@ -709,10 +697,7 @@ impl MacrosController {
         notify: Arc<dyn Fn() + Send + Sync>,
     ) -> Option<PlaybackState> {
         let playback = self.playback.as_mut()?;
-        if !matches!(
-            playback.state(),
-            PlaybackState::Running | PlaybackState::Waiting(_)
-        ) {
+        if !matches!(playback.state(), PlaybackState::Running | PlaybackState::Waiting(_)) {
             return None;
         }
         if self.replay_document.is_none() {
@@ -721,12 +706,7 @@ impl MacrosController {
         let active = self
             .replay_document
             .as_ref()
-            .and_then(|target| {
-                workspace
-                    .editors
-                    .iter()
-                    .position(|editor| target.matches(editor))
-            })
+            .and_then(|target| workspace.editors.iter().position(|editor| target.matches(editor)))
             .unwrap_or(usize::MAX);
         let mut executor = WorkspaceExecutor {
             workspace,
@@ -763,12 +743,11 @@ impl MacrosController {
         permission: ProcessPermission,
         launcher: Arc<dyn ProcessLauncher>,
     ) -> Result<(), String> {
-        if self.process.as_ref().is_some_and(|process| {
-            matches!(
-                process.state(),
-                ProcessState::Starting | ProcessState::Running
-            )
-        }) {
+        if self
+            .process
+            .as_ref()
+            .is_some_and(|process| matches!(process.state(), ProcessState::Starting | ProcessState::Running))
+        {
             return Err("An external command is already running".into());
         }
         self.process = Some(process::launch(request, permission, launcher, 1024 * 1024)?);
@@ -803,11 +782,7 @@ impl MacrosController {
         };
         let output = process.output();
         let fingerprint = (output.byte_len(), output.discarded_bytes);
-        let status = format!(
-            "{:?} · {} bytes discarded",
-            process.state(),
-            output.discarded_bytes
-        );
+        let status = format!("{:?} · {} bytes discarded", process.state(), output.discarded_bytes);
         let changed = fingerprint != self.output_fingerprint || self.process_status != status;
         if !changed {
             return false;
@@ -818,12 +793,7 @@ impl MacrosController {
     }
     /// Apply a captured bounded process-output snapshot without retaining its lock.
     /// A status-only update omits text and preserves the existing visible rows.
-    pub fn update_output_snapshot(
-        &mut self,
-        text: Option<&str>,
-        fingerprint: (usize, u64),
-        status: &str,
-    ) -> bool {
+    pub fn update_output_snapshot(&mut self, text: Option<&str>, fingerprint: (usize, u64), status: &str) -> bool {
         let changed = fingerprint != self.output_fingerprint || self.process_status != status;
         if fingerprint != self.output_fingerprint {
             let Some(value) = text else { return false };
@@ -921,32 +891,17 @@ impl MacrosController {
             return None;
         }
         if invoke {
-            self.rows
-                .0
-                .get(index)
-                .and_then(|line| process::parse_output_link(line))
+            self.rows.0.get(index).and_then(|line| process::parse_output_link(line))
         } else {
             None
         }
     }
-    pub fn draw_output(
-        &mut self,
-        bounds: Rect,
-        theme: bareline_ui::theme::UiTheme,
-        ops: &mut Vec<DrawOp>,
-    ) {
+    pub fn draw_output(&mut self, bounds: Rect, theme: bareline_ui::theme::UiTheme, ops: &mut Vec<DrawOp>) {
         if !self.output_open {
             return;
         }
         ops.push(DrawOp::Fill(bounds, theme.elevated));
-        text(
-            ops,
-            bounds.x + 10.0,
-            bounds.y + 8.0,
-            "Output",
-            13.0,
-            theme.text,
-        );
+        text(ops, bounds.x + 10.0, bounds.y + 8.0, "Output", 13.0, theme.text);
         ops.push(DrawOp::PushClip(rect(
             bounds.x + 70.0,
             bounds.y,
@@ -962,12 +917,7 @@ impl MacrosController {
             theme.muted,
         );
         ops.push(DrawOp::PopClip);
-        self.list.bounds = rect(
-            bounds.x,
-            bounds.y + 28.0,
-            bounds.width,
-            bounds.height - 28.0,
-        );
+        self.list.bounds = rect(bounds.x, bounds.y + 28.0, bounds.width, bounds.height - 28.0);
         self.list.paint(&self.rows, theme.widgets(), ops);
     }
 }
@@ -1030,9 +980,7 @@ impl MacroExecutor for WorkspaceExecutor<'_> {
                     .is_some_and(|editor| pending.source.same_state(editor))
             {
                 *self.pending_search = None;
-                return Err(
-                    "Recorded search was superseded; resume to run its captured query again".into(),
-                );
+                return Err("Recorded search was superseded; resume to run its captured query again".into());
             }
             let backwards = pending.backwards;
             self.workspace.find.pump();
@@ -1043,10 +991,7 @@ impl MacroExecutor for WorkspaceExecutor<'_> {
             if self.workspace.find.completed_results().is_none()
                 && self.workspace.find.completed_paged_results().is_none()
             {
-                return Err(format!(
-                    "Search did not complete: {}",
-                    self.workspace.find.status
-                ));
+                return Err(format!("Search did not complete: {}", self.workspace.find.status));
             }
             let editor = self
                 .workspace
@@ -1054,9 +999,17 @@ impl MacroExecutor for WorkspaceExecutor<'_> {
                 .get_mut(self.active)
                 .ok_or("Macro document closed")?;
             let at = if backwards {
-                editor.selection.anchor.min(editor.selection.caret)
+                editor
+                    .viewport()
+                    .selection
+                    .anchor
+                    .min(editor.viewport().selection.caret)
             } else {
-                editor.selection.anchor.max(editor.selection.caret)
+                editor
+                    .viewport()
+                    .selection
+                    .anchor
+                    .max(editor.viewport().selection.caret)
             };
             match editor {
                 crate::workspace::WorkspaceEditor::Resident(editor) => {
@@ -1089,7 +1042,7 @@ impl MacroExecutor for WorkspaceExecutor<'_> {
                     editor.restore_selection(range.start, range.end)?;
                 }
             }
-            editor.search_selection = true;
+            editor.viewport_mut().search_selection = true;
         }
         let editor = self
             .workspace
@@ -1100,16 +1053,12 @@ impl MacroExecutor for WorkspaceExecutor<'_> {
         if editor.busy() {
             return Ok(false);
         }
-        if let Some(error) = editor.error.take() {
+        if let Some(error) = editor.viewport_mut().error.take() {
             return Err(error);
         }
         Ok(true)
     }
-    fn execute(
-        &mut self,
-        command: CommandId,
-        args: &BTreeMap<String, String>,
-    ) -> Result<(), String> {
+    fn execute(&mut self, command: CommandId, args: &BTreeMap<String, String>) -> Result<(), String> {
         let editor = self
             .workspace
             .editors
@@ -1144,16 +1093,10 @@ impl MacroExecutor for WorkspaceExecutor<'_> {
             let scope = match (args.get("selection_start"), args.get("selection_end")) {
                 (None, None) => None,
                 (Some(start), Some(end)) => {
-                    let start = start
-                        .parse::<usize>()
-                        .map_err(|_| "Invalid search selection")?;
-                    let end = end
-                        .parse::<usize>()
-                        .map_err(|_| "Invalid search selection")?;
+                    let start = start.parse::<usize>().map_err(|_| "Invalid search selection")?;
+                    let end = end.parse::<usize>().map_err(|_| "Invalid search selection")?;
                     let length = match &*editor {
-                        crate::workspace::WorkspaceEditor::Resident(editor) => {
-                            editor.snapshot().len()
-                        }
+                        crate::workspace::WorkspaceEditor::Resident(editor) => editor.snapshot().len(),
                         crate::workspace::WorkspaceEditor::Paged(editor) => editor.snapshot().len(),
                     };
                     if start > end || end > length {
@@ -1192,7 +1135,7 @@ impl MacroExecutor for WorkspaceExecutor<'_> {
             return Ok(());
         }
         if command.0.starts_with("editor.") {
-            editor.error = None;
+            editor.viewport_mut().error = None;
             if bareline_editor_surface::paged_power::supports_command(command.0) {
                 validate_power_arguments(command.0, args)?;
                 let id = self
@@ -1206,12 +1149,8 @@ impl MacroExecutor for WorkspaceExecutor<'_> {
                         id,
                         target_index: self.active,
                         selections: match &*editor {
-                            crate::workspace::WorkspaceEditor::Resident(view) => {
-                                view.selection_set()
-                            }
-                            crate::workspace::WorkspaceEditor::Paged(view) => {
-                                view.global_selection_set()
-                            }
+                            crate::workspace::WorkspaceEditor::Resident(view) => view.selection_set(),
+                            crate::workspace::WorkspaceEditor::Paged(view) => view.global_selection_set(),
                         },
                         target: PowerReplayTarget::capture(editor),
                         command: command.0.into(),
@@ -1239,27 +1178,44 @@ impl MacroExecutor for WorkspaceExecutor<'_> {
             "edit.backspace" => Input::Backspace,
             "edit.delete" => Input::Delete,
             "edit.move_left" => {
-                Input::Left(args.get("extend").is_some_and(|value| value == "true"))
+                let extend = args.get("extend").is_some_and(|value| value == "true");
+                if args.get("control").is_some_and(|value| value == "true") {
+                    Input::WordLeft(extend)
+                } else {
+                    Input::Left(extend)
+                }
             }
             "edit.move_right" => {
-                Input::Right(args.get("extend").is_some_and(|value| value == "true"))
+                let extend = args.get("extend").is_some_and(|value| value == "true");
+                if args.get("control").is_some_and(|value| value == "true") {
+                    Input::WordRight(extend)
+                } else {
+                    Input::Right(extend)
+                }
             }
             "edit.move_up" => Input::Up(args.get("extend").is_some_and(|value| value == "true")),
-            "edit.move_down" => {
-                Input::Down(args.get("extend").is_some_and(|value| value == "true"))
-            }
+            "edit.move_down" => Input::Down(args.get("extend").is_some_and(|value| value == "true")),
             "edit.move_home" => {
-                Input::Home(args.get("extend").is_some_and(|value| value == "true"))
+                let extend = args.get("extend").is_some_and(|value| value == "true");
+                if args.get("control").is_some_and(|value| value == "true") {
+                    Input::DocumentHome(extend)
+                } else {
+                    Input::Home(extend)
+                }
             }
-            "edit.move_end" => Input::End(args.get("extend").is_some_and(|value| value == "true")),
+            "edit.move_end" => {
+                let extend = args.get("extend").is_some_and(|value| value == "true");
+                if args.get("control").is_some_and(|value| value == "true") {
+                    Input::DocumentEnd(extend)
+                } else {
+                    Input::End(extend)
+                }
+            }
             _ => {
-                return Err(format!(
-                    "Command {} has no deterministic macro adapter",
-                    command.0
-                ));
+                return Err(format!("Command {} has no deterministic macro adapter", command.0));
             }
         };
-        editor.error = None;
+        editor.viewport_mut().error = None;
         editor.enqueue_with_origin(input, bareline_document::history::EditOrigin::Macro);
         Ok(())
     }
@@ -1286,10 +1242,7 @@ mod tests {
         assert!(
             validate_power_arguments(
                 "editor.comment.toggleBlock",
-                &BTreeMap::from([
-                    ("block_start".into(), "/*".into()),
-                    ("block_end".into(), "*/".into())
-                ])
+                &BTreeMap::from([("block_start".into(), "/*".into()), ("block_end".into(), "*/".into())])
             )
             .is_ok()
         );
@@ -1298,21 +1251,13 @@ mod tests {
     fn staged_replay_waits_for_matching_terminal_and_retries_failed_event() {
         struct NoIo;
         impl bareline_platform::LocalFileSystem for NoIo {
-            fn identity(
-                &self,
-                _: &std::fs::File,
-            ) -> std::io::Result<bareline_platform::FileIdentity> {
+            fn identity(&self, _: &std::fs::File) -> std::io::Result<bareline_platform::FileIdentity> {
                 Err(std::io::Error::other("fixture must not inspect files"))
             }
             fn validate_target(&self, _: &std::path::Path) -> std::io::Result<()> {
                 Err(std::io::Error::other("fixture must not access files"))
             }
-            fn commit(
-                &self,
-                _: &std::path::Path,
-                _: &std::path::Path,
-                _: bool,
-            ) -> std::io::Result<()> {
+            fn commit(&self, _: &std::path::Path, _: &std::path::Path, _: bool) -> std::io::Result<()> {
                 Err(std::io::Error::other("fixture must not write files"))
             }
         }
@@ -1406,9 +1351,7 @@ mod tests {
     }
     #[test]
     fn mixed_receipts_keep_completion_order_through_save_and_replay() {
-        use bareline_editor_surface::power::consumer::{
-            OrderedReceipt, ReceiptEvent, next_receipt_sequence,
-        };
+        use bareline_editor_surface::power::consumer::{OrderedReceipt, ReceiptEvent, next_receipt_sequence};
         let mut registry = registry();
         bareline_editor_surface::power::register_commands(&mut registry);
         let mut query = bareline_search::SearchQuery::literal("B");
@@ -1465,11 +1408,7 @@ mod tests {
                     eof: self.selection.end == self.value.len(),
                 }
             }
-            fn execute(
-                &mut self,
-                id: CommandId,
-                args: &BTreeMap<String, String>,
-            ) -> Result<(), String> {
+            fn execute(&mut self, id: CommandId, args: &BTreeMap<String, String>) -> Result<(), String> {
                 match id.0 {
                     "edit.insert_text" => {
                         let value = args.get("text").ok_or("Missing explicit text")?;
@@ -1489,10 +1428,7 @@ mod tests {
                             return Err("Captured query case changed".into());
                         }
                         let pattern = args.get("pattern").ok_or("Missing captured query")?;
-                        let start = self
-                            .value
-                            .find(pattern)
-                            .ok_or("Captured query did not match")?;
+                        let start = self.value.find(pattern).ok_or("Captured query did not match")?;
                         self.selection = start..start + pattern.len();
                     }
                     _ => return Err("Unexpected replay command".into()),
@@ -1521,9 +1457,7 @@ mod tests {
                 arguments: BTreeMap::from([("text".into(), "hello".into())]),
             }],
         };
-        controller
-            .import(&definition.export_toml(), &registry)
-            .unwrap();
+        controller.import(&definition.export_toml(), &registry).unwrap();
         let slot = controller.selected_slot().unwrap();
         controller.rename("Original", "Renamed").unwrap();
         assert_eq!(controller.selected_slot(), Some(slot));
@@ -1586,10 +1520,7 @@ mod tests {
     #[test]
     fn output_arrows_only_select_enter_activates_and_scroll_is_bounded() {
         let mut controller = MacrosController::default();
-        controller.rows.0 = vec![
-            "C:\\work\\first.rs:2:3".into(),
-            "C:\\work\\second.rs:4:5".into(),
-        ];
+        controller.rows.0 = vec!["C:\\work\\first.rs:2:3".into(), "C:\\work\\second.rs:4:5".into()];
         controller.list.bounds = rect(0., 0., 300., 28.);
         assert_eq!(
             controller.output_event(UiEvent::Key(bareline_ui::controls::Key::Down)),

@@ -2,9 +2,8 @@
 //! Bounded UTF-8 windows over a generation-aware source. Raw legacy bytes must first
 //! pass through a transcoder; byte offsets here address the UTF-8 text view only.
 pub use crate::source_transaction::{
-    HistoryCommitLease, HistorySourceEdit, OwnedTextRange, PreparedSourceHistory,
-    PreparedSourceTransaction, SourceCommitLease, SourceEdit, SourceTransactionPoll,
-    SourceTransactionRequest,
+    HistoryCommitLease, HistorySourceEdit, OwnedTextRange, PreparedSourceHistory, PreparedSourceTransaction,
+    SourceCommitLease, SourceEdit, SourceTransactionPoll, SourceTransactionRequest,
 };
 use crate::{
     Budget, ContentStateId, EditTransaction, Error, Reservation, Revision, TextOffset,
@@ -90,23 +89,15 @@ impl SparseLineIndex {
         self.cancelled = false;
     }
     /// Keep the unchanged prefix after an edit; later checkpoints must be rediscovered.
-    pub fn invalidate_after_edit(
-        &mut self,
-        snapshot: PagedSnapshot,
-        first_changed: TextOffset,
-    ) -> Result<(), Error> {
+    pub fn invalidate_after_edit(&mut self, snapshot: PagedSnapshot, first_changed: TextOffset) -> Result<(), Error> {
         if !self.snapshot.same_document(&snapshot) {
             return Err(Error::WrongDocument);
         }
         if first_changed.0 > self.snapshot.len() || first_changed.0 > snapshot.len() {
             return Err(Error::OutOfBounds);
         }
-        self.checkpoints
-            .retain(|checkpoint| checkpoint.offset <= first_changed);
-        self.progress = *self
-            .checkpoints
-            .last()
-            .expect("initial checkpoint retained");
+        self.checkpoints.retain(|checkpoint| checkpoint.offset <= first_changed);
+        self.progress = *self.checkpoints.last().expect("initial checkpoint retained");
         self.snapshot = snapshot;
         self.cancelled = false;
         Ok(())
@@ -197,9 +188,7 @@ impl SparseLineIndex {
         if self.cancelled {
             return Err(IndexError::Cancelled);
         }
-        if window.document_id != self.snapshot.document_id
-            || window.content_state != self.snapshot.content_state
-        {
+        if window.document_id != self.snapshot.document_id || window.content_state != self.snapshot.content_state {
             return Err(IndexError::StaleSnapshot);
         }
         if window.range.start != self.progress.offset {
@@ -342,17 +331,8 @@ impl PagedSnapshot {
     }
     /// A display window may trim at most three continuation bytes at either edge.
     /// Interior malformed input and truncated scalars at actual EOF still fail.
-    pub fn begin_viewport(
-        &self,
-        start: TextOffset,
-        max_bytes: usize,
-        budget: &Budget,
-    ) -> Result<WindowRequest, Error> {
-        let end = start
-            .0
-            .checked_add(max_bytes)
-            .unwrap_or(self.len())
-            .min(self.len());
+    pub fn begin_viewport(&self, start: TextOffset, max_bytes: usize, budget: &Budget) -> Result<WindowRequest, Error> {
+        let end = start.0.checked_add(max_bytes).unwrap_or(self.len()).min(self.len());
         let mut request = self.begin_read(start..TextOffset(end), max_bytes, budget)?;
         request.align_edges = true;
         Ok(request)
@@ -393,9 +373,7 @@ impl<'a> Iterator for Pieces<'a> {
                     return Some(PagedPiece::OwnedSource {
                         source,
                         range: range.clone(),
-                        original: original
-                            .as_ref()
-                            .map(|(source, range)| (source, range.clone())),
+                        original: original.as_ref().map(|(source, range)| (source, range.clone())),
                     });
                 }
                 tree::Node::Source { source, range, .. } => {
@@ -538,10 +516,7 @@ impl PagedDocument {
         Ok(())
     }
     pub fn initialize_metadata(&mut self, metadata: crate::DocumentMetadata) -> Result<(), Error> {
-        if self.saved_state != self.current.content_state
-            || !self.undo.is_empty()
-            || !self.redo.is_empty()
-        {
+        if self.saved_state != self.current.content_state || !self.undo.is_empty() || !self.redo.is_empty() {
             return Err(Error::ActorBusy);
         }
         self.current.metadata = metadata;
@@ -558,19 +533,9 @@ impl PagedDocument {
         if metadata == self.current.metadata {
             return Ok(base_revision);
         }
-        let revision = Revision(
-            base_revision
-                .0
-                .checked_add(1)
-                .ok_or(Error::RevisionOverflow)?,
-        );
-        let charge = crate::history::Charge::new(
-            self.history
-                .reserve(metadata.charge().saturating_add(128))?,
-        );
-        self.undo
-            .try_reserve(1)
-            .map_err(|_| Error::BudgetExceeded)?;
+        let revision = Revision(base_revision.0.checked_add(1).ok_or(Error::RevisionOverflow)?);
+        let charge = crate::history::Charge::new(self.history.reserve(metadata.charge().saturating_add(128))?);
+        self.undo.try_reserve(1).map_err(|_| Error::BudgetExceeded)?;
         let state = ContentStateId(crate::unique());
         let change = crate::change::AppliedChange::owned(
             self.current.document_id,
@@ -611,11 +576,7 @@ impl PagedDocument {
         transaction: EditTransaction,
         windows: &[TextWindow],
     ) -> Result<Revision, Error> {
-        self.apply_materialized_with_metadata(
-            transaction,
-            windows,
-            crate::history::EditMetadata::default(),
-        )
+        self.apply_materialized_with_metadata(transaction, windows, crate::history::EditMetadata::default())
     }
     pub fn apply_materialized_with_metadata(
         &mut self,
@@ -643,9 +604,7 @@ impl PagedDocument {
         if transaction.edits.is_empty() {
             return Ok(self.current.revision);
         }
-        transaction
-            .edits
-            .sort_by_key(|edit| (edit.range.start, edit.range.end));
+        transaction.edits.sort_by_key(|edit| (edit.range.start, edit.range.end));
         let mut inverse = Vec::with_capacity(transaction.edits.len());
         let mut undo_bytes = 0usize;
         for (index, edit) in transaction.edits.iter().enumerate() {
@@ -671,9 +630,7 @@ impl PagedDocument {
             let end = edit.range.end.0 - window.range.start.0;
             if !window.text.is_char_boundary(start)
                 || !window.text.is_char_boundary(end)
-                || (window.text.is_empty()
-                    && edit.range.start.0 != 0
-                    && edit.range.start.0 != self.current.len())
+                || (window.text.is_empty() && edit.range.start.0 != 0 && edit.range.start.0 != self.current.len())
             {
                 return Err(Error::InvalidBoundary);
             }
@@ -688,13 +645,7 @@ impl PagedDocument {
                 &self.bytes,
             )?);
         }
-        let revision = Revision(
-            self.current
-                .revision
-                .0
-                .checked_add(1)
-                .ok_or(Error::RevisionOverflow)?,
-        );
+        let revision = Revision(self.current.revision.0.checked_add(1).ok_or(Error::RevisionOverflow)?);
         let reservation = self.history.reserve(undo_bytes.max(1))?;
         let inserts = transaction
             .edits
@@ -709,9 +660,7 @@ impl PagedDocument {
             let start = after_cursor
                 .checked_add(edit.range.start.0 - before_cursor)
                 .ok_or(Error::BudgetExceeded)?;
-            let end = start
-                .checked_add(edit.insert.len())
-                .ok_or(Error::BudgetExceeded)?;
+            let end = start.checked_add(edit.insert.len()).ok_or(Error::BudgetExceeded)?;
             owned_edits.push(OwnedEdit {
                 before_range: edit.range.start.0..edit.range.end.0,
                 after_range: start..end,
@@ -722,25 +671,17 @@ impl PagedDocument {
             after_cursor = end;
         }
         for edit in owned_edits.iter().rev() {
-            after = tree::charged_replace(
-                after,
-                edit.before_range.clone(),
-                edit.inserted.clone(),
-                &self.bytes,
-            )?;
+            after = tree::charged_replace(after, edit.before_range.clone(), edit.inserted.clone(), &self.bytes)?;
         }
         let state = ContentStateId(crate::unique());
         metadata.validate(self.current.len(), tree::summary(&after).bytes)?;
         let mut metadata_charge = self.history.reserve(
-            (metadata.before.len() + metadata.after.len())
-                * std::mem::size_of::<crate::history::Selection>(),
+            (metadata.before.len() + metadata.after.len()) * std::mem::size_of::<crate::history::Selection>(),
         )?;
         let mut reservation = reservation;
         reservation.bytes += metadata_charge.bytes;
         metadata_charge.bytes = 0;
-        self.undo
-            .try_reserve(1)
-            .map_err(|_| Error::BudgetExceeded)?;
+        self.undo.try_reserve(1).map_err(|_| Error::BudgetExceeded)?;
         let entry = PagedHistory {
             group: None,
             before_metadata: self.current.metadata.clone(),
@@ -865,11 +806,7 @@ impl PagedDocument {
     /// Tail owner supplies a verified decoded suffix (source byte zero corresponds to `from`).
     /// Existing snapshots retain their old immutable prefix/suffix. Continuity and scalar
     /// boundary validation belong to the tail decoder before this publication step.
-    pub fn replace_tail_source(
-        &mut self,
-        from: TextOffset,
-        source: MemorySource,
-    ) -> Result<Revision, Error> {
+    pub fn replace_tail_source(&mut self, from: TextOffset, source: MemorySource) -> Result<Revision, Error> {
         if !self.undo.is_empty() || !self.redo.is_empty() {
             return Err(Error::ActorBusy);
         }
@@ -877,16 +814,8 @@ impl PagedDocument {
             return Err(Error::OutOfBounds);
         }
         let suffix_len = usize::try_from(source.len()).map_err(|_| Error::BudgetExceeded)?;
-        from.0
-            .checked_add(suffix_len)
-            .ok_or(Error::BudgetExceeded)?;
-        let revision = Revision(
-            self.current
-                .revision
-                .0
-                .checked_add(1)
-                .ok_or(Error::RevisionOverflow)?,
-        );
+        from.0.checked_add(suffix_len).ok_or(Error::BudgetExceeded)?;
+        let revision = Revision(self.current.revision.0.checked_add(1).ok_or(Error::RevisionOverflow)?);
         let (prefix, _) = tree::charged_split(self.current.root.clone(), from.0, &self.bytes)?;
         let suffix = tree::charged_source(source.clone(), 0..source.len(), &self.bytes)?;
         let root = tree::charged_concat(prefix, suffix, &self.bytes)?;
@@ -921,25 +850,16 @@ impl PagedDocument {
         self.set_history_policy(policy);
     }
     pub(crate) fn trim_history(&mut self) {
-        let excess = self
-            .undo
-            .len()
-            .saturating_sub(self.history_policy.max_changes);
+        let excess = self.undo.len().saturating_sub(self.history_policy.max_changes);
         self.undo.drain(..excess);
-        let excess = self.redo.len().saturating_sub(
-            self.history_policy
-                .max_changes
-                .saturating_sub(self.undo.len()),
-        );
+        let excess = self
+            .redo
+            .len()
+            .saturating_sub(self.history_policy.max_changes.saturating_sub(self.undo.len()));
         self.redo.drain(..excess);
     }
     pub fn history_metadata(&self, undo: bool) -> Option<&crate::history::EditMetadata> {
-        (if undo {
-            self.undo.last()
-        } else {
-            self.redo.last()
-        })
-        .map(|entry| &entry.metadata)
+        (if undo { self.undo.last() } else { self.redo.last() }).map(|entry| &entry.metadata)
     }
     pub fn history_stats(&self) -> crate::history::HistoryStats {
         crate::history::HistoryStats {
@@ -966,12 +886,7 @@ impl PagedDocument {
         max_bytes: usize,
         budget: Budget,
     ) -> Result<HistoryDeltaRequest, Error> {
-        let entry = (if undo {
-            self.undo.last()
-        } else {
-            self.redo.last()
-        })
-        .ok_or(Error::EmptyHistory)?;
+        let entry = (if undo { self.undo.last() } else { self.redo.last() }).ok_or(Error::EmptyHistory)?;
         let total = entry
             .edits
             .iter()
@@ -1013,12 +928,7 @@ impl PagedDocument {
         })
     }
     pub fn history_delta(&self, undo: bool) -> Result<Vec<OwnedDelta>, Error> {
-        let entry = if undo {
-            self.undo.last()
-        } else {
-            self.redo.last()
-        }
-        .ok_or(Error::EmptyHistory)?;
+        let entry = if undo { self.undo.last() } else { self.redo.last() }.ok_or(Error::EmptyHistory)?;
         if entry
             .edits
             .iter()
@@ -1026,18 +936,12 @@ impl PagedDocument {
         {
             return Err(Error::IncompleteSource);
         }
-        let owned_text = |root: &tree::Root| {
-            tree::chunks(root, 0..tree::summary(root).bytes).collect::<String>()
-        };
+        let owned_text = |root: &tree::Root| tree::chunks(root, 0..tree::summary(root).bytes).collect::<String>();
         Ok(entry
             .edits
             .iter()
             .map(|edit| {
-                let range = if undo {
-                    &edit.after_range
-                } else {
-                    &edit.before_range
-                };
+                let range = if undo { &edit.after_range } else { &edit.before_range };
                 OwnedDelta {
                     range: TextOffset(range.start)..TextOffset(range.end),
                     removed: owned_text(if undo { &edit.inserted } else { &edit.inverse }),
@@ -1119,10 +1023,7 @@ impl HistoryDeltaRequest {
             return HistoryDeltaPoll::Finished;
         }
         let result = self.step();
-        if matches!(
-            result,
-            HistoryDeltaPoll::Failed(_) | HistoryDeltaPoll::Unavailable(_)
-        ) {
+        if matches!(result, HistoryDeltaPoll::Failed(_) | HistoryDeltaPoll::Unavailable(_)) {
             self.cancel();
             self.finished = true;
         }
@@ -1226,12 +1127,9 @@ impl WindowRequest {
                     self.cursor += count;
                     continue;
                 }
-                tree::Span::Source(source, range) | tree::Span::OwnedSource(source, range) => {
-                    (source, range)
-                }
+                tree::Span::Source(source, range) | tree::Span::OwnedSource(source, range) => (source, range),
             };
-            let page_remaining =
-                source.page_size() as u64 - range.start % source.page_size() as u64;
+            let page_remaining = source.page_size() as u64 - range.start % source.page_size() as u64;
             let count = page_remaining
                 .min(range.end - range.start)
                 .min((self.end - self.cursor) as u64);
@@ -1251,11 +1149,7 @@ impl WindowRequest {
         let mut bytes = self.bytes.take().expect("active request");
         if self.align_edges {
             if self.range.start.0 != 0 {
-                let skip = bytes
-                    .iter()
-                    .take(3)
-                    .take_while(|byte| **byte & 0xc0 == 0x80)
-                    .count();
+                let skip = bytes.iter().take(3).take_while(|byte| **byte & 0xc0 == 0x80).count();
                 bytes.drain(..skip);
                 self.range.start.0 += skip;
             }
@@ -1299,8 +1193,7 @@ mod tests {
     #[test]
     fn sparse_index_is_bounded_crlf_aware_cancellable_and_state_scoped() {
         let budget = Budget::new(2048);
-        let (source, publisher) =
-            MemorySource::new(8, Generation(9), SourceKind::Paged, 8, 8, budget.clone()).unwrap();
+        let (source, publisher) = MemorySource::new(8, Generation(9), SourceKind::Paged, 8, 8, budget.clone()).unwrap();
         publisher
             .publish(
                 PageTicket {
@@ -1344,8 +1237,7 @@ mod tests {
     #[test]
     fn deleted_inverse_survives_eviction_change_and_multiple_undo_redo() {
         let budget = Budget::new(1024);
-        let (source, publisher) =
-            MemorySource::new(8, Generation(1), SourceKind::Paged, 4, 4, budget.clone()).unwrap();
+        let (source, publisher) = MemorySource::new(8, Generation(1), SourceKind::Paged, 4, 4, budget.clone()).unwrap();
         let mut document = PagedDocument::new(
             PagedSnapshot::utf8(source, 0).unwrap(),
             budget.clone(),
@@ -1401,10 +1293,7 @@ mod tests {
         document.undo().unwrap();
         assert_eq!(ready(&document.snapshot(), 0, 4, &budget).text(), "efgh");
         document.undo().unwrap();
-        assert_eq!(
-            ready(&document.snapshot(), 0, 8, &budget).text(),
-            "abcdefgh"
-        );
+        assert_eq!(ready(&document.snapshot(), 0, 8, &budget).text(), "abcdefgh");
         assert_eq!(document.snapshot().line_count(), LineCount::Known(1));
         document.redo().unwrap();
         document.redo().unwrap();
@@ -1414,12 +1303,10 @@ mod tests {
     #[test]
     fn materialized_multi_edit_is_atomic_and_rejects_stale_or_split_boundaries() {
         // Two replacements and inverse replay retain leaves plus temporary AVL paths.
-        let node_bytes = std::mem::size_of::<tree::Node>()
-            + std::mem::size_of::<Reservation>()
-            + 4 * std::mem::size_of::<usize>();
+        let node_bytes =
+            std::mem::size_of::<tree::Node>() + std::mem::size_of::<Reservation>() + 4 * std::mem::size_of::<usize>();
         let budget = Budget::new(2048 + 16 * node_bytes);
-        let (source, publisher) =
-            MemorySource::new(8, Generation(2), SourceKind::Paged, 8, 8, budget.clone()).unwrap();
+        let (source, publisher) = MemorySource::new(8, Generation(2), SourceKind::Paged, 8, 8, budget.clone()).unwrap();
         publisher
             .publish(
                 PageTicket {
@@ -1483,23 +1370,17 @@ mod tests {
             Err(Error::IncompleteSource)
         );
         document.undo().unwrap();
-        assert_eq!(
-            ready(&document.snapshot(), 0, 8, &budget).text(),
-            "a😀b\r\n"
-        );
+        assert_eq!(ready(&document.snapshot(), 0, 8, &budget).text(), "a😀b\r\n");
         document.redo().unwrap();
         assert_eq!(ready(&document.snapshot(), 0, 4, &budget).text(), "azb\n");
     }
     #[test]
     fn window_keeps_owned_prefix_across_eviction_and_split_scalar() {
         let budget = Budget::new(32);
-        let (source, publisher) =
-            MemorySource::new(8, Generation(1), SourceKind::Paged, 4, 4, budget.clone()).unwrap();
+        let (source, publisher) = MemorySource::new(8, Generation(1), SourceKind::Paged, 4, 4, budget.clone()).unwrap();
         let snapshot = PagedSnapshot::utf8(source, 0).unwrap();
         assert_eq!(snapshot.line_count(), LineCount::Unknown);
-        let mut request = snapshot
-            .begin_read(TextOffset(0)..TextOffset(8), 8, &budget)
-            .unwrap();
+        let mut request = snapshot.begin_read(TextOffset(0)..TextOffset(8), 8, &budget).unwrap();
         let WindowPoll::Pending(ticket) = request.poll() else {
             panic!()
         };
@@ -1524,12 +1405,9 @@ mod tests {
     #[test]
     fn missing_generation_and_invalid_utf8_never_yield_a_complete_window() {
         let budget = Budget::new(16);
-        let (source, publisher) =
-            MemorySource::new(8, Generation(1), SourceKind::Paged, 4, 4, budget.clone()).unwrap();
+        let (source, publisher) = MemorySource::new(8, Generation(1), SourceKind::Paged, 4, 4, budget.clone()).unwrap();
         let snapshot = PagedSnapshot::utf8(source, 0).unwrap();
-        let mut request = snapshot
-            .begin_read(TextOffset(0)..TextOffset(8), 8, &budget)
-            .unwrap();
+        let mut request = snapshot.begin_read(TextOffset(0)..TextOffset(8), 8, &budget).unwrap();
         let WindowPoll::Pending(ticket) = request.poll() else {
             panic!()
         };
@@ -1541,8 +1419,7 @@ mod tests {
             WindowPoll::Unavailable(Unavailable::SourceChanged)
         ));
         assert_eq!(budget.used(), 4);
-        let (source, publisher) =
-            MemorySource::new(1, Generation(2), SourceKind::Paged, 1, 1, budget.clone()).unwrap();
+        let (source, publisher) = MemorySource::new(1, Generation(2), SourceKind::Paged, 1, 1, budget.clone()).unwrap();
         publisher
             .publish(
                 PageTicket {
@@ -1585,43 +1462,25 @@ mod lookup_feedback_tests {
             .unwrap();
         let snapshot = PagedSnapshot::utf8(source, 0).unwrap();
         let mut index = SparseLineIndex::new(snapshot.clone(), 2, 4, &budget).unwrap();
-        let mut request = index
-            .lookup(LineTarget::Byte(TextOffset(8)), budget.clone())
-            .unwrap();
-        assert!(matches!(
-            request.poll(),
-            LineLookupPoll::Progress(TextOffset(4))
-        ));
+        let mut request = index.lookup(LineTarget::Byte(TextOffset(8)), budget.clone()).unwrap();
+        assert!(matches!(request.poll(), LineLookupPoll::Progress(TextOffset(4))));
         index.retain_lookup_progress(&request).unwrap();
         let checkpoint = index.checkpoint_before(TextOffset(4)).unwrap();
         assert!(checkpoint.preceding_cr);
         assert_eq!(checkpoint.breaks, 1);
-        assert!(matches!(
-            request.poll(),
-            LineLookupPoll::Progress(TextOffset(8))
-        ));
+        assert!(matches!(request.poll(), LineLookupPoll::Progress(TextOffset(8))));
         index.retain_lookup_progress(&request).unwrap();
         assert_eq!(index.checkpoints.len(), 2);
         assert_eq!(index.line_count(), LineCount::Known(3));
         assert!(matches!(request.poll(), LineLookupPoll::Line(2)));
-        let earlier = index
-            .lookup(LineTarget::Byte(TextOffset(2)), budget.clone())
-            .unwrap();
+        let earlier = index.lookup(LineTarget::Byte(TextOffset(2)), budget.clone()).unwrap();
         index.retain_lookup_progress(&earlier).unwrap();
-        assert!(
-            index
-                .checkpoints
-                .windows(2)
-                .all(|pair| pair[0].offset < pair[1].offset)
-        );
+        assert!(index.checkpoints.windows(2).all(|pair| pair[0].offset < pair[1].offset));
         assert_eq!(index.scanned_to(), TextOffset(8));
         let mut changed = snapshot;
         changed.content_state = ContentStateId(crate::unique());
         index.reset(changed);
-        assert_eq!(
-            index.retain_lookup_progress(&request),
-            Err(IndexError::StaleSnapshot)
-        );
+        assert_eq!(index.retain_lookup_progress(&request), Err(IndexError::StaleSnapshot));
         request.cancel();
         assert!(request.verified_checkpoint().is_none());
     }

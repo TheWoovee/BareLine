@@ -1,0 +1,244 @@
+diff --git a/crates/file-io/src/codecs/disk.rs b/crates/file-io/src/codecs/disk.rs
+index 0ad01c0..274e60f 100644
+--- a/crates/file-io/src/codecs/disk.rs
++++ b/crates/file-io/src/codecs/disk.rs
+@@ -216,6 +216,18 @@ impl DiskTranscoder {
+         cancellation: Cancellation,
+     ) -> Result<Self, DiskError> {
+         cancellation.check().map_err(|_| DiskError::Cancelled)?;
++        let cache = if crate::owned_cache::registered_root(cache) {
++            crate::owned_cache::registered_producer_root(cache, crate::owned_cache::CacheKind::Transcode).ok_or_else(
++                || {
++                    io::Error::new(
++                        io::ErrorKind::InvalidData,
++                        "no unique registered transcode root for disk producer",
++                    )
++                },
++            )?
++        } else {
++            cache.to_path_buf()
++        };
+         let identity = platform.identity(&input.file)?;
+         let scratch = budget
+             .claim((CHUNK + 4) * (std::mem::size_of::<Record>() + 3) + CHUNK)
+@@ -243,7 +255,7 @@ impl DiskTranscoder {
+         state.save_target = state.interpreted();
+         state.bom = !state.interpreted().bom().is_empty() && pending.starts_with(state.interpreted().bom());
+         static NEXT: AtomicU64 = AtomicU64::new(1);
+-        fs::create_dir_all(cache)?;
++        fs::create_dir_all(&cache)?;
+         let store = loop {
+             let path = cache.join(format!(
+                 "bareline-transcode-{}-{}",
+@@ -252,7 +264,7 @@ impl DiskTranscoder {
+             ));
+             match fs::create_dir(&path) {
+                 Ok(()) => {
+-                    if crate::owned_cache::registered_root(cache)
++                    if crate::owned_cache::registered_root(&cache)
+                         && let Err(error) = crate::owned_cache::publish_ownership(
+                             &path,
+                             crate::owned_cache::CacheKind::Transcode,
+diff --git a/crates/file-io/src/owned_cache.rs b/crates/file-io/src/owned_cache.rs
+index c42dcc2..9294ca8 100644
+--- a/crates/file-io/src/owned_cache.rs
++++ b/crates/file-io/src/owned_cache.rs
+@@ -60,7 +60,17 @@ pub fn publish_ownership(directory: &Path, kind: CacheKind, platform: &dyn Local
+         return Ok(());
+     }
+     if !registered_kind(root, kind) || parse_candidate(directory.file_name(), kind) != Some(std::process::id()) {
+-        return Err(invalid("cache root or producer grammar is not registered"));
++        let root_name = root
++            .file_name()
++            .and_then(|name| name.to_str())
++            .unwrap_or("<non-unicode>");
++        return Err(io::Error::new(
++            io::ErrorKind::InvalidData,
++            format!(
++                "cache root or producer grammar is not registered (root={root_name}, kind={kind:?}, expected-prefix={})",
++                kind.prefix()
++            ),
++        ));
+     }
+     let owner = platform.cache_process_identity()?;
+     if owner.pid != std::process::id() {
+diff --git a/crates/file-io/src/owned_store.rs b/crates/file-io/src/owned_store.rs
+index 532e1f2..e7075fe 100644
+--- a/crates/file-io/src/owned_store.rs
++++ b/crates/file-io/src/owned_store.rs
+@@ -134,17 +134,11 @@ pub fn prepare_resident(
+         temp_quota_bytes: quota.saturating_sub(used),
+         interpret: Some(encoding.map_or(Encoding::Utf8, |encoding| encoding.state.save_target)),
+     };
+-    let transcode_cache = if crate::owned_cache::registered_root(cache) {
+-        crate::owned_cache::registered_producer_root(cache, crate::owned_cache::CacheKind::Transcode)
+-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "no unique registered transcode root"))?
+-    } else {
+-        cache.to_path_buf()
+-    };
+     let mut job = if encoding.map_or(bom, |encoding| encoding.state.bom) {
+         DiskTranscoder::new(
+             input,
+             platform.clone(),
+-            &transcode_cache,
++            cache,
+             options_disk,
+             bytes.clone(),
+             cancellation.clone(),
+@@ -153,7 +147,7 @@ pub fn prepare_resident(
+         DiskTranscoder::continuation(
+             input,
+             platform.clone(),
+-            &transcode_cache,
++            cache,
+             options_disk,
+             bytes.clone(),
+             cancellation.clone(),
+@@ -663,3 +657,123 @@ impl Write for StreamingStoreBuilder {
+             .flush()
+     }
+ }
++
++#[cfg(test)]
++mod registered_producer_tests {
++    use super::*;
++    use bareline_document::Document;
++    use bareline_platform::FileIdentity;
++    use std::fs::File;
++
++    struct Platform;
++    impl LocalFileSystem for Platform {
++        fn guard_directory(&self, _: &Path) -> io::Result<Arc<dyn Send + Sync>> {
++            Ok(Arc::new(()))
++        }
++        fn available_space(&self, _: &Path) -> io::Result<u64> {
++            Ok(u64::MAX)
++        }
++        fn open_sealed_read(&self, path: &Path) -> io::Result<File> {
++            File::open(path)
++        }
++        fn identity(&self, file: &File) -> io::Result<FileIdentity> {
++            let metadata = file.metadata()?;
++            Ok(FileIdentity {
++                volume: 1,
++                file: metadata.len(),
++                length: metadata.len(),
++                modified: metadata
++                    .modified()?
++                    .duration_since(std::time::UNIX_EPOCH)
++                    .unwrap_or_default()
++                    .as_nanos() as u64,
++            })
++        }
++        fn validate_target(&self, _: &Path) -> io::Result<()> {
++            Ok(())
++        }
++        fn commit(&self, _: &Path, _: &Path, _: bool) -> io::Result<()> {
++            Err(io::Error::other("not used"))
++        }
++    }
++
++    struct Temp(PathBuf);
++    impl Temp {
++        fn new() -> Self {
++            static NEXT: AtomicU64 = AtomicU64::new(1);
++            let path = std::env::temp_dir().join(format!(
++                "bareline-owned-producer-test-{}-{}",
++                std::process::id(),
++                NEXT.fetch_add(1, Ordering::Relaxed)
++            ));
++            fs::create_dir(&path).unwrap();
++            Self(path)
++        }
++    }
++    impl Drop for Temp {
++        fn drop(&mut self) {
++            let _ = fs::remove_dir_all(&self.0);
++        }
++    }
++
++    fn count_prefix(root: &Path, prefix: &str) -> usize {
++        fs::read_dir(root)
++            .unwrap()
++            .filter(|entry| {
++                entry
++                    .as_ref()
++                    .unwrap()
++                    .file_name()
++                    .to_str()
++                    .is_some_and(|name| name.starts_with(prefix))
++            })
++            .count()
++    }
++
++    #[test]
++    fn resident_and_original_baseline_route_nested_transcodes_to_exact_registered_root() {
++        let temp = Temp::new();
++        let owned = temp.0.join("Bareline-owned-spill");
++        let transcode = temp.0.join("Bareline-transcode");
++        fs::create_dir(&owned).unwrap();
++        let platform: Arc<dyn LocalFileSystem> = Arc::new(Platform);
++        let bytes = Budget::new(32 * 1024 * 1024);
++        let history = Budget::new(1024 * 1024);
++        let document = Document::from_utf8("resident", bytes.clone(), history.clone()).unwrap();
++
++        let resident = prepare_resident(
++            &document.snapshot(),
++            None,
++            false,
++            &owned,
++            8 * 1024 * 1024,
++            platform.clone(),
++            SourceOptions::default(),
++            bytes.clone(),
++            history.clone(),
++            Cancellation::default(),
++        )
++        .unwrap();
++        assert_eq!(count_prefix(&owned, "resident-spill-"), 1);
++        assert_eq!(count_prefix(&owned, "bareline-transcode-"), 0);
++        assert_eq!(count_prefix(&transcode, "bareline-transcode-"), 1);
++        drop(resident);
++
++        let prior_transcodes = count_prefix(&transcode, "bareline-transcode-");
++        let baseline = prepare_original_baseline(
++            None,
++            &owned,
++            8 * 1024 * 1024,
++            platform,
++            SourceOptions::default(),
++            bytes,
++            history,
++            Cancellation::default(),
++        )
++        .unwrap();
++        assert_eq!(count_prefix(&owned, "spill-baseline-"), 1);
++        assert_eq!(count_prefix(&owned, "bareline-transcode-"), 0);
++        assert_eq!(count_prefix(&transcode, "bareline-transcode-"), prior_transcodes + 1);
++        drop(baseline);
++    }
++}
+diff --git a/docs/implementation/2026-09-12-audit-implementation/PR-T01-T02-final-corrections.md b/docs/implementation/2026-09-12-audit-implementation/PR-T01-T02-final-corrections.md
+index a4785d3..6bc2521 100644
+--- a/docs/implementation/2026-09-12-audit-implementation/PR-T01-T02-final-corrections.md
++++ b/docs/implementation/2026-09-12-audit-implementation/PR-T01-T02-final-corrections.md
+@@ -5,16 +5,16 @@
+ 
+ ## Confirmed causes
+ 
+-- Resident promotion publishes its resident staging directory under `Bareline-owned-spill`, then the nested disk transcoder tries to publish `CacheKind::Transcode` under that same root. T01 permits transcode producers only under `Bareline-transcode`, so the rejection is correct and production must select the authorized producer root.
++- Resident promotion publishes staging directories under `Bareline-owned-spill`, then nested disk transcoders try to publish `bareline-transcode-<pid>-<serial>` as `CacheKind::Transcode` under that same root. This occurs through both `prepare_resident` and `SpillOwnedResident`'s original-baseline/open paths. T01 permits transcode producers only under `Bareline-transcode`, so the rejection is correct and production must select the authorized producer root.
+ - Profile migration duplicated platform-specific `OsStr` byte encoding inside the neutral file-I/O crate. `bareline_platform::SerializedPath` already owns the lossless native path identity contract.
+ 
+ ## Corrective contract
+ 
+ - A registered producer root may resolve a sibling only after the supplied root passes the existing exact registry check. The destination name comes from `owned_cache::ROOTS`, must authorize the requested kind, and must be unique. Ambiguous kinds fail closed. Already-authorized roots are unchanged; unregistered custom roots receive no registered authority and retain their previous path.
+-- `prepare_resident` applies that resolver only to its nested `CacheKind::Transcode` stage. Resident staging remains under `Bareline-owned-spill`; transcode output is published under `Bareline-transcode`.
++- `DiskTranscoder::new` applies the resolver at the transcode producer boundary, and `continuation` delegates through it. Resident and baseline staging remain under `Bareline-owned-spill`; all raw/text/map transcode output and its cleanup owner remain under `Bareline-transcode`.
+ - Migration directory-entry hashing obtains native identity bytes through `SerializedPath`, preserving Windows UTF-16 code units and Unix bytes without a second platform-specific codec.
+ 
+ ## Verification ownership
+ 
+ - Worker: portability guard, focused formatting, and diff validation only.
+-- Root: `owned_cache::tests::producer_root_resolution_requires_exact_registered_authority`, the two failed promotion tests (`large_selected_copy_promotes_exact_destination_and_waits_for_durable_actor` and `promotion_rebinds_linked_views_without_replacing_tabs_or_history`), and final Cargo/native gates after source review.
++- Root: `owned_cache::tests::producer_root_resolution_requires_exact_registered_authority`, `owned_store::registered_producer_tests::resident_and_original_baseline_route_nested_transcodes_to_exact_registered_root`, the two failed promotion tests (`large_selected_copy_promotes_exact_destination_and_waits_for_durable_actor` and `promotion_rebinds_linked_views_without_replacing_tabs_or_history`), and final Cargo/native gates after source review.

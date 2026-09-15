@@ -1,0 +1,300 @@
+ M .github/workflows/ci.yml
+ M .gitignore
+ M AGENTS.md
+ M Cargo.lock
+ M apps/bareline/Cargo.toml
+ M apps/bareline/build.rs
+ M apps/bareline/src/main.rs
+ M apps/bareline/src/windows_app.rs
+ M apps/bareline/src/windows_app/accessibility.rs
+ M apps/bareline/src/windows_app/compare.rs
+ M apps/bareline/src/windows_app/encoding.rs
+ M apps/bareline/src/windows_app/extensions.rs
+ M apps/bareline/src/windows_app/extensions/readers.rs
+ M apps/bareline/src/windows_app/extensions/ui.rs
+ M apps/bareline/src/windows_app/instance.rs
+ M apps/bareline/src/windows_app/inventory.rs
+ M apps/bareline/src/windows_app/language.rs
+ M apps/bareline/src/windows_app/launch.rs
+ M apps/bareline/src/windows_app/lifecycle.rs
+ M apps/bareline/src/windows_app/macros.rs
+ M apps/bareline/src/windows_app/macros/location.rs
+ M apps/bareline/src/windows_app/migration.rs
+ M apps/bareline/src/windows_app/performance.rs
+ M apps/bareline/src/windows_app/power.rs
+ M apps/bareline/src/windows_app/power_drag.rs
+ M apps/bareline/src/windows_app/power_stream.rs
+ M apps/bareline/src/windows_app/recovery.rs
+ M apps/bareline/src/windows_app/scrolling.rs
+ M apps/bareline/src/windows_app/search.rs
+ M apps/bareline/src/windows_app/search/folder.rs
+ M apps/bareline/src/windows_app/search/replace.rs
+ M apps/bareline/src/windows_app/session.rs
+ M apps/bareline/src/windows_app/settings.rs
+ M apps/bareline/src/windows_app/shell_integration.rs
+ M apps/bareline/src/windows_app/shortcuts.rs
+ M apps/bareline/src/windows_app/toolbar.rs
+ M apps/bareline/src/windows_app/update.rs
+ M apps/bareline/src/windows_app/utilities.rs
+ M apps/bareline/src/windows_app/views.rs
+ M apps/bareline/src/windows_app/watch.rs
+ M apps/bareline/src/windows_app/workspace_panels.rs
+ M apps/bareline/windows.manifest
+ M apps/extension-host/Cargo.toml
+ M apps/extension-host/src/lib.rs
+ M apps/extension-host/src/main.rs
+ M apps/extension-host/tests/first_party.rs
+ M apps/extension-host/tests/isolation.rs
+ M apps/update-helper/src/main.rs
+ M crates/app/src/accessibility.rs
+ M crates/app/src/compare.rs
+ M crates/app/src/encoding.rs
+ M crates/app/src/extensions.rs
+ M crates/app/src/extensions/manager.rs
+ M crates/app/src/find.rs
+ M crates/app/src/language.rs
+ M crates/app/src/lib.rs
+ M crates/app/src/macros.rs
+ M crates/app/src/macros/manager.rs
+ M crates/app/src/palette.rs
+ M crates/app/src/search_panel.rs
+ M crates/app/src/session_service.rs
+ M crates/app/src/session_ui.rs
+ M crates/app/src/settings.rs
+ M crates/app/src/styling.rs
+ M crates/app/src/styling/paged.rs
+ M crates/app/src/text_prototype.rs
+ M crates/app/src/toolbar.rs
+ M crates/app/src/utilities.rs
+ M crates/app/src/views.rs
+ M crates/app/src/workspace.rs
+ M crates/app/src/workspace/encoding.rs
+ M crates/app/src/workspace/extensions.rs
+ M crates/app/src/workspace/remote.rs
+ M crates/app/src/workspace_panel.rs
+ M crates/app/src/workspace_panel/documents.rs
+ M crates/app/src/workspace_panel/map.rs
+ M crates/app/src/workspace_panel/outline.rs
+ M crates/commands/src/contributions.rs
+ M crates/commands/src/discovery.rs
+ M crates/commands/src/keymap.rs
+ M crates/commands/src/lib.rs
+ M crates/diagnostics/src/lib.rs
+ M crates/diff/src/lib.rs
+ M crates/diff/src/paged.rs
+ M crates/distribution/src/cli.rs
+ M crates/distribution/src/importer.rs
+ M crates/distribution/src/lib.rs
+ M crates/distribution/src/trust.rs
+ M crates/distribution/src/update.rs
+ M crates/distribution/tests/signed_metadata.rs
+ M crates/document/src/change.rs
+ M crates/document/src/group.rs
+ M crates/document/src/history.rs
+ M crates/document/src/lib.rs
+ M crates/document/src/line_lookup.rs
+ M crates/document/src/metadata.rs
+ M crates/document/src/paged.rs
+ M crates/document/src/paged_group.rs
+ M crates/document/src/service.rs
+ M crates/document/src/source.rs
+ M crates/document/src/source_transaction.rs
+ M crates/document/src/spill.rs
+ M crates/document/src/tests.rs
+ M crates/document/src/tree.rs
+ M crates/editor-surface/src/completion.rs
+ M crates/editor-surface/src/grapheme_navigation.rs
+ M crates/editor-surface/src/group_view.rs
+ M crates/editor-surface/src/lib.rs
+ M crates/editor-surface/src/mapped_viewport.rs
+ M crates/editor-surface/src/measured_columns.rs
+ M crates/editor-surface/src/paged_navigation.rs
+ M crates/editor-surface/src/paged_power.rs
+ M crates/editor-surface/src/paged_spill.rs
+ M crates/editor-surface/src/paged_transfer.rs
+ M crates/editor-surface/src/paged_typing.rs
+ M crates/editor-surface/src/paged_view.rs
+ M crates/editor-surface/src/power.rs
+ M crates/editor-surface/src/power/captured.rs
+ M crates/editor-surface/src/power/consumer.rs
+ M crates/editor-surface/src/power/streaming.rs
+ M crates/editor-surface/src/search_marks.rs
+ M crates/editor-surface/src/tracked_edit.rs
+ M crates/editor-surface/src/view_geometry.rs
+ M crates/editor-surface/src/virtual_layout.rs
+ M crates/extension-sdk/src/lib.rs
+ M crates/extensions-protocol/src/broker.rs
+ M crates/extensions-protocol/src/lib.rs
+ M crates/extensions-protocol/src/package.rs
+ M crates/file-io/src/cancellation.rs
+ M crates/file-io/src/codecs/disk.rs
+ M crates/file-io/src/codecs/failure.rs
+ M crates/file-io/src/codecs/mod.rs
+ M crates/file-io/src/codecs/resident.rs
+ M crates/file-io/src/codecs/state.rs
+ M crates/file-io/src/fault_transitions.rs
+ M crates/file-io/src/lib.rs
+ M crates/file-io/src/lifecycle.rs
+ M crates/file-io/src/owned_read.rs
+ M crates/file-io/src/owned_store.rs
+ M crates/file-io/src/paged_group_recovery.rs
+ M crates/file-io/src/paged_recovery.rs
+ M crates/file-io/src/recovery/mod.rs
+ M crates/file-io/src/recovery/streaming.rs
+ M crates/file-io/src/resident_recovery.rs
+ M crates/file-io/src/session/mod.rs
+ M crates/file-io/src/session/salvage.rs
+ M crates/file-io/src/source.rs
+ M crates/file-io/src/tail.rs
+ M crates/file-io/tests/recovery_process_death.rs
+ M crates/macros/src/lib.rs
+ M crates/macros/src/process.rs
+ M crates/platform-linux/src/lib.rs
+ M crates/platform-macos/src/lib.rs
+ M crates/platform-windows/Cargo.toml
+ M crates/platform-windows/src/accessibility.rs
+ M crates/platform-windows/src/accessibility/text_provider.rs
+ M crates/platform-windows/src/clipboard.rs
+ M crates/platform-windows/src/extension_transport.rs
+ M crates/platform-windows/src/files.rs
+ M crates/platform-windows/src/instance.rs
+ M crates/platform-windows/src/lib.rs
+ M crates/platform-windows/src/native.rs
+ M crates/platform-windows/src/path_trust.rs
+ M crates/platform-windows/src/printing.rs
+ M crates/platform-windows/src/process.rs
+ M crates/platform-windows/src/remote_read.rs
+ M crates/platform-windows/src/rename.rs
+ M crates/platform-windows/src/renderer.rs
+ M crates/platform-windows/src/replacement_faults.rs
+ M crates/platform-windows/src/shell_integration.rs
+ M crates/platform-windows/src/update.rs
+ M crates/platform-windows/src/update/runtime.rs
+ M crates/platform-windows/src/watch.rs
+ M crates/platform-windows/src/workspace_files.rs
+ M crates/platform/recording_probe.rs
+ M crates/platform/src/accessibility.rs
+ M crates/platform/src/clipboard.rs
+ M crates/platform/src/lib.rs
+ M crates/platform/src/paths.rs
+ M crates/platform/src/printing.rs
+ M crates/platform/src/remote_read.rs
+ M crates/renderer-recording/src/lib.rs
+ M crates/renderer/src/lib.rs
+ M crates/search/build.rs
+ M crates/search/src/disk_source.rs
+ M crates/search/src/extended.rs
+ M crates/search/src/folders.rs
+ M crates/search/src/lib.rs
+ M crates/search/src/paged.rs
+ M crates/search/src/regex.rs
+ M crates/search/src/replace_disk.rs
+ M crates/search/src/replace_files.rs
+ M crates/search/src/service.rs
+ M crates/search/src/sources.rs
+ M crates/search/src/word.rs
+ M crates/settings/src/behavior_tests.rs
+ M crates/settings/src/keymap.rs
+ M crates/settings/src/lib.rs
+ M crates/settings/src/localization.rs
+ M crates/settings/src/model.rs
+ M crates/settings/src/persistence.rs
+ M crates/settings/src/theme.rs
+ M crates/syntax/src/catalog.rs
+ M crates/syntax/src/folding.rs
+ M crates/syntax/src/lexilla.rs
+ M crates/syntax/src/lib.rs
+ M crates/syntax/src/outline.rs
+ M crates/syntax/src/service.rs
+ M crates/syntax/src/stream.rs
+ M crates/syntax/src/udl.rs
+ M crates/ui/src/controls.rs
+ M crates/ui/src/focus.rs
+ M crates/ui/src/lib.rs
+ M crates/ui/src/overlays.rs
+ M crates/ui/src/semantics.rs
+ M crates/ui/src/text_field.rs
+ M crates/ui/src/theme.rs
+ M crates/ui/src/variable_list.rs
+ M crates/ui/src/virtual_tree.rs
+ M crates/ui/src/widgets.rs
+ M crates/ui/tests/advanced_controls.rs
+ M crates/ui/tests/themed_goldens.rs
+ M docs/IMPLEMENTATION_STATUS.md
+ M docs/UNLOCK_CHECKLIST.md
+ M docs/blueprint/PRs/PR-014_MACROS_EXTERNAL_COMMANDS_AND_OUTPUT_PANEL.md
+ M extensions/common/src/lib.rs
+ M extensions/hex-view/src/lib.rs
+ M extensions/json-tools/src/lib.rs
+ M extensions/json-tools/src/tree.rs
+ M extensions/xml-tools/src/lib.rs
+ M native/lexilla-bridge/build.rs
+ M native/lexilla-bridge/src/lib.rs
+ M packaging/windows/README.md
+ M packaging/windows/bareline.iss
+ M packaging/windows/build.ps1
+ M packaging/windows/generate-notices.ps1
+ M packaging/windows/generate-sbom.ps1
+ M packaging/windows/test-local.ps1
+ M tests/a11y/native-semantic.json
+ M tests/security/parser_corpus.rs
+ M xtask/Cargo.toml
+ M xtask/src/bench.rs
+ M xtask/src/bench_diff.rs
+ M xtask/src/capture.rs
+ M xtask/src/controller_fixture.rs
+ M xtask/src/main.rs
+ M xtask/src/render.rs
+?? .ignore
+?? apps/bareline/src/windows_app/charsets.rs
+?? apps/bareline/src/windows_app/goto.rs
+?? apps/bareline/src/windows_app/run_prompt.rs
+?? apps/bareline/src/windows_app/toast.rs
+?? apps/extension-host/tests/sandbox.rs
+?? clippy.toml
+?? crates/app/src/menus.rs
+?? crates/app/src/task.rs
+?? crates/editor-surface/src/columns.rs
+?? crates/file-io/src/paged_service.rs
+?? crates/platform-windows/src/dark_mode.rs
+?? crates/platform-windows/src/menu_bar.rs
+?? docs/implementation/PLAN-20260908-REVIEW-FIXES.md
+?? docs/implementation/PLAN-20260910-REVIEW-CLOSURE.md
+?? docs/implementation/PROGRESS-20260908-REVIEW-FIXES.md
+?? docs/implementation/PROGRESS-20260910-REVIEW-CLOSURE.md
+?? docs/implementation/QA-FIX-001.md
+?? docs/implementation/QA-FIX-002.md
+?? docs/implementation/QA-FIX-003.md
+?? docs/implementation/QA-FIX-004.md
+?? docs/implementation/QA-FIX-006.md
+?? docs/implementation/QA-FIX-007.md
+?? docs/implementation/QA-FIX-010.md
+?? docs/implementation/QA-FIX-011.md
+?? docs/implementation/QA-FIX-012.md
+?? docs/implementation/QA-FIX-013.md
+?? docs/implementation/QA-FIX-015.md
+?? docs/implementation/QA-FIX-016.md
+?? docs/implementation/QA-FIX-017.md
+?? docs/implementation/QA-FIX-019.md
+?? docs/implementation/QA-FIX-020.md
+?? docs/implementation/QA-FIX-021.md
+?? docs/implementation/QA-FIX-023.md
+?? docs/implementation/QA-FIX-024.md
+?? docs/implementation/QA-FIX-025.md
+?? docs/implementation/QA-FIX-027.md
+?? docs/implementation/QA-FIX-028.md
+?? docs/implementation/QA-FIX-029.md
+?? docs/implementation/QA-FIX-031.md
+?? docs/implementation/QA-FIX-032.md
+?? docs/implementation/REMAINING-ACCESS.md
+?? docs/implementation/REMAINING-INPUT.md
+?? docs/implementation/REMAINING-RECOVERY.md
+?? docs/implementation/REMAINING-RENDER.md
+?? docs/implementation/REMAINING-SESSION.md
+?? docs/implementation/REMAINING-SPILL.md
+?? docs/implementation/WINDOWS-PACKAGES-20260908.md
+?? docs/qa/
+?? packaging/windows/bareline.ico
+?? packaging/windows/compiler-probe.iss
+?? rustfmt.toml
+?? xtask/src/journey.rs

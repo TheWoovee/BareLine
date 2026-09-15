@@ -7,6 +7,27 @@ on:
 permissions:
   contents: read
 jobs:
+  first-party-large:
+    if: vars.BARELINE_FIRST_PARTY_LARGE_ENABLED == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 20
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.98.1'
+      - name: Run informational 1 GiB JSON and 5 GiB synthetic Hex qualification
+        shell: pwsh
+        run: ./scripts/test-first-party.ps1 -Suite Large
+      - name: Preserve hashes, phase timings, byte counts, deadlines, and semantic result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: first-party-large-${{ github.sha }}-${{ github.run_id }}
+          path: target/first-party/
+          retention-days: 90
+          if-no-files-found: error
   measure:
     if: vars.BARELINE_PERF_ENABLED == 'true'
     runs-on: windows-latest

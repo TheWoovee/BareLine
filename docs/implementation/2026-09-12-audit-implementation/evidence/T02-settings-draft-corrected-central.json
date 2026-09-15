@@ -1,0 +1,14 @@
+{
+  "arguments": [
+    "test",
+    "-p",
+    "bareline-app",
+    "--lib",
+    "migration_reconciliation_retains_an_uncommitted_value_draft"
+  ],
+  "completed_utc": "2026-09-12T08:57:19.1330957Z",
+  "integration_snapshot": "91cc150ceb2e72c61208bbc7c155e5f231ee246c",
+  "exit_code": 0,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\T02-settings-draft-corrected-central.log"
+}

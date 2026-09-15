@@ -1,0 +1,14 @@
+{
+  "arguments": [
+    "test",
+    "-p",
+    "bareline-platform-windows",
+    "--lib",
+    "substituted_transaction_directory_never_reads_external_sentinel"
+  ],
+  "completed_utc": "2026-09-12T09:40:49.9572279Z",
+  "integration_snapshot": "642d82f75d8e586957f56e99cab2ecedfc62fde8",
+  "exit_code": 0,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\T04-native-substitution-corrected-central.log"
+}

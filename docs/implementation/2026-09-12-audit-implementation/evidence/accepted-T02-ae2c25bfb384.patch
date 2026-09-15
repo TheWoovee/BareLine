@@ -1,0 +1,17 @@
+diff --git a/crates/app/src/settings.rs b/crates/app/src/settings.rs
+index 5d6a8f9..2525672 100644
+--- a/crates/app/src/settings.rs
++++ b/crates/app/src/settings.rs
+@@ -2814,7 +2814,11 @@ mod visual_contract_tests {
+     }
+     #[test]
+     fn migration_reconciliation_retains_an_uncommitted_value_draft() {
+-        let mut controller = controller();
++        let mut controller = SettingsController::new(
++            SettingsDocument::empty(Scope::User),
++            None,
++            SystemAppearance::default(),
++        );
+         controller.show();
+         controller
+             .draw(

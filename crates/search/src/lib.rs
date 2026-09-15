@@ -158,9 +158,7 @@ impl SearchResults {
                 groups.capacity() * std::mem::size_of::<Vec<Option<Range<TextOffset>>>>()
                     + groups
                         .iter()
-                        .map(|group| {
-                            group.capacity() * std::mem::size_of::<Option<Range<TextOffset>>>()
-                        })
+                        .map(|group| group.capacity() * std::mem::size_of::<Option<Range<TextOffset>>>())
                         .sum::<usize>()
             })
     }
@@ -245,9 +243,7 @@ impl SearchResults {
         let matches = match scope {
             ReplaceScope::All => self.matches.as_slice(),
             ReplaceScope::One(range) => {
-                let index = self
-                    .matches
-                    .partition_point(|m| m.range.start < range.start);
+                let index = self.matches.partition_point(|m| m.range.start < range.start);
                 let found = self
                     .matches
                     .get(index)
@@ -412,8 +408,7 @@ pub fn scan(
         prefix[i] = matched;
     }
     matched = 0;
-    let capacity =
-        query.results_ram_bytes.min(MAX_RESULT_BYTES) / std::mem::size_of::<SearchMatch>();
+    let capacity = query.results_ram_bytes.min(MAX_RESULT_BYTES) / std::mem::size_of::<SearchMatch>();
     result.matches = Vec::with_capacity(capacity.min(BATCH_SIZE));
     let mut emitted = 0;
     let mut offset = range.start.0;
@@ -601,12 +596,7 @@ mod tests {
     fn replacement_scope_cancellation_and_atomic_undo() {
         let mut doc = document("cat cat cat");
         let snapshot = doc.snapshot();
-        let results = scan(
-            &snapshot,
-            &SearchQuery::literal("cat"),
-            &SearchJob::default(),
-            |_| {},
-        );
+        let results = scan(&snapshot, &SearchQuery::literal("cat"), &SearchJob::default(), |_| {});
         let job = SearchJob::default();
         assert_eq!(
             results
@@ -632,19 +622,12 @@ mod tests {
         assert_eq!(one.edits.len(), 1);
         doc.apply(one).unwrap();
         assert_eq!(
-            doc.snapshot()
-                .read(TextOffset(0)..TextOffset(11), 11)
-                .unwrap(),
+            doc.snapshot().read(TextOffset(0)..TextOffset(11), 11).unwrap(),
             "cat dog cat"
         );
         doc.undo().unwrap();
         let snapshot = doc.snapshot();
-        let results = scan(
-            &snapshot,
-            &SearchQuery::literal("cat"),
-            &SearchJob::default(),
-            |_| {},
-        );
+        let results = scan(&snapshot, &SearchQuery::literal("cat"), &SearchJob::default(), |_| {});
         job.cancel();
         assert_eq!(
             results
@@ -655,17 +638,10 @@ mod tests {
         assert_eq!(doc.snapshot().revision, snapshot.revision);
         doc.apply(results.prepare_replace(&snapshot, "x", 1024).unwrap())
             .unwrap();
-        assert_eq!(
-            doc.snapshot()
-                .read(TextOffset(0)..TextOffset(5), 5)
-                .unwrap(),
-            "x x x"
-        );
+        assert_eq!(doc.snapshot().read(TextOffset(0)..TextOffset(5), 5).unwrap(), "x x x");
         doc.undo().unwrap();
         assert_eq!(
-            doc.snapshot()
-                .read(TextOffset(0)..TextOffset(11), 11)
-                .unwrap(),
+            doc.snapshot().read(TextOffset(0)..TextOffset(11), 11).unwrap(),
             "cat cat cat"
         );
     }
@@ -704,11 +680,7 @@ mod tests {
         let result = scan(&snapshot, &query, &SearchJob::default(), |_| {});
         assert_eq!(result.count(), 2);
         assert_eq!(
-            result
-                .next(TextOffset(4), false, false)
-                .unwrap()
-                .range
-                .start,
+            result.next(TextOffset(4), false, false).unwrap().range.start,
             TextOffset(4)
         );
         assert_eq!(
@@ -760,12 +732,7 @@ mod tests {
         text.push_str(&"x".repeat(4 << 20));
         let mut query = SearchQuery::literal("STRASSE");
         query.case = Case::Folded;
-        let result = scan(
-            &document(&text).snapshot(),
-            &query,
-            &SearchJob::default(),
-            |_| {},
-        );
+        let result = scan(&document(&text).snapshot(), &query, &SearchJob::default(), |_| {});
         assert_eq!(
             result.matches()[0].range,
             TextOffset((16 << 20) - 4)..TextOffset((16 << 20) + 3)
@@ -779,18 +746,11 @@ mod tests {
         query.whole_word = true;
         let result = scan(&snapshot, &query, &SearchJob::default(), |_| {});
         assert_eq!(
-            result
-                .matches()
-                .iter()
-                .map(|m| m.range.start.0)
-                .collect::<Vec<_>>(),
+            result.matches().iter().map(|m| m.range.start.0).collect::<Vec<_>>(),
             vec![0, 20, 24]
         );
         query.selection = Some(TextOffset(4)..TextOffset(7));
-        assert_eq!(
-            scan(&snapshot, &query, &SearchJob::default(), |_| {}).count(),
-            0
-        );
+        assert_eq!(scan(&snapshot, &query, &SearchJob::default(), |_| {}).count(), 0);
     }
 }
 
@@ -802,9 +762,7 @@ pub struct ReplacementOptions {
 }
 /// Preserve uniform upper/lower case or initial capitalization; mixed case is literal.
 pub fn preserve_replacement_case(original: &str, replacement: &str) -> String {
-    let mut letters = original
-        .chars()
-        .filter(|c| c.is_lowercase() || c.is_uppercase());
+    let mut letters = original.chars().filter(|c| c.is_lowercase() || c.is_uppercase());
     let Some(first_letter) = letters.next() else {
         return replacement.into();
     };

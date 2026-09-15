@@ -1,0 +1,2778 @@
+diff --git a/apps/bareline/src/windows_app.rs b/apps/bareline/src/windows_app.rs
+index 0fe50f5..37671c8 100644
+--- a/apps/bareline/src/windows_app.rs
++++ b/apps/bareline/src/windows_app.rs
+@@ -2,6 +2,7 @@
+ mod accessibility;
+ mod charsets;
+ mod compare;
++mod dock;
+ mod encoding;
+ mod extensions;
+ mod goto;
+@@ -125,6 +126,7 @@ struct Shell {
+     extensions: extensions::ExtensionsRuntime,
+     toolbar: toolbar::ToolbarRuntime,
+     compare: compare::CompareRuntime,
++    dock: dock::DockRuntime,
+     instance: instance::InstanceRuntime,
+     recovery_root: Option<PathBuf>,
+     shortcuts: shortcuts::ShortcutsRuntime,
+@@ -182,6 +184,7 @@ pub(super) enum Route {
+     Extensions,
+     Settings,
+     Macros,
++    Dock,
+     Views,
+     Panels,
+     Watch,
+@@ -283,6 +286,9 @@ pub(super) fn command_route(id: &str) -> Option<Route> {
+     if id.starts_with("macro.") || id.starts_with("output.") || id.starts_with("run.") {
+         return Some(Macros);
+     }
++    if id.starts_with("view.bottom_panel.") {
++        return Some(Dock);
++    }
+     if id.starts_with("window.select.")
+         || id.starts_with("view.tabs.")
+         || matches!(
+@@ -341,6 +347,7 @@ const DISPATCH_CHAIN: &[fn(&mut Shell, &ActiveEventLoop, &str) -> bool] = &[
+     Shell::extensions_dispatch,
+     Shell::settings_dispatch,
+     Shell::macros_dispatch,
++    Shell::dock_dispatch,
+     Shell::views_dispatch,
+     Shell::panels_dispatch,
+     Shell::watch_dispatch,
+@@ -402,6 +409,7 @@ pub(super) fn register_all_commands(registry: &mut bareline_commands::CommandReg
+     search::register(registry);
+     bareline_app::encoding::register(registry);
+     compare::register(registry);
++    dock::register(registry);
+     views::register(registry);
+     bareline_app::macros::register_commands(registry);
+     bareline_app::workspace_panel::register_commands(registry);
+@@ -537,6 +545,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
+         extensions: Default::default(),
+         toolbar: Default::default(),
+         compare: Default::default(),
++        dock: Default::default(),
+         instance,
+         recovery_root: launch.recovery_path.clone(),
+         shortcuts: Default::default(),
+@@ -1069,7 +1078,7 @@ impl Shell {
+             self.panels.width_left(),
+             self.toolbar.controller.height(),
+             (width - self.panels.width_left() - self.panels.width_right()).max(0.0),
+-            (height - self.macros.height() - self.toolbar.controller.height()).max(0.0),
++            (height - self.toolbar.controller.height()).max(0.0),
+         )
+     }
+     fn editor_pointer(&self) -> Point {
+@@ -1078,6 +1087,94 @@ impl Shell {
+             y: self.pointer.y - self.editor_bounds().y,
+         }
+     }
++    fn sync_bottom_dock(&mut self, width: f32, height: f32) {
++        let search = self
++            .workspace
++            .as_ref()
++            .map_or(dock::DockSurfaceState::default(), |workspace| {
++                let (available, busy, revision) = workspace.search_panel.dock_state();
++                dock::DockSurfaceState {
++                    available,
++                    busy,
++                    revision,
++                }
++            });
++        let compare = self
++            .workspace
++            .as_ref()
++            .map_or(dock::DockSurfaceState::default(), |workspace| {
++                self.compare.dock_state(workspace)
++            });
++        let output = self.macros.output_dock_state();
++        let previous = self.dock.active();
++        self.dock.sync([search, compare, output]);
++        if self.dock.active() != previous {
++            if let Some(tab) = self.dock.active() {
++                self.activate_dock_tab(tab);
++            } else {
++                self.deactivate_dock_focus();
++            }
++        }
++        self.dock.layout(width, height);
++        if let Some(workspace) = &mut self.workspace {
++            workspace.external_search_panel = true;
++            workspace.bottom_panel_height = self.dock.occupied_height(height);
++        }
++    }
++    fn activate_dock_tab(&mut self, tab: dock::DockTab) {
++        self.dock.blur_focus();
++        if let Some(workspace) = &mut self.workspace {
++            workspace.search_focus = tab == dock::DockTab::Search;
++            workspace.search_panel.focused = tab == dock::DockTab::Search;
++            if tab != dock::DockTab::Search {
++                workspace.search_panel.field.cancel();
++            }
++        }
++        self.compare.set_dock_focused(tab == dock::DockTab::Compare);
++        self.macros.set_output_focused(tab == dock::DockTab::Output);
++    }
++    fn request_dock_tab(&mut self, tab: dock::DockTab) {
++        self.dock.request(tab);
++        if self.dock.active() == Some(tab) {
++            self.activate_dock_tab(tab);
++        }
++    }
++    fn focus_dock_body(&mut self, tab: dock::DockTab) {
++        self.dock.blur_focus();
++        if let Some(workspace) = &mut self.workspace {
++            workspace.search_focus = tab == dock::DockTab::Search;
++            if tab != dock::DockTab::Search {
++                workspace.search_panel.focused = false;
++                workspace.search_panel.field.cancel();
++            }
++        }
++        self.compare.set_dock_focused_preserving(tab == dock::DockTab::Compare);
++        self.macros.set_output_focused(tab == dock::DockTab::Output);
++    }
++    fn traverse_dock_header(&mut self, backwards: bool) -> bool {
++        if self.dock.accessibility_focus().is_none() {
++            return false;
++        }
++        if backwards {
++            self.blur_dock_ownership();
++        } else if let Some(tab) = self.dock.active() {
++            self.activate_dock_tab(tab);
++        }
++        true
++    }
++    fn deactivate_dock_focus(&mut self) {
++        if let Some(workspace) = &mut self.workspace {
++            workspace.search_focus = false;
++            workspace.search_panel.focused = false;
++            workspace.search_panel.field.cancel();
++        }
++        self.macros.set_output_focused(false);
++        self.compare.set_dock_focused(false);
++    }
++    fn blur_dock_ownership(&mut self) {
++        self.dock.blur_focus();
++        self.deactivate_dock_focus();
++    }
+     fn finish_palette_focus(&mut self) {
+         if self.palette.open {
+             return;
+@@ -1260,6 +1357,7 @@ impl Shell {
+         );
+         self.watch_annotate_context(context);
+         self.views.annotate_context(context, &self.app.tabs, self.app.active);
++        self.dock.annotate_context(context);
+         // Open-document search now includes paged documents
+         // (search_panel.rs submit_mixed_open_documents), so it is no longer gated off.
+         for id in [
+@@ -1623,6 +1721,9 @@ impl Shell {
+         if handled {
+             return;
+         }
++        if id.0 == "search.open_documents" {
++            self.request_dock_tab(dock::DockTab::Search);
++        }
+         if let Some(workspace) = &mut self.workspace {
+             match id.0 {
+                 "search.open_documents" => {
+@@ -1734,6 +1835,7 @@ impl Shell {
+                 Action::SelectAll | Action::Copy | Action::Cut | Action::Paste | Action::Undo | Action::Redo
+             )
+         {
++            let search_dock_active = self.dock.active() == Some(dock::DockTab::Search);
+             let paste = if action == Action::Paste {
+                 self.platform
+                     .as_ref()
+@@ -1749,7 +1851,7 @@ impl Shell {
+                 } else {
+                     self.workspace
+                         .as_mut()
+-                        .filter(|workspace| workspace.search_panel.open && workspace.search_focus)
++                        .filter(|workspace| search_dock_active && workspace.search_panel.open && workspace.search_focus)
+                         .map(|workspace| &mut workspace.search_panel.field)
+                 };
+                 if let Some(field) = field {
+@@ -1783,6 +1885,7 @@ impl Shell {
+                 } else {
+                     self.workspace
+                         .as_mut()
++                        .filter(|workspace| search_dock_active && workspace.search_panel.open && workspace.search_focus)
+                         .map(|workspace| &mut workspace.search_panel.field)
+                 };
+                 if let Some(field) = field {
+@@ -2308,6 +2411,19 @@ impl ApplicationHandler for Shell {
+                     x: logical.x,
+                     y: logical.y,
+                 };
++                if self.dock.drag(
++                    Point {
++                        x: logical.x - editor_bounds.x,
++                        y: logical.y - editor_bounds.y,
++                    },
++                    editor_bounds.height,
++                ) {
++                    if let Some(workspace) = &mut self.workspace {
++                        workspace.bottom_panel_height = self.dock.occupied_height(editor_bounds.height);
++                    }
++                    self.window.as_ref().unwrap().request_redraw();
++                    return;
++                }
+                 let find_pointer = Point {
+                     x: logical.x - editor_bounds.x,
+                     y: logical.y - editor_bounds.y,
+@@ -2338,6 +2454,11 @@ impl ApplicationHandler for Shell {
+                 button: MouseButton::Left,
+                 ..
+             } => {
++                if self.dock.is_dragging() {
++                    self.dock.pointer(editor_pointer, false, editor_bounds.height);
++                    self.window.as_ref().unwrap().request_redraw();
++                    return;
++                }
+                 let window = self.window.as_ref().unwrap();
+                 if !self.app.palette
+                     && let (Some(workspace), Some(renderer)) = (&mut self.workspace, &self.renderer)
+@@ -2392,6 +2513,23 @@ impl ApplicationHandler for Shell {
+             }
+             WindowEvent::MouseWheel { delta, .. } => {
+                 let window = self.window.as_ref().unwrap();
++                if self
++                    .dock
++                    .current_layout()
++                    .is_some_and(|layout| layout.body.contains(editor_pointer))
++                {
++                    if self.dock.active() == Some(dock::DockTab::Search)
++                        && let Some(workspace) = &mut self.workspace
++                    {
++                        let amount = match delta {
++                            MouseScrollDelta::LineDelta(_, y) => -y as f64 * 28.0,
++                            MouseScrollDelta::PixelDelta(point) => -point.y / window.scale_factor(),
++                        };
++                        workspace.search_panel.scroll(amount);
++                    }
++                    window.request_redraw();
++                    return;
++                }
+                 if let Some(editor) = self.workspace.as_mut().and_then(|w| w.editors.get_mut(self.app.active)) {
+                     let (horizontal, vertical, zoom) = match delta {
+                         MouseScrollDelta::LineDelta(x, y) => (-x as f64 * 72.0, -y as f64 * 72.0, y),
+@@ -2469,6 +2607,21 @@ impl Shell {
+             self.window.as_ref().unwrap().request_redraw();
+             return;
+         }
++        if let Some(layout) = self.dock.current_layout()
++            && (layout.header.contains(editor_pointer) || layout.splitter.contains(editor_pointer))
++        {
++            let was_active = self.dock.active();
++            if self.dock.pointer(editor_pointer, true, editor_bounds.height).is_some() {
++                self.deactivate_dock_focus();
++            } else if was_active.is_some() && self.dock.active().is_none() {
++                self.deactivate_dock_focus();
++            } else if layout.header.contains(editor_pointer) {
++                self.deactivate_dock_focus();
++                self.dock.focus_active();
++            }
++            self.window.as_ref().unwrap().request_redraw();
++            return;
++        }
+         // A click on a status-bar picker segment opens its picker (UX-40).
+         if let Some(command) = self
+             .status_pickers
+@@ -2482,15 +2635,31 @@ impl Shell {
+             }
+             return;
+         }
+-        if let Some(workspace) = &mut self.workspace {
+-            let height = editor_bounds.height;
+-            if workspace.search_panel.open
+-                && editor_pointer.y >= height - 24.0 - workspace.search_panel.height()
+-                && editor_pointer.y < height - 24.0
+-            {
+-                workspace.search_focus = true;
++        if self.dock.active() == Some(dock::DockTab::Search)
++            && self
++                .dock
++                .current_layout()
++                .is_some_and(|layout| layout.body.contains(editor_pointer))
++        {
++            self.focus_dock_body(dock::DockTab::Search);
++            if let Some(workspace) = &mut self.workspace {
+                 workspace.find.blur();
+-                if let Some((source, range)) = workspace.search_panel.pointer(editor_pointer)
++                let activation = if let Some(renderer) = &self.renderer {
++                    match workspace.search_panel.pointer_with_backend(
++                        renderer,
++                        editor_pointer,
++                        self.modifiers.shift_key(),
++                    ) {
++                        Ok(activation) => activation,
++                        Err(error) => {
++                            workspace.message = Some(format!("Search hit test failed: {error:?}"));
++                            None
++                        }
++                    }
++                } else {
++                    None
++                };
++                if let Some((source, range)) = activation
+                     && let Some(index) = workspace.activate_search(source, range)
+                 {
+                     self.app.active = index;
+@@ -2501,8 +2670,21 @@ impl Shell {
+                 self.window.as_ref().unwrap().request_redraw();
+                 return;
+             }
++        }
++        if let Some(workspace) = &mut self.workspace {
+             workspace.search_focus = false;
+         }
++        if self
++            .dock
++            .current_layout()
++            .is_some_and(|layout| layout.body.contains(editor_pointer))
++        {
++            if let Some(tab) = self.dock.active() {
++                self.activate_dock_tab(tab);
++            }
++            self.window.as_ref().unwrap().request_redraw();
++            return;
++        }
+         let window = self.window.as_ref().unwrap();
+         if !self.app.palette
+             && let (Some(workspace), Some(renderer)) = (&mut self.workspace, &self.renderer)
+@@ -2531,11 +2713,19 @@ impl Shell {
+         }
+         if self.pointer.y >= 34.0
+             && !self.app.palette
+-            && let (Some(editor), Some(renderer)) = (
++            && self
++                .workspace
++                .as_ref()
++                .is_some_and(|workspace| self.app.active < workspace.editors.len())
++            && self.renderer.is_some()
++        {
++            self.blur_dock_ownership();
++            let (Some(editor), Some(renderer)) = (
+                 self.workspace.as_mut().and_then(|w| w.editors.get_mut(self.app.active)),
+                 &self.renderer,
+-            )
+-        {
++            ) else {
++                return;
++            };
+             if matches!(editor, bareline_app::workspace::WorkspaceEditor::Paged(paged) if !paged.paged_frame_state().ready)
+             {
+                 return;
+@@ -2544,7 +2734,7 @@ impl Shell {
+                 self.fail(el, format!("editor hit test: {error:?}"));
+                 return;
+             }
+-            window.request_redraw();
++            self.window.as_ref().unwrap().request_redraw();
+             return;
+         }
+         if (34.0..68.0).contains(&self.pointer.y)
+@@ -2632,6 +2822,7 @@ impl Shell {
+             return;
+         }
+         if let Some(workspace) = &mut self.workspace
++            && self.dock.active() == Some(dock::DockTab::Search)
+             && workspace.search_focus
+             && workspace.search_panel.open
+         {
+@@ -2708,7 +2899,41 @@ impl Shell {
+             self.on_key_palette(el, event);
+             return;
+         }
++        if matches!(
++            event.logical_key,
++            Key::Named(NamedKey::Tab | NamedKey::ArrowLeft | NamedKey::ArrowRight)
++        ) && self.dock.accessibility_focus().is_some()
++            && self.workspace.as_ref().is_none_or(|workspace| !workspace.search_focus)
++        {
++            if event.logical_key == Key::Named(NamedKey::Tab) {
++                self.traverse_dock_header(self.modifiers.shift_key());
++            } else if let Some(tab) = self
++                .dock
++                .focus_next_tab(event.logical_key == Key::Named(NamedKey::ArrowLeft))
++            {
++                self.dock.activate(tab);
++                self.deactivate_dock_focus();
++                self.dock.focus_active();
++            }
++            self.window.as_ref().unwrap().request_redraw();
++            return;
++        }
++        let search_tab_state = self.workspace.as_ref().and_then(|workspace| {
++            (self.dock.active() == Some(dock::DockTab::Search) && workspace.search_focus && workspace.search_panel.open)
++                .then_some(workspace.search_panel.focused)
++        });
++        if event.logical_key == Key::Named(NamedKey::Tab) && search_tab_state == Some(self.modifiers.shift_key()) {
++            self.deactivate_dock_focus();
++            if self.modifiers.shift_key() {
++                self.dock.focus_active();
++            } else {
++                self.dock.blur_focus();
++            }
++            self.window.as_ref().unwrap().request_redraw();
++            return;
++        }
+         if let Some(workspace) = &mut self.workspace
++            && self.dock.active() == Some(dock::DockTab::Search)
+             && workspace.search_focus
+             && workspace.search_panel.open
+         {
+@@ -3179,8 +3404,6 @@ impl Shell {
+             self.settings.ui_theme(),
+         );
+         let footer_labels = self.draw_editor_layer(el, renderer, editor_bounds, &mut operations)?;
+-        self.macros
+-            .draw_output(size.width as f32 / scale, size.height as f32 / scale, &mut operations);
+         self.status_pickers.clear();
+         self.draw_footer(size, scale, &footer_labels, &mut operations);
+         self.draw_panels(el, renderer, editor_bounds, size, scale, &mut operations)?;
+@@ -3199,6 +3422,7 @@ impl Shell {
+     ) -> Result<Vec<String>, ()> {
+         let window = self.window.as_ref().unwrap();
+         let mut footer_labels = Vec::new();
++        self.sync_bottom_dock(editor_bounds.width, editor_bounds.height);
+         if let Some(workspace) = &mut self.workspace {
+             workspace.theme = self.settings.ui_theme();
+             let effective = self.settings.effective();
+@@ -3269,11 +3493,7 @@ impl Shell {
+                 editor_bounds.x,
+                 editor_bounds.y,
+                 editor_bounds.width,
+-                if self.macros.height() > 0.0 {
+-                    (editor_bounds.height - bareline_ui::STATUS_HEIGHT).max(0.0)
+-                } else {
+-                    editor_bounds.height
+-                },
++                editor_bounds.height,
+             )));
+             // Pumping and tab selection happen here, before the layout
+             // pass, so rendering itself stays side-effect free (ARCH-13).
+@@ -3333,6 +3553,59 @@ impl Shell {
+                 self.fail(el, format!("compare layout: {error:?}"));
+                 return Err(());
+             }
++            if let Some(layout) = self.dock.current_layout() {
++                self.dock.draw_chrome(self.settings.ui_theme(), operations);
++                match self.dock.active() {
++                    Some(dock::DockTab::Search) => {
++                        let labels: Vec<_> = workspace
++                            .editors
++                            .iter()
++                            .zip(workspace.titles())
++                            .map(|(editor, title)| (editor.snapshot().clone(), title))
++                            .collect();
++                        match workspace
++                            .search_panel
++                            .draw_in(renderer, layout.body, &labels, operations)
++                        {
++                            Ok(Some(caret)) => {
++                                self.editor_caret = Some(bareline_ui::rect(
++                                    caret.x + editor_bounds.x,
++                                    caret.y + editor_bounds.y,
++                                    caret.width,
++                                    caret.height,
++                                ))
++                            }
++                            Ok(None) => {}
++                            Err(error) => {
++                                self.fail(el, format!("search dock layout: {error:?}"));
++                                return Err(());
++                            }
++                        }
++                    }
++                    Some(dock::DockTab::Compare) => {
++                        self.compare.draw_dock(&self.settings, layout.body, operations);
++                    }
++                    Some(dock::DockTab::Output) => self.macros.draw_output_in(
++                        layout.body,
++                        Point {
++                            x: editor_bounds.x,
++                            y: editor_bounds.y,
++                        },
++                        operations,
++                    ),
++                    None => {}
++                }
++            }
++            if let Err(error) = self.compare.draw_options_overlay(
++                &self.settings,
++                renderer,
++                editor_bounds.width,
++                editor_bounds.height,
++                operations,
++            ) {
++                self.fail(el, format!("compare options layout: {error:?}"));
++                return Err(());
++            }
+             self.recovery.draw(
+                 self.settings.ui_theme(),
+                 editor_bounds.width,
+diff --git a/apps/bareline/src/windows_app/accessibility.rs b/apps/bareline/src/windows_app/accessibility.rs
+index faa372e..a65a5f5 100644
+--- a/apps/bareline/src/windows_app/accessibility.rs
++++ b/apps/bareline/src/windows_app/accessibility.rs
+@@ -307,8 +307,7 @@ impl Shell {
+             })
+             .or_else(|| {
+                 self.workspace.as_ref().and_then(|workspace| {
+-                    workspace
+-                        .search_focus
++                    (self.dock.active() == Some(super::dock::DockTab::Search) && workspace.search_focus)
+                         .then(|| workspace.search_panel.accessibility_text_field())
+                         .flatten()
+                 })
+@@ -319,7 +318,10 @@ impl Shell {
+     fn search_accessibility_active(&self) -> bool {
+         self.search_folder_open()
+             || self.workspace.as_ref().is_some_and(|workspace| {
+-                workspace.find.has_focus() || (workspace.search_focus && workspace.search_panel.open)
++                workspace.find.has_focus()
++                    || (self.dock.active() == Some(super::dock::DockTab::Search)
++                        && workspace.search_focus
++                        && workspace.search_panel.open)
+             })
+     }
+ 
+@@ -383,7 +385,10 @@ impl Shell {
+                     workspace.find.accessibility_action(owner, true);
+                     workspace.find.active_field().set_selection(anchor, caret);
+                 }
+-                7000 if workspace.search_panel.open && workspace.search_focus => {
++                7000 if workspace.search_panel.open
++                    && workspace.search_focus
++                    && self.dock.active() == Some(super::dock::DockTab::Search) =>
++                {
+                     workspace.search_panel.field.set_selection(anchor, caret);
+                 }
+                 _ => {}
+@@ -402,7 +407,8 @@ impl Shell {
+             field.select_all();
+             return field.insert(value);
+         }
+-        if id == 7000 && workspace.search_panel.open {
++        if id == 7000 && workspace.search_panel.open && self.dock.active() == Some(super::dock::DockTab::Search) {
++            self.dock.blur_focus();
+             workspace.search_focus = true;
+             workspace.search_panel.accessibility_focus(id);
+             workspace.search_panel.field.select_all();
+@@ -677,14 +683,25 @@ impl Shell {
+             settings_nodes.push(bareline_app::accessibility::semantic_node(&semantic, 1));
+         }
+         semantic_group(&mut chrome, 90_000_012, "Settings", settings_nodes);
++        for semantic in self.dock.semantics() {
++            if semantic.focused && !self.settings.controller.open {
++                focus = semantic.id.0;
++            }
++            let mut node = bareline_app::accessibility::semantic_node(&semantic, 1);
++            if semantic.role == bareline_ui::widgets::SemanticRole::Tab {
++                node.parent = super::dock::TAB_LIST_ID;
++            }
++            node.bounds[0] += editor_bounds.x as f64;
++            node.bounds[1] += editor_bounds.y as f64;
++            chrome.push(node);
++        }
+         if let Some(workspace) = &self.workspace {
+             let mut search_tabs = Vec::new();
+-            for semantic in workspace
+-                .find
+-                .semantics(editor_bounds.width)
+-                .into_iter()
+-                .chain(workspace.search_panel.semantics())
+-            {
++            let mut search_semantics = workspace.find.semantics(editor_bounds.width);
++            if self.dock.active() == Some(super::dock::DockTab::Search) {
++                search_semantics.extend(workspace.search_panel.semantics());
++            }
++            for semantic in search_semantics {
+                 if semantic.focused && !self.settings.controller.open {
+                     focus = semantic.id.0;
+                 }
+@@ -739,7 +756,7 @@ impl Shell {
+                     invokable: false,
+                 });
+             }
+-            if workspace.search_panel.open {
++            if workspace.search_panel.open && self.dock.active() == Some(super::dock::DockTab::Search) {
+                 chrome.push(AccessibilityNode {
+                     id: 9002,
+                     parent: 1,
+@@ -764,12 +781,14 @@ impl Shell {
+         }
+         semantic_group(&mut chrome, 90_000_003, "Toolbar", toolbar_nodes);
+         chrome.extend(self.recovery_accessibility_nodes());
+-        semantic_group(
+-            &mut chrome,
+-            super::modal::COMPARE_GROUP_ID,
+-            "Compare",
+-            self.compare_accessibility_nodes(),
+-        );
++        if self.dock.active() == Some(super::dock::DockTab::Compare) {
++            semantic_group(
++                &mut chrome,
++                super::modal::COMPARE_GROUP_ID,
++                "Compare",
++                self.compare_accessibility_nodes(),
++            );
++        }
+         chrome.extend(self.panels_accessibility_nodes());
+         chrome.extend(self.extensions_accessibility_nodes());
+         chrome.extend(self.language_accessibility_nodes());
+@@ -786,7 +805,9 @@ impl Shell {
+             if let Some(id) = self.recovery_accessibility_focus() {
+                 focus = id;
+             }
+-            if let Some(id) = self.compare_accessibility_focus() {
++            if self.dock.active() == Some(super::dock::DockTab::Compare)
++                && let Some(id) = self.compare_accessibility_focus()
++            {
+                 focus = id;
+             }
+             if let Some(id) = self.panels_accessibility_focus() {
+@@ -805,12 +826,20 @@ impl Shell {
+         let mut manager = Vec::new();
+         let mut output = Vec::new();
+         for semantic in self.macros.controller.semantics() {
+-            if semantic.focused && !self.settings.controller.open {
++            let is_output = semantic.id.0 >= 2_000_000;
++            if semantic.focused
++                && !self.settings.controller.open
++                && (!is_output || self.dock.active() == Some(super::dock::DockTab::Output))
++            {
+                 focus = semantic.id.0;
+             }
+-            let node = bareline_app::accessibility::semantic_node(&semantic, 1);
+-            if semantic.id.0 >= 2_000_000 {
+-                output.push(node);
++            let mut node = bareline_app::accessibility::semantic_node(&semantic, 1);
++            if is_output {
++                if self.dock.active() == Some(super::dock::DockTab::Output) {
++                    node.bounds[0] += editor_bounds.x as f64;
++                    node.bounds[1] += editor_bounds.y as f64;
++                    output.push(node);
++                }
+             } else {
+                 manager.push(node);
+             }
+@@ -890,6 +919,12 @@ impl Shell {
+             }
+         }
+         let active_layer = self.active_accessibility_layer();
++        if active_layer.is_none()
++            && !self.search_accessibility_active()
++            && let Some(id) = self.dock.accessibility_focus()
++        {
++            focus = id;
++        }
+ 
+         let mut snapshot = compose_snapshot(
+             "Bareline",
+@@ -1223,6 +1258,28 @@ impl Shell {
+                 // reach the editor or other controllers while it is active.
+                 continue;
+             }
++            let dock_target = match &action {
++                AccessibilityAction::Focus(id) => Some((*id, false)),
++                AccessibilityAction::Invoke(id) => Some((*id, true)),
++                _ => None,
++            };
++            if let Some((id, invoke)) = dock_target
++                && self.dock.semantics().iter().any(|node| node.id.0 == id)
++            {
++                if let Some(tab) = self.dock.accessibility_action(id, invoke) {
++                    if invoke {
++                        self.activate_dock_tab(tab);
++                    } else {
++                        self.deactivate_dock_focus();
++                    }
++                } else if id == super::dock::CLOSE_ID && invoke {
++                    self.deactivate_dock_focus();
++                }
++                if let Some(window) = &self.window {
++                    window.request_redraw();
++                }
++                continue;
++            }
+             if self.power_accessibility(&action) {
+                 continue;
+             }
+@@ -1248,7 +1305,8 @@ impl Shell {
+                 if !self.macros.controller.manager.open
+                     && (self.views_accessibility(el, &action)
+                         || self.recovery_accessibility(el, &action)
+-                        || self.compare_accessibility(el, &action)
++                        || (self.dock.active() == Some(super::dock::DockTab::Compare)
++                            && self.compare_accessibility(el, &action))
+                         || self.panels_accessibility(el, &action))
+                 {
+                     continue;
+@@ -1458,6 +1516,7 @@ impl Shell {
+                     }
+                 }
+                 AccessibilityAction::Focus(id) if is_editor_provider_id(id) => {
++                    self.blur_dock_ownership();
+                     let pane = (0..2).find(|pane| {
+                         self.views
+                             .pane_token(*pane)
+@@ -1471,6 +1530,7 @@ impl Shell {
+                     }
+                 }
+                 AccessibilityAction::Focus(id) if id == EDITOR_ID => {
++                    self.blur_dock_ownership();
+                     self.palette.dismiss();
+                     self.app.palette = false;
+                     if let Some(workspace) = &mut self.workspace {
+@@ -1511,7 +1571,10 @@ impl Shell {
+                         if (6000..6300).contains(&id) {
+                             workspace.find.accessibility_action(id, true);
+                             workspace.search_focus = false;
+-                        } else if workspace.search_panel.semantics().iter().any(|n| n.id.0 == id) {
++                        } else if self.dock.active() == Some(super::dock::DockTab::Search)
++                            && workspace.search_panel.semantics().iter().any(|n| n.id.0 == id)
++                        {
++                            self.dock.blur_focus();
+                             workspace.search_focus = true;
+                             workspace.search_panel.accessibility_focus(id);
+                             workspace.find.blur();
+@@ -1523,7 +1586,7 @@ impl Shell {
+                     if let Some(workspace) = &mut self.workspace {
+                         if (6000..6300).contains(&id) {
+                             command_action = workspace.find.accessibility_action(id, false).map(super::find_action);
+-                        } else {
++                        } else if self.dock.active() == Some(super::dock::DockTab::Search) {
+                             let (handled, active) = super::search::accessibility_invoke_panel(workspace, id);
+                             if handled && let Some(index) = active {
+                                 self.app.active = index;
+@@ -1664,6 +1727,7 @@ pub(super) mod tests {
+             extensions: Default::default(),
+             toolbar: Default::default(),
+             compare: Default::default(),
++            dock: Default::default(),
+             instance: Default::default(),
+             recovery_root: None,
+             shortcuts: Default::default(),
+@@ -1718,7 +1782,7 @@ pub(super) mod tests {
+             shell.panels.width_left(),
+             shell.toolbar.controller.height(),
+             (1000.0 - shell.panels.width_left() - shell.panels.width_right()).max(0.0),
+-            (800.0 - shell.macros.height() - shell.toolbar.controller.height()).max(0.0),
++            (800.0 - shell.toolbar.controller.height()).max(0.0),
+         );
+         shell.accessibility_snapshot_with_editor_bounds(1000.0, 800.0, 1.0, bounds)
+     }
+@@ -2036,13 +2100,20 @@ pub(super) mod tests {
+             workspace.find.draw(&mut backend, 1000.0, &mut operations).unwrap();
+         }
+         if scenario.starts_with("search") || scenario == "all_app_panels" {
+-            let workspace = shell.workspace.as_mut().unwrap();
+-            workspace.search_panel.show();
+-            workspace.search_focus = true;
+-            workspace.search_panel.field.insert("workspace");
+-            workspace
++            {
++                let workspace = shell.workspace.as_mut().unwrap();
++                workspace.search_panel.show();
++                workspace.search_focus = true;
++                workspace.search_panel.field.insert("workspace");
++            }
++            shell.sync_bottom_dock(1000.0, editor_height);
++            let bounds = shell.dock.current_layout().unwrap().body;
++            shell
++                .workspace
++                .as_mut()
++                .unwrap()
+                 .search_panel
+-                .draw(&mut backend, 1000.0, editor_height, &[], &mut operations)
++                .draw_in(&mut backend, bounds, &[], &mut operations)
+                 .unwrap();
+         }
+         if scenario.starts_with("settings") || scenario == "all_app_panels" {
+@@ -2126,6 +2197,7 @@ pub(super) mod tests {
+             workspace.search_panel.show();
+             workspace.search_focus = true;
+         }
++        shell.sync_bottom_dock(1000.0, 800.0);
+         assert!(shell.set_search_accessibility_value(7000, "workspace"));
+         let files = shell_snapshot(&shell);
+         assert_eq!(files.focus, 7000);
+@@ -2168,6 +2240,7 @@ pub(super) mod tests {
+         assert!(shell.workspace.as_ref().unwrap().search_focus);
+         shell.workspace.as_mut().unwrap().search_panel.hide();
+         shell.workspace.as_mut().unwrap().search_focus = false;
++        shell.sync_bottom_dock(1000.0, 800.0);
+         assert!(shell.search_text_selection_action(files_identity, 0, 1));
+         assert!(!editor_text_selection_matches(document_before, files_identity));
+         assert_eq!(
+@@ -2179,6 +2252,7 @@ pub(super) mod tests {
+ 
+         shell.workspace.as_mut().unwrap().search_panel.show();
+         shell.workspace.as_mut().unwrap().search_focus = true;
++        shell.sync_bottom_dock(1000.0, 800.0);
+         let reopened = shell_snapshot(&shell);
+         assert_ne!(
+             reopened.text_context.as_ref().unwrap().source_identity,
+@@ -2187,6 +2261,95 @@ pub(super) mod tests {
+         );
+     }
+ 
++    #[test]
++    fn bottom_dock_exposes_one_selected_surface_and_retires_background_search_owner() {
++        let mut shell = app_shell("search.open");
++        shell.macros.controller.output_open = true;
++        shell.sync_bottom_dock(1000.0, 800.0);
++        assert!(shell.dock.activate(super::super::dock::DockTab::Output));
++        shell.activate_dock_tab(super::super::dock::DockTab::Output);
++        let snapshot = shell_snapshot(&shell);
++        snapshot.validate().unwrap();
++        assert_eq!(snapshot.focus, super::super::dock::TAB_IDS[2]);
++        assert_eq!(
++            snapshot
++                .nodes
++                .iter()
++                .filter(|node| { super::super::dock::TAB_IDS.contains(&node.id) && node.selected })
++                .count(),
++            1
++        );
++        assert!(!snapshot.nodes.iter().any(|node| node.id == 7000));
++        assert_ne!(snapshot.text.as_ref().map(|text| text.editor_id), Some(7000));
++        assert!(
++            shell
++                .accessibility_text_source()
++                .is_none_or(|source| { source.identity().0 != SEARCH_TEXT_NAMESPACE })
++        );
++    }
++
++    #[test]
++    fn compare_dock_exposes_both_current_hunk_copy_directions() {
++        let mut shell = headless_shell();
++        super::super::compare::accessibility_test_setup(&mut shell, "open");
++        let snapshot = shell_snapshot(&shell);
++        snapshot.validate().unwrap();
++        for command in ["compare.copyLeftToRight", "compare.copyRightToLeft"] {
++            let title = shell
++                .app
++                .commands
++                .entries()
++                .find(|entry| entry.id.0 == command)
++                .unwrap()
++                .title;
++            assert!(
++                snapshot.nodes.iter().any(|node| node.name == title && node.invokable),
++                "missing {command}"
++            );
++        }
++    }
++
++    #[test]
++    fn shared_body_focus_transfer_retires_header_and_shift_tab_returns_to_editor() {
++        let mut shell = headless_shell();
++        views::accessibility_test_setup(&mut shell, "open");
++        {
++            let workspace = shell.workspace.as_mut().unwrap();
++            workspace.search_panel.show();
++        }
++        shell.sync_bottom_dock(1000.0, 800.0);
++        assert!(shell.dock.activate(super::super::dock::DockTab::Search));
++        shell.dock.focus_active();
++        assert!(shell.dock.accessibility_focus().is_some());
++
++        shell.focus_dock_body(super::super::dock::DockTab::Search);
++        shell.workspace.as_mut().unwrap().search_panel.accessibility_focus(7000);
++        assert_eq!(shell_snapshot(&shell).focus, 7000);
++        assert!(shell.dock.accessibility_focus().is_none());
++
++        shell.dock.focus_active();
++        shell.focus_dock_body(super::super::dock::DockTab::Compare);
++        assert!(shell.compare.dock_has_focus());
++        assert!(shell.dock.accessibility_focus().is_none());
++
++        shell.dock.focus_active();
++        shell.focus_dock_body(super::super::dock::DockTab::Output);
++        assert!(shell.macros.output_has_focus());
++        assert!(shell.dock.accessibility_focus().is_none());
++
++        shell.dock.focus_active();
++        assert!(shell.traverse_dock_header(false));
++        assert_eq!(shell_snapshot(&shell).focus, 7000);
++        shell.dock.focus_active();
++        assert!(shell.traverse_dock_header(true));
++        let snapshot = shell_snapshot(&shell);
++        assert!(
++            !super::super::dock::TAB_IDS.contains(&snapshot.focus),
++            "editor ownership must not retain a dock tab as accessibility focus"
++        );
++        assert_eq!(snapshot.focus, bareline_app::accessibility::EDITOR_ID);
++    }
++
+     #[test]
+     fn recovery_modal_hides_background_text_and_restores_the_find_invoker() {
+         let mut shell = app_shell("find.open");
+diff --git a/apps/bareline/src/windows_app/compare.rs b/apps/bareline/src/windows_app/compare.rs
+index 746e44e..1209fdb 100644
+--- a/apps/bareline/src/windows_app/compare.rs
++++ b/apps/bareline/src/windows_app/compare.rs
+@@ -143,6 +143,7 @@ pub(super) struct CompareRuntime {
+     pub(super) options_open: bool,
+     hits: Vec<(Rect, &'static str)>,
+     focus: usize,
++    dock_focused: bool,
+     colors_tab: bool,
+     pub(super) active_color: Option<&'static str>,
+     pub(super) color_field: bareline_ui::text_field::TextField,
+@@ -207,7 +208,67 @@ struct PendingSource {
+     previous: Vec<CompareInput>,
+     origin: CompareOrigin,
+ }
++#[allow(clippy::too_many_arguments)]
++fn dock_button(
++    ops: &mut Vec<DrawOp>,
++    hits: &mut Vec<(Rect, &'static str)>,
++    theme: bareline_ui::theme::UiTheme,
++    dock: Rect,
++    row_height: f32,
++    x: &mut f32,
++    y: &mut f32,
++    label: String,
++    id: &'static str,
++    width: f32,
++) {
++    if *x + width > dock.x + dock.width - 8.0 && *x > dock.x + 8.0 {
++        *x = dock.x + 8.0;
++        *y += row_height;
++    }
++    let bounds = rect(*x, *y, width, (row_height - 4.0).max(18.0));
++    *x += width + 6.0;
++    ops.push(DrawOp::StrokeRounded(bounds, theme.border, 4.0, 1.0));
++    ops.push(DrawOp::PushClip(bounds));
++    text(ops, bounds.x + 8.0, bounds.y + 6.0, label, 12.0, theme.text);
++    ops.push(DrawOp::PopClip);
++    hits.push((bounds, id));
++}
++
+ impl CompareRuntime {
++    pub(super) fn set_dock_focused(&mut self, focused: bool) {
++        self.dock_focused = focused;
++        if focused {
++            self.focus = 0;
++        }
++    }
++    pub(super) fn set_dock_focused_preserving(&mut self, focused: bool) {
++        self.dock_focused = focused;
++    }
++    #[cfg(test)]
++    pub(super) fn dock_has_focus(&self) -> bool {
++        self.dock_focused
++    }
++    pub(super) fn dock_state(&self, workspace: &Workspace) -> super::dock::DockSurfaceState {
++        use std::hash::{Hash, Hasher};
++        let Some(controller) = &self.controller else {
++            return super::dock::DockSurfaceState::default();
++        };
++        let mut hash = std::collections::hash_map::DefaultHasher::new();
++        format!("{:?}", controller.state).hash(&mut hash);
++        controller.counter().hash(&mut hash);
++        if let Some(indices) = self.indices(workspace) {
++            for index in indices {
++                workspace.editors[index].snapshot().identity_token().hash(&mut hash);
++            }
++        }
++        super::dock::DockSurfaceState {
++            available: self.indices(workspace).is_some(),
++            busy: controller.state == CompareState::Running
++                || self.pending_merge.is_some()
++                || self.merge_promotion.is_some(),
++            revision: hash.finish(),
++        }
++    }
+     pub(super) fn capture(
+         &self,
+         workspace: &Workspace,
+@@ -525,7 +586,9 @@ impl Shell {
+     }
+     pub(super) fn compare_accessibility_focus(&self) -> Option<u64> {
+         if !self.compare.options_open {
+-            return None;
++            return (self.dock.active() == Some(super::dock::DockTab::Compare) && self.compare.dock_focused)
++                .then(|| self.compare_accessibility_hit_id(self.compare.focus))
++                .flatten();
+         }
+         if self.compare.active_color.is_some() && self.compare.color_focus {
+             return Some(59_999);
+@@ -579,6 +642,8 @@ impl Shell {
+             return false;
+         };
+         self.compare.focus = index;
++        self.dock.blur_focus();
++        self.compare.dock_focused = true;
+         if invoke {
+             self.compare_dispatch(el, command);
+         }
+@@ -1642,6 +1707,7 @@ impl Shell {
+                 {
+                     let id = *id;
+                     self.compare.focus = index;
++                    self.focus_dock_body(super::dock::DockTab::Compare);
+                     return self.compare_dispatch(el, id);
+                 }
+             }
+@@ -1690,6 +1756,35 @@ impl Shell {
+                     return true;
+                 }
+                 match &event.logical_key {
++                    Key::Named(NamedKey::Tab | NamedKey::ArrowDown | NamedKey::ArrowUp)
++                        if self.dock.active() == Some(super::dock::DockTab::Compare) && self.compare.dock_focused =>
++                    {
++                        let count = self.compare.hits.len();
++                        if count > 0 {
++                            let backward =
++                                self.modifiers.shift_key() || event.logical_key == Key::Named(NamedKey::ArrowUp);
++                            let tab = event.logical_key == Key::Named(NamedKey::Tab);
++                            if tab && backward && self.compare.focus == 0 {
++                                self.deactivate_dock_focus();
++                                self.dock.focus_active();
++                            } else if tab && !backward && self.compare.focus >= count - 1 {
++                                self.blur_dock_ownership();
++                            } else {
++                                self.compare.focus =
++                                    (self.compare.focus.min(count - 1) + if backward { count - 1 } else { 1 }) % count;
++                            }
++                            self.compare_redraw();
++                        }
++                        return true;
++                    }
++                    Key::Named(NamedKey::Enter | NamedKey::Space)
++                        if self.dock.active() == Some(super::dock::DockTab::Compare) && self.compare.dock_focused =>
++                    {
++                        if let Some((_, id)) = self.compare.hits.get(self.compare.focus) {
++                            return self.compare_dispatch(el, id);
++                        }
++                        return true;
++                    }
+                     Key::Named(NamedKey::Tab | NamedKey::ArrowDown | NamedKey::ArrowUp)
+                         if self.compare.options_open =>
+                     {
+@@ -1745,8 +1840,8 @@ impl CompareRuntime {
+         views: &mut views::ViewsRuntime,
+         settings: &settings::SettingsRuntime,
+         renderer: &mut impl TextBackend,
+-        width: f32,
+-        height: f32,
++        _width: f32,
++        _height: f32,
+         ops: &mut Vec<DrawOp>,
+     ) -> Result<(), LayoutError> {
+         let Some(indices) = self.indices(workspace) else {
+@@ -1891,37 +1986,168 @@ impl CompareRuntime {
+             }
+         }
+         self.hits.clear();
+-        ops.push(DrawOp::Fill(rect(0.0, TAB_HEIGHT, width, 44.0), theme.chrome));
+-        let source_width = ((width - 710.0) / 2.0).max(72.0);
+-        let mut x = 8.0;
+-        let mut button = |label: String, id: &'static str, w: f32| {
+-            let bounds = rect(x, TAB_HEIGHT + 6.0, w, 32.0);
+-            x += w + 6.0;
+-            ops.push(DrawOp::StrokeRounded(bounds, theme.border, 4.0, 1.0));
+-            ops.push(DrawOp::PushClip(bounds));
+-            text(ops, bounds.x + 9.0, bounds.y + 8.0, &label, 12.0, theme.text);
+-            ops.push(DrawOp::PopClip);
+-            self.hits.push((bounds, id));
++        Ok(())
++    }
++    pub(super) fn draw_options_overlay(
++        &mut self,
++        settings: &settings::SettingsRuntime,
++        renderer: &mut impl TextBackend,
++        width: f32,
++        height: f32,
++        ops: &mut Vec<DrawOp>,
++    ) -> Result<(), LayoutError> {
++        if self.options_open {
++            self.draw_options(settings, renderer, width, height, ops)?;
++        }
++        Ok(())
++    }
++    pub(super) fn draw_dock(&mut self, settings: &settings::SettingsRuntime, bounds: Rect, ops: &mut Vec<DrawOp>) {
++        self.hits.clear();
++        let Some(controller) = &self.controller else { return };
++        let theme = settings.ui_theme();
++        ops.push(DrawOp::PushClip(bounds));
++        let compact = bounds.width < 900.0 || bounds.height < 140.0;
++        let row_height = if compact { 26.0 } else { 34.0 };
++        let source_width = if compact {
++            ((bounds.width - 64.0) / 2.0).max(40.0)
++        } else {
++            ((bounds.width - 710.0) / 2.0).max(100.0)
+         };
+-        button(controller.sources[0].label.clone(), "compare.leftSource", source_width);
+-        button("⇄".into(), "compare.swap", 32.0);
+-        button(controller.sources[1].label.clone(), "compare.rightSource", source_width);
+-        button(
+-            match controller.options().whitespace {
+-                Whitespace::Significant => "Whitespace significant",
+-                Whitespace::TrimEdges => "Trim edges",
+-                Whitespace::IgnoreAll => "Ignore whitespace",
++        let mut x = bounds.x + 8.0;
++        let mut y = bounds.y + 7.0;
++        dock_button(
++            ops,
++            &mut self.hits,
++            theme,
++            bounds,
++            row_height,
++            &mut x,
++            &mut y,
++            controller.sources[0].label.clone(),
++            "compare.leftSource",
++            source_width,
++        );
++        dock_button(
++            ops,
++            &mut self.hits,
++            theme,
++            bounds,
++            row_height,
++            &mut x,
++            &mut y,
++            "⇄".into(),
++            "compare.swap",
++            32.0,
++        );
++        dock_button(
++            ops,
++            &mut self.hits,
++            theme,
++            bounds,
++            row_height,
++            &mut x,
++            &mut y,
++            controller.sources[1].label.clone(),
++            "compare.rightSource",
++            source_width,
++        );
++        if compact {
++            x = bounds.x + 8.0;
++            y += row_height;
++        }
++        for (label, id, width) in [
++            (
++                if compact { "L → R" } else { "Copy left → right" },
++                "compare.copyLeftToRight",
++                if compact { 50.0 } else { 132.0 },
++            ),
++            (
++                if compact { "R → L" } else { "Copy right → left" },
++                "compare.copyRightToLeft",
++                if compact { 50.0 } else { 132.0 },
++            ),
++            (
++                if compact { "‹" } else { "Previous" },
++                "compare.previous",
++                if compact { 26.0 } else { 70.0 },
++            ),
++            (
++                if compact { "›" } else { "Next" },
++                "compare.next",
++                if compact { 26.0 } else { 52.0 },
++            ),
++        ] {
++            dock_button(
++                ops,
++                &mut self.hits,
++                theme,
++                bounds,
++                row_height,
++                &mut x,
++                &mut y,
++                label.into(),
++                id,
++                width,
++            );
++        }
++        let (index, total) = controller.counter();
++        dock_button(
++            ops,
++            &mut self.hits,
++            theme,
++            bounds,
++            row_height,
++            &mut x,
++            &mut y,
++            format!("{index} / {total}"),
++            "compare.next",
++            if compact { 36.0 } else { 62.0 },
++        );
++        if compact {
++            x = bounds.x + 8.0;
++            y += row_height;
++        }
++        dock_button(
++            ops,
++            &mut self.hits,
++            theme,
++            bounds,
++            row_height,
++            &mut x,
++            &mut y,
++            if compact {
++                "Whitespace"
++            } else {
++                match controller.options().whitespace {
++                    Whitespace::Significant => "Whitespace significant",
++                    Whitespace::TrimEdges => "Trim edges",
++                    Whitespace::IgnoreAll => "Ignore whitespace",
++                }
+             }
+             .into(),
+             "compare.whitespace",
+-            155.0,
++            if compact { 62.0 } else { 155.0 },
+         );
+-        button("Options".into(), "compare.options", 66.0);
+-        button("←".into(), "compare.previous", 32.0);
+-        button("→".into(), "compare.next", 32.0);
+-        let (index, total) = controller.counter();
+-        button(format!("{index} / {total}"), "compare.next", 62.0);
+-        button(
++        dock_button(
++            ops,
++            &mut self.hits,
++            theme,
++            bounds,
++            row_height,
++            &mut x,
++            &mut y,
++            "Options".into(),
++            "compare.options",
++            if compact { 40.0 } else { 66.0 },
++        );
++        dock_button(
++            ops,
++            &mut self.hits,
++            theme,
++            bounds,
++            row_height,
++            &mut x,
++            &mut y,
+             if controller.state == CompareState::Running {
+                 "Cancel"
+             } else {
+@@ -1933,13 +2159,29 @@ impl CompareRuntime {
+             } else {
+                 "compare.recompare"
+             },
+-            88.0,
++            if compact { 54.0 } else { 88.0 },
+         );
+-        button("Close".into(), "compare.close", 60.0);
+-        if self.options_open {
+-            self.draw_options(settings, renderer, width, height, ops)?;
+-        }
+-        Ok(())
++        dock_button(
++            ops,
++            &mut self.hits,
++            theme,
++            bounds,
++            row_height,
++            &mut x,
++            &mut y,
++            if compact { "Close" } else { "Close comparison" }.into(),
++            "compare.close",
++            if compact { 40.0 } else { 112.0 },
++        );
++        text(
++            ops,
++            bounds.x + 10.0,
++            (y + row_height + 8.0).min(bounds.y + bounds.height - 18.0),
++            format!("{:?} · {total} differences", controller.state),
++            12.0,
++            theme.muted,
++        );
++        ops.push(DrawOp::PopClip);
+     }
+     fn draw_options(
+         &mut self,
+@@ -2278,30 +2520,39 @@ pub(super) fn accessibility_test_setup(shell: &mut Shell, scenario: &str) {
+     }
+     let mut renderer = bareline_renderer_recording::RecordingBackend::default();
+     let mut ops = Vec::new();
+-    let workspace = shell.workspace.as_mut().unwrap();
+-    shell
+-        .views
+-        .draw(
+-            workspace,
+-            &mut shell.app,
+-            &mut renderer,
+-            1000.0,
+-            800.0,
+-            &mut ops,
+-            shell.notify.clone(),
+-        )
+-        .unwrap();
++    {
++        let workspace = shell.workspace.as_mut().unwrap();
++        shell
++            .views
++            .draw(
++                workspace,
++                &mut shell.app,
++                &mut renderer,
++                1000.0,
++                800.0,
++                &mut ops,
++                shell.notify.clone(),
++            )
++            .unwrap();
++        shell
++            .compare
++            .draw(
++                workspace,
++                &mut shell.views,
++                &shell.settings,
++                &mut renderer,
++                1000.0,
++                800.0,
++                &mut ops,
++            )
++            .unwrap();
++    }
++    shell.sync_bottom_dock(1000.0, 800.0);
++    let body = shell.dock.current_layout().unwrap().body;
++    shell.compare.draw_dock(&shell.settings, body, &mut ops);
+     shell
+         .compare
+-        .draw(
+-            workspace,
+-            &mut shell.views,
+-            &shell.settings,
+-            &mut renderer,
+-            1000.0,
+-            800.0,
+-            &mut ops,
+-        )
++        .draw_options_overlay(&shell.settings, &mut renderer, 1000.0, 800.0, &mut ops)
+         .unwrap();
+ }
+ 
+@@ -2309,6 +2560,29 @@ pub(super) fn accessibility_test_setup(shell: &mut Shell, scenario: &str) {
+ mod tests {
+     use super::*;
+     #[test]
++    fn compact_dock_keeps_merge_directions_and_close_inside_body() {
++        let source = |label: &str| CompareSource {
++            label: label.into(),
++            origin: CompareOrigin::OpenDocument(label.into()),
++        };
++        let mut runtime = CompareRuntime {
++            controller: Some(CompareController::new(source("left"), source("right"))),
++            ..Default::default()
++        };
++        let body = rect(20.0, 300.0, 240.0, 101.0);
++        let mut ops = Vec::new();
++        runtime.draw_dock(&settings::SettingsRuntime::default(), body, &mut ops);
++        for id in ["compare.copyLeftToRight", "compare.copyRightToLeft", "compare.close"] {
++            assert!(runtime.hits.iter().any(|(_, command)| *command == id));
++        }
++        assert!(runtime.hits.iter().all(|(bounds, _)| {
++            bounds.x >= body.x
++                && bounds.y >= body.y
++                && bounds.x + bounds.width <= body.x + body.width
++                && bounds.y + bounds.height <= body.y + body.height
++        }));
++    }
++    #[test]
+     fn large_selected_copy_promotes_exact_destination_and_waits_for_durable_actor() {
+         use bareline_document::{Budget, Document, TextOffset, paged::WindowPoll};
+         let platform = std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem);
+diff --git a/apps/bareline/src/windows_app/dock.rs b/apps/bareline/src/windows_app/dock.rs
+new file mode 100644
+index 0000000..83666d5
+--- /dev/null
++++ b/apps/bareline/src/windows_app/dock.rs
+@@ -0,0 +1,611 @@
++// SPDX-License-Identifier: MPL-2.0
++use bareline_renderer::{DrawOp, Point, Rect};
++use bareline_ui::controls::ControlState;
++use bareline_ui::theme::UiTheme;
++use bareline_ui::widgets::{SemanticAction, SemanticRole, Semantics};
++
++pub(super) fn register(registry: &mut bareline_commands::CommandRegistry) {
++    for (id, title) in [
++        ("view.bottom_panel.search", "Show Search Panel"),
++        ("view.bottom_panel.compare", "Show Compare Panel"),
++        ("view.bottom_panel.output", "Show Output Panel"),
++        ("view.bottom_panel.close", "Collapse Bottom Panel"),
++    ] {
++        registry
++            .register(bareline_commands::CommandSpec {
++                id: bareline_commands::CommandId(id),
++                title,
++                category: "View",
++                shortcut: "",
++                action: bareline_commands::Action::Contributed(bareline_commands::CommandId(id)),
++            })
++            .expect("unique bottom panel command");
++    }
++}
++use bareline_ui::{ViewId, rect, text};
++
++pub(super) const TAB_LIST_ID: u64 = 80_000;
++pub(super) const TAB_IDS: [u64; 3] = [80_001, 80_002, 80_003];
++const PANEL_ID: u64 = 80_010;
++pub(super) const CLOSE_ID: u64 = 80_011;
++const HEADER_HEIGHT: f32 = 34.0;
++const SPLITTER_HEIGHT: f32 = 5.0;
++const MIN_HEIGHT: f32 = 140.0;
++const DEFAULT_HEIGHT: f32 = 260.0;
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub(super) enum DockTab {
++    Search,
++    Compare,
++    Output,
++}
++impl DockTab {
++    const ALL: [Self; 3] = [Self::Search, Self::Compare, Self::Output];
++    fn index(self) -> usize {
++        match self {
++            Self::Search => 0,
++            Self::Compare => 1,
++            Self::Output => 2,
++        }
++    }
++    pub(super) fn name(self) -> &'static str {
++        match self {
++            Self::Search => "Search",
++            Self::Compare => "Compare",
++            Self::Output => "Output",
++        }
++    }
++}
++
++#[derive(Clone, Copy, Default)]
++pub(super) struct DockSurfaceState {
++    pub available: bool,
++    pub busy: bool,
++    pub revision: u64,
++}
++
++#[derive(Clone, Copy, Debug, PartialEq)]
++pub(super) struct DockLayout {
++    pub outer: Rect,
++    pub splitter: Rect,
++    pub header: Rect,
++    pub body: Rect,
++}
++
++pub(super) struct DockRuntime {
++    active: Option<DockTab>,
++    collapsed: bool,
++    height: f32,
++    available: [bool; 3],
++    busy: [bool; 3],
++    revision: [u64; 3],
++    unread: [bool; 3],
++    focused: Option<u64>,
++    dragging: bool,
++    layout: Option<DockLayout>,
++    restored: bool,
++    requested: Option<DockTab>,
++}
++impl Default for DockRuntime {
++    fn default() -> Self {
++        Self {
++            active: None,
++            collapsed: true,
++            height: DEFAULT_HEIGHT,
++            available: [false; 3],
++            busy: [false; 3],
++            revision: [0; 3],
++            unread: [false; 3],
++            focused: None,
++            dragging: false,
++            layout: None,
++            restored: false,
++            requested: None,
++        }
++    }
++}
++impl DockRuntime {
++    pub(super) fn annotate_context(&self, context: &mut bareline_commands::CommandContext) {
++        for (tab, id) in DockTab::ALL.into_iter().zip([
++            "view.bottom_panel.search",
++            "view.bottom_panel.compare",
++            "view.bottom_panel.output",
++        ]) {
++            if !self.available[tab.index()] {
++                context.states.insert(
++                    bareline_commands::CommandId(id),
++                    bareline_commands::CommandState::disabled("The panel has no retained state"),
++                );
++            }
++        }
++        if self.active().is_none() {
++            context.states.insert(
++                bareline_commands::CommandId("view.bottom_panel.close"),
++                bareline_commands::CommandState::disabled("The bottom panel is collapsed"),
++            );
++        }
++    }
++    pub(super) fn sync(&mut self, states: [DockSurfaceState; 3]) {
++        let old_available = self.available;
++        for (index, state) in states.into_iter().enumerate() {
++            if state.available && self.revision[index] != state.revision {
++                self.unread[index] = self.active() != Some(DockTab::ALL[index]);
++            }
++            self.available[index] = state.available;
++            self.busy[index] = state.busy;
++            self.revision[index] = state.revision;
++            if !state.available {
++                self.unread[index] = false;
++            }
++        }
++        if let Some(requested) = self.requested
++            && self.available[requested.index()]
++        {
++            self.activate(requested);
++            self.requested = None;
++        } else if !self.restored
++            && let Some(opened) = DockTab::ALL
++                .into_iter()
++                .rev()
++                .find(|tab| self.available[tab.index()] && !old_available[tab.index()])
++        {
++            self.activate(opened);
++        } else if self.active.is_none_or(|tab| !self.available[tab.index()]) {
++            let preserve_collapsed = self.restored && self.collapsed;
++            self.active = DockTab::ALL.into_iter().find(|tab| self.available[tab.index()]);
++            self.collapsed = preserve_collapsed || self.active.is_none();
++            self.focused = (!self.collapsed)
++                .then(|| self.active.map(|tab| TAB_IDS[tab.index()]))
++                .flatten();
++        }
++        self.restored = false;
++    }
++    pub(super) fn activate(&mut self, tab: DockTab) -> bool {
++        if !self.available[tab.index()] {
++            return false;
++        }
++        self.active = Some(tab);
++        self.collapsed = false;
++        self.unread[tab.index()] = false;
++        self.focused = Some(TAB_IDS[tab.index()]);
++        true
++    }
++    pub(super) fn request(&mut self, tab: DockTab) {
++        self.requested = Some(tab);
++        if self.available[tab.index()] {
++            self.activate(tab);
++            self.requested = None;
++        }
++    }
++    pub(super) fn blur_focus(&mut self) {
++        self.focused = None;
++    }
++    pub(super) fn focus_active(&mut self) {
++        self.focused = self.active().map(|tab| TAB_IDS[tab.index()]);
++    }
++    pub(super) fn collapse(&mut self) {
++        self.collapsed = true;
++        self.dragging = false;
++        self.focused = None;
++    }
++    pub(super) fn active(&self) -> Option<DockTab> {
++        (!self.collapsed).then_some(self.active).flatten()
++    }
++    pub(super) fn accessibility_focus(&self) -> Option<u64> {
++        self.focused
++    }
++    pub(super) fn accessibility_action(&mut self, id: u64, invoke: bool) -> Option<DockTab> {
++        if id == CLOSE_ID && invoke {
++            self.collapse();
++            return None;
++        }
++        let tab = TAB_IDS
++            .iter()
++            .position(|candidate| *candidate == id)
++            .map(|index| DockTab::ALL[index])?;
++        if !self.available[tab.index()] {
++            return None;
++        }
++        self.focused = Some(id);
++        if invoke {
++            self.activate(tab);
++        }
++        Some(tab)
++    }
++    pub(super) fn occupied_height(&self, viewport_height: f32) -> f32 {
++        if self.active().is_none() {
++            return 0.0;
++        }
++        let available = (viewport_height - bareline_ui::STATUS_HEIGHT - bareline_ui::TAB_HEIGHT).max(0.0);
++        let maximum = (viewport_height * 0.55).min(available);
++        if maximum < MIN_HEIGHT {
++            maximum
++        } else {
++            self.height.clamp(MIN_HEIGHT, maximum)
++        }
++    }
++    pub(super) fn layout(&mut self, width: f32, height: f32) -> Option<DockLayout> {
++        let occupied = self.occupied_height(height);
++        if occupied == 0.0 {
++            self.layout = None;
++            return None;
++        }
++        let top = (height - bareline_ui::STATUS_HEIGHT - occupied).max(bareline_ui::TAB_HEIGHT);
++        let outer = rect(0.0, top, width.max(0.0), occupied);
++        let splitter = rect(outer.x, outer.y, outer.width, SPLITTER_HEIGHT);
++        let header = rect(outer.x, outer.y + SPLITTER_HEIGHT, outer.width, HEADER_HEIGHT);
++        let body = rect(
++            outer.x,
++            header.y + header.height,
++            outer.width,
++            (outer.height - SPLITTER_HEIGHT - HEADER_HEIGHT).max(0.0),
++        );
++        let layout = DockLayout {
++            outer,
++            splitter,
++            header,
++            body,
++        };
++        self.layout = Some(layout);
++        Some(layout)
++    }
++    pub(super) fn current_layout(&self) -> Option<DockLayout> {
++        self.layout
++    }
++    pub(super) fn pointer(&mut self, point: Point, down: bool, viewport_height: f32) -> Option<DockTab> {
++        let layout = self.layout?;
++        if down && layout.splitter.contains(point) {
++            self.dragging = true;
++            return None;
++        }
++        if !down {
++            self.dragging = false;
++        }
++        if self.dragging {
++            self.resize(point.y, viewport_height);
++            return None;
++        }
++        if down {
++            for tab in DockTab::ALL {
++                if self.available[tab.index()] && self.tab_bounds(layout, tab).contains(point) {
++                    self.activate(tab);
++                    return Some(tab);
++                }
++            }
++            if self.close_bounds(layout).contains(point) {
++                self.collapse();
++            }
++        }
++        None
++    }
++    pub(super) fn drag(&mut self, point: Point, viewport_height: f32) -> bool {
++        if !self.dragging {
++            return false;
++        }
++        self.resize(point.y, viewport_height);
++        true
++    }
++    fn resize(&mut self, pointer_y: f32, viewport_height: f32) {
++        let available = (viewport_height - bareline_ui::STATUS_HEIGHT - bareline_ui::TAB_HEIGHT).max(0.0);
++        let maximum = (viewport_height * 0.55).min(available);
++        if maximum >= MIN_HEIGHT {
++            self.height = (viewport_height - bareline_ui::STATUS_HEIGHT - pointer_y).clamp(MIN_HEIGHT, maximum);
++        }
++    }
++    pub(super) fn is_dragging(&self) -> bool {
++        self.dragging
++    }
++    pub(super) fn focus_next_tab(&mut self, backwards: bool) -> Option<DockTab> {
++        let current = self
++            .focused
++            .and_then(|id| TAB_IDS.iter().position(|candidate| *candidate == id))
++            .or_else(|| self.active.map(DockTab::index))?;
++        for step in 1..=DockTab::ALL.len() {
++            let index = if backwards {
++                (current + DockTab::ALL.len() - step) % DockTab::ALL.len()
++            } else {
++                (current + step) % DockTab::ALL.len()
++            };
++            if self.available[index] {
++                let tab = DockTab::ALL[index];
++                self.focused = Some(TAB_IDS[index]);
++                return Some(tab);
++            }
++        }
++        None
++    }
++    fn tab_bounds(&self, layout: DockLayout, tab: DockTab) -> Rect {
++        let width = ((layout.header.width - 50.0).max(0.0) / 3.0).min(100.0);
++        rect(
++            layout.header.x + 8.0 + tab.index() as f32 * width,
++            layout.header.y,
++            width,
++            HEADER_HEIGHT,
++        )
++    }
++    fn close_bounds(&self, layout: DockLayout) -> Rect {
++        rect(
++            layout.header.x + layout.header.width - 34.0,
++            layout.header.y + 3.0,
++            28.0,
++            28.0,
++        )
++    }
++    pub(super) fn draw_chrome(&self, theme: UiTheme, ops: &mut Vec<DrawOp>) {
++        let Some(layout) = self.layout else { return };
++        ops.push(DrawOp::Fill(layout.outer, theme.elevated));
++        ops.push(DrawOp::Fill(layout.splitter, theme.border));
++        ops.push(DrawOp::Stroke(layout.outer, theme.border, 1.0));
++        for tab in DockTab::ALL {
++            let bounds = self.tab_bounds(layout, tab);
++            let selected = self.active() == Some(tab);
++            if selected {
++                ops.push(DrawOp::Fill(
++                    rect(bounds.x, bounds.y + bounds.height - 2.0, bounds.width, 2.0),
++                    theme.focus,
++                ));
++            }
++            let suffix = if self.busy[tab.index()] {
++                " …"
++            } else if self.unread[tab.index()] {
++                " •"
++            } else {
++                ""
++            };
++            text(
++                ops,
++                bounds.x + 10.0,
++                bounds.y + 9.0,
++                format!("{}{suffix}", tab.name()),
++                13.0,
++                if selected { theme.text } else { theme.muted },
++            );
++            if self.focused == Some(TAB_IDS[tab.index()]) {
++                ops.push(DrawOp::Stroke(bounds, theme.focus, 1.0));
++            }
++        }
++        text(
++            ops,
++            layout.header.x + layout.header.width - 27.0,
++            layout.header.y + 8.0,
++            "×",
++            14.0,
++            theme.text,
++        );
++    }
++    pub(super) fn semantics(&self) -> Vec<Semantics> {
++        let Some(layout) = self.layout else { return Vec::new() };
++        let group = Semantics::new(
++            ViewId(TAB_LIST_ID),
++            SemanticRole::TabList,
++            "Bottom panel tabs",
++            "view.bottom_panel",
++            layout.header,
++            ControlState::default(),
++        );
++        let mut nodes = vec![group];
++        for tab in DockTab::ALL {
++            let mut node = Semantics::new(
++                ViewId(TAB_IDS[tab.index()]),
++                SemanticRole::Tab,
++                tab.name(),
++                match tab {
++                    DockTab::Search => "view.bottom_panel.search",
++                    DockTab::Compare => "view.bottom_panel.compare",
++                    DockTab::Output => "view.bottom_panel.output",
++                },
++                self.tab_bounds(layout, tab),
++                ControlState {
++                    disabled: !self.available[tab.index()],
++                    focused: self.focused == Some(TAB_IDS[tab.index()]),
++                    ..Default::default()
++                },
++            )
++            .action(SemanticAction::Focus);
++            if self.available[tab.index()] {
++                node = node.action(SemanticAction::Select).action(SemanticAction::Invoke);
++            }
++            node.selected = self.active() == Some(tab);
++            node.value = Some(
++                if self.busy[tab.index()] {
++                    "Running"
++                } else if self.unread[tab.index()] {
++                    "Updated"
++                } else {
++                    "Ready"
++                }
++                .into(),
++            );
++            nodes.push(node);
++        }
++        let mut panel = Semantics::new(
++            ViewId(PANEL_ID),
++            SemanticRole::Group,
++            self.active().map_or("Bottom panel", DockTab::name),
++            "view.bottom_panel.active",
++            layout.body,
++            ControlState::default(),
++        );
++        panel.selected = true;
++        nodes.push(panel);
++        nodes.push(
++            Semantics::new(
++                ViewId(CLOSE_ID),
++                SemanticRole::Button,
++                "Collapse bottom panel",
++                "view.bottom_panel.close",
++                self.close_bounds(layout),
++                ControlState::default(),
++            )
++            .action(SemanticAction::Invoke),
++        );
++        nodes
++    }
++    pub(super) fn restore(&mut self, active: Option<DockTab>, collapsed: bool, height: f32) {
++        self.active = active;
++        self.collapsed = collapsed;
++        self.height = if height.is_finite() {
++            height.clamp(MIN_HEIGHT, 10_000.0)
++        } else {
++            DEFAULT_HEIGHT
++        };
++        self.restored = true;
++    }
++    pub(super) fn persisted(&self) -> (Option<DockTab>, bool, f32) {
++        (self.active, self.collapsed, self.height)
++    }
++}
++
++impl super::Shell {
++    pub(super) fn dock_dispatch(&mut self, _el: &winit::event_loop::ActiveEventLoop, id: &str) -> bool {
++        let tab = match id {
++            "view.bottom_panel.search" => Some(DockTab::Search),
++            "view.bottom_panel.compare" => Some(DockTab::Compare),
++            "view.bottom_panel.output" => Some(DockTab::Output),
++            "view.bottom_panel.close" => {
++                self.dock.collapse();
++                self.deactivate_dock_focus();
++                None
++            }
++            _ => return false,
++        };
++        if let Some(tab) = tab
++            && self.dock.activate(tab)
++        {
++            self.activate_dock_tab(tab);
++        }
++        if let Some(window) = &self.window {
++            window.request_redraw();
++        }
++        true
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    fn ready(revision: u64) -> DockSurfaceState {
++        DockSurfaceState {
++            available: true,
++            revision,
++            ..Default::default()
++        }
++    }
++    #[test]
++    fn surfaces_share_one_bounded_region_and_switch_without_geometry_drift() {
++        let mut dock = DockRuntime::default();
++        dock.sync([ready(1), DockSurfaceState::default(), DockSurfaceState::default()]);
++        assert_eq!(dock.active(), Some(DockTab::Search));
++        let first = dock.layout(1000.0, 800.0).unwrap();
++        dock.sync([ready(1), ready(1), ready(1)]);
++        assert_eq!(dock.active(), Some(DockTab::Output));
++        let switched = dock.layout(1000.0, 800.0).unwrap();
++        assert_eq!(first.outer, switched.outer);
++        assert!(dock.activate(DockTab::Search));
++        assert_eq!(dock.layout(1000.0, 800.0).unwrap().outer, first.outer);
++    }
++    #[test]
++    fn collapse_resize_restore_and_semantics_keep_one_selected_panel() {
++        let mut dock = DockRuntime::default();
++        dock.sync([ready(1), ready(1), ready(1)]);
++        let layout = dock.layout(500.0, 400.0).unwrap();
++        dock.pointer(
++            Point {
++                x: 10.0,
++                y: layout.splitter.y + 1.0,
++            },
++            true,
++            400.0,
++        );
++        assert!(dock.drag(Point { x: 10.0, y: 100.0 }, 400.0));
++        dock.pointer(Point::default(), false, 400.0);
++        let (_, _, height) = dock.persisted();
++        assert!((MIN_HEIGHT..=220.0).contains(&height));
++        let nodes = dock.semantics();
++        assert_eq!(
++            nodes
++                .iter()
++                .filter(|node| node.role == SemanticRole::Tab && node.selected)
++                .count(),
++            1
++        );
++        dock.collapse();
++        assert_eq!(dock.occupied_height(400.0), 0.0);
++        dock.restore(Some(DockTab::Compare), false, height);
++        dock.sync([ready(1), ready(1), ready(1)]);
++        assert_eq!(dock.active(), Some(DockTab::Compare));
++    }
++    #[test]
++    fn inactive_completion_is_unread_until_selected_and_removed_tabs_retire_focus() {
++        let mut dock = DockRuntime::default();
++        dock.sync([ready(1), ready(1), DockSurfaceState::default()]);
++        dock.activate(DockTab::Search);
++        dock.sync([ready(1), ready(2), DockSurfaceState::default()]);
++        assert!(dock.unread[DockTab::Compare.index()]);
++        assert!(dock.activate(DockTab::Compare));
++        assert!(!dock.unread[DockTab::Compare.index()]);
++        dock.sync([ready(1), DockSurfaceState::default(), DockSurfaceState::default()]);
++        assert_eq!(dock.active(), Some(DockTab::Search));
++        assert_ne!(dock.accessibility_focus(), Some(TAB_IDS[DockTab::Compare.index()]));
++
++        dock.collapse();
++        dock.sync([ready(2), DockSurfaceState::default(), DockSurfaceState::default()]);
++        assert!(dock.unread[DockTab::Search.index()]);
++        dock.request(DockTab::Search);
++        assert_eq!(dock.active(), Some(DockTab::Search));
++        assert!(!dock.unread[DockTab::Search.index()]);
++    }
++    #[test]
++    fn tiny_viewport_bounds_panel_and_exposes_stable_disabled_tabs() {
++        let mut dock = DockRuntime::default();
++        dock.sync([ready(1), DockSurfaceState::default(), DockSurfaceState::default()]);
++        let layout = dock.layout(240.0, 120.0).unwrap();
++        assert!(layout.outer.y + layout.outer.height <= 120.0 - bareline_ui::STATUS_HEIGHT);
++        let tabs: Vec<_> = dock
++            .semantics()
++            .into_iter()
++            .filter(|node| node.role == SemanticRole::Tab)
++            .collect();
++        assert_eq!(tabs.len(), 3);
++        assert_eq!(tabs.iter().filter(|node| node.selected).count(), 1);
++        assert_eq!(tabs.iter().filter(|node| node.disabled).count(), 2);
++
++        dock.restore(Some(DockTab::Output), true, 300.0);
++        dock.sync([ready(2), DockSurfaceState::default(), DockSurfaceState::default()]);
++        assert_eq!(dock.active(), None);
++        assert_eq!(dock.persisted().0, Some(DockTab::Search));
++    }
++    #[test]
++    fn tiny_resize_preserves_a_session_valid_preferred_height() {
++        let mut dock = DockRuntime::default();
++        dock.sync([ready(1), DockSurfaceState::default(), DockSurfaceState::default()]);
++        let layout = dock.layout(240.0, 120.0).unwrap();
++        dock.pointer(
++            Point {
++                x: layout.splitter.x + 1.0,
++                y: layout.splitter.y + 1.0,
++            },
++            true,
++            120.0,
++        );
++        dock.drag(Point { x: 1.0, y: 110.0 }, 120.0);
++        let (_, _, preferred) = dock.persisted();
++        assert!(preferred >= MIN_HEIGHT);
++        let mut manifest = bareline_file_io::session::SessionManifest::default();
++        manifest.layout.bottom_panel = Some("search".into());
++        manifest.layout.bottom_panel_collapsed = false;
++        manifest.layout.bottom_panel_height_bits = preferred.to_bits();
++        assert!(manifest.validate().is_ok());
++    }
++    #[test]
++    fn retained_surface_requests_switch_and_reopen_the_requested_tab() {
++        let mut dock = DockRuntime::default();
++        dock.sync([ready(1), DockSurfaceState::default(), ready(1)]);
++        assert!(dock.activate(DockTab::Output));
++        dock.request(DockTab::Search);
++        assert_eq!(dock.active(), Some(DockTab::Search));
++        dock.collapse();
++        dock.request(DockTab::Output);
++        assert_eq!(dock.active(), Some(DockTab::Output));
++    }
++}
+diff --git a/apps/bareline/src/windows_app/macros.rs b/apps/bareline/src/windows_app/macros.rs
+index 5b315e0..00071ba 100644
+--- a/apps/bareline/src/windows_app/macros.rs
++++ b/apps/bareline/src/windows_app/macros.rs
+@@ -8,7 +8,7 @@ use bareline_app::macros::{
+         process::{ExternalDefinition, LaunchMode, PlaceholderContext, ProcessPermission, ProcessState},
+     },
+ };
+-use bareline_renderer::{DrawOp, Rect};
++use bareline_renderer::{DrawOp, Point, Rect};
+ use bareline_ui::controls::{Key as UiKey, UiEvent};
+ use std::{
+     io::{Read, Write},
+@@ -115,6 +115,7 @@ pub struct MacrosRuntime {
+     external: Option<ExternalDefinition>,
+     pending: Option<mpsc::Receiver<Result<FileResult, String>>>,
+     bounds: Rect,
++    output_offset: Point,
+     focused: bool,
+     next_name: u32,
+     directory: Option<PathBuf>,
+@@ -140,6 +141,7 @@ impl Default for MacrosRuntime {
+             external: None,
+             pending: None,
+             bounds: Rect::default(),
++            output_offset: Point::default(),
+             focused: false,
+             next_name: 1,
+             directory: None,
+@@ -158,6 +160,19 @@ impl Default for MacrosRuntime {
+     }
+ }
+ impl MacrosRuntime {
++    pub(super) fn set_output_focused(&mut self, focused: bool) {
++        self.focused = focused;
++    }
++    #[cfg(test)]
++    pub(super) fn output_has_focus(&self) -> bool {
++        self.focused
++    }
++    fn output_point(&self, point: Point) -> Point {
++        Point {
++            x: point.x - self.output_offset.x,
++            y: point.y - self.output_offset.y,
++        }
++    }
+     pub fn configure(&mut self, directory: Option<PathBuf>) {
+         self.directory = directory;
+     }
+@@ -395,12 +410,35 @@ impl MacrosRuntime {
+     pub fn height(&self) -> f32 {
+         if self.controller.output_open { 200.0 } else { 0.0 }
+     }
++    pub(super) fn output_dock_state(&self) -> super::dock::DockSurfaceState {
++        let (available, busy, revision) = self.controller.output_dock_state();
++        super::dock::DockSurfaceState {
++            available,
++            busy,
++            revision,
++        }
++    }
+     pub fn draw_output(&mut self, width: f32, height: f32, ops: &mut Vec<DrawOp>) {
+         self.bounds = bareline_ui::rect(0.0, (height - 24.0 - self.height()).max(0.0), width, self.height());
++        self.output_offset = Point::default();
+         self.controller.draw_output(self.bounds, self.theme, ops);
+     }
++    pub(super) fn draw_output_in(
++        &mut self,
++        bounds: bareline_renderer::Rect,
++        window_offset: bareline_renderer::Point,
++        ops: &mut Vec<DrawOp>,
++    ) {
++        self.bounds = bareline_ui::rect(
++            bounds.x + window_offset.x,
++            bounds.y + window_offset.y,
++            bounds.width,
++            bounds.height,
++        );
++        self.output_offset = window_offset;
++        self.controller.draw_output(bounds, self.theme, ops);
++    }
+     pub fn draw(&mut self, renderer: &mut WindowsRenderer, width: f32, height: f32, ops: &mut Vec<DrawOp>) {
+-        self.bounds = bareline_ui::rect(0.0, (height - 24.0 - self.height()).max(0.0), width, self.height());
+         if let Err(error) = self.controller.manager.draw(
+             renderer,
+             width,
+@@ -567,7 +605,12 @@ impl Shell {
+         if !self.macros.controller.semantics().iter().any(|node| node.id.0 == id) {
+             return false;
+         }
++        if id >= 2_000_000 && self.dock.active() != Some(super::dock::DockTab::Output) {
++            return true;
++        }
+         if id >= 2_000_000 {
++            self.dock.blur_focus();
++            self.macros.focused = true;
+             if let Some(link) = self.macros.controller.output_accessibility(id, invoke) {
+                 self.macros_open_link(link);
+             }
+@@ -631,6 +674,7 @@ impl Shell {
+         {
+             self.macros.controller.status = "Open a document before playing a macro".into();
+             self.macros.controller.output_open = true;
++            self.request_dock_tab(super::dock::DockTab::Output);
+             return true;
+         }
+         if !self.macros.storage_ready
+@@ -648,6 +692,7 @@ impl Shell {
+             self.macros.controller.status =
+                 "Macro storage is loading or failed; use Retry Loading Macros before changing it.".into();
+             self.macros.controller.output_open = true;
++            self.request_dock_tab(super::dock::DockTab::Output);
+             return true;
+         }
+         if matches!(id, "macro.rename" | "macro.play_n" | "macro.shortcut" | "macro.ghost")
+@@ -676,6 +721,9 @@ impl Shell {
+                 self.macros.controller.capture_replay_target(workspace, self.app.active);
+             }
+             (self.notify)();
++            if self.macros.controller.output_open {
++                self.request_dock_tab(super::dock::DockTab::Output);
++            }
+             return true;
+         }
+         let result: Result<(), String> = match id {
+@@ -850,6 +898,23 @@ impl Shell {
+             self.macros.controller.status = error;
+             self.macros.controller.output_open = true;
+         }
++        if self.macros.controller.output_open
++            && matches!(
++                id,
++                "macro.record"
++                    | "macro.play"
++                    | "macro.play_eof"
++                    | "macro.play_n"
++                    | "macro.resume"
++                    | "run.execute"
++                    | "output.clear"
++                    | "output.copy"
++                    | "output.save"
++                    | "output.open_link"
++            )
++        {
++            self.request_dock_tab(super::dock::DockTab::Output);
++        }
+         if let Some(window) = &self.window {
+             window.request_redraw();
+         }
+@@ -993,6 +1058,7 @@ impl Shell {
+         if let Err(error) = self.macros.load_library(self.notify.clone()) {
+             self.macros.controller.status = error;
+         }
++        let mut reveal_output = false;
+         if let Some(receiver) = &self.macros.pending {
+             match receiver.try_recv() {
+                 Ok(result) => {
+@@ -1041,6 +1107,7 @@ impl Shell {
+                     } else if !background {
+                         self.macros.controller.output_open = true;
+                     }
++                    reveal_output = self.macros.controller.output_open && !background;
+                     if let Some(window) = &self.window {
+                         window.request_redraw();
+                     }
+@@ -1052,6 +1119,9 @@ impl Shell {
+                 Err(mpsc::TryRecvError::Empty) => {}
+             }
+         }
++        if reveal_output {
++            self.request_dock_tab(super::dock::DockTab::Output);
++        }
+         if self.macros.dirty && self.macros.pending.is_none() {
+             if let Err(error) = self.macros.save_library(self.notify.clone()) {
+                 self.macros.dirty = false;
+@@ -1256,6 +1326,7 @@ impl Shell {
+             return true;
+         }
+         if !self.macros.controller.output_open
++            || self.dock.active() != Some(super::dock::DockTab::Output)
+             || self.palette.open
+             || self.utilities.has_input_focus()
+             || self.search_modal()
+@@ -1272,6 +1343,22 @@ impl Shell {
+         {
+             return false;
+         }
++        if let WindowEvent::KeyboardInput { event, .. } = event
++            && event.state == ElementState::Pressed
++            && event.logical_key == Key::Named(NamedKey::Tab)
++            && self.macros.focused
++        {
++            self.deactivate_dock_focus();
++            if self.modifiers.shift_key() {
++                self.dock.focus_active();
++            } else {
++                self.dock.blur_focus();
++            }
++            if let Some(window) = &self.window {
++                window.request_redraw();
++            }
++            return true;
++        }
+         let ui = match event {
+             WindowEvent::MouseWheel { delta, .. } if self.macros.bounds.contains(self.pointer) => {
+                 let dy = match delta {
+@@ -1291,11 +1378,14 @@ impl Shell {
+                 button: MouseButton::Left,
+                 ..
+             } if self.macros.bounds.contains(self.pointer) => {
+-                self.macros.focused = true;
++                if *state == ElementState::Pressed {
++                    self.focus_dock_body(super::dock::DockTab::Output);
++                }
++                let local = self.macros.output_point(self.pointer);
+                 Some(if *state == ElementState::Pressed {
+-                    UiEvent::PointerDown(self.pointer)
++                    UiEvent::PointerDown(local)
+                 } else {
+-                    UiEvent::PointerUp(self.pointer)
++                    UiEvent::PointerUp(local)
+                 })
+             }
+             WindowEvent::KeyboardInput { event, .. } if self.macros.focused && event.state == ElementState::Pressed => {
+@@ -1365,6 +1455,20 @@ mod tests {
+     use super::*;
+     use bareline_commands::{CommandContext, CommandId};
+ 
++    #[test]
++    fn dock_output_keeps_window_hit_bounds_and_local_controller_coordinates() {
++        let mut runtime = MacrosRuntime::default();
++        runtime.controller.output_open = true;
++        let body = bareline_ui::rect(18.0, 260.0, 420.0, 175.0);
++        let offset = Point { x: 76.0, y: 44.0 };
++        runtime.draw_output_in(body, offset, &mut Vec::new());
++        assert_eq!(runtime.bounds, bareline_ui::rect(94.0, 304.0, 420.0, 175.0));
++        assert_eq!(
++            runtime.output_point(Point { x: 114.0, y: 334.0 }),
++            Point { x: 38.0, y: 290.0 }
++        );
++    }
++
+     fn assert_open_close_enabled(runtime: &MacrosRuntime, label: &str) {
+         assert!(runtime.controller.manager.open, "{label}");
+         let mut context = CommandContext::default();
+diff --git a/apps/bareline/src/windows_app/session.rs b/apps/bareline/src/windows_app/session.rs
+index fa61fc8..7a13dc7 100644
+--- a/apps/bareline/src/windows_app/session.rs
++++ b/apps/bareline/src/windows_app/session.rs
+@@ -515,6 +515,17 @@ impl Shell {
+         // persisted views last so it cannot replace their carets or active pane.
+         self.views
+             .restore_session(workspace, &mut self.app, queue.manifest(), &view_tabs);
++        let panel = match queue.manifest().layout.bottom_panel.as_deref() {
++            Some("search") => Some(super::dock::DockTab::Search),
++            Some("compare") => Some(super::dock::DockTab::Compare),
++            Some("output") => Some(super::dock::DockTab::Output),
++            _ => None,
++        };
++        self.dock.restore(
++            panel,
++            queue.manifest().layout.bottom_panel_collapsed,
++            f32::from_bits(queue.manifest().layout.bottom_panel_height_bits),
++        );
+     }
+     pub(super) fn session_before_exit(&mut self, _el: &ActiveEventLoop) -> bool {
+         if !self.first_frame || self.smoke || self.perf || self.prototype.is_some() || self.session.exit_failed {
+@@ -736,6 +747,17 @@ impl Shell {
+             })
+             .collect();
+         manifest.compare = self.compare.capture(workspace, &documents);
++        let (panel, collapsed, height) = self.dock.persisted();
++        manifest.layout.bottom_panel = panel.map(|panel| {
++            match panel {
++                super::dock::DockTab::Search => "search",
++                super::dock::DockTab::Compare => "compare",
++                super::dock::DockTab::Output => "output",
++            }
++            .into()
++        });
++        manifest.layout.bottom_panel_collapsed = collapsed;
++        manifest.layout.bottom_panel_height_bits = height.to_bits();
+         manifest.tabs.sort_by_key(|tab| !tab.pinned);
+         manifest.recent = workspace.recent_paths().to_vec();
+         manifest.window = self.capture_window();
+diff --git a/apps/bareline/src/windows_app/views.rs b/apps/bareline/src/windows_app/views.rs
+index ddbf765..622666a 100644
+--- a/apps/bareline/src/windows_app/views.rs
++++ b/apps/bareline/src/windows_app/views.rs
+@@ -2944,8 +2944,8 @@ impl ViewsRuntime {
+         } else {
+             0.0
+         };
+-        let panel_height = workspace.search_panel.height();
+-        let compare_height = if self.compare { 44.0 } else { 0.0 };
++        let panel_height = workspace.bottom_panel_height;
++        let compare_height = 0.0;
+         let geometry = self.controller.as_ref().unwrap().geometry(rect(
+             0.0,
+             TAB_HEIGHT + find_height + compare_height,
+@@ -3108,15 +3108,6 @@ impl ViewsRuntime {
+         {
+             active_caret = Some(caret);
+         }
+-        let labels: Vec<_> = workspace
+-            .editors
+-            .iter()
+-            .zip(titles)
+-            .map(|(e, title)| (e.snapshot().clone(), title))
+-            .collect();
+-        if let Some(caret) = workspace.search_panel.draw(renderer, width, height, &labels, ops)? {
+-            active_caret = Some(caret);
+-        }
+         self.draw_mru(workspace, width, height, ops);
+         Ok(active_caret)
+     }
+diff --git a/crates/app/src/macros.rs b/crates/app/src/macros.rs
+index 78b5f36..7bfb663 100644
+--- a/crates/app/src/macros.rs
++++ b/crates/app/src/macros.rs
+@@ -370,6 +370,18 @@ impl Default for MacrosController {
+     }
+ }
+ impl MacrosController {
++    pub fn output_dock_state(&self) -> (bool, bool, u64) {
++        use std::hash::{Hash, Hasher};
++        let mut hash = std::collections::hash_map::DefaultHasher::new();
++        self.output_fingerprint.hash(&mut hash);
++        self.status.hash(&mut hash);
++        self.process_status.hash(&mut hash);
++        (
++            self.output_open,
++            self.process.is_some() || self.playback.is_some(),
++            hash.finish(),
++        )
++    }
+     /// Merge independently drained producers using their process-wide completion clock.
+     pub fn record_receipts(
+         &mut self,
+diff --git a/crates/app/src/search_panel.rs b/crates/app/src/search_panel.rs
+index 10b3a11..54554a9 100644
+--- a/crates/app/src/search_panel.rs
++++ b/crates/app/src/search_panel.rs
+@@ -82,6 +82,7 @@ pub struct SearchPanel {
+     bounds: Rect,
+     list_bounds: Rect,
+     field_bounds: Rect,
++    draw_offset: Point,
+     search_requested: bool,
+     tab_requested: Option<SearchTab>,
+     semantic_focus: Option<u64>,
+@@ -105,6 +106,13 @@ impl SearchPanel {
+     pub fn status(&self) -> &str {
+         &self.status
+     }
++    pub fn dock_state(&self) -> (bool, bool, u64) {
++        (
++            self.open,
++            self.pending.is_some() || self.folder_pending.is_some(),
++            self.accessibility_revision.get(),
++        )
++    }
+     pub fn accessibility_text_field(&self) -> Option<(u64, u64, &TextField)> {
+         if !self.open || !self.focused || self.semantic_focus.is_some_and(|id| id != 7000) {
+             return None;
+@@ -770,26 +778,59 @@ impl SearchPanel {
+         }
+         None
+     }
+-    pub fn draw(
++    pub fn pointer_with_backend(
++        &mut self,
++        backend: &impl TextBackend,
++        point: Point,
++        extend: bool,
++    ) -> Result<Option<Activation>, LayoutError> {
++        let activation = self.pointer(point);
++        if self.open && self.field_bounds.contains(point) {
++            self.field.click(
++                backend,
++                Point {
++                    x: point.x - self.draw_offset.x,
++                    y: point.y - self.draw_offset.y,
++                },
++                extend,
++            )?;
++            self.focused = true;
++            self.semantic_focus = Some(7000);
++        }
++        Ok(activation)
++    }
++    fn draw_canvas(
+         &mut self,
+         backend: &mut impl TextBackend,
+         width: f32,
+         height: f32,
++        panel_height: f32,
+         labels: &[(DocumentSnapshot, String)],
+         ops: &mut Vec<DrawOp>,
+     ) -> Result<Option<Rect>, LayoutError> {
+         if !self.open {
+             return Ok(None);
+         }
+-        let top = (height - STATUS_HEIGHT - HEIGHT).max(TAB_HEIGHT + 48.0);
+-        self.bounds = rect(6.0, top, width - 12.0, (height - STATUS_HEIGHT - top).max(0.0));
++        self.draw_offset = Point::default();
++        let top = (height - STATUS_HEIGHT - panel_height).max(TAB_HEIGHT + 48.0);
++        self.bounds = rect(
++            6.0,
++            top,
++            (width - 12.0).max(0.0),
++            (height - STATUS_HEIGHT - top).max(0.0),
++        );
+         self.field_bounds = rect(
+             24.0,
+             top + 40.0,
+             (width * 0.40).max(80.0).min((width - 160.0).max(80.0)),
+             28.0,
+         );
+-        self.list_bounds = rect(18.0, top + 78.0, width - 36.0, self.bounds.height - 110.0);
++        self.list_bounds = rect(
++            18.0,
++            top + 78.0,
++            (width - 36.0).max(0.0),
++            (self.bounds.height - 110.0).max(0.0),
++        );
+         self.scroll(0.0);
+         ops.push(DrawOp::FillRounded(self.bounds, ELEVATED, 4.0));
+         ops.push(DrawOp::StrokeRounded(self.bounds, BORDER, 4.0, 1.0));
+@@ -1004,6 +1045,77 @@ impl SearchPanel {
+         ops.push(DrawOp::PopClip);
+         Ok(self.focused.then_some(caret))
+     }
++    pub fn draw(
++        &mut self,
++        backend: &mut impl TextBackend,
++        width: f32,
++        height: f32,
++        labels: &[(DocumentSnapshot, String)],
++        ops: &mut Vec<DrawOp>,
++    ) -> Result<Option<Rect>, LayoutError> {
++        self.draw_canvas(backend, width, height, HEIGHT, labels, ops)
++    }
++    /// Draw Search inside a shell-owned dock body while keeping hit testing and
++    /// accessibility bounds in the shell's editor coordinate space.
++    pub fn draw_in(
++        &mut self,
++        backend: &mut impl TextBackend,
++        bounds: Rect,
++        labels: &[(DocumentSnapshot, String)],
++        ops: &mut Vec<DrawOp>,
++    ) -> Result<Option<Rect>, LayoutError> {
++        if !self.open || bounds.width <= 0.0 || bounds.height <= 0.0 {
++            return Ok(None);
++        }
++        let mut local = Vec::new();
++        let canvas_width = bounds.width + 12.0;
++        let canvas_height = TAB_HEIGHT + 48.0 + bounds.height + STATUS_HEIGHT;
++        let caret = self.draw_canvas(backend, canvas_width, canvas_height, bounds.height, labels, &mut local)?;
++        let dx = bounds.x - self.bounds.x;
++        let dy = bounds.y - self.bounds.y;
++        self.draw_offset = Point { x: dx, y: dy };
++        self.field_bounds = translate_rect(self.field_bounds, dx, dy);
++        self.list_bounds = translate_rect(self.list_bounds, dx, dy);
++        for op in &mut local {
++            translate_draw_op(op, dx, dy);
++        }
++        self.bounds = bounds;
++        self.list_bounds.width = self.list_bounds.width.min(bounds.width).max(0.0);
++        self.list_bounds.height = self
++            .list_bounds
++            .height
++            .min((bounds.y + bounds.height - self.list_bounds.y).max(0.0))
++            .max(0.0);
++        ops.push(DrawOp::PushClip(bounds));
++        ops.extend(local);
++        ops.push(DrawOp::PopClip);
++        Ok(caret.map(|caret| translate_rect(caret, dx, dy)))
++    }
++}
++
++fn translate_rect(bounds: Rect, x: f32, y: f32) -> Rect {
++    rect(bounds.x + x, bounds.y + y, bounds.width, bounds.height)
++}
++fn translate_draw_op(op: &mut DrawOp, x: f32, y: f32) {
++    let point = |point: Point| Point {
++        x: point.x + x,
++        y: point.y + y,
++    };
++    match op {
++        DrawOp::Fill(bounds, _)
++        | DrawOp::Stroke(bounds, _, _)
++        | DrawOp::FillRounded(bounds, _, _)
++        | DrawOp::StrokeRounded(bounds, _, _, _)
++        | DrawOp::PushClip(bounds)
++        | DrawOp::PushLayer { bounds, .. } => *bounds = translate_rect(*bounds, x, y),
++        DrawOp::Text { origin, .. } | DrawOp::Layout { origin, .. } => *origin = point(*origin),
++        DrawOp::Image { destination, .. } => *destination = translate_rect(*destination, x, y),
++        DrawOp::Line { from, to, .. } => {
++            *from = point(*from);
++            *to = point(*to);
++        }
++        DrawOp::PopClip | DrawOp::PopLayer => {}
++    }
+ }
+ 
+ #[cfg(test)]
+@@ -1083,6 +1195,90 @@ mod tests {
+         assert_eq!(panel.query().pattern, "needle");
+         assert!(panel.query().selection.is_none());
+     }
++    #[test]
++    fn external_dock_bounds_own_search_hit_and_semantic_geometry() {
++        let mut panel = SearchPanel::default();
++        panel.show();
++        let dock = rect(12.0, 410.0, 476.0, 150.0);
++        let mut backend = RecordingBackend::default();
++        let mut ops = Vec::new();
++        panel.draw_in(&mut backend, dock, &[], &mut ops).unwrap();
++        assert_eq!(panel.bounds, dock);
++        assert!(dock.contains(Point {
++            x: panel.field_bounds.x,
++            y: panel.field_bounds.y,
++        }));
++        assert!(panel.semantics().iter().all(|node| {
++            node.bounds.x >= dock.x
++                && node.bounds.y >= dock.y
++                && node.bounds.x + node.bounds.width <= dock.x + dock.width + f32::EPSILON
++                && node.bounds.y + node.bounds.height <= dock.y + dock.height + f32::EPSILON
++        }));
++        assert!(balanced_clips(&ops));
++        panel.field.insert("abcdef");
++        ops.clear();
++        panel.draw_in(&mut backend, dock, &[], &mut ops).unwrap();
++        let search = rect(dock.x + dock.width - 108.0, dock.y + 40.0, 96.0, 28.0);
++        assert!(
++            ops.iter()
++                .any(|op| matches!(op, DrawOp::StrokeRounded(bounds, _, _, _) if *bounds == search))
++        );
++        assert!(ops.iter().any(|op| matches!(op, DrawOp::Text { origin, text, .. }
++            if text == "×" && *origin == Point { x: dock.x + dock.width - 26.0, y: dock.y + 9.0 })));
++        let glyph = backend.measure("a", 13.0).0;
++        panel
++            .pointer_with_backend(
++                &backend,
++                Point {
++                    x: panel.field_bounds.x + 8.0,
++                    y: panel.field_bounds.y + panel.field_bounds.height / 2.0,
++                },
++                false,
++            )
++            .unwrap();
++        assert_eq!(panel.field.selection(), (0, 0));
++        panel
++            .pointer_with_backend(
++                &backend,
++                Point {
++                    x: panel.field_bounds.x + 8.0 + glyph * 3.0,
++                    y: panel.field_bounds.y + panel.field_bounds.height / 2.0,
++                },
++                false,
++            )
++            .unwrap();
++        assert_eq!(panel.field.selection(), (3, 3));
++        panel
++            .pointer_with_backend(
++                &backend,
++                Point {
++                    x: panel.field_bounds.x + 8.0 + glyph * 5.0,
++                    y: panel.field_bounds.y + panel.field_bounds.height / 2.0,
++                },
++                true,
++            )
++            .unwrap();
++        assert_eq!(panel.field.selection(), (3, 5));
++        assert_eq!(
++            panel
++                .semantics()
++                .into_iter()
++                .find(|node| node.id.0 == 7001)
++                .unwrap()
++                .bounds,
++            search
++        );
++        panel.pointer(Point {
++            x: search.x + search.width - 1.0,
++            y: search.y + search.height / 2.0,
++        });
++        assert!(panel.take_search_requested());
++        panel.pointer(Point {
++            x: dock.x + dock.width - 5.0,
++            y: dock.y + 15.0,
++        });
++        assert!(!panel.open);
++    }
+ 
+     #[test]
+     fn accessibility_tabs_select_modes_and_provider_revisions_do_not_recycle() {
+diff --git a/crates/app/src/workspace.rs b/crates/app/src/workspace.rs
+index 0e95c8a..76a7642 100644
+--- a/crates/app/src/workspace.rs
++++ b/crates/app/src/workspace.rs
+@@ -636,6 +636,9 @@ pub struct Workspace {
+     pub find: crate::find::FindController,
+     pub search_panel: crate::search_panel::SearchPanel,
+     pub search_focus: bool,
++    /// Reserved by a platform shell that composes Search into a shared dock.
++    pub bottom_panel_height: f32,
++    pub external_search_panel: bool,
+     pending_replace: Option<bareline_search::service::ReplaceTicket>,
+     pending_paged_replace: Option<bareline_search::service::PagedReplaceTicket>,
+     pending_search_navigation: Option<PendingSearchNavigation>,
+@@ -814,6 +817,8 @@ impl Workspace {
+             find: crate::find::FindController::default(),
+             search_panel: Default::default(),
+             search_focus: false,
++            bottom_panel_height: 0.0,
++            external_search_panel: false,
+             pending_replace: None,
+             pending_paged_replace: None,
+             pending_search_navigation: None,
+@@ -2619,7 +2624,11 @@ impl Workspace {
+                     WorkspaceEditor::Paged(paged) => self.find.refresh_paged(paged.read_handle(), self.notify.clone()),
+                 }
+                 editor.viewport_mut().top_inset = if self.find.open { self.find.height() } else { 0.0 };
+-                editor.viewport_mut().bottom_inset = self.search_panel.height();
++                editor.viewport_mut().bottom_inset = if self.external_search_panel {
++                    self.bottom_panel_height
++                } else {
++                    self.search_panel.height()
++                };
+                 let language = self
+                     .files
+                     .get(active)
+@@ -2748,7 +2757,9 @@ impl Workspace {
+             .zip(self.titles())
+             .map(|(editor, title)| (editor.snapshot().clone(), title))
+             .collect();
+-        if let Some(caret) = self.search_panel.draw(renderer, width, height, &labels, ops)? {
++        if !self.external_search_panel
++            && let Some(caret) = self.search_panel.draw(renderer, width, height, &labels, ops)?
++        {
+             result = Ok(Some(caret));
+         }
+         if let Some(message) = &self.message {
+diff --git a/crates/file-io/src/session/mod.rs b/crates/file-io/src/session/mod.rs
+index c6e6ac7..ff6f5f8 100644
+--- a/crates/file-io/src/session/mod.rs
++++ b/crates/file-io/src/session/mod.rs
+@@ -88,6 +88,9 @@ pub struct SessionLayout {
+     pub active_tabs: [Option<u64>; 2],
+     pub sync_horizontal: bool,
+     pub sync_vertical: bool,
++    pub bottom_panel: Option<String>,
++    pub bottom_panel_collapsed: bool,
++    pub bottom_panel_height_bits: u32,
+ }
+ impl Default for SessionLayout {
+     fn default() -> Self {
+@@ -102,6 +105,9 @@ impl Default for SessionLayout {
+             active_tabs: [None, None],
+             sync_horizontal: false,
+             sync_vertical: false,
++            bottom_panel: None,
++            bottom_panel_collapsed: true,
++            bottom_panel_height_bits: 260.0f32.to_bits(),
+         }
+     }
+ }
+@@ -240,8 +246,16 @@ impl SessionManifest {
+     }
+     fn valid_layout(&self) -> bool {
+         let ratio = f64::from_bits(self.layout.ratio_bits);
++        let bottom_height = f32::from_bits(self.layout.bottom_panel_height_bits);
+         ratio.is_finite()
+             && (0.1..=0.9).contains(&ratio)
++            && bottom_height.is_finite()
++            && (140.0..=10_000.0).contains(&bottom_height)
++            && self
++                .layout
++                .bottom_panel
++                .as_deref()
++                .is_none_or(|panel| matches!(panel, "search" | "compare" | "output"))
+             && self.layout.active_pane <= u32::from(self.layout.split)
+             && self
+                 .tabs
+@@ -516,6 +530,23 @@ mod tests {
+         assert!(!decoded.diagnostics.summary().contains("must-not-be-opened"));
+     }
+     #[test]
++    fn bottom_panel_layout_round_trips_and_rejects_unbounded_state() {
++        let mut manifest = fixture();
++        manifest.layout.bottom_panel = Some("compare".into());
++        manifest.layout.bottom_panel_collapsed = false;
++        manifest.layout.bottom_panel_height_bits = 344.0f32.to_bits();
++        let decoded: SessionManifest = serde_json::from_slice(&serde_json::to_vec(&manifest).unwrap()).unwrap();
++        decoded.validate().unwrap();
++        assert_eq!(decoded.layout.bottom_panel.as_deref(), Some("compare"));
++        assert_eq!(f32::from_bits(decoded.layout.bottom_panel_height_bits), 344.0);
++
++        manifest.layout.bottom_panel = Some("unknown".into());
++        assert!(manifest.validate().is_err());
++        manifest.layout.bottom_panel = Some("search".into());
++        manifest.layout.bottom_panel_height_bits = f32::NAN.to_bits();
++        assert!(manifest.validate().is_err());
++    }
++    #[test]
+     fn window_placement_round_trips_and_absent_window_decodes() {
+         // P4-7 added `SessionManifest.window`; the salvage decoder must accept and
+         // restore it (regression: an encoded `"window"` key was rejected as unknown,
+diff --git a/docs/implementation/2026-09-12-audit-implementation/PR-U11.md b/docs/implementation/2026-09-12-audit-implementation/PR-U11.md
+new file mode 100644
+index 0000000..cf094af
+--- /dev/null
++++ b/docs/implementation/2026-09-12-audit-implementation/PR-U11.md
+@@ -0,0 +1,47 @@
++# PR-U11 — Shared bottom dock ownership
++
++## Baseline
++
++- Base commit: `4f46208bbafffd5a3195a4a4f48eb6f2813f2ee1`.
++- Dependency: PR-U12 Find option tooltips, PR-U09 document-bound Find sessions, PR-U08 split providers, and PR-U07 Search accessibility ownership.
++- Worktree: `audit-implementation-worktrees/modal`.
++
++## Scope
++
++Unify Search, Compare controls, and Output under one bottom dock with one selected surface, height, splitter, focus owner, and session representation. Compare editor panes remain in the main editor area and both copy directions remain available.
++
++## Decisions
++
++- `DockRuntime` is the sole owner of the selected Search, Compare, or Output surface, collapsed state, bounded height, splitter drag, tab focus, and busy/unread badges.
++- Search keeps its Find/Replace/Files semantics and document-bound state but paints inside the dock body. Compare retains both editor panes in the main view and puts source, navigation, status, options, and both hunk copy directions in the dock. Output retains its process rows while using the same body.
++- All three tabs have stable semantic identities. Unavailable tabs remain discoverable and disabled; only the selected surface contributes child semantics or text ownership.
++- Session layout stores the active panel, collapsed state, and finite bounded logical height. Restore asks the dock to reconcile that preference with the surfaces whose underlying state actually survived.
++- Dock header focus, selected-surface control focus, and editor focus are distinct owners. Existing Search and Output user commands request and reveal their retained surface, and hidden completion is marked unread.
++- Search owns and clips its exact supplied body, Output translates window input once into its painted editor-local body, and Compare uses a compact three-row control layout when height or width is constrained.
++- Search translates text hit testing with the same nonzero dock origin used for paint and semantics. Every raw Search, Compare, and Output body click transfers focus from the dock header to the clicked child; Shift+Tab from the header returns to the editor.
++
++## Changed files
++
++- `apps/bareline/src/windows_app.rs`
++- `apps/bareline/src/windows_app/{accessibility,compare,dock,macros,session,views}.rs`
++- `crates/app/src/{macros,search_panel,workspace}.rs`
++- `crates/file-io/src/session/mod.rs`
++- This implementation note.
++
++## Focused checks
++
++- `cargo test -p bareline windows_app::dock::tests -- --nocapture`
++- `cargo test -p bareline-app search_panel::tests::external_dock_bounds_own_search_hit_and_semantic_geometry -- --exact`
++- `cargo test -p bareline-file-io session::tests::bottom_panel_layout_round_trips_and_rejects_unbounded_state -- --exact`
++- `cargo test -p bareline windows_app::accessibility::tests::bottom_dock_exposes_one_selected_surface_and_retires_background_search_owner -- --exact`
++- `cargo test -p bareline windows_app::accessibility::tests::compare_dock_exposes_both_current_hunk_copy_directions -- --exact`
++- `cargo test -p bareline windows_app::accessibility::tests::shared_body_focus_transfer_retires_header_and_shift_tab_returns_to_editor -- --exact`
++- `cargo test -p bareline windows_app::compare::tests::compact_dock_keeps_merge_directions_and_close_inside_body -- --exact`
++- `cargo test -p bareline windows_app::macros::tests::dock_output_keeps_window_hit_bounds_and_local_controller_coordinates -- --exact`
++
++Commands are recorded for the root integration checkout. This worker did not run Cargo or native desktop control.
++
++## Unresolved qualifications
++
++- Root-owned contained compilation and the combined U07/U08/U11 semantic golden review remain pending.
++- Native high-DPI splitter, focus traversal, process-output completion, and compare-copy qualification remain pending on the integrated build.

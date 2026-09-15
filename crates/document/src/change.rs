@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Compact acknowledged transitions. No document bytes are retained here.
-use crate::{
-    Budget, BudgetClaim, ContentStateId, Error, Revision, TextOffset, history::OwnedEdit, tree,
-};
+use crate::{Budget, BudgetClaim, ContentStateId, Error, Revision, TextOffset, history::OwnedEdit, tree};
 use std::{ops::Range, sync::Arc};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ChangeDirection {
@@ -86,15 +84,11 @@ impl AppliedChange {
         }
         let bytes = count
             .checked_mul(std::mem::size_of::<CompactEdit>())
-            .and_then(|n| {
-                n.checked_add(std::mem::size_of::<Self>() + 2 * std::mem::size_of::<usize>())
-            })
+            .and_then(|n| n.checked_add(std::mem::size_of::<Self>() + 2 * std::mem::size_of::<usize>()))
             .ok_or(Error::BudgetExceeded)?;
         let claim = budget.claim(bytes)?;
         let mut output = Vec::new();
-        output
-            .try_reserve_exact(count)
-            .map_err(|_| Error::BudgetExceeded)?;
+        output.try_reserve_exact(count).map_err(|_| Error::BudgetExceeded)?;
         for edit in edits {
             if output.len() == count {
                 return Err(Error::BudgetExceeded);
@@ -124,8 +118,7 @@ mod tests {
     #[test]
     fn receipts_use_actual_ranges_and_reverse_history_without_text() {
         let bytes = Budget::new(1024 * 1024);
-        let mut document =
-            Document::from_utf8("abcdef", bytes.clone(), Budget::new(1024 * 1024)).unwrap();
+        let mut document = Document::from_utf8("abcdef", bytes.clone(), Budget::new(1024 * 1024)).unwrap();
         let before = document.snapshot();
         document
             .apply(EditTransaction {
@@ -233,15 +226,9 @@ mod tests {
         let receipt = undone.applied_change().unwrap();
         assert_eq!(receipt.direction, ChangeDirection::Undo);
         assert_eq!(receipt.edits().len(), 10_000);
-        assert!(
-            receipt
-                .edits()
-                .iter()
-                .enumerate()
-                .all(|(offset, edit)| edit.before
-                    == (TextOffset(offset * 2)..TextOffset(offset * 2 + 1))
-                    && edit.inserted_len == 0)
-        );
+        assert!(receipt.edits().iter().enumerate().all(|(offset, edit)| edit.before
+            == (TextOffset(offset * 2)..TextOffset(offset * 2 + 1))
+            && edit.inserted_len == 0));
         assert_eq!(undone.content_state, before.content_state);
         assert_eq!(undone.len(), 10_000);
     }

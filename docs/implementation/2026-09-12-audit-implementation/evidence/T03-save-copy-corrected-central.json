@@ -1,0 +1,18 @@
+{
+  "arguments": [
+    "test",
+    "-p",
+    "bareline-app",
+    "--lib",
+    "workspace::tests::save_copy_and_restore_closed_preserve_document_identity_and_history",
+    "--offline",
+    "--locked",
+    "--",
+    "--exact"
+  ],
+  "completed_utc": "2026-09-12T06:33:28.2192677Z",
+  "integration_snapshot": "7b178da5c4b9d01fcce24653f45c0c4a73352d3d",
+  "exit_code": 101,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\T03-save-copy-corrected-central.log"
+}

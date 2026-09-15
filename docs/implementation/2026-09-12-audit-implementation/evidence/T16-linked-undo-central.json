@@ -1,0 +1,18 @@
+{
+  "arguments": [
+    "test",
+    "-p",
+    "bareline-editor-surface",
+    "--lib",
+    "paged_transfer::tests::opaque_cross_document_move_restart_and_linked_undo_preserve_raw_bytes",
+    "--offline",
+    "--locked",
+    "--",
+    "--nocapture"
+  ],
+  "completed_utc": "2026-09-12T12:26:30.9195686Z",
+  "integration_snapshot": "05fecd863427da7a6936e42325c3f801b80affbd",
+  "exit_code": 0,
+  "zero_tests": true,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\T16-linked-undo-central.log"
+}

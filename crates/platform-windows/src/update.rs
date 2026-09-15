@@ -49,7 +49,7 @@ pub fn download_https(
     path: &str,
     maximum_bytes: u64,
     cancel: &AtomicBool,
-    output: &mut impl Write,
+    output: &mut (impl Write + ?Sized),
 ) -> Result<u64, UpdateError> {
     if host.is_empty()
         || !host
@@ -87,8 +87,7 @@ pub fn download_https(
             std::ptr::null(),
             WINHTTP_FLAG_SECURE,
         ))?;
-        let disabled =
-            WINHTTP_DISABLE_REDIRECTS | WINHTTP_DISABLE_COOKIES | WINHTTP_DISABLE_AUTHENTICATION;
+        let disabled = WINHTTP_DISABLE_REDIRECTS | WINHTTP_DISABLE_COOKIES | WINHTTP_DISABLE_AUTHENTICATION;
         WinHttpSetOption(
             Some(request.0),
             WINHTTP_OPTION_DISABLE_FEATURE,
@@ -96,8 +95,7 @@ pub fn download_https(
         )
         .map_err(|_| UpdateError::Network)?;
         WinHttpSendRequest(request.0, None, None, 0, 0, 0).map_err(|_| UpdateError::Network)?;
-        WinHttpReceiveResponse(request.0, std::ptr::null_mut())
-            .map_err(|_| UpdateError::Network)?;
+        WinHttpReceiveResponse(request.0, std::ptr::null_mut()).map_err(|_| UpdateError::Network)?;
         let mut status = 0_u32;
         let mut size = 4_u32;
         WinHttpQueryHeaders(
@@ -122,19 +120,12 @@ pub fn download_https(
                 return Err(UpdateError::Limit);
             }
             let mut count = 0;
-            WinHttpReadData(
-                request.0,
-                chunk.as_mut_ptr().cast(),
-                chunk.len() as u32,
-                &mut count,
-            )
-            .map_err(|_| UpdateError::Network)?;
+            WinHttpReadData(request.0, chunk.as_mut_ptr().cast(), chunk.len() as u32, &mut count)
+                .map_err(|_| UpdateError::Network)?;
             if count == 0 {
                 return Ok(total);
             }
-            total = total
-                .checked_add(u64::from(count))
-                .ok_or(UpdateError::Limit)?;
+            total = total.checked_add(u64::from(count)).ok_or(UpdateError::Limit)?;
             if total > maximum_bytes {
                 return Err(UpdateError::Limit);
             }
@@ -148,10 +139,7 @@ pub fn download_https(
 /// Authenticode verifies the same held handle used for hashing. No online revocation
 /// requests: missing cached trust/revocation evidence fails closed. Pin DER certificate
 /// SHA256 from independent owner trust policy, not a display-name string.
-pub fn verify_authenticode(
-    file: &File,
-    publisher_certificate_sha256: &[u8; 32],
-) -> Result<(), UpdateError> {
+pub fn verify_authenticode(file: &File, publisher_certificate_sha256: &[u8; 32]) -> Result<(), UpdateError> {
     unsafe {
         let mut info = WINTRUST_FILE_INFO {
             cbStruct: std::mem::size_of::<WINTRUST_FILE_INFO>() as u32,
@@ -190,10 +178,7 @@ pub fn verify_authenticode(
                         Err(UpdateError::Signature)
                     } else {
                         let cert = &*(*certificate).pCert;
-                        let bytes = std::slice::from_raw_parts(
-                            cert.pbCertEncoded,
-                            cert.cbCertEncoded as usize,
-                        );
+                        let bytes = std::slice::from_raw_parts(cert.pbCertEncoded, cert.cbCertEncoded as usize);
                         if Sha256::digest(bytes).as_slice() == publisher_certificate_sha256 {
                             Ok(())
                         } else {
@@ -255,14 +240,11 @@ fn open_update_file_mode(path: &std::path::Path, rename: bool) -> std::io::Resul
         .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT.0)
         .open(path)?;
     let mut info = BY_HANDLE_FILE_INFORMATION::default();
-    unsafe { GetFileInformationByHandle(HANDLE(file.as_raw_handle()), &mut info) }
-        .map_err(std::io::Error::other)?;
+    unsafe { GetFileInformationByHandle(HANDLE(file.as_raw_handle()), &mut info) }.map_err(std::io::Error::other)?;
     if info.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT.0 | FILE_ATTRIBUTE_DIRECTORY.0) != 0
         || info.nNumberOfLinks != 1
     {
-        return Err(std::io::Error::other(
-            "update file must be a regular unlinked file",
-        ));
+        return Err(std::io::Error::other("update file must be a regular unlinked file"));
     }
     Ok(file)
 }
@@ -272,18 +254,16 @@ fn open_update_file_mode(path: &std::path::Path, rename: bool) -> std::io::Resul
 pub fn rename_update_handle(file: &File, destination: &std::path::Path) -> std::io::Result<()> {
     rename_update_handle_inner(file, destination, false)
 }
-fn rename_update_handle_inner(
-    file: &File,
-    destination: &std::path::Path,
-    replace: bool,
-) -> std::io::Result<()> {
+fn rename_update_handle_inner(file: &File, destination: &std::path::Path, replace: bool) -> std::io::Result<()> {
     use std::os::windows::ffi::OsStrExt;
     use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
     use windows::Win32::Storage::FileSystem::*;
     if !destination.is_absolute() {
         return Err(std::io::Error::other("absolute destination required"));
     }
-    let parent = destination.parent().ok_or_else(|| std::io::Error::other("destination parent required"))?;
+    let parent = destination
+        .parent()
+        .ok_or_else(|| std::io::Error::other("destination parent required"))?;
     let directory = std::fs::OpenOptions::new()
         .access_mode(FILE_READ_ATTRIBUTES.0)
         .share_mode(FILE_SHARE_READ.0 | FILE_SHARE_WRITE.0)
@@ -292,7 +272,11 @@ fn rename_update_handle_inner(
     if directory.metadata()?.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0 {
         return Err(std::io::Error::other("reparse destination parent refused"));
     }
-    let name: Vec<u16> = destination.file_name().ok_or_else(|| std::io::Error::other("destination filename required"))?.encode_wide().collect();
+    let name: Vec<u16> = destination
+        .file_name()
+        .ok_or_else(|| std::io::Error::other("destination filename required"))?
+        .encode_wide()
+        .collect();
     if name.is_empty() || name.contains(&0) || name.len() > 32767 {
         return Err(std::io::Error::other("invalid destination"));
     }
@@ -396,9 +380,7 @@ pub fn create_private_stage(parent: &std::path::Path) -> std::io::Result<std::pa
     use windows::core::PWSTR;
     if !matches!(parent.components().next(), Some(std::path::Component::Prefix(prefix)) if matches!(prefix.kind(), std::path::Prefix::Disk(_) | std::path::Prefix::VerbatimDisk(_)))
     {
-        return Err(std::io::Error::other(
-            "absolute local stage parent required",
-        ));
+        return Err(std::io::Error::other("absolute local stage parent required"));
     }
     for ancestor in parent.ancestors() {
         use std::os::windows::fs::MetadataExt;
@@ -409,8 +391,7 @@ pub fn create_private_stage(parent: &std::path::Path) -> std::io::Result<std::pa
     }
     unsafe {
         let mut token = HANDLE::default();
-        OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token)
-            .map_err(std::io::Error::other)?;
+        OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token).map_err(std::io::Error::other)?;
         let result = (|| {
             let mut needed = 0;
             let _ = GetTokenInformation(token, TokenUser, None, 0, &mut needed);
@@ -418,14 +399,8 @@ pub fn create_private_stage(parent: &std::path::Path) -> std::io::Result<std::pa
                 return Err(std::io::Error::other("token size"));
             }
             let mut buffer = vec![0usize; (needed as usize).div_ceil(std::mem::size_of::<usize>())];
-            GetTokenInformation(
-                token,
-                TokenUser,
-                Some(buffer.as_mut_ptr().cast()),
-                needed,
-                &mut needed,
-            )
-            .map_err(std::io::Error::other)?;
+            GetTokenInformation(token, TokenUser, Some(buffer.as_mut_ptr().cast()), needed, &mut needed)
+                .map_err(std::io::Error::other)?;
             let user = &*buffer.as_ptr().cast::<TOKEN_USER>();
             let mut sid = PWSTR::null();
             ConvertSidToStringSidW(user.User.Sid, &mut sid).map_err(std::io::Error::other)?;
@@ -457,8 +432,7 @@ pub fn create_private_stage(parent: &std::path::Path) -> std::io::Result<std::pa
                     let suffix: String = random.iter().map(|b| format!("{b:02x}")).collect();
                     let path = parent.join(format!("bareline-update-{suffix}"));
                     let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
-                    CreateDirectoryW(PCWSTR(wide.as_ptr()), Some(&attributes))
-                        .map_err(std::io::Error::other)?;
+                    CreateDirectoryW(PCWSTR(wide.as_ptr()), Some(&attributes)).map_err(std::io::Error::other)?;
                     Ok(path)
                 });
             let _ = LocalFree(Some(HLOCAL(descriptor.0)));
@@ -481,59 +455,135 @@ pub use runtime::*;
 pub struct ResolvedReleaseAuthority {
     pub release_public_key: String,
     pub publisher: String,
-    pub certificate: [u8;32],
+    pub certificate: [u8; 32],
     pub minimum_metadata_version: u64,
     pub catalog_public_key: Option<String>,
 }
 /// Optional offline root policy. A deployment opting in must supply a signed,
 /// nonexpired authority file; missing or revoked authority never falls back.
-pub fn resolve_release_authority(root: &std::path::Path, embedded_key: &str, embedded_publisher: &str, embedded_floor: u64, now: u64) -> std::io::Result<ResolvedReleaseAuthority> {
+pub fn resolve_release_authority(
+    root: &std::path::Path,
+    embedded_key: &str,
+    embedded_publisher: &str,
+    embedded_floor: u64,
+    now: u64,
+) -> std::io::Result<ResolvedReleaseAuthority> {
     use std::io::{Read, Write};
-    let mut key = embedded_key.to_owned(); let mut publisher = embedded_publisher.to_owned(); let mut floor = embedded_floor; let mut catalog_public_key=None;
+    let mut key = embedded_key.to_owned();
+    let mut publisher = embedded_publisher.to_owned();
+    let mut floor = embedded_floor;
+    let mut catalog_public_key = None;
     if let Some(root_key) = option_env!("BARELINE_OFFLINE_ROOT_PUBLIC_KEY") {
         let _lock = lock_update_installation(root)?;
-        let read = |name: &str, limit: u64| -> std::io::Result<Vec<u8>> { let mut b=Vec::new(); open_update_read_file(&root.join(name))?.take(limit+1).read_to_end(&mut b)?; if b.len() as u64 > limit {return Err(std::io::Error::other("authority limit"));} Ok(b) };
-        let mut root_floor = option_env!("BARELINE_ROOT_VERSION_FLOOR").ok_or_else(|| std::io::Error::other("root version floor missing"))?.parse::<u64>().map_err(std::io::Error::other)?;
-        let mut active_root=root_key.to_owned();
-        let mut lineage=vec![active_root.clone()];
+        let read = |name: &str, limit: u64| -> std::io::Result<Vec<u8>> {
+            let mut b = Vec::new();
+            open_update_read_file(&root.join(name))?
+                .take(limit + 1)
+                .read_to_end(&mut b)?;
+            if b.len() as u64 > limit {
+                return Err(std::io::Error::other("authority limit"));
+            }
+            Ok(b)
+        };
+        let mut root_floor = option_env!("BARELINE_ROOT_VERSION_FLOOR")
+            .ok_or_else(|| std::io::Error::other("root version floor missing"))?
+            .parse::<u64>()
+            .map_err(std::io::Error::other)?;
+        let mut active_root = root_key.to_owned();
+        let mut lineage = vec![active_root.clone()];
         if root.join("bareline.root-transitions.json").try_exists()? {
-            let (next,version,keys)=bareline_distribution::trust::verify_root_chain(&read("bareline.root-transitions.json",262144)?,root_key,now).map_err(|e|std::io::Error::other(format!("root transition: {e:?}")))?;
-            active_root=next; lineage=keys; root_floor=root_floor.max(version);
+            let (next, version, keys) = bareline_distribution::trust::verify_root_chain(
+                &read("bareline.root-transitions.json", 262144)?,
+                root_key,
+                now,
+            )
+            .map_err(|e| std::io::Error::other(format!("root transition: {e:?}")))?;
+            active_root = next;
+            lineage = keys;
+            root_floor = root_floor.max(version);
         }
-        let key_ledger=root.join("bareline.root-keys");
-        let mut accepted_key=None;
-        if key_ledger.try_exists()? { let bytes=read("bareline.root-keys",65536)?; for old in std::str::from_utf8(&bytes).map_err(std::io::Error::other)?.lines() { if !lineage.iter().any(|k|k==old) {return Err(std::io::Error::other("root lineage rollback"));} accepted_key=Some(old.to_owned()); } }
+        let key_ledger = root.join("bareline.root-keys");
+        let mut accepted_key = None;
+        if key_ledger.try_exists()? {
+            let bytes = read("bareline.root-keys", 65536)?;
+            for old in std::str::from_utf8(&bytes).map_err(std::io::Error::other)?.lines() {
+                if !lineage.iter().any(|k| k == old) {
+                    return Err(std::io::Error::other("root lineage rollback"));
+                }
+                accepted_key = Some(old.to_owned());
+            }
+        }
         let ledger = root.join("bareline.root-versions");
-        if ledger.try_exists()? { let bytes=read("bareline.root-versions",65536)?; for line in std::str::from_utf8(&bytes).map_err(std::io::Error::other)?.lines() { root_floor=root_floor.max(line.parse::<u64>().map_err(std::io::Error::other)?); } }
-        let bytes=read("bareline.release-authority.json",16384)?; let signature=read("bareline.release-authority.minisig",8192)?;
-        let authority=bareline_distribution::trust::verify_authority(&bytes,std::str::from_utf8(&signature).map_err(std::io::Error::other)?,&active_root,root_floor,now).map_err(|e|std::io::Error::other(format!("release authority: {e:?}")))?;
-        if accepted_key.as_deref()!=Some(active_root.as_str()) {
-            use std::os::windows::fs::{OpenOptionsExt,MetadataExt};
-            let mut out=std::fs::OpenOptions::new().create(true).append(true).share_mode(0).custom_flags(0x00200000).open(&key_ledger)?;
-            if out.metadata()?.file_attributes() & 0x400 != 0 {return Err(std::io::Error::other("reparse root key ledger"));}
-            writeln!(out,"{active_root}")?; out.sync_all()?;
+        if ledger.try_exists()? {
+            let bytes = read("bareline.root-versions", 65536)?;
+            for line in std::str::from_utf8(&bytes).map_err(std::io::Error::other)?.lines() {
+                root_floor = root_floor.max(line.parse::<u64>().map_err(std::io::Error::other)?);
+            }
+        }
+        let bytes = read("bareline.release-authority.json", 16384)?;
+        let signature = read("bareline.release-authority.minisig", 8192)?;
+        let authority = bareline_distribution::trust::verify_authority(
+            &bytes,
+            std::str::from_utf8(&signature).map_err(std::io::Error::other)?,
+            &active_root,
+            root_floor,
+            now,
+        )
+        .map_err(|e| std::io::Error::other(format!("release authority: {e:?}")))?;
+        if accepted_key.as_deref() != Some(active_root.as_str()) {
+            use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+            let mut out = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .share_mode(0)
+                .custom_flags(0x00200000)
+                .open(&key_ledger)?;
+            if out.metadata()?.file_attributes() & 0x400 != 0 {
+                return Err(std::io::Error::other("reparse root key ledger"));
+            }
+            writeln!(out, "{active_root}")?;
+            out.sync_all()?;
         }
         if authority.root_version > root_floor || !ledger.exists() {
             use std::os::windows::fs::OpenOptionsExt;
-            let mut out=std::fs::OpenOptions::new().create(true).append(true).share_mode(0).custom_flags(0x00200000).open(&ledger)?;
+            let mut out = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .share_mode(0)
+                .custom_flags(0x00200000)
+                .open(&ledger)?;
             use std::os::windows::fs::MetadataExt;
-            if out.metadata()?.file_attributes() & 0x400 != 0 {return Err(std::io::Error::other("reparse root ledger"));}
-            writeln!(out,"{}",authority.root_version)?; out.sync_all()?;
+            if out.metadata()?.file_attributes() & 0x400 != 0 {
+                return Err(std::io::Error::other("reparse root ledger"));
+            }
+            writeln!(out, "{}", authority.root_version)?;
+            out.sync_all()?;
         }
-        key=authority.release_public_key; publisher=authority.publisher_certificate_sha256; floor=floor.max(authority.minimum_metadata_version); catalog_public_key=Some(authority.catalog_public_key);
+        key = authority.release_public_key;
+        publisher = authority.publisher_certificate_sha256;
+        floor = floor.max(authority.minimum_metadata_version);
+        catalog_public_key = Some(authority.catalog_public_key);
     }
-    if publisher.len()!=64 || !publisher.is_ascii() { return Err(std::io::Error::other("publisher fingerprint")); }
-    let mut certificate=[0;32]; for (i,b) in certificate.iter_mut().enumerate() { *b=u8::from_str_radix(&publisher[i*2..i*2+2],16).map_err(std::io::Error::other)?; }
-    Ok(ResolvedReleaseAuthority { release_public_key:key,publisher,certificate,minimum_metadata_version:floor,catalog_public_key })
+    if publisher.len() != 64 || !publisher.is_ascii() {
+        return Err(std::io::Error::other("publisher fingerprint"));
+    }
+    let mut certificate = [0; 32];
+    for (i, b) in certificate.iter_mut().enumerate() {
+        *b = u8::from_str_radix(&publisher[i * 2..i * 2 + 2], 16).map_err(std::io::Error::other)?;
+    }
+    Ok(ResolvedReleaseAuthority {
+        release_public_key: key,
+        publisher,
+        certificate,
+        minimum_metadata_version: floor,
+        catalog_public_key,
+    })
 }
 
 /// Transfer authenticated bytes to fixed helper inputs, never trusting metadata paths.
 /// Each file is create-new and flushed; the manifest is committed last. The helper
 /// repeats signature, digest and publisher checks, so interrupted transfer cannot apply.
-pub fn transfer_update(
-    mut prepared: PreparedUpdate,
-    root: &std::path::Path,
-) -> std::io::Result<()> {
+pub fn transfer_update(mut prepared: PreparedUpdate, root: &std::path::Path) -> std::io::Result<()> {
     use std::io::{Seek, SeekFrom, Write};
     use std::os::windows::fs::OpenOptionsExt;
     validate_install_root(root)?;
@@ -556,10 +606,7 @@ pub fn transfer_update(
     std::io::copy(&mut prepared.file, &mut package)?;
     package.sync_all()?;
     drop(package);
-    write_new(
-        "bareline.update.minisig",
-        prepared.signature_text.as_bytes(),
-    )?;
+    write_new("bareline.update.minisig", prepared.signature_text.as_bytes())?;
     write_new("bareline.update.json", &prepared.metadata_bytes)?;
     drop(prepared.file);
     // Delete only the known file in the private directory created by our worker.
@@ -573,9 +620,7 @@ pub fn validate_install_root(root: &std::path::Path) -> std::io::Result<()> {
     if !matches!(root.components().next(), Some(std::path::Component::Prefix(prefix)) if matches!(prefix.kind(), std::path::Prefix::Disk(_)))
         || !root.is_absolute()
     {
-        return Err(std::io::Error::other(
-            "absolute local installation root required",
-        ));
+        return Err(std::io::Error::other("absolute local installation root required"));
     }
     for ancestor in root.ancestors() {
         if std::fs::symlink_metadata(ancestor)?.file_attributes() & 0x400 != 0 {
@@ -641,17 +686,12 @@ pub fn discard_pending_update(root: &std::path::Path) -> std::io::Result<()> {
 }
 
 /// Spawn an exact publisher-verified adjacent helper, without a console window.
-pub fn launch_update_helper(
-    root: &std::path::Path,
-    publisher: &[u8; 32],
-    acknowledge: bool,
-) -> std::io::Result<()> {
+pub fn launch_update_helper(root: &std::path::Path, publisher: &[u8; 32], acknowledge: bool) -> std::io::Result<()> {
     use std::os::windows::process::CommandExt;
     validate_install_root(root)?;
     let path = root.join("bareline-update-helper.exe");
     let held = open_update_read_file(&path)?;
-    verify_authenticode(&held, publisher)
-        .map_err(|e| std::io::Error::other(format!("helper publisher: {e:?}")))?;
+    verify_authenticode(&held, publisher).map_err(|e| std::io::Error::other(format!("helper publisher: {e:?}")))?;
     let mut command = std::process::Command::new(&path);
     command.creation_flags(0x08000000).current_dir(root);
     {
@@ -664,32 +704,19 @@ pub fn launch_update_helper(
         let nonce: String = random.iter().map(|b| format!("{b:02x}")).collect();
         let name = format!("Local\\Bareline.UpdateReady.{}.{nonce}", std::process::id());
         let wide: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
-        let event = unsafe { CreateEventW(None, true, false, PCWSTR(wide.as_ptr())) }
-            .map_err(std::io::Error::other)?;
+        let event = unsafe { CreateEventW(None, true, false, PCWSTR(wide.as_ptr())) }.map_err(std::io::Error::other)?;
         let result = (|| {
             command.args([
-                if acknowledge {
-                    "--acknowledge"
-                } else {
-                    "--apply"
-                },
-                if acknowledge {
-                    "--healthy-pid"
-                } else {
-                    "--wait-pid"
-                },
+                if acknowledge { "--acknowledge" } else { "--apply" },
+                if acknowledge { "--healthy-pid" } else { "--wait-pid" },
                 &std::process::id().to_string(),
                 "--ready-event",
                 &name,
             ]);
             command.spawn()?;
             // Do not let this process disappear before the helper holds its identity.
-            if unsafe { WaitForSingleObject(event, 10_000) }
-                != windows::Win32::Foundation::WAIT_OBJECT_0
-            {
-                return Err(std::io::Error::other(
-                    "update helper did not acknowledge parent",
-                ));
+            if unsafe { WaitForSingleObject(event, 10_000) } != windows::Win32::Foundation::WAIT_OBJECT_0 {
+                return Err(std::io::Error::other("update helper did not acknowledge parent"));
             }
             Ok(())
         })();
@@ -707,16 +734,14 @@ impl Drop for HealthyUpdateProcess {
 }
 /// Bind a health acknowledgement to the live image that produced the ready frame.
 /// A rollback/retained executable in the same directory cannot acknowledge the target.
-pub fn hold_healthy_update_process(
-    pid: u32,
-    target: &std::path::Path,
-) -> std::io::Result<HealthyUpdateProcess> {
+pub fn hold_healthy_update_process(pid: u32, target: &std::path::Path) -> std::io::Result<HealthyUpdateProcess> {
     use windows::Win32::System::Threading::*;
     use windows::core::PWSTR;
     unsafe {
         use windows::Win32::System::Diagnostics::ToolHelp::*;
         let snapshot = HealthyUpdateProcess(
-            CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0).map_err(std::io::Error::other)?, None,
+            CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0).map_err(std::io::Error::other)?,
+            None,
         );
         let mut entry = PROCESSENTRY32W {
             dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
@@ -733,25 +758,16 @@ pub fn hold_healthy_update_process(
             return Err(std::io::Error::other("healthy PID is not helper's parent"));
         }
         let mut process = HealthyUpdateProcess(
-            OpenProcess(
-                PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
-                false,
-                pid,
-            )
-            .map_err(std::io::Error::other)?, None,
+            OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE, false, pid)
+                .map_err(std::io::Error::other)?,
+            None,
         );
         let mut buffer = vec![0u16; 32768];
         let mut length = buffer.len() as u32;
-        QueryFullProcessImageNameW(
-            process.0,
-            PROCESS_NAME_WIN32,
-            PWSTR(buffer.as_mut_ptr()),
-            &mut length,
-        )
-        .map_err(std::io::Error::other)?;
+        QueryFullProcessImageNameW(process.0, PROCESS_NAME_WIN32, PWSTR(buffer.as_mut_ptr()), &mut length)
+            .map_err(std::io::Error::other)?;
         use std::os::windows::ffi::OsStringExt;
-        let actual =
-            std::path::PathBuf::from(std::ffi::OsString::from_wide(&buffer[..length as usize]));
+        let actual = std::path::PathBuf::from(std::ffi::OsString::from_wide(&buffer[..length as usize]));
         #[cfg(test)]
         if std::env::var_os("BARELINE_TEST_HEALTH_PROBE").is_some() {
             eprintln!("health fixture paths: observed={actual:?}, expected={target:?}");
@@ -763,7 +779,8 @@ pub fn hold_healthy_update_process(
         let expected = open_update_read_file(target)?;
         let observed_id = crate::files::WindowsFileSystem.identity(&observed)?;
         let expected_id = crate::files::WindowsFileSystem.identity(&expected)?;
-        if observed_id.volume != expected_id.volume || observed_id.file != expected_id.file
+        if observed_id.volume != expected_id.volume
+            || observed_id.file != expected_id.file
             || WaitForSingleObject(process.0, 0) != windows::Win32::Foundation::WAIT_TIMEOUT
         {
             return Err(std::io::Error::other(
@@ -786,41 +803,27 @@ pub fn signal_update_parent_ready(pid: u32, ready_event: &str) -> std::io::Resul
     let name: Vec<u16> = ready_event.encode_utf16().chain(Some(0)).collect();
     unsafe {
         let event = HealthyUpdateProcess(
-            OpenEventW(EVENT_MODIFY_STATE, false, PCWSTR(name.as_ptr()))
-                .map_err(std::io::Error::other)?, None,
+            OpenEventW(EVENT_MODIFY_STATE, false, PCWSTR(name.as_ptr())).map_err(std::io::Error::other)?,
+            None,
         );
         SetEvent(event.0).map_err(std::io::Error::other)
     }
 }
 
 /// Hold the parent process identity before waiting; PID reuse cannot redirect the wait.
-pub fn wait_for_update_parent(
-    pid: u32,
-    target: &std::path::Path,
-    ready_event: &str,
-) -> std::io::Result<()> {
+pub fn wait_for_update_parent(pid: u32, target: &std::path::Path, ready_event: &str) -> std::io::Result<()> {
     use windows::Win32::System::Threading::*;
     use windows::core::PWSTR;
     unsafe {
-        let process = OpenProcess(
-            PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
-            false,
-            pid,
-        )
-        .map_err(std::io::Error::other)?;
+        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE, false, pid)
+            .map_err(std::io::Error::other)?;
         let result = (|| {
             let mut buffer = vec![0u16; 32768];
             let mut length = buffer.len() as u32;
-            QueryFullProcessImageNameW(
-                process,
-                PROCESS_NAME_WIN32,
-                PWSTR(buffer.as_mut_ptr()),
-                &mut length,
-            )
-            .map_err(std::io::Error::other)?;
+            QueryFullProcessImageNameW(process, PROCESS_NAME_WIN32, PWSTR(buffer.as_mut_ptr()), &mut length)
+                .map_err(std::io::Error::other)?;
             use std::os::windows::ffi::OsStringExt;
-            let actual =
-                std::path::PathBuf::from(std::ffi::OsString::from_wide(&buffer[..length as usize]));
+            let actual = std::path::PathBuf::from(std::ffi::OsString::from_wide(&buffer[..length as usize]));
             if actual != target {
                 return Err(std::io::Error::other("update parent image differs"));
             }
@@ -831,15 +834,12 @@ pub fn wait_for_update_parent(
                 return Err(std::io::Error::other("invalid ready event"));
             }
             let name: Vec<u16> = ready_event.encode_utf16().chain(Some(0)).collect();
-            let event = OpenEventW(EVENT_MODIFY_STATE, false, PCWSTR(name.as_ptr()))
-                .map_err(std::io::Error::other)?;
+            let event = OpenEventW(EVENT_MODIFY_STATE, false, PCWSTR(name.as_ptr())).map_err(std::io::Error::other)?;
             let signaled = SetEvent(event).map_err(std::io::Error::other);
             let _ = windows::Win32::Foundation::CloseHandle(event);
             signaled?;
             if WaitForSingleObject(process, 120_000) != windows::Win32::Foundation::WAIT_OBJECT_0 {
-                return Err(std::io::Error::other(
-                    "editor did not exit within update timeout",
-                ));
+                return Err(std::io::Error::other("editor did not exit within update timeout"));
             }
             Ok(())
         })();
@@ -862,19 +862,59 @@ pub fn fetch_verified_update(
     stage_parent: &std::path::Path,
     cancel: &AtomicBool,
 ) -> Result<PreparedUpdate, UpdateError> {
+    fetch_verified_update_with(
+        manifest_path,
+        signature_path,
+        artifact_path,
+        policy,
+        now_unix,
+        publisher,
+        stage_parent,
+        cancel,
+        |path, maximum, output| download_https(host, path, maximum, cancel, output),
+        verify_authenticode,
+    )
+}
+
+/// Shared verification pipeline. Tests inject a bounded, local byte transport;
+/// production always supplies HTTPS and WinVerifyTrust above.
+#[allow(clippy::too_many_arguments)]
+fn fetch_verified_update_with(
+    manifest_path: &str,
+    signature_path: &str,
+    artifact_path: &str,
+    policy: &bareline_distribution::update::TrustPolicy<'_>,
+    now_unix: u64,
+    publisher: &[u8; 32],
+    stage_parent: &std::path::Path,
+    cancel: &AtomicBool,
+    mut download: impl FnMut(&str, u64, &mut dyn Write) -> Result<u64, UpdateError>,
+    verify_publisher: impl Fn(&File, &[u8; 32]) -> Result<(), UpdateError>,
+) -> Result<PreparedUpdate, UpdateError> {
     use std::io::{Seek, SeekFrom};
     use std::os::windows::fs::OpenOptionsExt;
+    let check_cancelled = || {
+        if cancel.load(Ordering::Acquire) {
+            Err(UpdateError::Cancelled)
+        } else {
+            Ok(())
+        }
+    };
     let mut metadata = Vec::new();
     let mut signature = Vec::new();
-    download_https(host, manifest_path, 65536, cancel, &mut metadata)?;
-    download_https(host, signature_path, 8192, cancel, &mut signature)?;
+    check_cancelled()?;
+    download(manifest_path, 65536, &mut metadata)?;
+    check_cancelled()?;
+    download(signature_path, 8192, &mut signature)?;
+    check_cancelled()?;
     let signature = std::str::from_utf8(&signature).map_err(|_| UpdateError::Signature)?;
-    let manifest =
-        bareline_distribution::update::verify_manifest(&metadata, signature, policy, now_unix)
-            .map_err(|_| UpdateError::Signature)?;
+    let manifest = bareline_distribution::update::verify_manifest(&metadata, signature, policy, now_unix)
+        .map_err(|_| UpdateError::Signature)?;
+    check_cancelled()?;
     let directory = create_private_stage(stage_parent).map_err(|_| UpdateError::Io)?;
     let path = directory.join("package.exe");
     let result = (|| {
+        check_cancelled()?;
         let mut file = std::fs::OpenOptions::new()
             .create_new(true)
             .read(true)
@@ -882,19 +922,14 @@ pub fn fetch_verified_update(
             .share_mode(0)
             .open(&path)
             .map_err(|_| UpdateError::Io)?;
-        download_https(
-            host,
-            artifact_path,
-            manifest.metadata().length,
-            cancel,
-            &mut file,
-        )?;
+        download(artifact_path, manifest.metadata().length, &mut file)?;
+        check_cancelled()?;
         file.sync_all().map_err(|_| UpdateError::Io)?;
         file.seek(SeekFrom::Start(0)).map_err(|_| UpdateError::Io)?;
-        manifest
-            .verify_package(&mut file)
-            .map_err(|_| UpdateError::Signature)?;
-        verify_authenticode(&file, publisher)?;
+        manifest.verify_package(&mut file).map_err(|_| UpdateError::Signature)?;
+        check_cancelled()?;
+        verify_publisher(&file, publisher)?;
+        check_cancelled()?;
         Ok(PreparedUpdate {
             manifest,
             file,
@@ -915,7 +950,9 @@ mod stage_tests {
     use super::*;
     #[test]
     fn running_image_probe() {
-        let Some(ready) = std::env::var_os("BARELINE_TEST_RUNNING_READY") else { return; };
+        let Some(ready) = std::env::var_os("BARELINE_TEST_RUNNING_READY") else {
+            return;
+        };
         std::fs::write(ready, b"ready").unwrap();
         let mut byte = [0];
         std::io::Read::read_exact(&mut std::io::stdin(), &mut byte).unwrap();
@@ -932,8 +969,15 @@ mod stage_tests {
         let mut child = std::process::Command::new(&target)
             .args(["--exact", "update::stage_tests::running_image_probe"])
             .env("BARELINE_TEST_RUNNING_READY", &ready)
-            .stdin(std::process::Stdio::piped()).spawn().unwrap();
-        for _ in 0..200 { if ready.exists() { break; } std::thread::sleep(std::time::Duration::from_millis(10)); }
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        for _ in 0..200 {
+            if ready.exists() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
         assert!(ready.exists());
         let result = open_update_file(&target).and_then(|current| {
             let staged = open_update_file(&stage)?;
@@ -942,7 +986,9 @@ mod stage_tests {
         child.stdin.take().unwrap().write_all(b"x").unwrap();
         assert!(child.wait().unwrap().success());
         assert!(result.is_err(), "running target must refuse atomic replacement");
-        for entry in std::fs::read_dir(&root).unwrap() { std::fs::remove_file(entry.unwrap().path()).unwrap(); }
+        for entry in std::fs::read_dir(&root).unwrap() {
+            std::fs::remove_file(entry.unwrap().path()).unwrap();
+        }
         std::fs::remove_dir(root).unwrap();
     }
     #[test]
@@ -957,25 +1003,45 @@ mod stage_tests {
         let mut target = std::env::current_exe().unwrap();
         if mode == "case-variant" {
             use std::os::windows::ffi::{OsStrExt, OsStringExt};
-            let units: Vec<u16> = target.as_os_str().encode_wide().map(|unit| {
-                if (b'a' as u16..=b'z' as u16).contains(&unit) { unit - 32 }
-                else if (b'A' as u16..=b'Z' as u16).contains(&unit) { unit + 32 }
-                else { unit }
-            }).collect();
+            let units: Vec<u16> = target
+                .as_os_str()
+                .encode_wide()
+                .map(|unit| {
+                    if (b'a' as u16..=b'z' as u16).contains(&unit) {
+                        unit - 32
+                    } else if (b'A' as u16..=b'Z' as u16).contains(&unit) {
+                        unit + 32
+                    } else {
+                        unit
+                    }
+                })
+                .collect();
             target = std::ffi::OsString::from_wide(&units).into();
         }
         let wrong_root = if mode == "wrong-image" {
             let root = create_private_stage(&std::env::temp_dir()).unwrap();
             let copy = root.join("bareline.rollback.exe");
-            std::fs::copy(&target, &copy).unwrap(); target = copy; Some(root)
-        } else { None };
+            std::fs::copy(&target, &copy).unwrap();
+            target = copy;
+            Some(root)
+        } else {
+            None
+        };
         if mode == "forged-pid" {
             pid = std::process::id();
         }
         let result = hold_healthy_update_process(pid, &target);
-        let accepted = result.is_ok(); let error = result.err();
-        if let Some(root) = wrong_root { std::fs::remove_file(&target).unwrap(); std::fs::remove_dir(root).unwrap(); }
-        assert_eq!(accepted, matches!(mode.as_str(), "valid" | "case-variant"), "health fixture mode={mode}, expected={target:?}, error={error:?}");
+        let accepted = result.is_ok();
+        let error = result.err();
+        if let Some(root) = wrong_root {
+            std::fs::remove_file(&target).unwrap();
+            std::fs::remove_dir(root).unwrap();
+        }
+        assert_eq!(
+            accepted,
+            matches!(mode.as_str(), "valid" | "case-variant"),
+            "health fixture mode={mode}, expected={target:?}, error={error:?}"
+        );
     }
     #[test]
     fn health_ack_requires_actual_parent_and_exact_running_image() {
@@ -1018,22 +1084,13 @@ mod stage_tests {
             signature_text: signature.into(),
         };
         transfer_update(prepared, &root).unwrap();
-        assert_eq!(
-            std::fs::read(root.join("bareline.pending.exe")).unwrap(),
-            b"test"
-        );
-        assert_eq!(
-            std::fs::read(root.join("bareline.update.json")).unwrap(),
-            metadata
-        );
+        assert_eq!(std::fs::read(root.join("bareline.pending.exe")).unwrap(), b"test");
+        assert_eq!(std::fs::read(root.join("bareline.update.json")).unwrap(), metadata);
         std::fs::write(root.join("bareline.update-journal"), b"receipt").unwrap();
         std::fs::write(root.join("bareline.exe"), b"running").unwrap();
         assert!(discard_pending_update(&root).is_err());
         retain_update_evidence(&root).unwrap();
-        assert_eq!(
-            std::fs::read(root.join("bareline.exe")).unwrap(),
-            b"running"
-        );
+        assert_eq!(std::fs::read(root.join("bareline.exe")).unwrap(), b"running");
         assert!(!root.join("bareline.update-journal").exists());
         assert!(!root.join("bareline.pending.exe").exists());
         discard_pending_update(&root).unwrap();
@@ -1053,6 +1110,186 @@ mod stage_tests {
             std::fs::remove_file(file).unwrap();
         }
         std::fs::remove_dir(root).unwrap();
+    }
+    #[test]
+    fn local_fixture_transport_rejects_signature_policy_certificate_cancel_corruption_and_unavailable_runtime() {
+        use bareline_distribution::update::TrustPolicy;
+        use std::collections::BTreeMap;
+        let metadata = include_bytes!("../../distribution/tests/fixtures/valid.json").to_vec();
+        let signature = include_bytes!("../../distribution/tests/fixtures/valid.minisig").to_vec();
+        let key: &'static str = include_str!("../../distribution/tests/fixtures/public-key.txt");
+        let policy = |channel: &'static str, floor| TrustPolicy {
+            release_public_key: key,
+            channel,
+            artifact_type: "bareline-x64",
+            platform: "windows-x64",
+            publisher: "test-publisher",
+            protocol: 1,
+            highest_metadata_version: floor,
+            maximum_package_bytes: 4096,
+        };
+        let run = |metadata: Vec<u8>,
+                   signature: Vec<u8>,
+                   artifact: Vec<u8>,
+                   trust: TrustPolicy<'_>,
+                   cancel: bool,
+                   certificate: [u8; 32],
+                   runtime_available: bool| {
+            let root = create_private_stage(&std::env::temp_dir()).unwrap();
+            let paths = BTreeMap::from([
+                ("/manifest", metadata),
+                ("/signature", signature),
+                ("/artifact", artifact),
+            ]);
+            let cancelled = AtomicBool::new(cancel);
+            let result = fetch_verified_update_with(
+                "/manifest",
+                "/signature",
+                "/artifact",
+                &trust,
+                100,
+                &certificate,
+                &root,
+                &cancelled,
+                |path, maximum, output| {
+                    if cancelled.load(Ordering::Acquire) {
+                        return Err(UpdateError::Cancelled);
+                    }
+                    if path == "/artifact" && !runtime_available {
+                        return Err(UpdateError::Network);
+                    }
+                    let bytes = paths.get(path).ok_or(UpdateError::InvalidEndpoint)?;
+                    if bytes.len() as u64 > maximum {
+                        return Err(UpdateError::Limit);
+                    }
+                    output.write_all(bytes).map_err(|_| UpdateError::Io)?;
+                    Ok(bytes.len() as u64)
+                },
+                |_file, expected| {
+                    if expected == &[7; 32] {
+                        Ok(())
+                    } else {
+                        Err(UpdateError::Publisher)
+                    }
+                },
+            );
+            let result = match result {
+                Ok(prepared) => {
+                    drop(prepared);
+                    Ok(())
+                }
+                Err(error) => Err(error),
+            };
+            for entry in std::fs::read_dir(&root).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    for child in std::fs::read_dir(&path).unwrap() {
+                        let _ = std::fs::remove_file(child.unwrap().path());
+                    }
+                    let _ = std::fs::remove_dir(path);
+                }
+            }
+            let _ = std::fs::remove_dir(root);
+            result
+        };
+        assert!(
+            run(
+                metadata.clone(),
+                signature.clone(),
+                b"test".to_vec(),
+                policy("stable", 3),
+                false,
+                [7; 32],
+                true
+            )
+            .is_ok()
+        );
+        let mut bad_signature = signature.clone();
+        bad_signature[50] ^= 1;
+        assert!(matches!(
+            run(
+                metadata.clone(),
+                bad_signature,
+                b"test".to_vec(),
+                policy("stable", 3),
+                false,
+                [7; 32],
+                true
+            ),
+            Err(UpdateError::Signature)
+        ));
+        assert!(matches!(
+            run(
+                metadata.clone(),
+                signature.clone(),
+                b"test".to_vec(),
+                policy("beta", 3),
+                false,
+                [7; 32],
+                true
+            ),
+            Err(UpdateError::Signature)
+        ));
+        assert!(matches!(
+            run(
+                metadata.clone(),
+                signature.clone(),
+                b"test".to_vec(),
+                policy("stable", 4),
+                false,
+                [7; 32],
+                true
+            ),
+            Err(UpdateError::Signature)
+        ));
+        assert!(matches!(
+            run(
+                metadata.clone(),
+                signature.clone(),
+                b"test".to_vec(),
+                policy("stable", 3),
+                false,
+                [8; 32],
+                true
+            ),
+            Err(UpdateError::Publisher)
+        ));
+        assert!(matches!(
+            run(
+                metadata.clone(),
+                signature.clone(),
+                b"test".to_vec(),
+                policy("stable", 3),
+                true,
+                [7; 32],
+                true
+            ),
+            Err(UpdateError::Cancelled)
+        ));
+        assert!(matches!(
+            run(
+                metadata.clone(),
+                signature.clone(),
+                b"tent".to_vec(),
+                policy("stable", 3),
+                false,
+                [7; 32],
+                true
+            ),
+            Err(UpdateError::Signature)
+        ));
+        assert!(matches!(
+            run(
+                metadata,
+                signature,
+                b"test".to_vec(),
+                policy("stable", 3),
+                false,
+                [7; 32],
+                false
+            ),
+            Err(UpdateError::Network)
+        ));
     }
     #[test]
     fn private_stage_is_unique_and_missing_parent_refused() {

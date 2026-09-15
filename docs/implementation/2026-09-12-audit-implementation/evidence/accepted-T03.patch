@@ -1,0 +1,28 @@
+diff --git a/crates/file-io/src/fault_transitions.rs b/crates/file-io/src/fault_transitions.rs
+index 6afef66..a4012e4 100644
+--- a/crates/file-io/src/fault_transitions.rs
++++ b/crates/file-io/src/fault_transitions.rs
+@@ -102,9 +102,10 @@ fn exercise(root: &Path, point: Point, death: bool) {
+     fs::write(&target, b"OLD generation\n").unwrap();
+     fs::write(root.join("backup"), b"OLD generation\n").unwrap();
+     let expected = fingerprint(&target, &FixtureFs, &Cancellation::default()).unwrap();
++    let condition = DestinationCondition::ReplaceCaptured(expected);
+     ACTIVE.with(|active| *active.borrow_mut() = Some((point, death.then(|| root.join("reached")))));
+     let _reset = Reset;
+-    let result = save_bytes(&target, Some(&expected), &FixtureFs, &Cancellation::default(), |out| {
++    let result = save_bytes(&target, &condition, &FixtureFs, &Cancellation::default(), |out| {
+         out.write_all(b"NEW generation\n")?;
+         Ok(())
+     });
+diff --git a/docs/implementation/2026-09-12-audit-implementation/PR-T03.md b/docs/implementation/2026-09-12-audit-implementation/PR-T03.md
+index 88eaa8a..dff6644 100644
+--- a/docs/implementation/2026-09-12-audit-implementation/PR-T03.md
++++ b/docs/implementation/2026-09-12-audit-implementation/PR-T03.md
+@@ -16,6 +16,7 @@ Carry a typed, captured destination condition through Save, Save As, Save Copy,
+ ## Changed files
+ 
+ - `crates/file-io/src/lifecycle.rs`: typed destination/preflight contract, exact condition consumption, cancellation tests.
++- `crates/file-io/src/fault_transitions.rs`: existing save fault seam now supplies the typed captured-replacement condition.
+ - `crates/file-io/src/paged_service.rs`: typed paged destination condition.
+ - `crates/editor-surface/src/paged_view.rs`: prepared paged Save/Copy and actor-side full-document identity validation.
+ - `crates/app/src/workspace.rs`: full-document identity API, consent validation, prepared resident/encoded/paged request wiring and regressions.

@@ -5,10 +5,7 @@ pub mod disk;
 pub mod failure;
 pub mod resident;
 pub mod state;
-use crate::{
-    ByteSink, CodecError, DecodedSink, DecodedSpan, Progress, RawOffset, StreamingDecoder,
-    StreamingEncoder,
-};
+use crate::{ByteSink, CodecError, DecodedSink, DecodedSpan, Progress, RawOffset, StreamingDecoder, StreamingEncoder};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Encoding {
@@ -164,11 +161,7 @@ pub fn detect(raw: &[u8]) -> Detection {
         }
     }
     Detection {
-        encoding: if utf8 {
-            Encoding::Utf8
-        } else {
-            Encoding::Windows1252
-        },
+        encoding: if utf8 { Encoding::Utf8 } else { Encoding::Windows1252 },
         confidence: if utf8 {
             Confidence::Utf8Sample
         } else {
@@ -291,23 +284,14 @@ impl Decoder {
     }
 }
 impl StreamingDecoder for Decoder {
-    fn push(
-        &mut self,
-        raw: &[u8],
-        end: bool,
-        out: &mut dyn DecodedSink,
-    ) -> Result<Progress, CodecError> {
+    fn push(&mut self, raw: &[u8], end: bool, out: &mut dyn DecodedSink) -> Result<Progress, CodecError> {
         let mut consumed = 0;
         let mut produced = 0;
         loop {
             let final_unit = end && consumed == raw.len();
             if self.start {
                 let bom = self.encoding.bom();
-                if !bom.is_empty()
-                    && bom.starts_with(&self.pending)
-                    && self.pending.len() < bom.len()
-                    && !final_unit
-                {
+                if !bom.is_empty() && bom.starts_with(&self.pending) && self.pending.len() < bom.len() && !final_unit {
                     if consumed == raw.len() {
                         break;
                     }
@@ -413,12 +397,7 @@ impl Encoder {
 impl StreamingEncoder for Encoder {
     /// Progress.consumed counts complete input spans. On backpressure pass the
     /// unconsumed spans again unchanged: the partial scalar offset is retained.
-    fn push(
-        &mut self,
-        spans: &[DecodedSpan<'_>],
-        _end: bool,
-        out: &mut dyn ByteSink,
-    ) -> Result<Progress, CodecError> {
+    fn push(&mut self, spans: &[DecodedSpan<'_>], _end: bool, out: &mut dyn ByteSink) -> Result<Progress, CodecError> {
         let mut produced = 0;
         if self.bom {
             let bom = self.encoding.bom();
@@ -437,10 +416,7 @@ impl StreamingEncoder for Encoder {
             if span.opaque_bytes.is_some() {
                 return Err(CodecError::UnresolvedOpaqueBytes);
             }
-            let remaining = span
-                .text
-                .get(self.span_offset..)
-                .ok_or(CodecError::InvalidSequence)?;
+            let remaining = span.text.get(self.span_offset..).ok_or(CodecError::InvalidSequence)?;
             for c in remaining.chars() {
                 let mut utf8 = [0; 4];
                 let bytes = self.encode_text(c.encode_utf8(&mut utf8))?;
@@ -569,9 +545,7 @@ mod tests {
         }
         assert_eq!(decode(Encoding::Latin1, &[0x80, 0xff], 1).text, "\u{80}ÿ");
         assert_eq!(
-            Encoder::new(Encoding::Latin1, false)
-                .encode_text("\u{80}ÿ")
-                .unwrap(),
+            Encoder::new(Encoding::Latin1, false).encode_text("\u{80}ÿ").unwrap(),
             [0x80, 0xff]
         );
         assert!(matches!(
@@ -620,9 +594,7 @@ mod tests {
             }
             fn write(&mut self, b: &[u8]) -> Result<(), CodecError> {
                 if self.fail {
-                    return Err(CodecError::Output(std::io::Error::other(
-                        "injected disk full",
-                    )));
+                    return Err(CodecError::Output(std::io::Error::other("injected disk full")));
                 }
                 self.bytes.extend_from_slice(b);
                 self.capacity -= b.len();

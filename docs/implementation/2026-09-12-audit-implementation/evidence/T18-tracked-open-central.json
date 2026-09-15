@@ -1,0 +1,19 @@
+{
+  "arguments": [
+    "test",
+    "--offline",
+    "--locked",
+    "-p",
+    "bareline-app",
+    "--lib",
+    "workspace::tests::tracked_missing_opens_emit_terminal_receipts_without_accumulating",
+    "--",
+    "--exact",
+    "--test-threads=1"
+  ],
+  "completed_utc": "2026-09-12T08:09:01.6308018Z",
+  "integration_snapshot": "3a0454addaa46a7d7163b92735b13d35bea1a18c",
+  "exit_code": 101,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\T18-tracked-open-central.log"
+}

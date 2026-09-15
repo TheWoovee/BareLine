@@ -6,12 +6,7 @@ pub struct ManifestBuilder {
     manifest: ExtensionManifest,
 }
 impl ManifestBuilder {
-    pub fn new(
-        id: &str,
-        version: &str,
-        publisher: &str,
-        entry: &str,
-    ) -> Result<Self, &'static str> {
+    pub fn new(id: &str, version: &str, publisher: &str, entry: &str) -> Result<Self, &'static str> {
         if !valid_id(id) || version.is_empty() || publisher.is_empty() || entry.is_empty() {
             return Err("invalid extension identity");
         }
@@ -57,12 +52,7 @@ impl ManifestBuilder {
         if !self.manifest.commands.iter().any(|command| command == id) {
             return Err("declare the command before its background eligibility");
         }
-        if !self
-            .manifest
-            .background_commands
-            .iter()
-            .any(|command| command == id)
-        {
+        if !self.manifest.background_commands.iter().any(|command| command == id) {
             self.manifest.background_commands.push(id.into());
         }
         Ok(self)

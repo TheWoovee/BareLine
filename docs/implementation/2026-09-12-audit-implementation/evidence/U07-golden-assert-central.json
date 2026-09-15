@@ -1,0 +1,19 @@
+{
+  "arguments": [
+    "test",
+    "-p",
+    "bareline",
+    "--bin",
+    "bareline",
+    "windows_app::accessibility::tests::complete_native_semantic_json_golden",
+    "--offline",
+    "--locked",
+    "--",
+    "--exact"
+  ],
+  "completed_utc": "2026-09-12T07:48:01.7955764Z",
+  "integration_snapshot": "7a17953c07961d2d8ea03f9933ae0845b2657581",
+  "exit_code": 0,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\U07-golden-assert-central.log"
+}

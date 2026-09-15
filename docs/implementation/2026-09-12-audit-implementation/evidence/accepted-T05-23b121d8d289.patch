@@ -1,0 +1,13 @@
+diff --git a/crates/platform-windows/src/native.rs b/crates/platform-windows/src/native.rs
+index d6685bb..8207863 100644
+--- a/crates/platform-windows/src/native.rs
++++ b/crates/platform-windows/src/native.rs
+@@ -828,7 +828,7 @@ fn initialize_common_controls() -> windows::core::Result<()> {
+     if unsafe { InitCommonControlsEx(&controls) }.as_bool() {
+         Ok(())
+     } else {
+-        Err(windows::core::Error::from_win32())
++        Err(windows::core::Error::new(E_FAIL, "InitCommonControlsEx returned FALSE"))
+     }
+ }
+ 

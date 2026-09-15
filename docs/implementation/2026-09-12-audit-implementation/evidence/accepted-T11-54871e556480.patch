@@ -1,0 +1,47 @@
+diff --git a/crates/platform-windows/src/update.rs b/crates/platform-windows/src/update.rs
+index c0f7513..a9d31f1 100644
+--- a/crates/platform-windows/src/update.rs
++++ b/crates/platform-windows/src/update.rs
+@@ -893,16 +893,28 @@ fn fetch_verified_update_with(
+ ) -> Result<PreparedUpdate, UpdateError> {
+     use std::io::{Seek, SeekFrom};
+     use std::os::windows::fs::OpenOptionsExt;
++    let check_cancelled = || {
++        if cancel.load(Ordering::Acquire) {
++            Err(UpdateError::Cancelled)
++        } else {
++            Ok(())
++        }
++    };
+     let mut metadata = Vec::new();
+     let mut signature = Vec::new();
++    check_cancelled()?;
+     download(manifest_path, 65536, &mut metadata)?;
++    check_cancelled()?;
+     download(signature_path, 8192, &mut signature)?;
++    check_cancelled()?;
+     let signature = std::str::from_utf8(&signature).map_err(|_| UpdateError::Signature)?;
+     let manifest = bareline_distribution::update::verify_manifest(&metadata, signature, policy, now_unix)
+         .map_err(|_| UpdateError::Signature)?;
++    check_cancelled()?;
+     let directory = create_private_stage(stage_parent).map_err(|_| UpdateError::Io)?;
+     let path = directory.join("package.exe");
+     let result = (|| {
++        check_cancelled()?;
+         let mut file = std::fs::OpenOptions::new()
+             .create_new(true)
+             .read(true)
+@@ -911,10 +923,13 @@ fn fetch_verified_update_with(
+             .open(&path)
+             .map_err(|_| UpdateError::Io)?;
+         download(artifact_path, manifest.metadata().length, &mut file)?;
++        check_cancelled()?;
+         file.sync_all().map_err(|_| UpdateError::Io)?;
+         file.seek(SeekFrom::Start(0)).map_err(|_| UpdateError::Io)?;
+         manifest.verify_package(&mut file).map_err(|_| UpdateError::Signature)?;
++        check_cancelled()?;
+         verify_publisher(&file, publisher)?;
++        check_cancelled()?;
+         Ok(PreparedUpdate {
+             manifest,
+             file,

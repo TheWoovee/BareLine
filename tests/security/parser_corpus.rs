@@ -47,10 +47,7 @@ impl Scratch {
 }
 impl Drop for Scratch {
     fn drop(&mut self) {
-        if self
-            .0
-            .starts_with(std::env::temp_dir().canonicalize().unwrap())
-        {
+        if self.0.starts_with(std::env::temp_dir().canonicalize().unwrap()) {
             let _ = fs::remove_dir_all(&self.0);
         }
     }
@@ -105,15 +102,9 @@ fn session_mutations_preserve_validation_and_pinned_roundtrip() {
     assert_eq!(decoded.manifest.tabs, original.tabs);
     assert_eq!(decoded.manifest.active_tab, Some(7));
     assert_eq!(decoded.diagnostics.skipped, 1);
-    assert!(
-        decoded
-            .diagnostics
-            .entries
-            .iter()
-            .any(|entry| entry.section == "tabs"
-                && entry.index == Some(1)
-                && entry.issue == session::SessionIssue::DuplicateIdentity)
-    );
+    assert!(decoded.diagnostics.entries.iter().any(|entry| entry.section == "tabs"
+        && entry.index == Some(1)
+        && entry.issue == session::SessionIssue::DuplicateIdentity));
     let mut oversized = original;
     oversized.documents[0].title = "x".repeat(4097);
     let decoded = session::decode_report(&serde_json::to_vec(&oversized).unwrap()).unwrap();
@@ -125,8 +116,7 @@ fn session_mutations_preserve_validation_and_pinned_roundtrip() {
             .diagnostics
             .entries
             .iter()
-            .any(|entry| entry.section == "documents"
-                && entry.issue == session::SessionIssue::ResourceLimit)
+            .any(|entry| entry.section == "documents" && entry.issue == session::SessionIssue::ResourceLimit)
     );
     oversized.documents[0].title = "safe".into();
     oversized.documents[0].path = Some(bareline_platform::SerializedPath {
@@ -144,8 +134,7 @@ fn session_mutations_preserve_validation_and_pinned_roundtrip() {
             .diagnostics
             .entries
             .iter()
-            .any(|entry| entry.section == "documents"
-                && entry.issue == session::SessionIssue::InvalidPath)
+            .any(|entry| entry.section == "documents" && entry.issue == session::SessionIssue::InvalidPath)
     );
     assert!(!decoded.diagnostics.summary().contains("untrusted display"));
     assert!(session::decode(&vec![b' '; session::MAX_SESSION_BYTES + 1]).is_err());
@@ -169,10 +158,7 @@ fn udl_mutations_reject_entities_and_preserve_registry_on_error() {
         if let Ok(text) = std::str::from_utf8(&bytes) {
             let before = registry.get(&definition.id).unwrap().to_json().unwrap();
             if registry.replace_json(text).is_err() {
-                assert_eq!(
-                    registry.get(&definition.id).unwrap().to_json().unwrap(),
-                    before
-                );
+                assert_eq!(registry.get(&definition.id).unwrap().to_json().unwrap(), before);
             }
         }
     }
@@ -213,10 +199,7 @@ fn rpc_mutations_revalidate_and_oversized_prefix_never_reads_payload() {
     }
     impl io::Read for PrefixOnly {
         fn read(&mut self, into: &mut [u8]) -> io::Result<usize> {
-            assert!(
-                self.prefix.position() < 4,
-                "oversized frame attempted payload read"
-            );
+            assert!(self.prefix.position() < 4, "oversized frame attempted payload read");
             io::Read::read(&mut self.prefix, into)
         }
     }
@@ -224,10 +207,7 @@ fn rpc_mutations_revalidate_and_oversized_prefix_never_reads_payload() {
         let mut reader = PrefixOnly {
             prefix: io::Cursor::new(length.to_le_bytes()),
         };
-        assert_eq!(
-            rpc::read_frame(&mut reader),
-            Err(rpc::ProtocolError::Oversized)
-        );
+        assert_eq!(rpc::read_frame(&mut reader), Err(rpc::ProtocolError::Oversized));
     }
 }
 

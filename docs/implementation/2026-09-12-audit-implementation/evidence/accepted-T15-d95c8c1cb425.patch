@@ -1,0 +1,1016 @@
+diff --git a/docs/implementation/2026-09-12-audit-implementation/PR-T15.md b/docs/implementation/2026-09-12-audit-implementation/PR-T15.md
+new file mode 100644
+index 0000000..e2e0f61
+--- /dev/null
++++ b/docs/implementation/2026-09-12-audit-implementation/PR-T15.md
+@@ -0,0 +1,30 @@
++# PR-T15 — Performance qualification tooling
++
++- Issue: TECH-018
++- Baseline source: `e7648af1715ecf5a0214377db2f802f7e330a9e4`
++- Binary baseline: unavailable; no executable was launched or benchmarked in this tooling slice.
++- Dependencies: PR-T09 source/evidence identity; configured extension scenarios from PR-T10/T11; capability-ledger publication from PR-T14; owner-provisioned comparator and dedicated hardware remain pending.
++- Scope: `tests/perf` manifest, orchestration, reporting, focused Python contract tests, and this note.
++
++## Qualification contract
++
++- Manifests must pin executable/configuration/driver/fixture bytes and the T09 source identity, plus structured hardware, OS build, power, display/DPI, fonts, wrap, syntax, storage, renderer, cache method and acquisition-cost policy.
++- Reports retain every expected trial as measured, failed, invalid or unavailable. Comparative rows use only complete, order-matched cohorts with explicitly reviewed shared endpoints.
++- Source drift retains raw trial artifacts but marks observations and paired rows unqualified, excludes them from regression input, and produces a nonzero native qualification exit.
++- Missing owner-provisioned comparator bytes or dedicated hardware remains pending and prevents a superiority claim.
++- Native execution, downloads, Cargo commands and the 26-case/three-trial registry are reserved for the root coordinator.
++- Paired and native reports use `schema_version: 2`, `kind: performance_qualification_report`, stable row/coverage IDs, `qualification_status: unqualified`, `claims_eligible: false`, and explicit ineligibility reasons. This is the PR-T14 ledger import boundary.
++
++## Evidence
++
++- `python -m py_compile tests/perf/perf_suite.py tests/perf/make_manifest.py tests/perf/native_nightly.py tests/perf/test_perf_suite.py tests/perf/test_native_nightly.py` — passed.
++- `python -m unittest discover -s tests/perf -p "test_*.py"` — 21 passed. These are parser/orchestrator contracts only; no editor or comparator was launched. The suite includes controlled inert-driver runs through manifest, raw retention and report generation in temporary Git repositories, including a source-mutation negative.
++- `python tests/perf/make_manifest.py --help` — passed without creating a manifest or executing a benchmark.
++- `git diff --check` — passed apart from Git's existing LF-to-CRLF worktree notices.
++
++## Pending qualification
++
++- The root coordinator can build Bareline, read its settings/fonts and generate ordinary scratch fixtures under the existing local authorization after integration settles.
++- Comparator bytes, dedicated hardware, a reviewed cold-cache method and the external support-floor/environment matrix remain unavailable until their existing owner/environment processes provide them.
++- The root coordinator must then run the 26-case native registry and matched paired cohorts on the dedicated unlocked hardware, retain the raw directories, and generate the schema-2 reports.
++- A release claim and renderer/storage default decision remain unavailable until those reports contain complete matching evidence and receive owner review. Failed, timed-out, missing or unavailable work must remain in coverage rather than become numeric zeroes.
+diff --git a/tests/perf/README-NATIVE-NIGHTLY.md b/tests/perf/README-NATIVE-NIGHTLY.md
+index 6c592d7..2aa2b16 100644
+--- a/tests/perf/README-NATIVE-NIGHTLY.md
++++ b/tests/perf/README-NATIVE-NIGHTLY.md
+@@ -30,7 +30,36 @@ artifacts supplied by the operator, not downloaded or guessed by this tool):
+   "schema_version": 1,
+   "interactive_desktop_ready": true,
+   "machine_id": "ACTUAL-HOSTNAME",
+-  "configuration": "reviewed display/DPI/font/theme/wrap/syntax/power configuration",
++  "configuration": "stable-reviewed-profile-id",
++  "qualification_environment": {
++    "hardware": {
++      "cpu_model": "actual model",
++      "logical_cpus": 16,
++      "physical_memory_bytes": 34359738368,
++      "storage_model": "actual volume/device model"
++    },
++    "os": {
++      "name": "Windows",
++      "release": "11",
++      "version": "actual platform.version() value",
++      "build": "actual build component",
++      "architecture": "AMD64"
++    },
++    "power": {"mode": "actual plan", "source": "AC"},
++    "display": {"dpi": 96, "scale_percent": 100},
++    "fonts": [
++      {"family": "actual family", "version": "actual version", "path": "font file", "sha256": "SHA256"}
++    ],
++    "editor": {"theme": "light", "wrap": "off", "syntax": "plain text"},
++    "acquisition": {
++      "setup_compilation": {"status": "measured", "duration_us": 123, "output_bytes": 456},
++      "download": {"status": "unavailable", "reason": "offline provisioned comparator"}
++    },
++    "cold_cache": {
++      "method": "reviewed method named by the pinned cold-cache plan",
++      "plan_sha256": "same SHA256 as cold_cache below"
++    }
++  },
+   "repetitions": 3,
+   "settings": {"path": "absolute settings.toml path", "sha256": "SHA256"},
+   "fixtures": {
+@@ -45,6 +74,22 @@ artifacts supplied by the operator, not downloaded or guessed by this tool):
+ }
+ ```
+ 
++The runner verifies the hostname, OS identity/build, architecture, logical CPU
++count and every font-file hash before launching a case. The remaining hardware,
++power, display and editor fields are explicit operator pins retained in every
++manifest and report. If the plan is absent or any case is unavailable/failed,
++`native_nightly.py` writes `native-report.json` and exits nonzero so the workflow
++can retain the report without presenting the run as successful.
++
++`native-report.json` uses `schema_version: 2` and
++`kind: performance_qualification_report`. It includes exact source identity
++before/after, the executable path/version/SHA-256 when available, structured
++configuration, stable coverage and row IDs, explicit ineligibility reasons and
++`claims_eligible: false`. Missing and failed cases carry no numeric substitute.
++If source identity is unavailable or changes during any case, raw observations
++remain in that case report but its rows are unqualified, excluded from rolling
++regression input, and the native command exits nonzero.
++
+ The fixture map must provide `open_10mb`, `open_100mb`, `open_1gb`, `open_5gb`,
+ `long_line`, `scroll`, `edit_to_paint`, `syntax_viewport`, `literal_search`,
+ `regex_search`, `search_cancel`, `result_jump`, `save`, `save_as`, `workspace_scan`,
+diff --git a/tests/perf/README-PR019.md b/tests/perf/README-PR019.md
+index 0f76616..abf4b7f 100644
+--- a/tests/perf/README-PR019.md
++++ b/tests/perf/README-PR019.md
+@@ -21,7 +21,10 @@ python tests/perf/perf_suite.py report <printed-run-directory> <new-report.json>
+ Manifest preparation requires `--bareline`, `--bareline-version`,
+ `--bareline-config` (settings.toml), corresponding `--notepadpp` options
+ (config.xml), `--fixture`, `--expected-text-bytes`, one or more `--scenario`,
+-`--machine-id`, `--configuration`, and `--destination`. `--renderer` selects the
++`--machine-id`, `--configuration`, `--qualification-environment`, and
++`--destination`. The environment JSON uses the structured schema shown in
++`README-NATIVE-NIGHTLY.md`; font files are hashed and host OS/build/architecture,
++hostname and logical CPU count are verified before execution. `--renderer` selects the
+ Bareline renderer; repeat the series separately for software and hardware. The
+ configuration identity must describe OS/build, CPU, display/DPI, theme/font,
+ wrapping, syntax and power settings. Exact copied configuration hashes are also
+@@ -45,6 +48,15 @@ name is insufficient: Bareline present receipts and Notepad++ Scintilla message
+ roundtrips have different endpoints. Search primitives and termination boundaries
+ also differ. No report automatically becomes eligible for marketing claims.
+ 
++The manifest and report use schema version 2. Manifest preparation calls the
++PR-T09 `run_test_evidence.py` source-identity implementation directly, excluding
++only the create-new manifest path. Execution refuses a changed source pin and
++records the identity again after all trials. Reports expose stable trial/row IDs,
++the pinned executable/configuration/environment, failed and missing coverage,
++and explicit claim-ineligibility reasons; an unavailable metric is never zero.
++Source-drifted trials remain as raw evidence but their observations and paired
++rows are unqualified and cannot enter rolling regression history.
++
+ `bareline_driver.py` launches only its suspended/Job-contained process, with
+ session disabled and all state under the temporary performance root. Extensions
+ are disabled except for the explicit signed-fixture extension scenario.
+diff --git a/tests/perf/make_manifest.py b/tests/perf/make_manifest.py
+index 88a7450..840d930 100644
+--- a/tests/perf/make_manifest.py
++++ b/tests/perf/make_manifest.py
+@@ -3,7 +3,8 @@
+ import argparse
+ from pathlib import Path
+ import sys
+-from perf_suite import digest, write_new, validate_fixture_size
++from perf_suite import (SOURCE_IDENTITY_TOOL, digest, read_json, t09_source_identity,
++                        validate_fixture_size, validate_qualification_environment, write_new)
+ 
+ COMMON = ('open_10mb', 'open_100mb', 'open_1gb', 'open_5gb', 'long_line',
+           'scroll', 'edit_to_paint', 'literal_search', 'regex_search', 'result_jump', 'save', 'warm_launch', 'cold_launch', 'empty_idle')
+@@ -24,7 +25,11 @@ def main():
+     parser.add_argument('--extension-inventory')
+     parser.add_argument('--extension-command')
+     parser.add_argument('--machine-id', required=True)
+-    parser.add_argument('--configuration', required=True, help='reviewed OS/CPU/display/DPI/theme/font/wrap/syntax/power settings identity')
++    parser.add_argument('--configuration', required=True, help='stable reviewed profile identifier')
++    parser.add_argument('--qualification-environment', required=True,
++                        help='JSON pinning hardware, OS, power, DPI, fonts, editor options, acquisition and cold method')
++    parser.add_argument('--source-root', default=str(Path(__file__).resolve().parents[2]),
++                        help='Git worktree recorded with the PR-T09 source identity algorithm')
+     parser.add_argument('--renderer', choices=('hardware', 'software'), default='hardware')
+     parser.add_argument('--repetitions', type=int, default=5)
+     parser.add_argument('--destination', required=True)
+@@ -37,11 +42,22 @@ def main():
+     if not 1 <= args.repetitions <= 100 or args.expected_text_bytes < 0:
+         raise ValueError('invalid repetition count or text-view length')
+     directory = Path(__file__).resolve().parent
++    destination = Path(args.destination).resolve()
++    environment_path = Path(args.qualification_environment).resolve()
++    qualification_environment = validate_qualification_environment(read_json(environment_path), environment_path.parent)
++    for font in qualification_environment['fonts']:
++        font['path'] = str((environment_path.parent / font['path']).resolve())
++    source_root = Path(args.source_root).resolve()
++    source_before = t09_source_identity(source_root, (destination,))
++    if source_before.get('available') is not True:
++        raise ValueError('source identity unavailable: ' + source_before.get('reason', 'unknown reason'))
+     fixture = Path(args.fixture).resolve()
+     fixture_hash = digest(fixture)
+     python = str(Path(sys.executable).resolve())
+     support = [{"path": str(directory / name), "sha256": digest(directory / name)} for name in
+                ('perf_suite.py', 'bareline_driver.py', 'notepadpp_driver.py', 'windows_process_metrics.py', 'cache_protocol.py', 'disk_metrics.py')]
++    support += [{"path": str(SOURCE_IDENTITY_TOOL), "sha256": digest(SOURCE_IDENTITY_TOOL)},
++                {"path": str(environment_path), "sha256": digest(environment_path)}]
+     applications = {}
+     for name in names:
+         executable = Path(getattr(args, name)).resolve()
+@@ -84,8 +100,11 @@ def main():
+             "cache_plan_sha256": digest(args.cache_plan) if scenario == 'cold_launch' else None,
+             "renderer": args.renderer, "fixtures": [{"path": str(fixture), "sha256": fixture_hash}],
+             "comparable_metrics": ['save_to_clean_ack_us'] if scenario == 'save' and len(names) == 2 else [], "drivers": drivers})
+-    write_new(args.destination, {"schema_version": 1, "series": "local", "machine_id": args.machine_id,
++    write_new(destination, {"schema_version": 2, "series": "local", "machine_id": args.machine_id,
+         "configuration": args.configuration, "repetitions": args.repetitions,
++        "qualification_environment": qualification_environment,
++        "source_identity": {"algorithm": "t09-run-test-evidence-v1", "root": str(source_root),
++                            "excluded_paths": [str(destination)], "before": source_before},
+         "applications": applications, "scenarios": scenarios,
+         "comparison_review": "Only Save command-to-clean acknowledgement has a shared default endpoint and identical PERF_SAVE edit. This is not a durability/paint comparison. Native presented/whole-find and Scintilla roundtrip endpoints otherwise differ; review identical work and sampling boundaries before listing further comparable_metrics."})
+ 
+diff --git a/tests/perf/native_nightly.py b/tests/perf/native_nightly.py
+index 0a559ad..40eb91b 100644
+--- a/tests/perf/native_nightly.py
++++ b/tests/perf/native_nightly.py
+@@ -20,40 +20,63 @@ def required_cases():
+ 
+ 
+ def regression_rows(report, scenario, renderer, repetitions):
+-    if report.get('failures') or report.get('missing_trials'):
++    if report.get('failures') or report.get('missing_trials') or not suite.report_source_valid(report):
+         return []
+-    return [{'scenario': scenario + '@' + renderer, 'metric': value['metric'],
++    return [{'id': scenario + '@' + renderer + '/' + value['metric'],
++             'scenario': scenario + '@' + renderer, 'metric': value['metric'],
+              'sample_count': value['sample_count'], 'sample_scope': 'native-only dedicated runner',
+              'bareline': {'p50': value['p50'], 'p95': value['p95']},
+-             'notepadpp': {'p50': None, 'p95': None}, 'p50_ratio': None}
++             'notepadpp': {'p50': None, 'p95': None}, 'p50_ratio': None,
++             'status': 'measured'}
+             for value in report.get('observations', [])
+-            if value['application'] == 'bareline' and value['sample_count'] == repetitions]
++            if value['application'] == 'bareline' and value['sample_count'] == repetitions
++            and value.get('status') == 'measured']
+ 
+ 
+ def pinned(record):
++    if not isinstance(record, dict) or type(record.get('path')) is not str:
++        raise ValueError('pinned prerequisite needs a string path and SHA-256')
+     path = Path(record['path']).resolve(strict=True)
+-    if suite.digest(path) != record['sha256'].lower():
++    if suite.digest(path) != suite.require_sha256(record.get('sha256'), 'prerequisite sha256'):
+         raise ValueError('prerequisite hash mismatch: ' + str(path))
+     return path
+ 
+ 
++def qualification_exit_code(source_before, source_after, coverage):
++    valid_source = (isinstance(source_before, dict) and source_before.get('available') is True
++                    and isinstance(source_after, dict) and source_after.get('available') is True
++                    and source_before == source_after)
++    return 0 if valid_source and all(case['status'] == 'measured' for case in coverage) else 1
++
++
+ def run(plan_path, plan_sha256, application, destination):
+     destination = Path(destination).resolve()
+     destination.mkdir(parents=True, exist_ok=False)
++    source_root = Path(__file__).resolve().parents[2]
++    source_before = suite.t09_source_identity(source_root, (destination,))
+     plan = {}
++    qualification_environment = None
++    application_path = str(Path(application).resolve())
++    application_sha = None
++    version = None
+     prerequisite_error = None
+     try:
+-        if not plan_path or suite.digest(plan_path) != plan_sha256.lower():
++        if not plan_path or suite.digest(plan_path) != suite.require_sha256(plan_sha256, 'plan sha256'):
+             raise ValueError('dedicated native plan is missing or its pin does not match')
+         plan = suite.read_json(plan_path)
+         if plan.get('schema_version') != 1 or plan.get('interactive_desktop_ready') is not True:
+             raise ValueError('plan must explicitly confirm a dedicated interactive desktop')
+-        if plan['machine_id'].casefold() != platform.node().casefold():
++        if type(plan.get('machine_id')) is not str or plan['machine_id'].casefold() != platform.node().casefold():
+             raise ValueError('plan machine identity does not match this host')
+         if type(plan['repetitions']) is not int or plan['repetitions'] != 3:
+             raise ValueError('the bounded full nightly registry requires exactly three repetitions')
++        qualification_environment = suite.validate_qualification_environment(
++            plan['qualification_environment'], Path(plan_path).resolve().parent)
++        for font in qualification_environment['fonts']:
++            font['path'] = str((Path(plan_path).resolve().parent / font['path']).resolve())
+         settings = pinned(plan['settings'])
+         application = Path(application).resolve(strict=True)
++        application_path = str(application)
+         from notepadpp_driver import file_version, require_x64_pe
+         require_x64_pe(application)
+         version = file_version(application)
+@@ -64,7 +87,7 @@ def run(plan_path, plan_sha256, application, destination):
+     rows = []
+     directory = Path(__file__).resolve().parent
+     for name, renderer in required_cases():
+-        record = {'scenario': name, 'renderer': renderer, 'status': 'unavailable'}
++        record = {'id': name + '@' + renderer, 'scenario': name, 'renderer': renderer, 'status': 'unavailable'}
+         try:
+             if prerequisite_error:
+                 raise ValueError(prerequisite_error)
+@@ -89,12 +112,18 @@ def run(plan_path, plan_sha256, application, destination):
+             support = [{'path': str(directory / source), 'sha256': suite.digest(directory / source)} for source in
+                        ('bareline_driver.py', 'notepadpp_driver.py', 'windows_process_metrics.py',
+                         'disk_metrics.py', 'cache_protocol.py', 'perf_suite.py')]
++            support.append({'path': str(suite.SOURCE_IDENTITY_TOOL),
++                            'sha256': suite.digest(suite.SOURCE_IDENTITY_TOOL)})
+             scenario = {'name': name, 'renderer': renderer, 'cache_state': 'external cold receipt' if name == 'cold_launch'
+                         else 'one warm-up launch' if name == 'warm_launch' else 'uncontrolled/warmed fixture',
++                        'cache_plan_sha256': plan['cold_cache']['sha256'] if name == 'cold_launch' else None,
+                         'timeout_seconds': 300, 'fixtures': fixtures, 'comparable_metrics': [],
+                         'drivers': {'bareline': {'argv': args, 'sha256': suite.digest(sys.executable), 'pinned_files': support}}}
+-            manifest = {'schema_version': 1, 'series': 'local', 'configuration': plan['configuration'],
++            manifest = {'schema_version': 2, 'series': 'local', 'configuration': plan['configuration'],
+                         'machine_id': plan['machine_id'], 'repetitions': plan['repetitions'],
++                        'qualification_environment': qualification_environment,
++                        'source_identity': {'algorithm': 't09-run-test-evidence-v1', 'root': str(source_root),
++                                            'excluded_paths': [str(destination)], 'before': source_before},
+                         'applications': {'bareline': {'executable': str(application), 'sha256': application_sha,
+                             'version': version, 'settings': plan['settings']}}, 'scenarios': [scenario]}
+             manifest_path = destination / (name + '-' + renderer + '-manifest.json')
+@@ -105,18 +134,41 @@ def run(plan_path, plan_sha256, application, destination):
+             suite.report(run_directory, report_path)
+             report = suite.read_json(report_path)
+             rows += regression_rows(report, name, renderer, plan['repetitions'])
+-            record.update(status='failed' if report['failures'] or report['missing_trials'] else 'measured',
++            failed = bool(report['failures'] or report['missing_trials'])
++            source_invalid = not suite.report_source_valid(report)
++            record.update(status='failed' if failed else 'unqualified' if source_invalid else 'measured',
+                           report=str(report_path.relative_to(destination)), report_sha256=suite.digest(report_path))
++            if failed:
++                record['reason'] = 'report contains failed or missing trials'
++            elif source_invalid:
++                record['reason'] = 'source identity is unavailable or changed during the case'
+         except (OSError, ValueError, RuntimeError, KeyError, TypeError) as error:
+             if record['status'] == 'running':
+                 record['status'] = 'failed'
+             record['reason'] = str(error)
+         coverage.append(record)
+-    result = {'schema_version': 1, 'claims_eligible': False, 'coverage': coverage, 'rows': rows,
++    source_after = suite.t09_source_identity(source_root, (destination,))
++    source_changed = source_after != source_before
++    ineligibility = ['comparator application is absent', 'owner review and approval are pending']
++    if any(case['status'] != 'measured' for case in coverage):
++        ineligibility.append('one or more registry cases failed or are unavailable')
++    if source_changed or source_before.get('available') is not True:
++        ineligibility.append('source identity is unavailable or changed during the run')
++    result = {'schema_version': 2, 'kind': 'performance_qualification_report',
++              'qualification_status': 'unqualified',
++              'claims_eligible': False, 'ineligibility_reasons': ineligibility,
++              'coverage': coverage, 'rows': rows,
+               'failures': [case for case in coverage if case['status'] != 'measured'],
+               'provenance': {'manifest': {'series': 'local', 'machine_id': plan.get('machine_id', platform.node()),
+-                  'commit': os.environ.get('GITHUB_SHA'),
+-                  'configuration': {'plan_configuration': plan.get('configuration'), 'settings': plan.get('settings'),
++                  'commit': source_before.get('head') or os.environ.get('GITHUB_SHA'),
++                  'source_manifest_sha256': source_before.get('source_manifest_sha256'),
++                  'working_tree_dirty': source_before.get('working_tree_dirty'),
++                  'source_before': source_before, 'source_after': source_after,
++                  'source_changed_during_run': source_changed,
++                  'application': {'path': application_path, 'sha256': application_sha, 'version': version},
++                  'configuration': {'profile_id': plan.get('configuration'),
++                                    'qualification_environment': qualification_environment,
++                                    'settings': plan.get('settings'),
+                                     'fixtures': plan.get('fixtures'), 'cold_cache': plan.get('cold_cache'),
+                                     'extensions': plan.get('extensions'), 'os': platform.platform(),
+                                     'arch': platform.machine(), 'python': platform.python_version(),
+@@ -126,6 +178,7 @@ def run(plan_path, plan_sha256, application, destination):
+                   'plan_sha256': plan_sha256 or None},
+               'limitations': 'Dedicated native observations only. Unavailable/failed cases retain reasons; no benchmark acceptance is inferred.'}
+     suite.write_new(destination / 'native-report.json', result)
++    return qualification_exit_code(source_before, source_after, coverage)
+ 
+ 
+ def main():
+@@ -135,8 +188,8 @@ def main():
+     parser.add_argument('--application', required=True)
+     parser.add_argument('--destination', required=True)
+     args = parser.parse_args()
+-    run(args.plan, args.plan_sha256, args.application, args.destination)
++    return run(args.plan, args.plan_sha256, args.application, args.destination)
+ 
+ 
+ if __name__ == '__main__':
+-    main()
++    raise SystemExit(main())
+diff --git a/tests/perf/perf_suite.py b/tests/perf/perf_suite.py
+index 702e7fd..88d2f4b 100644
+--- a/tests/perf/perf_suite.py
++++ b/tests/perf/perf_suite.py
+@@ -7,11 +7,13 @@ All subprocesses use argument arrays, bounded output, deadlines and retained evi
+ """
+ import argparse
+ import hashlib
++import importlib.util
+ import json
+ import math
+ import os
+ from pathlib import Path
+ import platform
++import re
+ import subprocess
+ import signal
+ import threading
+@@ -28,6 +30,124 @@ SCENARIOS = (
+ LIMIT = 256 * 1024
+ FIXTURE_SIZES = {'open_10mb': 10 * 1024**2, 'open_100mb': 100 * 1024**2,
+                  'open_1gb': 1024**3, 'open_5gb': 5 * 1024**3}
++SOURCE_IDENTITY_TOOL = Path(__file__).resolve().parents[2] / '.github' / 'workflows' / 'run_test_evidence.py'
++QUALIFICATION_FIELDS = {
++    'hardware': ('cpu_model', 'logical_cpus', 'physical_memory_bytes', 'storage_model'),
++    'os': ('name', 'release', 'version', 'build', 'architecture'),
++    'power': ('mode', 'source'),
++    'display': ('dpi', 'scale_percent'),
++    'editor': ('theme', 'wrap', 'syntax'),
++    'acquisition': ('setup_compilation', 'download'),
++    'cold_cache': ('method',),
++}
++
++
++def t09_source_identity(root, excluded=()):
++    """Call the PR-T09 identity implementation; keep one hash algorithm."""
++    spec = importlib.util.spec_from_file_location('bareline_run_test_evidence', SOURCE_IDENTITY_TOOL)
++    if spec is None or spec.loader is None:
++        raise RuntimeError('PR-T09 source identity tool is unavailable')
++    module = importlib.util.module_from_spec(spec)
++    spec.loader.exec_module(module)
++    return module.source_identity(Path(root), tuple(Path(path) for path in excluded))
++
++
++def validate_qualification_environment(value, base=None):
++    if not isinstance(value, dict):
++        raise ValueError('qualification_environment must be an object')
++    for section, fields in QUALIFICATION_FIELDS.items():
++        record = value.get(section)
++        numeric = {'hardware': ('logical_cpus', 'physical_memory_bytes'),
++                   'display': ('dpi', 'scale_percent'),
++                   'acquisition': ('setup_compilation', 'download')}.get(section, ())
++        if (not isinstance(record, dict) or any(type(record.get(field)) is not str or
++                not record[field].strip() for field in fields if field not in numeric)):
++            raise ValueError('qualification_environment.' + section + ' must pin ' + ', '.join(fields))
++    if type(value['hardware']['physical_memory_bytes']) is not int or value['hardware']['physical_memory_bytes'] <= 0:
++        raise ValueError('physical_memory_bytes must be a positive integer')
++    if type(value['hardware']['logical_cpus']) is not int or value['hardware']['logical_cpus'] <= 0:
++        raise ValueError('logical_cpus must be a positive integer')
++    for key in ('dpi', 'scale_percent'):
++        if (isinstance(value['display'][key], bool) or not isinstance(value['display'][key], (int, float))
++                or not math.isfinite(value['display'][key]) or value['display'][key] <= 0):
++            raise ValueError('display ' + key + ' must be a positive number')
++    fonts = value.get('fonts')
++    if not isinstance(fonts, list) or not fonts:
++        raise ValueError('qualification_environment.fonts must pin at least one font')
++    for font in fonts:
++        if (not isinstance(font, dict) or any(type(font.get(key)) is not str or not font[key].strip()
++                                             for key in ('family', 'version', 'path', 'sha256'))
++                or re.fullmatch(r'[0-9a-fA-F]{64}', font['sha256']) is None):
++            raise ValueError('each font must pin family, version, path and sha256')
++        if base is not None and digest(Path(base) / font['path']) != require_sha256(font['sha256'], 'font sha256'):
++            raise ValueError('font file hash mismatch')
++    for name, cost in value['acquisition'].items():
++        if not isinstance(cost, dict) or type(cost.get('status')) is not str or cost['status'] not in ('measured', 'unavailable', 'not_applicable'):
++            raise ValueError('acquisition ' + name + ' needs a measured, unavailable or not_applicable status')
++        if cost['status'] == 'measured':
++            metrics = {key: number for key, number in cost.items() if key.endswith(('_us', '_bytes'))}
++            if not metrics or any(isinstance(number, bool) or not isinstance(number, (int, float))
++                                  or not math.isfinite(number) or number < 0 for number in metrics.values()):
++                raise ValueError('measured acquisition cost needs finite nonnegative metrics')
++        elif type(cost.get('reason')) is not str or not cost['reason'].strip():
++            raise ValueError('unmeasured acquisition cost needs a reason')
++    plan_sha256 = value['cold_cache'].get('plan_sha256')
++    if plan_sha256 is not None and (type(plan_sha256) is not str or re.fullmatch(r'[0-9a-fA-F]{64}', plan_sha256) is None):
++        raise ValueError('cold cache plan_sha256 must be a SHA-256 or null')
++    return value
++
++
++def validate_source_pin(manifest, base):
++    pin = manifest.get('source_identity')
++    if not isinstance(pin, dict) or pin.get('algorithm') != 't09-run-test-evidence-v1':
++        raise ValueError('manifest must use the PR-T09 source identity algorithm')
++    expected = pin.get('before')
++    if not isinstance(expected, dict) or expected.get('available') is not True:
++        raise ValueError('manifest source identity must be available')
++    if type(pin.get('root')) is not str or not isinstance(pin.get('excluded_paths', []), list) or any(
++            type(path) is not str for path in pin.get('excluded_paths', [])):
++        raise ValueError('manifest source root and exclusions must be paths')
++    root = Path(pin['root']).resolve()
++    excluded = [(Path(base) / path).resolve() for path in pin.get('excluded_paths', [])]
++    actual = t09_source_identity(root, excluded)
++    if actual != expected:
++        raise ValueError('source identity changed after manifest preparation')
++    return root, excluded, actual
++
++
++def validate_host_identity(manifest):
++    if manifest['machine_id'].casefold() != platform.node().casefold():
++        raise ValueError('manifest machine identity does not match this host')
++    qualification = manifest['qualification_environment']
++    planned_os = qualification['os']
++    observed = {
++        'name': platform.system(), 'release': platform.release(),
++        'version': platform.version(), 'architecture': platform.machine(),
++    }
++    if any(str(planned_os[key]).casefold() != str(actual).casefold() for key, actual in observed.items()):
++        raise ValueError('manifest OS identity does not match this host')
++    if str(planned_os['build']).casefold() not in str(platform.version()).casefold().split('.'):
++        raise ValueError('manifest OS build does not match this host')
++    if qualification['hardware']['logical_cpus'] != os.cpu_count():
++        raise ValueError('manifest logical CPU count does not match this host')
++
++
++def validate_cold_cache_pins(manifest):
++    plan_sha256 = manifest['qualification_environment']['cold_cache'].get('plan_sha256')
++    for scenario in manifest['scenarios']:
++        if scenario['name'] == 'cold_launch' and scenario.get('cache_plan_sha256') != plan_sha256:
++            raise ValueError('cold launch plan must match the qualification environment pin')
++
++
++def report_source_valid(report):
++    provenance = report.get('provenance', {})
++    nested = provenance.get('manifest', {})
++    source_before = provenance.get('source_before', nested.get('source_before'))
++    source_after = provenance.get('source_after', nested.get('source_after'))
++    changed = provenance.get('source_changed_during_run', nested.get('source_changed_during_run'))
++    return (isinstance(source_before, dict) and source_before.get('available') is True
++            and isinstance(source_after, dict) and source_after.get('available') is True
++            and source_before == source_after and changed is False)
+ 
+ 
+ def validate_fixture_size(path, scenario):
+@@ -50,6 +170,12 @@ def digest(path):
+     return value.hexdigest()
+ 
+ 
++def require_sha256(value, label='sha256'):
++    if type(value) is not str or re.fullmatch(r'[0-9a-fA-F]{64}', value) is None:
++        raise ValueError(label + ' must be a SHA-256')
++    return value.lower()
++
++
+ def read_json(path):
+     if Path(path).stat().st_size > 16 * 1024 * 1024:
+         raise ValueError("JSON input exceeds 16 MiB")
+@@ -163,20 +289,29 @@ def run(manifest_path, destination):
+     if manifest["series"] not in ("local", "hosted", "profiled"):
+         raise ValueError("series must be local, hosted or profiled")
+     # A common configuration identity is explicit, never inferred from OS alone.
+-    if not manifest.get("configuration") or not manifest.get("machine_id"):
++    if (type(manifest.get("configuration")) is not str or not manifest['configuration'].strip()
++            or type(manifest.get("machine_id")) is not str or not manifest['machine_id'].strip()):
+         raise ValueError("configuration and machine_id are required")
++    validate_qualification_environment(manifest.get('qualification_environment'), base)
++    validate_host_identity(manifest)
++    source_root, source_excluded, source_before = validate_source_pin(manifest, base)
+     apps = manifest["applications"]
+-    if set(apps) not in ({"bareline", "notepadpp"}, {"bareline"}):
++    if not isinstance(apps, dict) or set(apps) not in ({"bareline", "notepadpp"}, {"bareline"}):
+         raise ValueError("runs require Bareline alone or a Bareline/Notepad++ pair")
+     for app in apps.values():
++        if (not isinstance(app, dict) or type(app.get('executable')) is not str
++                or type(app.get('version')) is not str or not app['version'].strip()
++                or not isinstance(app.get('settings'), dict) or not app['settings']):
++            raise ValueError('application path, version and settings must be pinned')
+         app["executable"] = str((base / app["executable"]).resolve())
+-        if digest(app["executable"]) != app["sha256"].lower():
++        if digest(app["executable"]) != require_sha256(app.get("sha256"), 'application sha256'):
+             raise ValueError("application executable hash mismatch")
+-        if not app.get("version") or not app.get("settings"):
+-            raise ValueError("pin application version and settings")
+     if "notepadpp" in apps and apps["notepadpp"]["settings"].get("plugins_disabled") is not True:
+         raise ValueError("Notepad++ plugins_disabled must be true")
+     scenarios = manifest["scenarios"]
++    if not isinstance(scenarios, list) or not scenarios or any(not isinstance(item, dict) for item in scenarios):
++        raise ValueError('scenarios must be a nonempty object list')
++    validate_cold_cache_pins(manifest)
+     names = [s["name"] for s in scenarios]
+     if len(names) != len(set(names)) or any(n not in SCENARIOS for n in names):
+         raise ValueError("unknown or duplicate scenario")
+@@ -184,29 +319,38 @@ def run(manifest_path, destination):
+         if not isinstance(scenario.get("comparable_metrics", []), list) or any(
+                 not isinstance(metric, str) for metric in scenario.get("comparable_metrics", [])):
+             raise ValueError("comparable_metrics must explicitly list reviewed matching endpoints")
+-        if not scenario.get("cache_state") or not scenario.get("renderer"):
++        if (type(scenario.get("cache_state")) is not str or not scenario['cache_state'].strip()
++                or type(scenario.get("renderer")) is not str or not scenario['renderer'].strip()):
+             raise ValueError("explicit cache_state and renderer required")
+-        if not 1 <= scenario["timeout_seconds"] <= 3600:
++        timeout = scenario.get("timeout_seconds")
++        if (isinstance(timeout, bool) or not isinstance(timeout, (int, float))
++                or not math.isfinite(timeout) or not 1 <= timeout <= 3600):
+             raise ValueError("scenario timeout must be 1..3600 seconds")
+         for fixture in scenario.get("fixtures", []):
+-            if digest(base / fixture["path"]) != fixture["sha256"].lower():
++            if not isinstance(fixture, dict) or type(fixture.get('path')) is not str:
++                raise ValueError('fixture path and SHA-256 must be pinned')
++            if digest(base / fixture["path"]) != require_sha256(fixture.get("sha256"), 'fixture sha256'):
+                 raise ValueError("fixture hash mismatch")
+         for app_id in apps:
+             driver = scenario["drivers"][app_id]
++            if (not isinstance(driver, dict) or not isinstance(driver.get('argv'), list)
++                    or not driver['argv'] or any(type(arg) is not str for arg in driver['argv'])):
++                raise ValueError('driver argv must be a nonempty string list')
+             driver["argv"][0] = str((base / driver["argv"][0]).resolve())
+-            if digest(driver["argv"][0]) != driver["sha256"].lower():
++            if digest(driver["argv"][0]) != require_sha256(driver.get("sha256"), 'driver sha256'):
+                 raise ValueError("driver executable hash mismatch")
+-            if any(not isinstance(arg, str) for arg in driver["argv"]):
+-                raise ValueError("driver argv must be strings")
+             for pinned in driver.get("pinned_files", []):
+-                if digest(base / pinned["path"]) != pinned["sha256"].lower():
++                if not isinstance(pinned, dict) or type(pinned.get('path')) is not str:
++                    raise ValueError('support-file path and SHA-256 must be pinned')
++                if digest(base / pinned["path"]) != require_sha256(pinned.get("sha256"), 'support-file sha256'):
+                     raise ValueError("driver support file hash mismatch")
+     destination = Path(destination).resolve() / (time.strftime("%Y%m%dT%H%M%S") + "-" + uuid.uuid4().hex)
+     destination.mkdir(parents=True)
+-    envelope = {"schema_version": 1, "kind": "paired_performance" if len(apps) == 2 else "native_performance", "manifest": manifest,
++    envelope = {"schema_version": 2, "kind": "paired_performance" if len(apps) == 2 else "native_performance", "manifest": manifest,
+                 "manifest_sha256": digest(manifest_path), "environment": {
+                     "os": platform.platform(), "architecture": platform.machine(),
+                     "logical_cpus": os.cpu_count(), "python": platform.python_version()},
++                "source_before": source_before,
+                 "missing_scenarios": sorted(set(SCENARIOS) - set(names))}
+     write_new(destination / "provenance.json", envelope)
+     output_bytes = 0
+@@ -230,7 +374,13 @@ def run(manifest_path, destination):
+                 if output_bytes > 256 * 1024 * 1024:
+                     write_new(destination / "interrupted.json", {"status": "run_output_quota", "unexecuted_trials": "See missing pairs in report"})
+                     print(destination)
++                    source_after = t09_source_identity(source_root, source_excluded)
++                    write_new(destination / 'source-after.json', {'source_after': source_after,
++                              'source_changed_during_run': source_after != source_before})
+                     return destination
++    source_after = t09_source_identity(source_root, source_excluded)
++    write_new(destination / 'source-after.json', {'source_after': source_after,
++              'source_changed_during_run': source_after != source_before})
+     print(destination)
+     return destination
+ 
+@@ -243,14 +393,24 @@ def percentile(values, fraction):
+ def report(directory, destination):
+     directory = Path(directory)
+     provenance = read_json(directory / "provenance.json")
++    source_after_path = directory / 'source-after.json'
++    if source_after_path.exists():
++        provenance.update(read_json(source_after_path))
++    else:
++        provenance.update(source_after=None, source_changed_during_run=None)
+     manifest = provenance["manifest"]
++    source_valid = report_source_valid({'provenance': provenance})
+     applications = tuple(manifest.get("applications", {"bareline": {}, "notepadpp": {}}))
+     records = []
++    coverage = []
+     for scenario in manifest["scenarios"]:
+         for pair in range(manifest["repetitions"]):
+             for app in applications:
+                 path = directory / f'{scenario["name"]}-{pair}-{app}.json'
+                 if not path.exists():
++                    coverage.append({'id': f'{scenario["name"]}/{pair}/{app}', 'scenario': scenario['name'],
++                                     'pair': pair, 'application': app, 'status': 'not_run',
++                                     'reason': 'trial artifact is absent', 'artifact': None})
+                     continue
+                 raw = read_json(path)
+                 if (raw.get("scenario"), raw.get("pair"), raw.get("application")) != (scenario["name"], pair, app):
+@@ -259,7 +419,13 @@ def report(directory, destination):
+                 if not isinstance(values, dict) or any(isinstance(v, bool) or not isinstance(v, (int, float))
+                         or not math.isfinite(v) or v < 0 for v in values.values()):
+                     raise ValueError("invalid persisted metric")
+-                records.append({k: raw.get(k) for k in ("scenario", "pair", "position", "application", "metrics", "status")})
++                record = {k: raw.get(k) for k in ("scenario", "pair", "position", "application", "metrics", "status", "exit_code", "error")}
++                records.append(record)
++                coverage.append({'id': f'{scenario["name"]}/{pair}/{app}', 'scenario': scenario['name'],
++                                 'pair': pair, 'application': app,
++                                 'status': 'measured' if raw.get('status') == 'ok' else 'failed',
++                                 'reason': raw.get('error'), 'artifact': path.name,
++                                 'artifact_sha256': digest(path), 'exit_code': raw.get('exit_code')})
+     rows = []
+     observations = []
+     for scenario in manifest["scenarios"]:
+@@ -269,10 +435,14 @@ def report(directory, destination):
+             for application in applications:
+                 values = [r["metrics"][metric] for r in selected if r["application"] == application
+                           and r["status"] == "ok" and metric in (r.get("metrics") or {})]
+-                observations.append({"scenario": scenario["name"], "application": application,
++                observations.append({"id": f'{scenario["name"]}/{application}/{metric}',
++                    "scenario": scenario["name"], "application": application,
+                     "metric": metric, "sample_count": len(values), "p50": percentile(values, .5),
+-                    "p95": percentile(values, .95), "comparison_eligible": False})
+-            if metric not in scenario.get("comparable_metrics", []):
++                    "p95": percentile(values, .95),
++                    "status": ('measured' if source_valid and len(values) == manifest['repetitions'] else
++                               'unqualified' if values else 'not_run'),
++                    "comparison_eligible": False})
++            if metric not in scenario.get("comparable_metrics", []) or set(applications) != {'bareline', 'notepadpp'}:
+                 continue
+             pairs = []
+             excluded = []
+@@ -288,25 +458,45 @@ def report(directory, destination):
+             stats = {a: {"p50": percentile([p[a] for p in pairs], .5),
+                          "p95": percentile([p[a] for p in pairs], .95)} for a in ("bareline", "notepadpp")}
+             denominator = stats["notepadpp"]["p50"]
+-            rows.append({"scenario": scenario["name"], "metric": metric, "paired_samples": len(pairs),
++            rows.append({"id": f'{scenario["name"]}/{metric}', "scenario": scenario["name"], "metric": metric, "paired_samples": len(pairs),
+                          "excluded_pairs": excluded, **stats,
++                         "status": 'measured' if source_valid and len(pairs) == manifest['repetitions'] else 'unqualified',
+                          "p50_ratio": stats["bareline"]["p50"] / denominator if denominator else None})
+-    write_new(destination, {"schema_version": 1, "provenance": provenance, "rows": rows, "observations": observations,
++    ineligibility = ['performance claims require owner review and approval']
++    if len(applications) != 2:
++        ineligibility.append('comparator application is absent')
++    if provenance.get('missing_scenarios'):
++        ineligibility.append('registry scenarios are missing')
++    if provenance.get('source_changed_during_run') is not False:
++        ineligibility.append('source identity is unavailable or changed during the run')
++    if any(item['status'] != 'measured' for item in coverage):
++        ineligibility.append('one or more trials failed or were not run')
++    if set(applications) == {'bareline', 'notepadpp'} and (not rows or any(row['status'] != 'measured' for row in rows)):
++        ineligibility.append('comparative cohorts are absent or incomplete')
++    write_new(destination, {"schema_version": 2, "kind": 'performance_qualification_report',
++                            "qualification_status": 'unqualified',
++                            "provenance": provenance, "rows": rows, "observations": observations,
++                            "coverage": coverage,
+                             "failures": [r for r in records if r["status"] != "ok"],
+                             "missing_trials": len(manifest["scenarios"]) * manifest["repetitions"] * len(applications) - len(records),
+                             "claims_eligible": False,
++                            "ineligibility_reasons": ineligibility,
+                             "claim_review": "Review pinned comparable settings, actual driver semantics and complete evidence before any claim",
+                             "percentile_method": "nearest rank; complete matched pairs only"})
+ 
+ 
+ def regress(candidate_path, baselines, destination):
+     candidate = read_json(candidate_path)
++    if not report_source_valid(candidate):
++        raise ValueError('candidate source identity is unavailable or changed during the run')
+     manifest = candidate["provenance"]["manifest"]
+     history = [read_json(path) for path in baselines]
+     if len(history) != 7:
+         raise ValueError("rolling baseline requires exactly the previous seven reports")
+-    identity = ("series", "configuration", "machine_id")
+-    if any(any(report["provenance"]["manifest"][k] != manifest[k] for k in identity) for report in history):
++    if any(not report_source_valid(report) for report in history):
++        raise ValueError('rolling baseline source identity is unavailable or changed')
++    identity = ("series", "configuration", "machine_id", "qualification_environment")
++    if any(any(report["provenance"]["manifest"].get(k) != manifest.get(k) for k in identity) for report in history):
+         raise ValueError("cannot mix machines, configurations or hosted/profiled/local series")
+     def scenarios(config):
+         return [{k: value for k, value in scenario.items() if k != "drivers"}
+@@ -321,10 +511,13 @@ def regress(candidate_path, baselines, destination):
+         raise ValueError("cannot mix application settings or comparator versions")
+     findings = []
+     for row in candidate["rows"]:
++        if row.get('status') != 'measured':
++            continue
+         if row.get("paired_samples", row.get("sample_count", 0)) < 3 or row.get("excluded_pairs"):
+             continue
+         previous = [old["bareline"]["p50"] for report in history for old in report["rows"]
+                     if (old["scenario"], old["metric"]) == (row["scenario"], row["metric"])
++                    and old.get('status') == 'measured'
+                     and old.get("paired_samples", old.get("sample_count", 0)) >= 3 and not old.get("excluded_pairs")]
+         if len(previous) != len(history):
+             continue
+diff --git a/tests/perf/test_native_nightly.py b/tests/perf/test_native_nightly.py
+index 0e32362..bebbb98 100644
+--- a/tests/perf/test_native_nightly.py
++++ b/tests/perf/test_native_nightly.py
+@@ -3,6 +3,7 @@
+ from pathlib import Path
+ import tempfile
+ import unittest
++from unittest import mock
+ 
+ from disk_metrics import DiskSampler, snapshot, isolated_environment
+ import native_nightly
+@@ -21,21 +22,52 @@ class NativeContracts(unittest.TestCase):
+     def test_missing_plan_records_every_case_without_launch(self):
+         with tempfile.TemporaryDirectory() as directory:
+             target = Path(directory) / 'run'
+-            native_nightly.run('', '', 'does-not-exist.exe', target)
++            self.assertEqual(native_nightly.run('', '', 'does-not-exist.exe', target), 1)
+             report = perf_suite.read_json(target / 'native-report.json')
++            self.assertEqual(report['schema_version'], 2)
+             self.assertEqual(len(report['coverage']), len(native_nightly.required_cases()))
+             self.assertTrue(all(case['status'] == 'unavailable' and case['reason'] for case in report['coverage']))
++            self.assertEqual(len({case['id'] for case in report['coverage']}), len(report['coverage']))
++            self.assertIsNone(report['provenance']['manifest']['application']['sha256'])
++            self.assertIn('comparator application is absent', report['ineligibility_reasons'])
+             self.assertEqual(report['rows'], [])
+             self.assertFalse(report['claims_eligible'])
+ 
++    def test_cli_propagates_unavailable_qualification_as_failure(self):
++        with tempfile.TemporaryDirectory() as directory:
++            target = Path(directory) / 'run'
++            argv = ['native_nightly.py', '--application', 'does-not-exist.exe',
++                    '--destination', str(target)]
++            with mock.patch('sys.argv', argv):
++                self.assertEqual(native_nightly.main(), 1)
++            self.assertTrue((target / 'native-report.json').is_file())
++
+     def test_failed_or_incomplete_samples_never_enter_rolling_baseline(self):
+-        report = {'observations': [{'application': 'bareline', 'metric': 'operation_us',
+-                  'sample_count': 3, 'p50': 100, 'p95': 110}], 'failures': [], 'missing_trials': 0}
++        identity = {'available': True, 'head': 'fixture', 'working_tree_dirty': False,
++                    'source_manifest_sha256': 'a' * 64}
++        report = {'provenance': {'source_before': identity, 'source_after': identity,
++                  'source_changed_during_run': False},
++                  'observations': [{'application': 'bareline', 'metric': 'operation_us',
++                  'sample_count': 3, 'p50': 100, 'p95': 110, 'status': 'measured'}],
++                  'failures': [], 'missing_trials': 0}
+         rows = native_nightly.regression_rows(report, 'scroll', 'software', 3)
+         self.assertEqual(rows[0]['scenario'], 'scroll@software')
+         self.assertEqual(native_nightly.regression_rows({**report, 'missing_trials': 1}, 'scroll', 'software', 3), [])
+         self.assertEqual(native_nightly.regression_rows({**report, 'failures': ['timeout']}, 'scroll', 'software', 3), [])
+         self.assertEqual(native_nightly.regression_rows(report, 'scroll', 'software', 4), [])
++        unqualified = {**report, 'observations': [{**report['observations'][0], 'status': 'unqualified'}]}
++        self.assertEqual(native_nightly.regression_rows(unqualified, 'scroll', 'software', 3), [])
++
++    def test_source_change_rejects_rows_and_success_exit(self):
++        before = {'available': True, 'head': 'fixture', 'working_tree_dirty': False,
++                  'source_manifest_sha256': 'a' * 64}
++        after = {**before, 'source_manifest_sha256': 'b' * 64}
++        report = {'provenance': {'source_before': before, 'source_after': after,
++                  'source_changed_during_run': True}, 'observations': [],
++                  'failures': [], 'missing_trials': 0}
++        self.assertEqual(native_nightly.regression_rows(report, 'scroll', 'hardware', 3), [])
++        self.assertEqual(native_nightly.qualification_exit_code(before, after,
++                         [{'status': 'measured'}]), 1)
+ 
+     def test_disk_peak_growth_and_release_use_actual_owned_files(self):
+         with tempfile.TemporaryDirectory() as directory:
+diff --git a/tests/perf/test_perf_suite.py b/tests/perf/test_perf_suite.py
+index a733d43..9e4709d 100644
+--- a/tests/perf/test_perf_suite.py
++++ b/tests/perf/test_perf_suite.py
+@@ -1,15 +1,109 @@
+ # SPDX-License-Identifier: MPL-2.0
+ """Focused harness regressions; run only at the coordinated verification gate."""
+ import json
++import os
+ from pathlib import Path
++import platform
++import subprocess
+ import sys
+ import tempfile
+ import unittest
+ 
++import native_nightly
+ import perf_suite as suite
+ 
+ 
++def qualification_environment(font):
++    return {
++        'hardware': {'cpu_model': 'controlled fixture CPU', 'logical_cpus': os.cpu_count(),
++                     'physical_memory_bytes': 1, 'storage_model': 'controlled fixture storage'},
++        'os': {'name': platform.system(), 'release': platform.release(), 'version': platform.version(),
++               'build': platform.version().split('.')[-1], 'architecture': platform.machine()},
++        'power': {'mode': 'controlled fixture mode', 'source': 'controlled fixture source'},
++        'display': {'dpi': 96, 'scale_percent': 100},
++        'fonts': [{'family': 'fixture', 'version': '1', 'path': str(font), 'sha256': suite.digest(font)}],
++        'editor': {'theme': 'light', 'wrap': 'off', 'syntax': 'plain text'},
++        'acquisition': {
++            'setup_compilation': {'status': 'not_applicable', 'reason': 'inert Python driver'},
++            'download': {'status': 'not_applicable', 'reason': 'local test fixture'},
++        },
++        'cold_cache': {'method': 'not applicable', 'plan_sha256': None},
++    }
++
++
++def init_source_repository(root):
++    root.mkdir()
++    tracked = root / 'tracked.txt'
++    tracked.write_text('original', encoding='utf-8')
++    for arguments in (('init',), ('add', 'tracked.txt'),
++                      ('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
++                       'commit', '-m', 'fixture')):
++        subprocess.run(['git', *arguments], cwd=root, check=True, capture_output=True)
++    return tracked
++
++
++def inert_manifest(root, mutate=False):
++    source = root / 'source'
++    tracked = init_source_repository(source)
++    font = root / 'font.bin'; font.write_bytes(b'font fixture')
++    driver = root / 'driver.py'
++    driver.write_text("import json, pathlib, sys\nif len(sys.argv) > 1: pathlib.Path(sys.argv[1]).write_text('changed', encoding='utf-8')\nprint(json.dumps({'event':'measurement','metrics':{'latency_us':10}}))\n", encoding='utf-8')
++    identity = suite.t09_source_identity(source)
++    python = str(Path(sys.executable).resolve())
++    driver_record = {'argv': [python, str(driver)] + ([str(tracked)] if mutate else []),
++                     'sha256': suite.digest(python),
++                     'pinned_files': [{'path': str(driver), 'sha256': suite.digest(driver)}]}
++    app = {'executable': python, 'sha256': suite.digest(python), 'version': platform.python_version(),
++           'settings': {'config': 'inert'}}
++    return {'schema_version': 2, 'series': 'local', 'machine_id': platform.node(),
++            'configuration': 'controlled-inert-driver', 'repetitions': 1,
++            'qualification_environment': qualification_environment(font),
++            'source_identity': {'algorithm': 't09-run-test-evidence-v1', 'root': str(source),
++                                'excluded_paths': [], 'before': identity},
++            'applications': {'bareline': app, 'notepadpp': {**app, 'settings': {'plugins_disabled': True}}},
++            'scenarios': [{'name': 'save', 'timeout_seconds': 5, 'cache_state': 'controlled inert',
++                           'renderer': 'hardware', 'fixtures': [], 'comparable_metrics': ['latency_us'],
++                           'drivers': {'bareline': driver_record, 'notepadpp': driver_record}}]}
++
++
+ class EvidenceTests(unittest.TestCase):
++    def test_qualification_environment_requires_structured_reproducibility_pins(self):
++        environment = {
++            'hardware': {'cpu_model': 'fixture cpu', 'logical_cpus': 1,
++                         'physical_memory_bytes': 1, 'storage_model': 'fixture disk'},
++            'os': {'name': 'Windows', 'release': 'fixture', 'version': 'fixture',
++                   'build': '1', 'architecture': 'x64'},
++            'power': {'mode': 'balanced', 'source': 'AC'},
++            'display': {'dpi': 96, 'scale_percent': 100},
++            'fonts': [],
++            'editor': {'theme': 'light', 'wrap': 'off', 'syntax': 'plain text'},
++            'acquisition': {
++                'setup_compilation': {'status': 'unavailable', 'reason': 'fixture'},
++                'download': {'status': 'not_applicable', 'reason': 'offline fixture'},
++            },
++            'cold_cache': {'method': 'pinned external receipt'},
++        }
++        with self.assertRaisesRegex(ValueError, 'fonts'):
++            suite.validate_qualification_environment(environment)
++
++    def test_environment_rejects_nonfinite_display_and_untyped_hashes(self):
++        with tempfile.TemporaryDirectory() as directory:
++            font = Path(directory) / 'font.bin'; font.write_bytes(b'font')
++            environment = qualification_environment(font)
++            environment['display']['dpi'] = float('nan')
++            with self.assertRaisesRegex(ValueError, 'dpi'):
++                suite.validate_qualification_environment(environment)
++            environment = qualification_environment(font)
++            environment['fonts'][0]['sha256'] = 7
++            with self.assertRaisesRegex(ValueError, 'font'):
++                suite.validate_qualification_environment(environment)
++
++    def test_cold_cache_method_and_scenario_use_the_same_plan(self):
++        manifest = {'qualification_environment': {'cold_cache': {'plan_sha256': 'a' * 64}},
++                    'scenarios': [{'name': 'cold_launch', 'cache_plan_sha256': 'b' * 64}]}
++        with self.assertRaisesRegex(ValueError, 'cold launch plan'):
++            suite.validate_cold_cache_pins(manifest)
++
+     def test_timeout_and_failing_child_retain_diagnostics(self):
+         result = suite.capture([sys.executable, "-c", "import sys; print('receipt', flush=True); sys.exit(3)"], None, 2)
+         self.assertEqual(result["status"], "failed")
+@@ -34,8 +128,64 @@ class EvidenceTests(unittest.TestCase):
+             report = suite.read_json(root / "report.out")
+             self.assertEqual(report["rows"][0]["p50_ratio"], .5)
+             self.assertEqual(report["rows"][0]["excluded_pairs"], [1])
++            self.assertEqual(report['rows'][0]['status'], 'unqualified')
++            self.assertEqual([item['status'] for item in report['coverage']].count('not_run'), 1)
++            self.assertIsNone(next(item for item in report['coverage'] if item['status'] == 'not_run')['artifact'])
+             self.assertFalse(report["claims_eligible"])
+ 
++    def test_failed_trial_keeps_status_without_fabricating_metrics(self):
++        with tempfile.TemporaryDirectory() as directory:
++            root = Path(directory)
++            suite.write_new(root / 'provenance.json', {'manifest': {'repetitions': 1,
++                'series': 'local', 'applications': {'bareline': {}},
++                'scenarios': [{'name': 'cold_launch', 'comparable_metrics': []}]},
++                'missing_scenarios': ['warm_launch']})
++            suite.write_new(root / 'cold_launch-0-bareline.json', {'scenario': 'cold_launch', 'pair': 0,
++                'position': 0, 'application': 'bareline', 'status': 'timeout', 'metrics': None,
++                'exit_code': None, 'error': 'deadline'})
++            suite.report(root, root / 'report.out')
++            output = suite.read_json(root / 'report.out')
++            self.assertEqual(output['schema_version'], 2)
++            self.assertEqual(output['coverage'][0]['status'], 'failed')
++            self.assertEqual(output['failures'][0]['status'], 'timeout')
++            self.assertEqual(output['observations'], [])
++            self.assertIn('one or more trials failed or were not run', output['ineligibility_reasons'])
++
++    def test_inert_paired_run_retains_raw_trials_and_valid_source(self):
++        with tempfile.TemporaryDirectory() as directory:
++            root = Path(directory)
++            manifest_path = root / 'manifest.json'
++            suite.write_new(manifest_path, inert_manifest(root))
++            run = suite.run(manifest_path, root / 'runs')
++            report_path = root / 'report.json'
++            suite.report(run, report_path)
++            report = suite.read_json(report_path)
++            self.assertTrue(suite.report_source_valid(report))
++            self.assertEqual(report['rows'][0]['status'], 'measured')
++            self.assertEqual(report['rows'][0]['paired_samples'], 1)
++            self.assertTrue(all(item['status'] == 'measured' for item in report['coverage']))
++            raw = suite.read_json(run / 'save-0-bareline.json')
++            self.assertEqual(raw['status'], 'ok')
++            self.assertIn('"event": "measurement"', raw['stdout'])
++
++    def test_source_mutation_retains_measurements_but_blocks_report_and_regression(self):
++        with tempfile.TemporaryDirectory() as directory:
++            root = Path(directory)
++            manifest_path = root / 'manifest.json'
++            suite.write_new(manifest_path, inert_manifest(root, mutate=True))
++            run = suite.run(manifest_path, root / 'runs')
++            report_path = root / 'report.json'
++            suite.report(run, report_path)
++            report = suite.read_json(report_path)
++            self.assertFalse(suite.report_source_valid(report))
++            self.assertEqual(report['rows'][0]['status'], 'unqualified')
++            self.assertTrue(all(item['status'] == 'measured' for item in report['coverage']))
++            provenance = report['provenance']
++            self.assertEqual(native_nightly.qualification_exit_code(
++                provenance['source_before'], provenance['source_after'], report['coverage']), 1)
++            with self.assertRaisesRegex(ValueError, 'candidate source identity'):
++                suite.regress(report_path, [], root / 'regression.json')
++
+     def test_invalid_marker_never_becomes_zero_measurement(self):
+         for value in ({}, {"event": "measurement", "metrics": {"time": -1}}, {"event": "measurement", "metrics": {"time": True}}):
+             with self.assertRaises(ValueError):
+@@ -65,10 +215,15 @@ class EvidenceTests(unittest.TestCase):
+         with tempfile.TemporaryDirectory() as directory:
+             root = Path(directory)
+             manifest = {'series': 'hosted', 'configuration': 'fixed', 'machine_id': 'hosted'}
+-            row = {'scenario': 'launch', 'metric': 'first_frame_us', 'sample_count': 3, 'bareline': {'p50': 100}}
++            identity = {'available': True, 'head': 'fixture', 'working_tree_dirty': False,
++                        'source_manifest_sha256': 'a' * 64}
++            provenance = {'manifest': manifest, 'source_before': identity, 'source_after': identity,
++                          'source_changed_during_run': False}
++            row = {'scenario': 'launch', 'metric': 'first_frame_us', 'sample_count': 3,
++                   'status': 'measured', 'bareline': {'p50': 100}}
+             for index in range(7):
+-                suite.write_new(root / f'{index}.json', {'provenance': {'manifest': manifest}, 'rows': [row]})
+-            suite.write_new(root / 'candidate.json', {'provenance': {'manifest': manifest},
++                suite.write_new(root / f'{index}.json', {'provenance': provenance, 'rows': [row]})
++            suite.write_new(root / 'candidate.json', {'provenance': provenance,
+                 'rows': [{**row, 'bareline': {'p50': 120}}]})
+             baselines = [str(root / f'{index}.json') for index in range(7)]
+             with self.assertRaises(ValueError):
+@@ -77,6 +232,10 @@ class EvidenceTests(unittest.TestCase):
+             output = suite.read_json(root / 'report.out')
+             self.assertEqual(len(output['findings']), 1)
+             self.assertFalse(output['ci_failure_from_numbers'])
++            suite.write_new(root / 'unqualified.json', {'provenance': provenance,
++                'rows': [{**row, 'status': 'unqualified', 'bareline': {'p50': 120}}]})
++            suite.regress(root / 'unqualified.json', baselines, root / 'unqualified.out')
++            self.assertEqual(suite.read_json(root / 'unqualified.out')['findings'], [])
+ 
+ 
+ if __name__ == "__main__":

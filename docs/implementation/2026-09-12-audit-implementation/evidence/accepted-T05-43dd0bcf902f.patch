@@ -1,0 +1,69 @@
+diff --git a/crates/app/src/workspace.rs b/crates/app/src/workspace.rs
+index 608cf62..52f6285 100644
+--- a/crates/app/src/workspace.rs
++++ b/crates/app/src/workspace.rs
+@@ -3324,11 +3324,13 @@ mod tests {
+             let mut hash = std::collections::hash_map::DefaultHasher::new();
+             path.hash(&mut hash);
+             Ok(Some(bareline_platform::CacheDirectoryLease {
++                path: path.to_path_buf(),
+                 identity: bareline_platform::CacheDirectoryIdentity {
+                     volume: 1,
+                     file: hash.finish(),
+                 },
+                 guard: Arc::new(()),
++                migration_publisher: None,
+             }))
+         }
+         fn remove_owned_cache_directory(
+diff --git a/crates/file-io/src/paged_recovery.rs b/crates/file-io/src/paged_recovery.rs
+index 8c56e0b..a6b8f46 100644
+--- a/crates/file-io/src/paged_recovery.rs
++++ b/crates/file-io/src/paged_recovery.rs
+@@ -1544,11 +1544,13 @@ mod sweep_tests {
+             let mut hash = std::collections::hash_map::DefaultHasher::new();
+             path.hash(&mut hash);
+             Ok(Some(bareline_platform::CacheDirectoryLease {
++                path: path.to_path_buf(),
+                 identity: bareline_platform::CacheDirectoryIdentity {
+                     volume: 1,
+                     file: hash.finish(),
+                 },
+                 guard: Arc::new(()),
++                migration_publisher: None,
+             }))
+         }
+         fn remove_owned_cache_directory(
+diff --git a/crates/file-io/src/recovery_retirement.rs b/crates/file-io/src/recovery_retirement.rs
+index 195a645..632972c 100644
+--- a/crates/file-io/src/recovery_retirement.rs
++++ b/crates/file-io/src/recovery_retirement.rs
+@@ -532,8 +532,10 @@ mod tests {
+         fn cache_directory_guard(&self, path: &Path) -> io::Result<Option<CacheDirectoryLease>> {
+             match directory_identity(path) {
+                 Ok(identity) => Ok(Some(CacheDirectoryLease {
++                    path: path.to_path_buf(),
+                     identity,
+                     guard: Arc::new(()),
++                    migration_publisher: None,
+                 })),
+                 Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+                 Err(error) => Err(error),
+diff --git a/crates/file-io/src/resident_recovery.rs b/crates/file-io/src/resident_recovery.rs
+index 644340b..2780661 100644
+--- a/crates/file-io/src/resident_recovery.rs
++++ b/crates/file-io/src/resident_recovery.rs
+@@ -474,11 +474,13 @@ mod journal_tests {
+             let mut hash = std::collections::hash_map::DefaultHasher::new();
+             path.hash(&mut hash);
+             Ok(Some(bareline_platform::CacheDirectoryLease {
++                path: path.to_path_buf(),
+                 identity: bareline_platform::CacheDirectoryIdentity {
+                     volume: 1,
+                     file: hash.finish(),
+                 },
+                 guard: Arc::new(()),
++                migration_publisher: None,
+             }))
+         }
+         fn remove_owned_cache_directory(

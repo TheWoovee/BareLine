@@ -29,10 +29,21 @@ if ($FinalInventory) {
 $payload = (Resolve-Path -LiteralPath $PayloadDir).Path
 [System.IO.Directory]::CreateDirectory([System.IO.Path]::GetFullPath($OutputDir)) | Out-Null
 $output = (Resolve-Path -LiteralPath $OutputDir).Path
+if (Test-Path -LiteralPath (Join-Path $output 'SHA-256SUMS.minisig')) { throw 'Use a new output directory; an existing signed inventory must not be replaced' }
 $names = @('bareline.exe', 'bareline-update-helper.exe', 'LICENSE', 'THIRD-PARTY-NOTICES.md', 'SBOM.json')
 foreach ($name in $names) {
     $item = Get-Item -LiteralPath (Join-Path $payload $name)
     if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw "Payload must contain regular files: $name" }
+}
+$installerPath = Join-Path $output "bareline-$Version-windows-x64-setup.exe"
+if ($Installer) {
+    if (-not $Iscc) { throw 'Installer requires explicit path to pinned Inno Setup 6.4.3 ISCC.exe' }
+    $compiler = Get-Item -LiteralPath $Iscc
+    if ($compiler.PSIsContainer) { throw 'Expected Inno Setup ISCC.exe file' }
+    if (Test-Path -LiteralPath $installerPath) { throw "Existing installer must not be overwritten: $installerPath" }
+    # ISCC PE version resources may be 0.0.0.0. ISPP Ver identifies the actual compiler.
+    & $compiler.FullName '/Q' '/O-' (Join-Path $PSScriptRoot 'compiler-probe.iss')
+    if ($LASTEXITCODE -ne 0) { throw 'Expected pinned Inno Setup 6.4.3; compiler probe failed' }
 }
 # Fixed order/timestamp, no compression: reproducible container for identical input bytes.
 Add-Type -AssemblyName System.IO.Compression
@@ -55,15 +66,14 @@ try {
     } finally { $zip.Dispose() }
 } finally { $stream.Dispose() }
 if ($Installer) {
-    if (-not $Iscc) { throw 'Installer requires explicit path to pinned Inno Setup 6.4.3 ISCC.exe' }
-    $compiler = Get-Item -LiteralPath $Iscc
-    if ($compiler.VersionInfo.ProductVersion -notmatch '^6\.4\.3(?:\D|$)') { throw 'Expected pinned Inno Setup 6.4.3' }
     & $compiler.FullName "/DAppVersion=$Version" "/DPayloadDir=$payload" "/DOutputDir=$output" (Join-Path $PSScriptRoot 'bareline.iss')
     if ($LASTEXITCODE -ne 0) { throw "ISCC failed: $LASTEXITCODE" }
+    if (-not (Test-Path -LiteralPath $installerPath -PathType Leaf)) { throw 'ISCC did not create the expected installer' }
 }
 $inventory = foreach ($file in (Get-ChildItem -LiteralPath $output -File | Where-Object { $_.Name -match '\.(zip|exe)$' } | Sort-Object Name)) {
     '{0}  {1}' -f (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant(), $file.Name
 }
 [IO.File]::WriteAllText((Join-Path $output 'SHA-256SUMS'), (($inventory -join "`n") + "`n"), [Text.UTF8Encoding]::new($false))
 Write-Output "Local unsigned package assembled: $zipPath"
+if ($Installer) { Write-Output "Local unsigned installer assembled: $installerPath" }
 Write-Output 'Release requires owner-approved signing and final signed-byte inventory regeneration.'

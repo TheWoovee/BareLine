@@ -1,0 +1,14 @@
+{
+  "arguments": [
+    "test",
+    "-p",
+    "bareline-platform-windows",
+    "--lib",
+    "replacement_race_retains_displaced_and_editor_bytes"
+  ],
+  "completed_utc": "2026-09-12T09:14:01.3694310Z",
+  "integration_snapshot": "67fbae06c16e51dffa95ad3b08ef69f0ff91a725",
+  "exit_code": 101,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\T04-native-race-central.log"
+}

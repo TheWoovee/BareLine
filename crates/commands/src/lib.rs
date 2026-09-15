@@ -76,10 +76,7 @@ impl CommandRegistry {
         if key.is_empty() {
             return None;
         }
-        self.entries
-            .values()
-            .find(|s| s.shortcut == key)
-            .map(|s| s.action)
+        self.entries.values().find(|s| s.shortcut == key).map(|s| s.action)
     }
 }
 
@@ -94,22 +91,10 @@ pub fn shell_commands() -> CommandRegistry {
             Action::FindCancel,
         ),
         ("file.new", "New", "File", "Ctrl+N", Action::New),
-        (
-            "search.whole_word",
-            "Whole Word",
-            "Search",
-            "",
-            Action::FindWholeWord,
-        ),
+        ("search.whole_word", "Whole Word", "Search", "", Action::FindWholeWord),
         ("file.close", "Close", "File", "Ctrl+W", Action::Close),
         ("search.find", "Find…", "Search", "Ctrl+F", Action::Find),
-        (
-            "search.replace",
-            "Replace…",
-            "Search",
-            "Ctrl+H",
-            Action::Replace,
-        ),
+        ("search.replace", "Replace…", "Search", "Ctrl+H", Action::Replace),
         (
             "search.replace_one",
             "Replace Selected Match",
@@ -131,13 +116,7 @@ pub fn shell_commands() -> CommandRegistry {
             "",
             Action::FindMode,
         ),
-        (
-            "search.find_next",
-            "Find Next",
-            "Search",
-            "F3",
-            Action::FindNext,
-        ),
+        ("search.find_next", "Find Next", "Search", "F3", Action::FindNext),
         (
             "search.find_previous",
             "Find Previous",
@@ -145,20 +124,8 @@ pub fn shell_commands() -> CommandRegistry {
             "Shift+F3",
             Action::FindPrevious,
         ),
-        (
-            "search.close_find",
-            "Close Find",
-            "Search",
-            "",
-            Action::FindClose,
-        ),
-        (
-            "search.match_case",
-            "Match Case",
-            "Search",
-            "",
-            Action::FindMatchCase,
-        ),
+        ("search.close_find", "Close Find", "Search", "", Action::FindClose),
+        ("search.match_case", "Match Case", "Search", "", Action::FindMatchCase),
         ("edit.copy", "Copy", "Edit", "Ctrl+C", Action::Copy),
         ("edit.cut", "Cut", "Edit", "Ctrl+X", Action::Cut),
         ("edit.paste", "Paste", "Edit", "Ctrl+V", Action::Paste),
@@ -171,13 +138,7 @@ pub fn shell_commands() -> CommandRegistry {
             "",
             Action::CancelFileOperations,
         ),
-        (
-            "file.save_as",
-            "Save As…",
-            "File",
-            "Ctrl+Shift+S",
-            Action::SaveAs,
-        ),
+        ("file.save_as", "Save As…", "File", "Ctrl+Shift+S", Action::SaveAs),
         ("app.quit", "Exit", "File", "Alt+F4", Action::Quit),
         (
             "view.command_palette",
@@ -189,13 +150,7 @@ pub fn shell_commands() -> CommandRegistry {
         ("help.about", "About Bareline", "Help", "F1", Action::About),
         ("edit.undo", "Undo", "Edit", "Ctrl+Z", Action::Undo),
         ("edit.redo", "Redo", "Edit", "Ctrl+Y", Action::Redo),
-        (
-            "edit.select_all",
-            "Select All",
-            "Edit",
-            "Ctrl+A",
-            Action::SelectAll,
-        ),
+        ("edit.select_all", "Select All", "Edit", "Ctrl+A", Action::SelectAll),
     ] {
         registry
             .register(CommandSpec {
@@ -252,11 +207,7 @@ mod tests {
     #[test]
     fn duplicate_registration_preserves_original_dispatch() {
         let mut r = shell_commands();
-        let mut duplicate = r
-            .entries()
-            .find(|s| s.id == CommandId("file.new"))
-            .unwrap()
-            .clone();
+        let mut duplicate = r.entries().find(|s| s.id == CommandId("file.new")).unwrap().clone();
         duplicate.action = Action::Quit;
         assert_eq!(r.register(duplicate), Err(CommandId("file.new")));
         assert_eq!(r.shortcut("Ctrl+N"), Some(Action::New));

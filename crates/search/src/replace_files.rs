@@ -5,8 +5,8 @@ use bareline_document::{
     Error as DocumentError,
     group::{MAX_GROUP_DOCUMENTS, UndoGroup},
     service::{
-        Completion, DocumentService, GroupCompletion, GroupEdit, GroupMutation, GroupParticipant,
-        Mutation, Scheduler, SubmitError,
+        Completion, DocumentService, GroupCompletion, GroupEdit, GroupMutation, GroupParticipant, Mutation, Scheduler,
+        SubmitError,
     },
 };
 use std::sync::mpsc::{Receiver, TryRecvError};
@@ -169,10 +169,7 @@ pub fn preview_open_documents_options(
         if number >= MAX_GROUP_DOCUMENTS {
             return Err(PreviewError::TooManyDocuments);
         }
-        if documents
-            .iter()
-            .any(|d| d.snapshot.same_document(&snapshot))
-        {
+        if documents.iter().any(|d| d.snapshot.same_document(&snapshot)) {
             return Err(PreviewError::DuplicateDocument);
         }
         if !service.same_document(&snapshot) {
@@ -187,13 +184,7 @@ pub fn preview_open_documents_options(
         if results.is_empty() {
             continue;
         }
-        let transaction = results.prepare_replace_scoped(
-            &snapshot,
-            &template,
-            remaining,
-            ReplaceScope::All,
-            job,
-        )?;
+        let transaction = results.prepare_replace_scoped(&snapshot, &template, remaining, ReplaceScope::All, job)?;
         let mut changes = Vec::new();
         remaining = remaining
             .checked_sub(std::mem::size_of::<OpenPreviewDocument>())
@@ -222,9 +213,7 @@ pub fn preview_open_documents_options(
                 + after.capacity()
                 + edit.range.end.0
                 - edit.range.start.0;
-            remaining = remaining
-                .checked_sub(needed)
-                .ok_or(ReplaceError::StagingLimit)?;
+            remaining = remaining.checked_sub(needed).ok_or(ReplaceError::StagingLimit)?;
             changes.reserve_exact(1);
             changes.push(PreviewChange {
                 range: edit.range.clone(),
@@ -331,8 +320,7 @@ mod tests {
     use super::*;
     use bareline_document::{Budget, Document};
     fn target(scheduler: &Scheduler, text: &str) -> (DocumentService, DocumentSnapshot) {
-        let document =
-            Document::from_utf8(text, Budget::new(1024 * 1024), Budget::new(1024 * 1024)).unwrap();
+        let document = Document::from_utf8(text, Budget::new(1024 * 1024), Budget::new(1024 * 1024)).unwrap();
         let snapshot = document.snapshot();
         (scheduler.document(document, 8), snapshot)
     }
@@ -346,38 +334,23 @@ mod tests {
                 })),
             )
             .unwrap();
-        receiver
-            .recv_timeout(std::time::Duration::from_secs(5))
-            .unwrap();
+        receiver.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
         ticket.try_recv().unwrap()
     }
     fn text(snapshot: &DocumentSnapshot) -> String {
-        snapshot
-            .read(TextOffset(0)..TextOffset(snapshot.len()), 4096)
-            .unwrap()
+        snapshot.read(TextOffset(0)..TextOffset(snapshot.len()), 4096).unwrap()
     }
     #[test]
     fn hundred_document_replacement_is_one_bounded_atomic_group_and_undo() {
         let scheduler = Scheduler::new(1, 8).unwrap();
         let targets: Vec<_> = (0..100).map(|_| target(&scheduler, "x")).collect();
         let job = SearchJob::default();
-        let preview = preview_open_documents(
-            targets.clone(),
-            &SearchQuery::literal("x"),
-            "Y",
-            &job,
-            MAX_RESULT_BYTES,
-        )
-        .unwrap();
+        let preview =
+            preview_open_documents(targets.clone(), &SearchQuery::literal("x"), "Y", &job, MAX_RESULT_BYTES).unwrap();
         assert_eq!(preview.documents().len(), 100);
         let completion = apply(preview.prepare(&job).unwrap(), &scheduler);
         assert_eq!(completion.matches_replaced, 100);
-        assert!(
-            completion
-                .snapshots
-                .iter()
-                .all(|snapshot| text(snapshot) == "Y")
-        );
+        assert!(completion.snapshots.iter().all(|snapshot| text(snapshot) == "Y"));
         let group = completion.result.unwrap().unwrap();
         let participants = completion
             .snapshots
@@ -393,25 +366,14 @@ mod tests {
             })
             .collect();
         let restored = scheduler
-            .submit_group(
-                GroupMutation::Undo {
-                    group,
-                    participants,
-                },
-                None,
-            )
+            .submit_group(GroupMutation::Undo { group, participants }, None)
             .map_err(|(error, _)| error)
             .unwrap()
             .recv_timeout(std::time::Duration::from_secs(5))
             .unwrap();
         assert!(restored.result.is_ok());
         assert_eq!(restored.snapshots.len(), 100);
-        assert!(
-            restored
-                .snapshots
-                .iter()
-                .all(|snapshot| text(snapshot) == "x")
-        );
+        assert!(restored.snapshots.iter().all(|snapshot| text(snapshot) == "x"));
     }
     #[test]
     fn preview_exclusions_apply_only_reviewed_matches_and_linked_undo_restores_both() {
@@ -419,14 +381,8 @@ mod tests {
         let a = target(&scheduler, "x x");
         let b = target(&scheduler, "x");
         let job = SearchJob::default();
-        let mut preview = preview_open_documents(
-            [a.clone(), b.clone()],
-            &SearchQuery::literal("x"),
-            "Y",
-            &job,
-            4096,
-        )
-        .unwrap();
+        let mut preview =
+            preview_open_documents([a.clone(), b.clone()], &SearchQuery::literal("x"), "Y", &job, 4096).unwrap();
         assert_eq!(preview.documents()[0].changes[0].before, "x");
         assert_eq!(preview.documents()[0].changes[0].after, "Y");
         preview.set_match_included(0, 1, false);
@@ -449,13 +405,7 @@ mod tests {
             })
             .collect();
         let restored = scheduler
-            .submit_group(
-                GroupMutation::Undo {
-                    group,
-                    participants,
-                },
-                None,
-            )
+            .submit_group(GroupMutation::Undo { group, participants }, None)
             .map_err(|(error, _)| error)
             .unwrap()
             .recv_timeout(std::time::Duration::from_secs(5))
@@ -470,14 +420,8 @@ mod tests {
         let a = target(&scheduler, "x");
         let b = target(&scheduler, "x");
         let job = SearchJob::default();
-        let preview = preview_open_documents(
-            [a.clone(), b.clone()],
-            &SearchQuery::literal("x"),
-            "Y",
-            &job,
-            4096,
-        )
-        .unwrap();
+        let preview =
+            preview_open_documents([a.clone(), b.clone()], &SearchQuery::literal("x"), "Y", &job, 4096).unwrap();
         let changed =
             b.0.submit(Mutation::Apply(EditTransaction {
                 base_revision: b.1.revision,
@@ -496,9 +440,7 @@ mod tests {
         assert_eq!(completion.matches_replaced, 0);
         assert_eq!(text(&completion.snapshots[0]), "x");
         assert_eq!(text(&completion.snapshots[1]), "z");
-        let preview =
-            preview_open_documents([a.clone()], &SearchQuery::literal("x"), "Y", &job, 4096)
-                .unwrap();
+        let preview = preview_open_documents([a.clone()], &SearchQuery::literal("x"), "Y", &job, 4096).unwrap();
         job.cancel();
         assert!(matches!(
             preview.prepare(&job),

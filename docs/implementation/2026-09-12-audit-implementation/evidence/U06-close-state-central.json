@@ -1,0 +1,19 @@
+{
+  "arguments": [
+    "test",
+    "--offline",
+    "--locked",
+    "-p",
+    "bareline",
+    "--bin",
+    "bareline",
+    "windows_app::macros::tests::manager_close_context_is_enabled_for_every_runtime_state",
+    "--",
+    "--exact"
+  ],
+  "completed_utc": "2026-09-12T07:53:18.6125710Z",
+  "integration_snapshot": "f3cb8cccc439fe1ff8bb15e3259ef55080f416e0",
+  "exit_code": 101,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\U06-close-state-central.log"
+}

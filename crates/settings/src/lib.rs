@@ -87,12 +87,14 @@ mod behavior_tests;
 pub fn register_commands(
     registry: &mut bareline_commands::CommandRegistry,
 ) -> Result<(), bareline_commands::CommandId> {
-    use bareline_commands::{Action, CommandId, CommandSpec};
+    use bareline_commands::{Action, CommandId, CommandPresentation, CommandSpec};
     for (key, title) in [
         ("settings.open", "Settings"),
         ("settings.close", "Close Settings"),
         ("settings.retry", "Retry Settings Save"),
         ("settings.revert", "Revert Settings Changes"),
+        ("settings.external_reload", "Reload Changed Settings"),
+        ("settings.external_keep", "Keep My Settings"),
         ("settings.reset_section", "Reset Settings Section"),
         ("settings.copy_key", "Copy Setting TOML Key"),
         ("settings.change", "Change Setting"),
@@ -105,6 +107,18 @@ pub fn register_commands(
             shortcut: "",
             action: Action::Contributed(id),
         })?;
+        // Only the page opener belongs in menus and the palette; the rest are
+        // actions the settings surface itself invokes by ID.
+        if key != "settings.open" {
+            registry.set_presentation(
+                id,
+                CommandPresentation {
+                    menu_path: "Settings".into(),
+                    internal: true,
+                    ..Default::default()
+                },
+            )?;
+        }
     }
     Ok(())
 }

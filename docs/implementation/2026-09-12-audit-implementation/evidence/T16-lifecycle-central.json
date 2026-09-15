@@ -1,0 +1,18 @@
+{
+  "arguments": [
+    "test",
+    "-p",
+    "bareline-file-io",
+    "--lib",
+    "paged_service::lifecycle_contract_tests",
+    "--offline",
+    "--locked",
+    "--",
+    "--nocapture"
+  ],
+  "completed_utc": "2026-09-12T12:16:28.7167971Z",
+  "integration_snapshot": "0d285d977a5ad08ec28f4024490099fe57146e40",
+  "exit_code": 101,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\T16-lifecycle-central.log"
+}

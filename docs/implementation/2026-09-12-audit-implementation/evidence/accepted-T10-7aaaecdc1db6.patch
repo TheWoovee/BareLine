@@ -1,0 +1,453 @@
+diff --git a/apps/extension-host/src/lib.rs b/apps/extension-host/src/lib.rs
+index a878009..0eb9a90 100644
+--- a/apps/extension-host/src/lib.rs
++++ b/apps/extension-host/src/lib.rs
+@@ -2,9 +2,10 @@
+ //! Only this optional process links Wasmtime/WASI. Each invocation owns a fresh
+ //! store and an operation-scoped watchdog; no timer survives an idle invocation.
+ use bareline_extensions_protocol::MEMORY_LIMIT;
++use std::io::Write;
+ use std::sync::{
+-    Arc,
+-    atomic::{AtomicBool, Ordering},
++    Arc, Mutex, OnceLock,
++    atomic::{AtomicBool, AtomicUsize, Ordering},
+     mpsc,
+ };
+ use std::time::Duration;
+@@ -23,8 +24,13 @@ struct State {
+     qualification_telemetry: bool,
+     execution_started: std::time::Instant,
+     first_broker_reported: bool,
++    response_reported: bool,
+ }
+ 
++const MAX_QUALIFICATION_TELEMETRY_BYTES: usize = 64 * 1024;
++static QUALIFICATION_TELEMETRY_FILE: OnceLock<Option<Mutex<std::fs::File>>> = OnceLock::new();
++static QUALIFICATION_TELEMETRY_BYTES: AtomicUsize = AtomicUsize::new(0);
++
+ fn qualification_telemetry() -> bool {
+     std::env::var_os("BARELINE_QUALIFICATION_TELEMETRY").is_some_and(|value| value == "1")
+ }
+@@ -33,21 +39,56 @@ fn qualification_case_id() -> String {
+     std::env::var("BARELINE_QUALIFICATION_CASE_ID").unwrap_or_else(|_| "uncorrelated".into())
+ }
+ 
++/// Write one bounded qualification event to the parent's explicitly granted receipt.
++/// Production launches do not set either qualification environment variable.
++#[doc(hidden)]
++pub fn report_qualification_event(event: String) {
++    if !qualification_telemetry() {
++        return;
++    }
++    let event = format!("{event}\n");
++    if event.len() > 4096
++        || QUALIFICATION_TELEMETRY_BYTES.fetch_add(event.len(), Ordering::Relaxed) + event.len()
++            > MAX_QUALIFICATION_TELEMETRY_BYTES
++    {
++        return;
++    }
++    let sink = QUALIFICATION_TELEMETRY_FILE.get_or_init(|| {
++        std::env::var_os("BARELINE_QUALIFICATION_TELEMETRY_PATH").and_then(|path| {
++            let mut options = std::fs::OpenOptions::new();
++            options.append(true);
++            #[cfg(windows)]
++            {
++                use std::os::windows::fs::OpenOptionsExt;
++                options.access_mode(0x0000_0004);
++            }
++            options.open(path).ok().map(Mutex::new)
++        })
++    });
++    if let Some(sink) = sink
++        && let Ok(mut file) = sink.lock()
++        && file.write_all(event.as_bytes()).and_then(|()| file.flush()).is_ok()
++    {
++        return;
++    }
++    eprint!("{event}");
++}
++
+ fn report_phase(phase: &str, elapsed: Duration) {
+     let case_id = qualification_case_id();
+     let host_pid = std::process::id();
+-    eprintln!(
++    report_qualification_event(format!(
+         "{{\"schema\":\"bareline.first-party-runtime.v1\",\"event\":\"phase\",\"case_id\":\"{case_id}\",\"host_pid\":{host_pid},\"phase\":\"{phase}\",\"elapsed_us\":{}}}",
+         elapsed.as_micros()
+-    );
++    ));
+ }
+ 
+ fn report_phase_start(phase: &str) {
+     let case_id = qualification_case_id();
+     let host_pid = std::process::id();
+-    eprintln!(
++    report_qualification_event(format!(
+         "{{\"schema\":\"bareline.first-party-runtime.v1\",\"event\":\"phase_start\",\"case_id\":\"{case_id}\",\"host_pid\":{host_pid},\"phase\":\"{phase}\"}}"
+-    );
++    ));
+ }
+ impl WasiView for State {
+     fn ctx(&mut self) -> WasiCtxView<'_> {
+@@ -177,6 +218,7 @@ impl Runtime {
+             qualification_telemetry: telemetry,
+             execution_started: std::time::Instant::now(),
+             first_broker_reported: false,
++            response_reported: false,
+         };
+         let mut store = Store::new(&self.engine, state);
+         store.limiter(|state| &mut state.limits);
+@@ -198,13 +240,15 @@ impl Runtime {
+                     report_phase("first_broker", store.data().execution_started.elapsed());
+                     store.data_mut().first_broker_reported = true;
+                 }
++                let report_response = store.data().qualification_telemetry && !store.data().response_reported;
+                 let response_started = std::time::Instant::now();
+-                if store.data().qualification_telemetry {
++                if report_response {
+                     report_phase_start("response");
+                 }
+                 let result = (store.data_mut().broker)(frame);
+-                if store.data().qualification_telemetry {
++                if report_response {
+                     report_phase("response", response_started.elapsed());
++                    store.data_mut().response_reported = true;
+                 }
+                 Ok((result.and_then(|bytes| {
+                     if bytes.len() <= bareline_extensions_protocol::MAX_CHUNK_BYTES {
+diff --git a/apps/extension-host/src/main.rs b/apps/extension-host/src/main.rs
+index e160980..7e2f5fc 100644
+--- a/apps/extension-host/src/main.rs
++++ b/apps/extension-host/src/main.rs
+@@ -18,9 +18,9 @@ fn run() -> Result<(), String> {
+     let host_pid = std::process::id();
+     let report_phase_start = |phase: &str| {
+         if qualification_telemetry {
+-            eprintln!(
++            bareline_extension_host::report_qualification_event(format!(
+                 "{{\"schema\":\"bareline.first-party-runtime.v1\",\"event\":\"phase_start\",\"case_id\":\"{qualification_case_id}\",\"host_pid\":{host_pid},\"phase\":\"{phase}\"}}"
+-            );
++            ));
+         }
+     };
+     // `args_os` so a non-UTF-8 argv is an error instead of a panic.
+@@ -41,12 +41,14 @@ fn run() -> Result<(), String> {
+     report_phase_start("authentication");
+     let mut pipe = AuthenticatedPipe::connect(&args[0], parent, Duration::from_secs(5)).map_err(|e| e.to_string())?;
+     if qualification_telemetry {
+-        eprintln!(
++        bareline_extension_host::report_qualification_event(format!(
+             "{{\"schema\":\"bareline.first-party-runtime.v1\",\"event\":\"phase\",\"case_id\":\"{qualification_case_id}\",\"host_pid\":{host_pid},\"phase\":\"authentication\",\"elapsed_us\":{}}}",
+             authentication_started.elapsed().as_micros()
+-        );
++        ));
+     }
+-    pipe.set_timeout(Duration::from_millis(budget.timeout_ms()));
++    // The operation watchdog owns the execution deadline. Keep broker I/O behind
++    // its 50 ms trap grace so a handled pipe timeout cannot stop that watchdog.
++    pipe.set_timeout(Duration::from_millis(budget.timeout_ms()) + Duration::from_secs(1));
+     let mut prefix = [0; 4];
+     pipe.read_exact(&mut prefix).map_err(|e| e.to_string())?;
+     let size = u32::from_le_bytes(prefix) as usize;
+@@ -73,25 +75,25 @@ fn run() -> Result<(), String> {
+     if qualification_telemetry {
+         let profile = if cfg!(debug_assertions) { "debug" } else { "release" };
+         let hash_read = hash_read_started.elapsed();
+-        eprintln!(
++        bareline_extension_host::report_qualification_event(format!(
+             "{{\"schema\":\"bareline.first-party-runtime.v1\",\"event\":\"phase\",\"case_id\":\"{qualification_case_id}\",\"host_pid\":{host_pid},\"phase\":\"hash_read\",\"elapsed_us\":{}}}",
+             hash_read.as_micros()
+-        );
+-        eprintln!(
++        ));
++        bareline_extension_host::report_qualification_event(format!(
+             "{{\"schema\":\"bareline.first-party-runtime.v1\",\"event\":\"component\",\"case_id\":\"{qualification_case_id}\",\"host_pid\":{host_pid},\"profile\":\"{profile}\",\"sha256\":\"{observed_hash}\",\"component_bytes\":{},\"host_deadline_ms\":{},\"hash_read_us\":{}}}",
+             component.len(),
+             budget.timeout_ms(),
+             hash_read.as_micros()
+-        );
++        ));
+     }
+     let runtime_started = Instant::now();
+     report_phase_start("runtime_init");
+     let runtime = bareline_extension_host::Runtime::new().map_err(|e| e.to_string())?;
+     if qualification_telemetry {
+-        eprintln!(
++        bareline_extension_host::report_qualification_event(format!(
+             "{{\"schema\":\"bareline.first-party-runtime.v1\",\"event\":\"phase\",\"case_id\":\"{qualification_case_id}\",\"host_pid\":{host_pid},\"phase\":\"runtime_init\",\"elapsed_us\":{}}}",
+             runtime_started.elapsed().as_micros()
+-        );
++        ));
+     }
+     runtime
+         .invoke_with_policy(
+diff --git a/apps/extension-host/tests/first_party.rs b/apps/extension-host/tests/first_party.rs
+index 36cd216..efeadd3 100644
+--- a/apps/extension-host/tests/first_party.rs
++++ b/apps/extension-host/tests/first_party.rs
+@@ -1,7 +1,9 @@
+ // SPDX-License-Identifier: MPL-2.0
+ #![cfg(windows)]
+ use bareline_extensions_protocol::*;
+-use bareline_platform_windows::{SandboxedProcessLauncher, extension_transport::PipeServer};
++use bareline_platform_windows::{
++    SandboxedProcessLauncher, extension_transport::PipeServer, sandbox_grant_restricted_qualification_write,
++};
+ use sha2::{Digest, Sha256};
+ use std::{
+     io::Write,
+@@ -83,7 +85,91 @@ struct CaseResult {
+     committed_edits: usize,
+ }
+ 
+-fn configure_qualification_process(process: &mut Command, executable: &std::path::Path, case_id: &str) {
++struct HostTelemetry {
++    path: std::path::PathBuf,
++    replayed: bool,
++}
++impl HostTelemetry {
++    fn create(case_id: &str) -> Self {
++        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/qualification-telemetry");
++        std::fs::create_dir_all(&directory).unwrap();
++        let nonce = std::time::SystemTime::now()
++            .duration_since(std::time::UNIX_EPOCH)
++            .unwrap()
++            .as_nanos();
++        let path = directory.join(format!("{case_id}-{nonce}.jsonl"));
++        std::fs::OpenOptions::new()
++            .write(true)
++            .create_new(true)
++            .open(&path)
++            .unwrap();
++        sandbox_grant_restricted_qualification_write(&path).unwrap();
++        Self { path, replayed: false }
++    }
++
++    fn replay(&mut self, case_id: &str, host_pid: u32, require_complete: bool) -> String {
++        let telemetry = std::fs::read_to_string(&self.path).unwrap();
++        assert!(telemetry.len() <= 64 * 1024, "host telemetry exceeded its bound");
++        for line in telemetry.lines() {
++            eprintln!("{line}");
++        }
++        let _ = std::fs::remove_file(&self.path);
++        self.replayed = true;
++        let lines: Vec<_> = telemetry.lines().collect();
++        assert!(!lines.is_empty(), "host emitted no qualification telemetry");
++        let case = format!("\"case_id\":\"{case_id}\"");
++        let pid = format!("\"host_pid\":{host_pid}");
++        assert!(lines.iter().all(|line| {
++            line.starts_with('{')
++                && line.ends_with('}')
++                && line.contains("\"schema\":\"bareline.first-party-runtime.v1\"")
++                && line.contains(&case)
++                && line.contains(&pid)
++        }));
++        assert!(telemetry.contains("\"event\":\"phase_start\""));
++        assert!(telemetry.contains("\"event\":\"phase\""));
++        assert!(telemetry.contains("\"event\":\"component\""));
++        if require_complete {
++            for phase in [
++                "authentication",
++                "hash_read",
++                "runtime_init",
++                "prepare",
++                "compile",
++                "instantiate",
++                "first_broker",
++                "response",
++                "execute",
++            ] {
++                assert!(
++                    telemetry.contains(&format!("\"phase\":\"{phase}\"")),
++                    "host telemetry omitted {phase}: {telemetry}"
++                );
++            }
++        }
++        telemetry
++    }
++}
++impl Drop for HostTelemetry {
++    fn drop(&mut self) {
++        if self.replayed {
++            return;
++        }
++        if let Ok(telemetry) = std::fs::read_to_string(&self.path) {
++            for line in telemetry.lines() {
++                eprintln!("{line}");
++            }
++        }
++        let _ = std::fs::remove_file(&self.path);
++    }
++}
++
++fn configure_qualification_process(
++    process: &mut Command,
++    executable: &std::path::Path,
++    case_id: &str,
++    telemetry_path: &std::path::Path,
++) {
+     process.env_clear();
+     let system_root = std::env::var_os("SystemRoot").unwrap_or_else(|| r"C:\Windows".into());
+     process
+@@ -93,7 +179,8 @@ fn configure_qualification_process(process: &mut Command, executable: &std::path
+         .env("PATHEXT", ".COM;.EXE;.BAT;.CMD")
+         .env("NoDefaultCurrentDirectoryInExePath", "1")
+         .env("BARELINE_QUALIFICATION_TELEMETRY", "1")
+-        .env("BARELINE_QUALIFICATION_CASE_ID", case_id);
++        .env("BARELINE_QUALIFICATION_CASE_ID", case_id)
++        .env("BARELINE_QUALIFICATION_TELEMETRY_PATH", telemetry_path);
+     for name in ["SystemDrive", "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE"] {
+         if let Some(value) = std::env::var_os(name) {
+             process.env(name, value);
+@@ -122,6 +209,7 @@ fn component_case(
+     let component_hash = format!("{:x}", Sha256::digest(&component));
+     let hash_read = hash_read_started.elapsed();
+     let case_id = qualification_case_id(command);
++    let mut telemetry = HostTelemetry::create(&case_id);
+     let server = PipeServer::create().unwrap();
+     let executable = std::path::Path::new(env!("CARGO_BIN_EXE_bareline-extension-host"));
+     let mut process = Command::new(executable);
+@@ -136,7 +224,7 @@ fn component_case(
+         .stdin(Stdio::null())
+         .stdout(Stdio::null())
+         .stderr(Stdio::inherit());
+-    configure_qualification_process(&mut process, executable, &case_id);
++    configure_qualification_process(&mut process, executable, &case_id, &telemetry.path);
+     let started = Instant::now();
+     let (child, mut job) = SandboxedProcessLauncher::default()
+         .spawn_host(&mut process, &[executable, &file])
+@@ -298,6 +386,7 @@ fn component_case(
+         std::thread::sleep(Duration::from_millis(10));
+     }
+     let shutdown = last_response_completed.elapsed();
++    telemetry.replay(&case_id, host_pid, true);
+     let panel = panel.expect("component result panel");
+     if result_was_panel {
+         assert!(panel.len() <= 1024 * 1024, "component result exceeded the panel limit");
+@@ -504,6 +593,7 @@ fn interrupt_actual_component(cancel: bool) -> String {
+     let component = std::fs::read(&file).expect("build actual components first");
+     let executable = std::path::Path::new(env!("CARGO_BIN_EXE_bareline-extension-host"));
+     let case_id = qualification_case_id(if cancel { "cancel" } else { "timeout" });
++    let mut telemetry = HostTelemetry::create(&case_id);
+     let server = PipeServer::create().unwrap();
+     let mut process = Command::new(executable);
+     process
+@@ -514,7 +604,7 @@ fn interrupt_actual_component(cancel: bool) -> String {
+         .stdin(Stdio::null())
+         .stdout(Stdio::null())
+         .stderr(Stdio::inherit());
+-    configure_qualification_process(&mut process, executable, &case_id);
++    configure_qualification_process(&mut process, executable, &case_id, &telemetry.path);
+     let (mut child, mut job) = SandboxedProcessLauncher::default()
+         .spawn_host(&mut process, &[executable, &file])
+         .unwrap();
+@@ -556,12 +646,21 @@ fn interrupt_actual_component(cancel: bool) -> String {
+         }
+         std::thread::sleep(Duration::from_millis(10));
+     };
++    let telemetry = telemetry.replay(&case_id, host_pid, false);
+     assert!(!status.success());
+     eprintln!(
+         "{{\"schema\":\"bareline.first-party-runtime.v1\",\"event\":\"interruption\",\"case_id\":\"{case_id}\",\"host_pid\":{host_pid},\"kind\":\"{}\",\"sandbox\":\"{sandbox}\",\"host_deadline_ms\":{},\"outcome\":\"{status}\"}}",
+         if cancel { "cancel" } else { "timeout" },
+         ExecutionBudget::Interactive.timeout_ms()
+     );
++    assert!(telemetry.contains("\"phase\":\"first_broker\""));
++    assert!(
++        telemetry
++            .lines()
++            .next_back()
++            .is_some_and(|line| line.contains("\"event\":\"phase_start\"") && line.contains("\"phase\":\"response\"")),
++        "interrupted host must retain its last started phase: {telemetry}"
++    );
+     status.to_string()
+ }
+ 
+diff --git a/crates/platform-windows/src/lib.rs b/crates/platform-windows/src/lib.rs
+index 10b7656..0e77cdb 100644
+--- a/crates/platform-windows/src/lib.rs
++++ b/crates/platform-windows/src/lib.rs
+@@ -37,7 +37,8 @@ pub use accessibility::WindowsAccessibility;
+ mod process;
+ #[cfg(windows)]
+ pub use process::{
+-    HostExit, SandboxedChild, SandboxedProcessLauncher, WindowsProcessLauncher, sandbox_lock_to_current_user,
++    HostExit, SandboxedChild, SandboxedProcessLauncher, WindowsProcessLauncher,
++    sandbox_grant_restricted_qualification_write, sandbox_lock_to_current_user,
+ };
+ 
+ #[cfg(windows)]
+diff --git a/crates/platform-windows/src/process.rs b/crates/platform-windows/src/process.rs
+index f926a67..71809c7 100644
+--- a/crates/platform-windows/src/process.rs
++++ b/crates/platform-windows/src/process.rs
+@@ -553,6 +553,28 @@ fn grant_object_all_access(handle: HANDLE, sid: &[u8]) -> io::Result<()> {
+ fn grant_restricted_read_execute(path: &Path) -> io::Result<()> {
+     const GENERIC_READ: u32 = 0x8000_0000;
+     const GENERIC_EXECUTE: u32 = 0x2000_0000;
++    grant_restricted_file_access(
++        path,
++        GENERIC_READ | GENERIC_EXECUTE,
++        OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE,
++    )
++}
++
++/// Grant the restricted host write access to one pre-created qualification receipt.
++/// The parent retains and validates the receipt; no directory write grant is added.
++#[doc(hidden)]
++pub fn sandbox_grant_restricted_qualification_write(path: &Path) -> io::Result<()> {
++    const FILE_APPEND_DATA: u32 = 0x0000_0004;
++    if !std::fs::symlink_metadata(path)?.file_type().is_file() {
++        return Err(io::Error::new(
++            io::ErrorKind::InvalidInput,
++            "qualification receipt must be a regular file",
++        ));
++    }
++    grant_restricted_file_access(path, FILE_APPEND_DATA, ACE_FLAGS(0))
++}
++
++fn grant_restricted_file_access(path: &Path, access: u32, inheritance: ACE_FLAGS) -> io::Result<()> {
+     unsafe {
+         let restricted = well_known_sid(WinRestrictedCodeSid)?;
+         let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+@@ -572,9 +594,9 @@ fn grant_restricted_read_execute(path: &Path) -> io::Result<()> {
+             return Err(io::Error::from_raw_os_error(status.0 as i32));
+         }
+         let entry = EXPLICIT_ACCESS_W {
+-            grfAccessPermissions: GENERIC_READ | GENERIC_EXECUTE,
++            grfAccessPermissions: access,
+             grfAccessMode: GRANT_ACCESS,
+-            grfInheritance: OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE,
++            grfInheritance: inheritance,
+             Trustee: TRUSTEE_W {
+                 pMultipleTrustee: std::ptr::null_mut(),
+                 MultipleTrusteeOperation: NO_MULTIPLE_TRUSTEE,
+diff --git a/docs/implementation/2026-09-12-audit-implementation/PR-T10.md b/docs/implementation/2026-09-12-audit-implementation/PR-T10.md
+index 3ccee29..1be67c0 100644
+--- a/docs/implementation/2026-09-12-audit-implementation/PR-T10.md
++++ b/docs/implementation/2026-09-12-audit-implementation/PR-T10.md
+@@ -22,6 +22,7 @@
+ 
+ - The audited release host passed all four prior ignored tests serially in 95.13 s. Its 1 GiB generated JSON validation took 88.588 s, issued 16,384 broker reads, and capped each read at 65,536 bytes.
+ - The debug host failed XML before its first broker request, including a serial rerun that exited 124 after 12.97 s. The debug 1 GiB JSON case also exceeded its parent budget. These observations do not prove a release-component defect or that parallel contention was the cause.
++- The first integrated fast run at frozen source `e063214c62505e7fdefb99bad7c435cdad5d0ea0` retained two passes and one failure. The timeout fixture withheld its first broker response; the host-side pipe's 5-second read timeout won a race with the 5-second runtime watchdog, the JSON component handled that broker error, and the process returned success. The same run proved that restricted native creation did not inherit the requested stderr handle, because parent case records were retained but all child phase records were absent.
+ - This change does not alter `INTERACTIVE_TIMEOUT_MS` (5,000), `BACKGROUND_TIMEOUT_MS` (120,000), fuel, memory, process-count, frame, broker reply, panel, or staged-edit limits.
+ 
+ ### Implemented qualification
+@@ -29,12 +30,13 @@
+ - `scripts/test-first-party.ps1` now defaults to `-Suite Fast`; `-Suite Large` selects only the existing 1 GiB JSON and 5 GiB synthetic Hex cases, and `-Suite All` runs both serially. Every invocation creates a collision-resistant directory under `target/first-party/` and uses T09's non-overwriting evidence wrapper for target setup, component build, a bounded release `--no-run` host/test compile, and each direct test-executable invocation. The 300-second fast watchdog therefore covers execution after compilation. `run.json` binds the run to HEAD plus the dirty-source fingerprint, host/test/component hashes and sizes, raw output receipts, expected/observed test counts, timestamps, and terminal failure. Qualification also fails if any build/test receipt lacks its before/after source identity, changes identity while running, or does not continue the preceding stage's HEAD and source-manifest fingerprint.
+ - The fast suite executes actual JSON validate/format/minify/tree, XML validate/format/XPath/parser/DTD errors, and Hex original-generation navigation. It restores exact large-integer minification, successful XML validation, XPath descendant attributes and missing attributes, exact `xml:space` output, and unavailable-original-byte messaging. It checks one full-document edit in one broker transaction, edit capability/scope on every staging request, bounded aggregate staging, Unicode and XML encoding-declaration preservation, simulated broker permission denial, unavailable original bytes, watchdog timeout, parent cancellation, recovery on the next launch, and a controlled two-component concurrent run. Production permission authorization remains covered by the protocol broker tests; the component case proves denial propagation across the authenticated boundary.
+ - Qualification processes use the same restricted-token launcher, kill-on-close job, 512 MiB job/process cap, one-process limit, minimal environment, component/runtime file grants, authenticated named pipe, component hash check, WASI authority restrictions, and existing execution budgets as the production path. Local components remain below the production package-signature gate; the test does not add a trust bypass.
+-- Opt-in JSON-line telemetry reports the authenticated connection, component hash/read, runtime initialization, compile, instantiate, first broker request, each broker response, execution, and parent-observed shutdown. Every child phase/start and parent case/interruption record carries the same unique case ID and host PID, so concurrent output remains attributable. Case records include component SHA-256/size, release profile, text/original sizes, requested and response bytes, request count, and the host and parent deadlines. Events are emitted as phases complete, so a timeout before the first broker request still identifies the last completed phase.
++- The runtime watchdog remains the authoritative overall execution deadline. Host-side broker I/O uses the same budget plus a fixed one-second grace, beyond the watchdog's 50 ms trap grace, so a component cannot convert a simultaneous broker read timeout into a successful invocation by handling the broker error. The interactive/background execution budgets themselves remain 5,000/120,000 ms.
++- Opt-in JSON-line telemetry reports the authenticated connection, component hash/read, runtime initialization, compile, instantiate, first broker request, first broker response, execution, and parent-observed shutdown. Restricted qualification hosts write through a 64 KiB sink to one pre-created receipt file whose DACL grants the restricted SID write access to that exact file only; the parent replays it into retained stderr after exit. Tests reject missing, oversized, or wrongly correlated child records, require the full phase set for successful cases, and retain the last started response phase for cancellation and timeout cases. Every child phase/start and parent case/interruption record carries the same unique case ID and host PID, so concurrent output remains attributable. Case records include component SHA-256/size, release profile, text/original sizes, requested and response bytes, request count, and the host and parent deadlines.
+ - Windows correctness CI runs exactly three selected fast tests in the release profile and retains the unique evidence directory. The opt-in nightly performance workflow runs exactly two selected large tests as informational work and retains its unique evidence directory; zero or unexpected selection counts fail, and the command exits nonzero on any semantic failure even though the performance job does not gate correctness.
+ 
+ ### Focused checks performed in the private worktree
+ 
+-- `rustfmt --edition 2024 --check apps/extension-host/src/lib.rs apps/extension-host/src/main.rs apps/extension-host/tests/first_party.rs` — passed after formatting.
++- `rustfmt --edition 2024 --check apps/extension-host/src/lib.rs apps/extension-host/src/main.rs apps/extension-host/tests/first_party.rs crates/platform-windows/src/lib.rs crates/platform-windows/src/process.rs` — passed after formatting.
+ - PowerShell AST parse of `scripts/test-first-party.ps1` — passed.
+ - Standalone synthetic-receipt checks of the script's source-identity validator — passed for a stable chain and rejected unavailable, changed-during-stage, and between-stage identities.
+ - `python .github/workflows/run_test_evidence.py --self-test` — passed; retained failures, spawn errors, hashes, and no-overwrite behavior remain intact for the reused T09 wrapper.

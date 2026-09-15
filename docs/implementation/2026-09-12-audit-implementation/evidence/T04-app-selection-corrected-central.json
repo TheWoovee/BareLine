@@ -1,0 +1,14 @@
+{
+  "arguments": [
+    "test",
+    "-p",
+    "bareline-app",
+    "--lib",
+    "conflict_selection_cycles_within_active_document_and_invalidates_on_tab_change"
+  ],
+  "completed_utc": "2026-09-12T09:22:16.4609859Z",
+  "integration_snapshot": "676dd846a82de51702ee8c85a353cf3684fd1cca",
+  "exit_code": 0,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\T04-app-selection-corrected-central.log"
+}

@@ -1,0 +1,75 @@
+diff --git a/apps/bareline/src/windows_app/accessibility.rs b/apps/bareline/src/windows_app/accessibility.rs
+index f52b1ca..4d0b429 100644
+--- a/apps/bareline/src/windows_app/accessibility.rs
++++ b/apps/bareline/src/windows_app/accessibility.rs
+@@ -2262,19 +2262,33 @@ pub(super) mod tests {
+ 
+         let mut compare_shell = headless_shell();
+         compare::accessibility_test_setup(&mut compare_shell, "options");
++        let editor_providers = [0, 1].map(|pane| {
++            editor_provider_id(
++                compare_shell
++                    .views
++                    .pane_token(pane)
++                    .expect("compare pane provider token"),
++            )
++        });
++        let restored_editor = editor_providers[compare_shell.views.pane() as usize];
++        compare_shell.blur_dock_ownership();
+         compare_shell.activate_modal(super::super::modal::ModalSurface::CompareOptions);
+         compare_shell.compare.options_open = true;
+         let compare = shell_snapshot(&compare_shell);
+         compare.validate().unwrap();
++        assert_eq!(compare.focus, super::super::modal::COMPARE_GENERAL_ID);
+         assert!(compare.nodes.iter().any(|node| {
+             node.id == super::super::modal::COMPARE_DONE_ID && node.name == "Done" && node.invokable && !node.disabled
+         }));
+-        assert!(
+-            compare
++        for provider in editor_providers {
++            let editor = compare
+                 .nodes
+                 .iter()
+-                .any(|node| { node.id == bareline_app::accessibility::EDITOR_ID && node.disabled && !node.focusable })
+-        );
++                .find(|node| node.id == provider)
++                .expect("compare modal must retain both editor providers as inert background");
++            assert_eq!(editor.role, AccessibilityRole::Editor);
++            assert!(editor.disabled && !editor.focusable && !editor.invokable);
++        }
+         assert!(
+             compare.nodes.iter().any(|node| {
+                 node.id == super::super::modal::COMPARE_GENERAL_ID && node.role == AccessibilityRole::Tab
+@@ -2285,6 +2299,19 @@ pub(super) mod tests {
+                 node.id == super::super::modal::COMPARE_COLORS_ID && node.role == AccessibilityRole::Tab
+             })
+         );
++
++        assert!(compare_shell.dismiss_modal(super::super::modal::ModalSurface::CompareOptions));
++        let restored = shell_snapshot(&compare_shell);
++        restored.validate().unwrap();
++        assert_eq!(restored.focus, restored_editor);
++        for provider in editor_providers {
++            let editor = restored
++                .nodes
++                .iter()
++                .find(|node| node.id == provider)
++                .expect("dismissed compare modal must restore both editor providers");
++            assert!(editor.focusable && !editor.disabled);
++        }
+     }
+ 
+     fn app_shell(scenario: &str) -> Shell {
+diff --git a/docs/implementation/2026-09-12-audit-implementation/reviews/U08-U11-modal-R1.md b/docs/implementation/2026-09-12-audit-implementation/reviews/U08-U11-modal-R1.md
+new file mode 100644
+index 0000000..3007e93
+--- /dev/null
++++ b/docs/implementation/2026-09-12-audit-implementation/reviews/U08-U11-modal-R1.md
+@@ -0,0 +1,7 @@
++# U08/U11 integration correction — compare modal pane isolation
++
++The integrated workspace test still expected the retired flat editor node while Compare Options was open. Split Compare publishes two stable U08 pane providers instead; U01 modal composition already makes every node outside the modal subtree disabled, non-focusable, and non-invokable.
++
++The regression now checks both actual pane provider IDs while the modal owns focus, then dismisses the modal from editor-owned focus and verifies focus returns to the selected pane provider with both pane providers enabled again. No production modal, dock, or provider behavior changed.
++
++Root-owned focused check: `cargo test -p bareline --bin bareline windows_app::accessibility::tests::prompt_and_compare_modals_own_focus_text_and_background_actions -- --exact`

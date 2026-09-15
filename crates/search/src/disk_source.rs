@@ -19,9 +19,7 @@ pub(crate) fn open(
     job: &SearchJob,
 ) -> io::Result<Box<PagedOpened>> {
     let approved = trust.open_read(path, PathOrigin::User)?;
-    if approved.trust.traverses_reparse_point
-        || !trust.permits(&approved.trust, PathOperation::Read)
-    {
+    if approved.trust.traverses_reparse_point || !trust.permits(&approved.trust, PathOperation::Read) {
         return Err(io::Error::other("Untrusted source"));
     }
     let expected = platform.identity(&approved.file)?;

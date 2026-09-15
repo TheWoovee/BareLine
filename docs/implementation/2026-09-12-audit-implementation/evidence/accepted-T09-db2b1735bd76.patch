@@ -1,0 +1,31 @@
+diff --git a/docs/implementation/2026-09-12-audit-implementation/PR-T09-R5.md b/docs/implementation/2026-09-12-audit-implementation/PR-T09-R5.md
+index 19e3a9b..930edf1 100644
+--- a/docs/implementation/2026-09-12-audit-implementation/PR-T09-R5.md
++++ b/docs/implementation/2026-09-12-audit-implementation/PR-T09-R5.md
+@@ -14,4 +14,5 @@
+ - R6 Unicode diagnosis: retained P4-4 evidence under `p4-4-9172-1789233424038018700` reports successful standalone `WM_CHAR` posts and `SendInput` insertion counts while TextPattern stayed empty; sanctioned native typing immediately produced the exact emoji and colour glyphs. Winit 0.30's Windows keyboard builder explicitly ignores `WM_CHAR` without pending key-event state and collects consecutive surrogate `WM_CHAR` units after `WM_KEYDOWN`. The primary targeted injector now posts one `VK_PACKET` keydown, the scalar's one or two UTF-16 `WM_CHAR` units, and one keyup as a single ordered transaction. Exact TextPattern and colour-glyph assertions remain required; the retained failed run is not reclassified.
+ - R6 long-input correction: the framed P4-4 input subsequently passed exact text and colour checks, while retained P0-3 evidence under `p0-3-10592-1789234456492457900` queued all 1,620 messages at once and observed only 518 of 540 characters. The editor source has a confirmed 256-input bound and rejects further inputs while its async worker is pending; attribution of this exact suffix loss to that bound is evidence-backed but inferred because the accessibility receipt does not expose the transient queue error. Restoring the prior bounded 6 ms pause after each complete scalar transaction lets the event loop and worker drain during the single submission. It does not poll, retry, duplicate or weaken the exact 540-character assertion.
+ - Prompt-observer diagnostic: the existing oracle is confirmed to depend on Win32 descendant text containing `save` and an exact Win32 `Button` for consent, so a native owned dialog implemented through another control surface could be missed. Whether such a dialog existed during the retained prompt timeouts remains unproven. Each app process now receives a unique `BARELINE_QA_COMMAND_TRACE` artifact path. Prompt waits retain at most eight same-process snapshots at the first disabled-main/owned-window topology changes and at the terminal match or timeout. Each snapshot caps Win32 descendants at 128 and UIA Control View nodes at 256, records UIA button names and Invoke availability, and excludes content from unrelated processes. The consent oracle, one-command rule, and failure classification are unchanged.
++- Contained compilation initially found that P0-5's same-profile custom relaunch bypassed `Session::launch`. It now receives its own second-launch trace path and retains both process artifacts in the reconstructed session, matching the per-process trace contract.
+ - Root verification: focused xtask helper tests followed by isolated P0-3, P0-7 and P4-4 against the integrated native binary.
+diff --git a/xtask/src/journey.rs b/xtask/src/journey.rs
+index c2f6256..80fdb31 100644
+--- a/xtask/src/journey.rs
++++ b/xtask/src/journey.rs
+@@ -2481,6 +2481,8 @@ fn journey_p0_5(env: &Env) -> Result<(), String> {
+     let mut command = Command::new(&env.exe);
+     command.args(["--software", "--no-session", "--no-extensions", "--new-instance"]);
+     isolate(&mut command, &home);
++    let command_trace = home.join("evidence/command-trace-launch-2.jsonl");
++    command.env("BARELINE_QA_COMMAND_TRACE", &command_trace);
+     command.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+     let child = command.spawn().map_err(|e| format!("relaunch failed: {e}"))?;
+     let mut session = Session {
+@@ -2491,6 +2493,7 @@ fn journey_p0_5(env: &Env) -> Result<(), String> {
+         run_id: env.run_id.clone(),
+         launch_files: Vec::new(),
+         hwnd: None,
++        command_traces: vec![home.join("evidence/command-trace-launch-1.jsonl"), command_trace],
+     };
+     session.pid = session.child.id();
+     let hwnd = session.wait_window(Duration::from_secs(20))?;

@@ -1,0 +1,16 @@
+{
+  "arguments": [
+    "test",
+    "-p",
+    "bareline-file-io",
+    "--lib",
+    "recovery_retirement::tests",
+    "--offline",
+    "--locked"
+  ],
+  "completed_utc": "2026-09-12T10:19:56.1850729Z",
+  "integration_snapshot": "67ee505ba9fc5e9754b237c6b18ea5fd1916d90a",
+  "exit_code": 0,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\T05-hold-retirement-central.log"
+}

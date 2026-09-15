@@ -15,10 +15,7 @@ pub struct Cursor {
 }
 impl Cursor {
     pub fn parse(arguments: &str, length: u64) -> Result<Self, String> {
-        let values = numeric_arguments(
-            arguments,
-            &["start", "end", "cursor", "depth", "mode", "escaped"],
-        )?;
+        let values = numeric_arguments(arguments, &["start", "end", "cursor", "depth", "mode", "escaped"])?;
         let start = *values.get("start").unwrap_or(&0);
         let end = *values.get("end").unwrap_or(&length);
         let offset = *values.get("cursor").unwrap_or(&start);
@@ -109,9 +106,7 @@ pub fn page(mut input: impl Read, mut cursor: Cursor) -> Result<String, String> 
             }
             b' ' | b'\t' | b'\r' | b'\n' | b',' | b':' => continue,
             _ => {
-                return Err(format!(
-                    "unexpected JSON byte at TextOffset {at}; run Validate"
-                ));
+                return Err(format!("unexpected JSON byte at TextOffset {at}; run Validate"));
             }
         };
         use std::fmt::Write;
@@ -125,11 +120,7 @@ pub fn page(mut input: impl Read, mut cursor: Cursor) -> Result<String, String> 
         .unwrap();
         nodes += 1;
         if matches!(b, b'{' | b'[') {
-            writeln!(
-                result,
-                "  Expand arguments: start={at}  (one argument per line)"
-            )
-            .unwrap();
+            writeln!(result, "  Expand arguments: start={at}  (one argument per line)").unwrap();
             cursor.depth += 1;
             if cursor.depth > 128 {
                 return Err("JSON depth limit (128)".into());
@@ -185,13 +176,7 @@ mod tests {
     }
     #[test]
     fn malformed_cursor_rejected() {
-        for args in [
-            "depth=129",
-            "mode=3",
-            "cursor=11",
-            "cursor=1\ncursor=2",
-            "wat=1",
-        ] {
+        for args in ["depth=129", "mode=3", "cursor=11", "cursor=1\ncursor=2", "wat=1"] {
             assert!(Cursor::parse(args, 10).is_err());
         }
     }

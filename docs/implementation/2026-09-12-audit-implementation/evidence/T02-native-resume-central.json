@@ -1,0 +1,18 @@
+{
+  "arguments": [
+    "test",
+    "--offline",
+    "--locked",
+    "-p",
+    "bareline-platform-windows",
+    "--lib",
+    "native_journal_and_guards_resume_after_verified_stage_interruption",
+    "--",
+    "--test-threads=1"
+  ],
+  "completed_utc": "2026-09-12T08:36:58.0747508Z",
+  "integration_snapshot": "dc360ff4033b484c7d16059e606131adc4ecc2ea",
+  "exit_code": 0,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\T02-native-resume-central.log"
+}

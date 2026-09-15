@@ -149,11 +149,7 @@ pub struct RevisionReceiver {
 }
 impl RevisionReceiver {
     pub fn latest(&mut self) -> Option<DocumentSnapshot> {
-        let snapshot = self
-            .publication
-            .snapshot
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
+        let snapshot = self.publication.snapshot.lock().unwrap_or_else(|p| p.into_inner());
         if snapshot.revision == self.seen {
             return None;
         }
@@ -197,14 +193,12 @@ impl Scheduler {
                         let job = match work {
                             Work::Actor(job) => job,
                             Work::HistoryPolicy(job, max_changes) => {
-                                let mut actor =
-                                    job.lock().unwrap_or_else(|error| error.into_inner());
+                                let mut actor = job.lock().unwrap_or_else(|error| error.into_inner());
                                 if !actor.retired {
                                     let mut policy = actor.document.history_policy;
                                     // Multiple workers may acquire this actor out of queue
                                     // order; coalesce to the latest admitted setting.
-                                    policy.max_changes =
-                                        actor.configured_history_limit.unwrap_or(max_changes);
+                                    policy.max_changes = actor.configured_history_limit.unwrap_or(max_changes);
                                     actor.document.set_history_policy(policy);
                                 }
                                 drop(actor);
@@ -232,9 +226,7 @@ impl Scheduler {
                             let before_revision = actor.document.snapshot().revision;
                             let result = match request.mutation {
                                 Mutation::Apply(edit) => match request.metadata {
-                                    Some(metadata) => {
-                                        actor.document.apply_with_metadata(edit, metadata)
-                                    }
+                                    Some(metadata) => actor.document.apply_with_metadata(edit, metadata),
                                     None => actor.document.apply(edit),
                                 },
                                 Mutation::Metadata {
@@ -361,14 +353,10 @@ impl Scheduler {
             reply,
             notify,
         };
-        self.ready
-            .submit(Work::Group(request))
-            .map_err(|(kind, work)| {
-                let Work::Group(request) = work else {
-                    unreachable!()
-                };
-                (kind, request.mutation)
-            })?;
+        self.ready.submit(Work::Group(request)).map_err(|(kind, work)| {
+            let Work::Group(request) = work else { unreachable!() };
+            (kind, request.mutation)
+        })?;
         Ok(receiver)
     }
 }
@@ -381,20 +369,14 @@ fn run_group(request: GroupRequest) {
                 .collect::<Vec<_>>(),
             None,
         ),
-        GroupMutation::Undo {
-            group,
-            participants,
-        } => (
+        GroupMutation::Undo { group, participants } => (
             participants
                 .into_iter()
                 .map(|participant| (participant, None))
                 .collect(),
             Some((group, false)),
         ),
-        GroupMutation::Redo {
-            group,
-            participants,
-        } => (
+        GroupMutation::Redo { group, participants } => (
             participants
                 .into_iter()
                 .map(|participant| (participant, None))
@@ -419,11 +401,7 @@ fn run_group(request: GroupRequest) {
             if !participant.snapshot.complete {
                 return Err(Error::IncompleteSource);
             }
-            if !actor
-                .document
-                .snapshot()
-                .same_document(&participant.snapshot)
-            {
+            if !actor.document.snapshot().same_document(&participant.snapshot) {
                 return Err(Error::WrongDocument);
             }
             if actor.document.current.revision != participant.snapshot.revision {
@@ -431,8 +409,7 @@ fn run_group(request: GroupRequest) {
             }
         }
         if let Some((group, redo)) = action {
-            let mut documents: Vec<_> =
-                actors.iter_mut().map(|actor| &mut actor.document).collect();
+            let mut documents: Vec<_> = actors.iter_mut().map(|actor| &mut actor.document).collect();
             if redo {
                 crate::group::redo(&mut documents, group)?;
             } else {
@@ -442,11 +419,7 @@ fn run_group(request: GroupRequest) {
         }
         let mut prepared = Vec::with_capacity(actors.len());
         for (actor, (_, transaction)) in actors.iter().zip(&mut targets) {
-            prepared.push(
-                actor
-                    .document
-                    .prepare(transaction.take().expect("apply transaction"))?,
-            );
+            prepared.push(actor.document.prepare(transaction.take().expect("apply transaction"))?);
         }
         let mut documents: Vec<_> = actors.iter_mut().map(|actor| &mut actor.document).collect();
         crate::group::commit(&mut documents, prepared)
@@ -460,9 +433,7 @@ fn run_group(request: GroupRequest) {
         })
         .collect();
     drop(actors);
-    let _ = request
-        .reply
-        .try_send(GroupCompletion { result, snapshots });
+    let _ = request.reply.try_send(GroupCompletion { result, snapshots });
     if let Some(notify) = request.notify {
         notify();
     }
@@ -514,9 +485,7 @@ impl DocumentService {
         if actor.retired || actor.scheduled || !actor.queue.is_empty() {
             return Err(Error::ActorBusy);
         }
-        if !actor.document.current.same_document(captured)
-            || actor.document.current.revision != captured.revision
-        {
+        if !actor.document.current.same_document(captured) || actor.document.current.revision != captured.revision {
             return Err(Error::StaleRevision);
         }
         // The caller owns the UI's opaque savepoint for this exact document snapshot.
@@ -530,10 +499,7 @@ impl DocumentService {
         }
         crate::spill::SpillPlan::resident(&actor.document)
     }
-    pub fn migrate_spill(
-        &self,
-        prepared: crate::spill::PreparedSpill,
-    ) -> Result<crate::paged::PagedDocument, Error> {
+    pub fn migrate_spill(&self, prepared: crate::spill::PreparedSpill) -> Result<crate::paged::PagedDocument, Error> {
         let mut actor = self.actor.try_lock().map_err(|_| Error::ActorBusy)?;
         if actor.retired || actor.scheduled || !actor.queue.is_empty() {
             return Err(Error::ActorBusy);
@@ -553,17 +519,14 @@ impl DocumentService {
         if actor.retired || actor.scheduled || !actor.queue.is_empty() {
             return Err(Error::ActorBusy);
         }
-        let paged =
-            crate::paged::PagedDocument::from_clean_spill(&actor.document, captured, source)?;
+        let paged = crate::paged::PagedDocument::from_clean_spill(&actor.document, captured, source)?;
         actor.retired = true;
         Ok(paged)
     }
     /// Roll back a failed controller installation; the retired actor never changed content.
     pub fn cancel_clean_spill(&self, captured: &DocumentSnapshot) -> Result<(), Error> {
         let mut actor = self.actor.try_lock().map_err(|_| Error::ActorBusy)?;
-        if !actor.document.current.same_document(captured)
-            || actor.document.current.revision != captured.revision
-        {
+        if !actor.document.current.same_document(captured) || actor.document.current.revision != captured.revision {
             return Err(Error::StaleRevision);
         }
         actor.retired = false;
@@ -584,10 +547,7 @@ impl DocumentService {
         }
     }
     /// Saturation returns the mutation so non-droppable edits can be retried unchanged.
-    pub fn submit(
-        &self,
-        mutation: Mutation,
-    ) -> Result<Receiver<Completion>, (SubmitError, Mutation)> {
+    pub fn submit(&self, mutation: Mutation) -> Result<Receiver<Completion>, (SubmitError, Mutation)> {
         self.submit_with_notify(mutation, None)
     }
     /// `notify` wakes an event loop after completion; no idle polling is needed.
@@ -618,8 +578,7 @@ impl DocumentService {
         transaction: EditTransaction,
         metadata: crate::history::EditMetadata,
         notify: Option<Arc<dyn Fn() + Send + Sync>>,
-    ) -> Result<Receiver<Completion>, (SubmitError, EditTransaction, crate::history::EditMetadata)>
-    {
+    ) -> Result<Receiver<Completion>, (SubmitError, EditTransaction, crate::history::EditMetadata)> {
         self.submit_context(Mutation::Apply(transaction), Some(metadata.clone()), notify)
             .map_err(|(error, mutation)| {
                 let Mutation::Apply(transaction) = mutation else {
@@ -675,11 +634,7 @@ impl DocumentService {
 mod tests {
     use super::*;
     use crate::{Budget, Edit, TextOffset};
-    fn group_edit(
-        service: &DocumentService,
-        snapshot: DocumentSnapshot,
-        insert: &str,
-    ) -> GroupEdit {
+    fn group_edit(service: &DocumentService, snapshot: DocumentSnapshot, insert: &str) -> GroupEdit {
         GroupEdit {
             participant: GroupParticipant {
                 service: service.clone(),
@@ -701,9 +656,7 @@ mod tests {
         loop {
             match pool.submit_group(mutation, None) {
                 Ok(receiver) => {
-                    return receiver
-                        .recv_timeout(std::time::Duration::from_secs(5))
-                        .unwrap();
+                    return receiver.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
                 }
                 Err((SubmitError::Saturated, returned)) if std::time::Instant::now() < deadline => {
                     mutation = returned;
@@ -727,18 +680,10 @@ mod tests {
         bad.transaction.base_revision = Revision(99);
         let failed = submit_group_retry(
             &pool,
-            GroupMutation::Apply(vec![
-                group_edit(&first, first_snapshot.clone(), "changed"),
-                bad,
-            ]),
+            GroupMutation::Apply(vec![group_edit(&first, first_snapshot.clone(), "changed"), bad]),
         );
         assert_eq!(failed.result, Err(Error::StaleRevision));
-        assert!(
-            failed
-                .snapshots
-                .iter()
-                .all(|snapshot| snapshot.revision == Revision(0))
-        );
+        assert!(failed.snapshots.iter().all(|snapshot| snapshot.revision == Revision(0)));
         let completed = submit_group_retry(
             &pool,
             GroupMutation::Apply(vec![
@@ -758,9 +703,7 @@ mod tests {
         let single = loop {
             match first.submit(mutation) {
                 Ok(receiver) => {
-                    break receiver
-                        .recv_timeout(std::time::Duration::from_secs(5))
-                        .unwrap();
+                    break receiver.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
                 }
                 Err((SubmitError::Saturated, returned)) if std::time::Instant::now() < deadline => {
                     mutation = returned;
@@ -780,24 +723,14 @@ mod tests {
                 snapshot: completed.snapshots[1].clone(),
             },
         ];
-        let undone = submit_group_retry(
-            &pool,
-            GroupMutation::Undo {
-                group,
-                participants,
-            },
-        );
+        let undone = submit_group_retry(&pool, GroupMutation::Undo { group, participants });
         assert_eq!(undone.result, Ok(group));
         assert_eq!(
-            undone.snapshots[0]
-                .read(TextOffset(0)..TextOffset(5), 5)
-                .unwrap(),
+            undone.snapshots[0].read(TextOffset(0)..TextOffset(5), 5).unwrap(),
             "first"
         );
         assert_eq!(
-            undone.snapshots[1]
-                .read(TextOffset(0)..TextOffset(6), 6)
-                .unwrap(),
+            undone.snapshots[1].read(TextOffset(0)..TextOffset(6), 6).unwrap(),
             "second"
         );
         let participants = vec![
@@ -810,26 +743,17 @@ mod tests {
                 snapshot: undone.snapshots[1].clone(),
             },
         ];
-        let redone = submit_group_retry(
-            &pool,
-            GroupMutation::Redo {
-                group,
-                participants,
-            },
-        );
+        let redone = submit_group_retry(&pool, GroupMutation::Redo { group, participants });
         assert_eq!(redone.result, Ok(group));
         assert_eq!(
-            redone.snapshots[0]
-                .read(TextOffset(0)..TextOffset(3), 3)
-                .unwrap(),
+            redone.snapshots[0].read(TextOffset(0)..TextOffset(3), 3).unwrap(),
             "one"
         );
     }
     #[test]
     fn configured_history_limit_retires_on_worker_without_changing_content() {
         let pool = Scheduler::new(1, 8).unwrap();
-        let mut document =
-            Document::from_utf8("", Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+        let mut document = Document::from_utf8("", Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
         for _ in 0..4 {
             let snapshot = document.snapshot();
             document
@@ -850,10 +774,7 @@ mod tests {
             peer.configure_history_limit(1);
             if let Ok(actor) = service.actor.try_lock() {
                 if actor.document.history_stats().undo_changes == 1 {
-                    assert_eq!(
-                        actor.document.snapshot().content_state,
-                        captured.content_state
-                    );
+                    assert_eq!(actor.document.snapshot().content_state, captured.content_state);
                     assert_eq!(actor.document.snapshot().revision, captured.revision);
                     break;
                 }
@@ -869,12 +790,7 @@ mod tests {
         let budget = Budget::new(1 << 20);
         let history = Budget::new(1 << 20);
         let services: Vec<_> = (0..5000)
-            .map(|_| {
-                pool.document(
-                    Document::from_utf8("", budget.clone(), history.clone()).unwrap(),
-                    8,
-                )
-            })
+            .map(|_| pool.document(Document::from_utf8("", budget.clone(), history.clone()).unwrap(), 8))
             .collect();
         let edit = || {
             Mutation::Apply(EditTransaction {

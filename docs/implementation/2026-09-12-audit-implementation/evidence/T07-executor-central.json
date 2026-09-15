@@ -1,0 +1,16 @@
+{
+  "arguments": [
+    "test",
+    "-p",
+    "bareline-platform",
+    "--lib",
+    "executor::tests",
+    "--offline",
+    "--locked"
+  ],
+  "completed_utc": "2026-09-12T06:43:48.8531292Z",
+  "integration_snapshot": "7d8f353b738d7ac264917ff70ce9f4ee8b52a32f",
+  "exit_code": 0,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\T07-executor-central.log"
+}

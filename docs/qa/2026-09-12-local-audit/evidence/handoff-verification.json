@@ -1,0 +1,195 @@
+{
+  "checked_utc": "2026-09-12T05:25:50.9630691Z",
+  "markdown_files": 40,
+  "local_links": 252,
+  "broken_links": [],
+  "brief_count": 31,
+  "brief_checks": [
+    {
+      "brief": "PR-T01-owned-cache-cleanup",
+      "words": 431,
+      "contract_link": true,
+      "acceptance_section": true
+    },
+    {
+      "brief": "PR-T02-resumable-data-migration",
+      "words": 408,
+      "contract_link": true,
+      "acceptance_section": true
+    },
+    {
+      "brief": "PR-T03-save-destination-consent",
+      "words": 429,
+      "contract_link": true,
+      "acceptance_section": true
+    },
+    {
+      "brief": "PR-T04-preserve-concurrent-writes",
+      "words": 483,
+      "contract_link": true,
+      "acceptance_section": true
+    },
+    {
+      "brief": "PR-T05-async-recovery-retirement",
+      "words": 478,
+      "contract_link": true,
+      "acceptance_section": true
+    },
+    {
+      "brief": "PR-T06-task-terminal-states",
+      "words": 417,
+      "contract_link": true,
+      "acceptance_section": true
+    },
+    {
+      "brief": "PR-T07-shared-worker-scheduling",
+      "words": 433,
+      "contract_link": true,
+      "acceptance_section": true
+    },
+    {
+      "brief": "PR-T08-fallible-extension-workers",
+      "words": 352,
+      "contract_link": true,
+      "acceptance_section": true
+    },
+    {
+      "brief": "PR-T09-reliable-test-evidence",
+      "words": 532,
+      "contract_link": true,
+      "acceptance_section": true
+    },
+    {
+      "brief": "PR-T10-first-party-runtime-qualification",
+      "words": 530,
+      "contract_link": true,
+      "acceptance_section": true
+    },
+    {
+      "brief": "PR-T11-release-feature-configuration",
+      "words": 407,
+      "contract_link": true,
+      "acceptance_section": true
+    },
+    {
+      "brief": "PR-T12-toolchain-contract",
+      "words": 313,
+      "contract_link": true,
+      "acceptance_section": true
+    },
+    {
+      "brief": "PR-T13-lint-debt-ratchet",
+      "words": 346,
+      "contract_link": true,
+      "acceptance_section": true
+    },
+    {
+      "brief": "PR-T14-current-capability-ledger",
+      "words": 399,
+      "contract_link": true,
+      "acceptance_section": true
+    },
+    {
+      "brief": "PR-T15-performance-qualification",
+      "words": 405,
+      "contract_link": true,
+      "acceptance_section": true
+    },
+    {
+      "brief": "PR-T16-paged-lifecycle-boundary",
+      "words": 418,
+      "contract_link": true,
+      "acceptance_section": true
+    },
+    {
+      "brief": "PR-T17-side-effect-free-launch-parsing",
+      "words": 375,
+      "contract_link": true,
+      "acceptance_section": true
+    },
+    {
+      "brief": "PR-T18-launch-request-lifecycle",
+      "words": 472,
+      "contract_link": true,
+      "acceptance_section": true
+    },
+    {
+      "brief": "PR-U01-overlay-and-modal-accessibility",
+      "words": 572,
+      "contract_link": true,
+      "acceptance_section": true
+    },
+    {
+      "brief": "PR-U02-notification-routing",
+      "words": 477,
+      "contract_link": true,
+      "acceptance_section": true
+    },
+    {
+      "brief": "PR-U03-native-popup-theme",
+      "words": 348,
+      "contract_link": true,
+      "acceptance_section": true
+    },
+    {
+      "brief": "PR-U04-menu-information-architecture",
+      "words": 390,
+      "contract_link": true,
+      "acceptance_section": true
+    },
+    {
+      "brief": "PR-U05-recovery-center-loading-refresh",
+      "words": 378,
+      "contract_link": true,
+      "acceptance_section": true
+    },
+    {
+      "brief": "PR-U06-macro-manager-close-state",
+      "words": 299,
+      "contract_link": true,
+      "acceptance_section": true
+    },
+    {
+      "brief": "PR-U07-search-and-recovery-focus",
+      "words": 376,
+      "contract_link": true,
+      "acceptance_section": true
+    },
+    {
+      "brief": "PR-U08-split-editor-providers",
+      "words": 331,
+      "contract_link": true,
+      "acceptance_section": true
+    },
+    {
+      "brief": "PR-U09-document-bound-find-state",
+      "words": 386,
+      "contract_link": true,
+      "acceptance_section": true
+    },
+    {
+      "brief": "PR-U10-settings-revert-contract",
+      "words": 383,
+      "contract_link": true,
+      "acceptance_section": true
+    },
+    {
+      "brief": "PR-U11-shared-bottom-dock",
+      "words": 333,
+      "contract_link": true,
+      "acceptance_section": true
+    },
+    {
+      "brief": "PR-U12-find-toggle-tooltips",
+      "words": 234,
+      "contract_link": true,
+      "acceptance_section": true
+    },
+    {
+      "brief": "PR-U13-estimated-gutter-cue",
+      "words": 235,
+      "contract_link": true,
+      "acceptance_section": true
+    }
+  ]
+}

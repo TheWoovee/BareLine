@@ -1,0 +1,144 @@
+diff --git a/README.md b/README.md
+index 097a933..3f38d40 100644
+--- a/README.md
++++ b/README.md
+@@ -47,14 +47,16 @@ and opaque-byte rules. Unchanged same-encoding saves preserve original byte
+ ranges. Changed saves stage captured document content, check destination/source
+ identity, flush and verify before replacement. Automatic resident and paged
+ recovery uses bounded, checksummed local journals; explicit discard must become
+-durable before recovery ownership is retired. Current Recovery Center loading
+-presentation is an open PR-U05 defect in the ledger.
++durable before recovery ownership is retired. The PR-U05 Recovery Center loading
++correction remains under review and is the open implementation defect in the ledger.
+ 
+ Preview builds fail closed for downloads, updates and first-party extension
+ execution unless a reviewed public trust configuration is compiled in. They do
+ not assume fixture trust, and an unconfigured command inventory must not claim
+-dynamic extension commands. PR-T11 owns the configured release handoff. The
+-[parity evidence guide](docs/parity/README.md) explains the composed registry
++dynamic extension commands. PR-T11's configured release source is integrated;
++the first connected run built three release binaries before its tooling corrections,
++while the corrected connected fixture, actual installation, installed Fast run,
++signing and external acceptance remain pending. The [parity evidence guide](docs/parity/README.md) explains the composed registry
+ export and checked T09/native receipt import. Final integrated acceptance and
+ comparative performance qualification remain pending.
+ 
+diff --git a/docs/IMPLEMENTATION_STATUS.md b/docs/IMPLEMENTATION_STATUS.md
+index 06c7a5a..b48b6a8 100644
+--- a/docs/IMPLEMENTATION_STATUS.md
++++ b/docs/IMPLEMENTATION_STATUS.md
+@@ -1,6 +1,6 @@
+ # Implementation status
+ 
+-**Implementation underway, 2026-09-12:** the owner authorized parallel Sol medium implementation and root review of the [31 audit PR plans](qa/2026-09-12-local-audit/PR_INDEX.md). Follow the [orchestration record](implementation/2026-09-12-audit-implementation/ORCHESTRATION.md) and its live status. Only contained checks run per fix; full integrated qualification and a fresh independent audit follow implementation.
++**Implementation checkpoint, 2026-09-12:** 30 of the [31 audit PR plans](qa/2026-09-12-local-audit/PR_INDEX.md) are integrated pending final qualification. PR-U05 is in correction review. Follow the [orchestration record](implementation/2026-09-12-audit-implementation/ORCHESTRATION.md) and its live status. Contained checks establish source behavior only; full integrated qualification and a fresh independent audit remain pending.
+ 
+ **Current capability authority:** use the 52-row
+ [capability ledger](parity/index.json) and its [evidence contract](parity/README.md)
+@@ -10,7 +10,9 @@ receipts. They do not override the current ledger or establish the final source/
+ binary identity. PR-T03 owns overwrite/default-save behavior for this audit;
+ older PR-004 ownership text remains historical.
+ 
+-**TECH-019 source implemented pending central qualification:** PR-T16 gives every paged document one file-io `PagedSession` owner for path/fingerprint, savepoint, encoding/conflict/cleanup state, and recovery generations. Paged views share that owner and keep presentation state locally; save completion is a typed identity/revision/content/source/operation-generation-fenced receipt. See [PR-T16 evidence](implementation/2026-09-12-audit-implementation/PR-T16.md).
++**TECH-019 source integrated pending final qualification:** PR-T16 gives every paged document one file-io `PagedSession` owner for path/fingerprint, savepoint, encoding/conflict/cleanup state, and recovery generations. Paged views share that owner and keep presentation state locally; save completion is a typed identity/revision/content/source/operation-generation-fenced receipt. Twelve contained lifecycle checks pass. Final native and full integration qualification remain pending. See [PR-T16 evidence](implementation/2026-09-12-audit-implementation/PR-T16.md).
++
++**Current contained checkpoint:** PR-U02 passes 20 focused notification checks; PR-T14 passes 13 Python adapter/resolver checks and all 10 composed command-inventory checks after the routed search-mode correction. PR-T11's corrected release source is integrated after its first connected run built three pre-correction release binaries but failed before installed delivery. The corrected connected fixture, actual installation, installed Fast run, signing, external hardware and all matching final AC/native receipts remain pending.
+ 
+ **Current audit, 2026-09-12:** the [local working-tree review](qa/2026-09-12-local-audit/README.md) records newly reproduced data-safety and native usability defects, fresh test results, and [implementor-ready PR plans](qa/2026-09-12-local-audit/PR_INDEX.md). Use that audit to qualify the historical completion statements below; source completion is not current runtime acceptance.
+ 
+diff --git a/docs/implementation/2026-09-12-audit-implementation/PR-T14.md b/docs/implementation/2026-09-12-audit-implementation/PR-T14.md
+index 19507d1..876b111 100644
+--- a/docs/implementation/2026-09-12-audit-implementation/PR-T14.md
++++ b/docs/implementation/2026-09-12-audit-implementation/PR-T14.md
+@@ -51,9 +51,26 @@ it is not a release-readiness claim.
+   encodings, exact-byte save/recovery policy, and fail-closed preview trust.
+   The active codec catalog's obsolete paged-transcode sentence was reconciled.
+ - `docs/IMPLEMENTATION_STATUS.md` points current readers to the ledger while
+-  preserving historical package receipts. `docs/UNLOCK_CHECKLIST.md` separates
+-  environment-only checks from U02/U05/T11/T16 code work and T15/final
+-  qualification, and removes stale implementation-gap wording from resume rows.
++  preserving historical package receipts. `docs/UNLOCK_CHECKLIST.md` remains the
++  native resume list; the live status and central check log supersede its
++  ordinary implementation labels as corrections integrate.
++
++## Integrated pre-qualification checkpoint
++
++- On integrated source, the T14 Python adapter/resolver cohort passes 13 checks
++  and the composed command-inventory cohort passes all 10 checks after the U04
++  search-mode routing correction. The actual inventory export remains pending.
++- PR-U02 passes 20 focused notification checks. PR-T16 passes 12 contained
++  lifecycle checks. These remain source-level receipts, not final AC/native
++  qualification.
++- PR-T11's corrected source is integrated. Its first connected run built three
++  pre-correction release binaries, then failed before installed delivery; the corrected
++  connected fixture, actual install, installed Fast run, signing and external
++  acceptance remain pending.
++- PR-U05 remains in correction review, so Recovery Center stays the sole
++  `open-defect` ledger row. The ledger now has 40 implemented-awaiting-
++  qualification rows, one open defect, seven deferred rows and four intentional
++  limits. It still has no `implemented-and-tested` row or imported AC evidence.
+ 
+ ## Focused verification
+ 
+@@ -65,8 +82,9 @@ it is not a release-readiness claim.
+ - `python .github/workflows/run_test_evidence.py --self-test` — passed; the
+   retained-failure/nested-summary/no-overwrite contract remains intact.
+ - PowerShell `ConvertFrom-Json` parsed the ledger; feature and current-ledger
+-  counts are both 52. Current states: 37 awaiting qualification, four open
+-  defects, seven deferred and four intentional limits.
++  counts are both 52. The initial T14 snapshot had 37 awaiting qualification,
++  four open defects, seven deferred and four intentional limits; the integrated
++  pre-qualification checkpoint above supersedes those delivery-state counts.
+ - `rustfmt --edition 2024 --check apps/bareline/src/windows_app/inventory.rs
+   xtask/src/journey.rs` and `git diff --check` — passed
+   after focused formatting.
+diff --git a/docs/parity/README.md b/docs/parity/README.md
+index 2bfffcf..8e3d9b5 100644
+--- a/docs/parity/README.md
++++ b/docs/parity/README.md
+@@ -86,4 +86,9 @@ been generated yet; owner-provided comparator/hardware runs remain pending.
+ Reliability, release artifacts and both-floor assistive native QA remain separate
+ required evidence under PR021 and the existing packaging verifier. The current
+ ledger therefore uses no `implemented-and-tested` rows until final integrated
+-qualification imports matching receipts.
++qualification imports matching receipts. At the pre-qualification checkpoint,
++the T14 Python adapter/resolver cohort passes 13 checks and the composed command
++inventory cohort passes all 10 checks. The actual schema-2 export and matching
++native/AC evidence are still pending. T11's configured source and the three
++pre-correction binaries from its first connected run likewise await the corrected connected run, actual installation,
++installed Fast execution, signing and external acceptance.
+diff --git a/docs/parity/index.json b/docs/parity/index.json
+index 7cf4571..7f2c4f5 100644
+--- a/docs/parity/index.json
++++ b/docs/parity/index.json
+@@ -778,7 +778,7 @@
+     {"id":"parity-023","state":"implemented-awaiting-qualification","owner":"PR-009/U13 + final qualification","code":"crates/app/src/workspace_panel.rs; document-map command","tests":"workspace panel and U13 sparse-index receipts","limitation":"Final native progressive map interaction is pending.","next_step":"Open a large generated file, navigate partial/exact map states, import receipt.","source_binary_identity":"pending: final inventory/T09 receipt"},
+     {"id":"parity-024","state":"implemented-awaiting-qualification","owner":"PR-009 + final qualification","code":"crates/syntax/src/outline.rs; function-list command","tests":"outline import/stale-result tests","limitation":"Final native progressive/cancellation evidence is pending.","next_step":"Qualify function list on edits/language switches and import receipt.","source_binary_identity":"pending: final inventory/T09 receipt"},
+     {"id":"parity-025","state":"implemented-awaiting-qualification","owner":"PR-009 + final qualification","code":"crates/app/src/workspace_panel.rs; workspace commands","tests":"workspace enumeration/mutation tests","limitation":"Final native filesystem/dialog workflow is pending.","next_step":"Run generated workspace navigation/mutation journey and import receipt.","source_binary_identity":"pending: final inventory/T09 receipt"},
+-    {"id":"parity-026","state":"open-defect","owner":"PR-U05 (presentation), PR-T16 (boundary), final qualification","code":"crates/file-io/src/recovery; apps/bareline/src/windows_app/recovery.rs","tests":"T05 recovery receipts; U05 delayed-discovery cases not yet integrated","limitation":"Recovery Center can present an in-flight discovery as empty; final lifecycle qualification is pending.","next_step":"Integrate U05 state model, finish T16 review, then run crash/restart/discard/session journeys.","source_binary_identity":"pending: corrected final inventory/T09 receipt"},
++    {"id":"parity-026","state":"open-defect","owner":"PR-U05 correction review + final qualification","code":"crates/file-io/src/recovery; apps/bareline/src/windows_app/recovery.rs","tests":"T05 recovery receipts; T16 lifecycle cohort 12 passed; U05 correction pending review","limitation":"Recovery Center in-flight discovery/loading presentation remains under correction; final lifecycle qualification is pending.","next_step":"Complete U05 correction review, then run crash/restart/discard/session journeys on the frozen binary.","source_binary_identity":"pending: corrected final inventory/T09 receipt"},
+     {"id":"parity-027","state":"implemented-awaiting-qualification","owner":"PR-015 + final qualification","code":"crates/file-io/src/tail.rs; apps/bareline/src/windows_app/watch.rs","tests":"tail rotation/truncation tests","limitation":"Final native rotation/truncation/follow receipt is pending.","next_step":"Run generated append/rotate/truncate cases and import receipt.","source_binary_identity":"pending: final inventory/T09 receipt"},
+     {"id":"parity-028","state":"implemented-awaiting-qualification","owner":"PR-014/U11 + final qualification","code":"crates/app/src/macros.rs; apps/bareline/src/windows_app/macros.rs","tests":"macro model/playback and U11 output focus receipts","limitation":"Final native record/playback/persistence evidence is pending.","next_step":"Run macro record/replay across focus/output states and import receipt.","source_binary_identity":"pending: final inventory/T09 receipt"},
+     {"id":"parity-029","state":"implemented-awaiting-qualification","owner":"PR-014 + final qualification","code":"crates/app/src/macros.rs; macro replay actions","tests":"macro replay timing/action tests","limitation":"Final visible replay and cancellation evidence is pending.","next_step":"Run bounded replay typing journey and import receipt.","source_binary_identity":"pending: final inventory/T09 receipt"},
+@@ -787,8 +787,8 @@
+     {"id":"parity-032","state":"implemented-awaiting-qualification","owner":"PR-017 + final qualification","code":"crates/platform/src/printing.rs; apps/bareline/src/windows_app/utilities.rs","tests":"printing/export layout tests","limitation":"Printer availability and final native dialog/output evidence are pending.","next_step":"Qualify export and available printer/PDF path; record unavailable environment explicitly.","source_binary_identity":"pending: final inventory/T09 receipt"},
+     {"id":"parity-033","state":"implemented-awaiting-qualification","owner":"PR-025/017 + final qualification","code":"crates/diff/src; crates/app/src/compare.rs","tests":"diff/compare view and session tests","limitation":"Final native compare/session/undo visual evidence is pending.","next_step":"Run resident/paged compare and restored-session journey; import receipts.","source_binary_identity":"pending: final inventory/T09 receipt"},
+     {"id":"parity-034","state":"deferred","owner":"Product owner (v1.1)","code":"docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md","tests":"none required for deferred v1.1 scope","limitation":"Inline and folder compare are outside v1 scope.","next_step":"Create a v1.1 implementation PR before changing this state.","source_binary_identity":"not applicable until implemented"},
+-    {"id":"parity-035","state":"open-defect","owner":"PR-T11 + final qualification","code":"apps/bareline/src/windows_app/extensions.rs; extensions panel commands","tests":"extension manager/isolation tests and T10 release workload","limitation":"Preview builds fail closed without reviewed owner trust/catalog/runtime configuration.","next_step":"Land reviewed public release configuration, export capability manifest, then qualify install/disable/failure routes.","source_binary_identity":"pending: configured final inventory/T09 receipt"},
+-    {"id":"parity-036","state":"open-defect","owner":"PR-T11/T10 + final qualification","code":"extensions/json-tools; extensions/xml-tools; extensions/hex-view","tests":"first-party component/host tests; T10 timeout correction pending final","limitation":"Extension commands must not appear in an unconfigured preview inventory; configured release workload is not fully qualified.","next_step":"Build fixture-trusted actual components, correct/review T10 timeout telemetry, export dynamic commands, import receipts.","source_binary_identity":"pending: configured final inventory/T09 receipt"},
++    {"id":"parity-035","state":"implemented-awaiting-qualification","owner":"PR-T11 + final qualification","code":"apps/bareline/src/windows_app/extensions.rs; extensions panel commands","tests":"extension manager/isolation tests; T11 release tooling checks; first connected run built three pre-correction binaries","limitation":"Configured release source is integrated and preview remains fail-closed; corrected connected install/disable/failure qualification is pending.","next_step":"Rerun the corrected connected fixture, install the generated release, export its capability manifest and qualify install/disable/failure routes.","source_binary_identity":"pending: configured final inventory/T09 receipt"},
++    {"id":"parity-036","state":"implemented-awaiting-qualification","owner":"PR-T11/T10 + final qualification","code":"extensions/json-tools; extensions/xml-tools; extensions/hex-view","tests":"first-party component/host tests; pre-install T10 Fast 3 passed; first T11 connected run built three pre-correction binaries","limitation":"Extension commands remain absent from unconfigured preview inventory; installed-component Fast and connected runtime qualification are pending.","next_step":"Complete corrected installation, run installed-component Fast, export verified dynamic commands and import matching receipts.","source_binary_identity":"pending: configured final inventory/T09 receipt"},
+     {"id":"parity-037","state":"deferred","owner":"Product owner/community (v1.1)","code":"docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md","tests":"none required for deferred community scope","limitation":"Spell check, CSV tooling and LSP breadth are outside v1.","next_step":"Define extension contracts and owners in a v1.1 PR.","source_binary_identity":"not applicable until implemented"},
+     {"id":"parity-038","state":"implemented-awaiting-qualification","owner":"PR-011/012 + final qualification","code":"crates/settings/src; crates/commands/src/keymap.rs","tests":"settings persistence/keymap/menu tests","limitation":"Final physical shortcut/IME/high-contrast qualification is pending.","next_step":"Run settings/revert/mapper/theme journey and import receipts.","source_binary_identity":"pending: final inventory/T09 receipt"},
+     {"id":"parity-039","state":"deferred","owner":"Product owner/community (v1.1)","code":"crates/settings/src/localization.rs; blueprint parity authority","tests":"English catalog tests only","limitation":"English is the v1 locale; broader language packs are deferred.","next_step":"Define signed/versioned language-pack delivery for v1.1.","source_binary_identity":"not applicable to deferred packs"},
+@@ -796,8 +796,8 @@
+     {"id":"parity-041","state":"implemented-awaiting-qualification","owner":"PR-018 + final qualification","code":"apps/bareline/src/windows_app/shell_integration.rs","tests":"shell integration registry/argument tests","limitation":"Changes require explicit user action and final isolated Windows verification.","next_step":"Qualify register/unregister and quoted Unicode paths in an isolated profile.","source_binary_identity":"pending: final inventory/T09 receipt"},
+     {"id":"parity-042","state":"intentional-limit","owner":"Product owner / FR-026","code":"docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md","tests":"exclusion checked by parity resolver authority validation","limitation":"Replacing Windows Notepad is excluded by product scope.","next_step":"Retain exclusion unless the product authority is explicitly revised.","source_binary_identity":"not applicable by design"},
+     {"id":"parity-043","state":"implemented-awaiting-qualification","owner":"PR-018 + final qualification","code":"apps/bareline/src/windows_app/instance.rs; tray commands","tests":"instance/tray state tests","limitation":"Final native tray lifecycle evidence is pending.","next_step":"Exercise minimize/restore/exit with generated scratch documents and import receipt.","source_binary_identity":"pending: final inventory/T09 receipt"},
+-    {"id":"parity-044","state":"open-defect","owner":"PR-T11/020 + final qualification","code":"apps/bareline/src/windows_app/update.rs; diagnostics commands","tests":"distribution verification/update tests and diagnostics tests","limitation":"Preview diagnostics work, but operational update trust/channel configuration is not yet accepted.","next_step":"Land T11 public configuration and qualify valid/invalid/stale/corrupt update fixtures.","source_binary_identity":"pending: configured final inventory/T09 receipt"},
+-    {"id":"parity-045","state":"implemented-awaiting-qualification","owner":"PR-T17/T11 + final qualification","code":"apps/bareline/src/windows_app/launch.rs; distribution packaging","tests":"portable mode/isolation tests","limitation":"Unsigned local artifacts are not a released portable package; final package inventory pending.","next_step":"Build final unsigned portable payload, verify isolation/hashes, and import receipt.","source_binary_identity":"pending: final package/inventory/T09 receipt"},
++    {"id":"parity-044","state":"implemented-awaiting-qualification","owner":"PR-T11/020 + final qualification","code":"apps/bareline/src/windows_app/update.rs; diagnostics commands","tests":"distribution verification/update tests; T11 release tooling checks and three pre-correction connected-run binaries","limitation":"Operational trust/channel source is integrated, but corrected connected update/install qualification and signing are pending.","next_step":"Rerun the corrected connected fixture and qualify valid/invalid/stale/corrupt update routes on the installed build.","source_binary_identity":"pending: configured final inventory/T09 receipt"},
++    {"id":"parity-045","state":"implemented-awaiting-qualification","owner":"PR-T17/T11 + final qualification","code":"apps/bareline/src/windows_app/launch.rs; distribution packaging","tests":"portable mode/isolation tests; first T11 connected run built three pre-correction binaries","limitation":"Built local artifacts are not installed or signed release acceptance; final package inventory is pending.","next_step":"Verify portable isolation/hashes, perform the corrected installed-delivery run and import matching receipts.","source_binary_identity":"pending: final package/inventory/T09 receipt"},
+     {"id":"parity-046","state":"deferred","owner":"Product owner (v1.1)","code":"docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md","tests":"none required for deferred v1.1 scope","limitation":"Character Panel is outside v1 scope.","next_step":"Assign a v1.1 implementation PR and acceptance cases.","source_binary_identity":"not applicable until implemented"},
+     {"id":"parity-047","state":"deferred","owner":"Product owner (v1.1)","code":"docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md","tests":"none required for deferred v1.1 scope","limitation":"Post-It/frameless mode is outside v1 scope.","next_step":"Assign a v1.1 implementation PR and native window acceptance.","source_binary_identity":"not applicable until implemented"},
+     {"id":"parity-048","state":"deferred","owner":"Product owner (v1.1)","code":"docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md","tests":"none required for deferred v1.1 scope","limitation":"Document Peeker is outside v1 scope.","next_step":"Assign a v1.1 implementation PR and bounded preview contract.","source_binary_identity":"not applicable until implemented"},

@@ -1,0 +1,86 @@
+diff --git a/apps/bareline/src/windows_app.rs b/apps/bareline/src/windows_app.rs
+index 6a97662..62140ad 100644
+--- a/apps/bareline/src/windows_app.rs
++++ b/apps/bareline/src/windows_app.rs
+@@ -4268,7 +4268,7 @@ impl Shell {
+ 
+ #[cfg(test)]
+ mod deferred_close_tests {
+-    use super::{CloseTarget, PendingClose, Shell, accessibility::tests::headless_shell, lifecycle::Identity};
++    use super::{CloseTarget, PendingClose, accessibility::tests::headless_shell, lifecycle::Identity};
+     use bareline_app::workspace::{Input, Workspace};
+     use bareline_platform::LocalFileSystem;
+     use std::{
+@@ -4308,6 +4308,40 @@ mod deferred_close_tests {
+         }
+     }
+     impl LocalFileSystem for TombstoneGate {
++        fn cache_directory_guard(
++            &self,
++            path: &Path,
++        ) -> std::io::Result<Option<bareline_platform::CacheDirectoryLease>> {
++            LocalFileSystem::cache_directory_guard(&bareline_platform_windows::WindowsFileSystem, path)
++        }
++        fn remove_owned_cache_directory(
++            &self,
++            root: &Path,
++            candidate: &Path,
++            expected_root: bareline_platform::CacheDirectoryIdentity,
++            expected_candidate: bareline_platform::CacheDirectoryIdentity,
++            proof_name: &str,
++            proof_bytes: &[u8],
++            max_entries: usize,
++            max_time: Duration,
++            cancelled: &dyn Fn() -> bool,
++        ) -> bareline_platform::CacheRemovalOutcome {
++            LocalFileSystem::remove_owned_cache_directory(
++                &bareline_platform_windows::WindowsFileSystem,
++                root,
++                candidate,
++                expected_root,
++                expected_candidate,
++                proof_name,
++                proof_bytes,
++                max_entries,
++                max_time,
++                cancelled,
++            )
++        }
++        fn open_sealed_read(&self, path: &Path) -> std::io::Result<std::fs::File> {
++            LocalFileSystem::open_sealed_read(&bareline_platform_windows::WindowsFileSystem, path)
++        }
+         fn guard_directory(&self, path: &Path) -> std::io::Result<Arc<dyn Send + Sync>> {
+             LocalFileSystem::guard_directory(&bareline_platform_windows::WindowsFileSystem, path)
+         }
+@@ -4508,11 +4542,12 @@ mod deferred_close_tests {
+         );
+         assert!(shell.workspace.as_ref().unwrap().editors[0].read_only());
+ 
++        let tab = shell.active_close_tab();
+         shell.close_document_with_renderer(
+             CloseTarget {
+                 index: 0,
+                 identity,
+-                tab: None,
++                tab,
+                 saving: false,
+                 discarding: false,
+                 was_read_only: true,
+diff --git a/crates/editor-surface/src/paged_view.rs b/crates/editor-surface/src/paged_view.rs
+index 1562e19..1e20e3e 100644
+--- a/crates/editor-surface/src/paged_view.rs
++++ b/crates/editor-surface/src/paged_view.rs
+@@ -896,9 +896,10 @@ impl PagedEditorSurface {
+         if let Ok(mut discard) = self.recovery_discard.lock() {
+             *discard = None;
+         }
+-        if let Ok(mut status) = self.recovery_status.lock() {
+-            *status = Default::default();
+-        }
++        // The retired recovery can still finish a cancelled baseline job. Give
++        // reopened editing a new status owner so that late completion cannot
++        // publish an error into the replacement journal generation.
++        self.recovery_status = Arc::new(Mutex::new(Default::default()));
+     }
+     pub fn recovery_status(&self) -> bareline_file_io::paged_recovery::PagedRecoveryStatus {
+         self.recovery_status

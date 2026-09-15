@@ -23,10 +23,7 @@ fn signed_metadata_policy_vectors_and_package_tampering() {
     let (bytes, signature) = fixture!("valid");
     let valid = verify_manifest(bytes, signature, &policy, 100).unwrap();
     valid.verify_package(&mut &b"test"[..]).unwrap();
-    assert_eq!(
-        valid.verify_package(&mut &b"tent"[..]),
-        Err(VerifyError::Hash)
-    );
+    assert_eq!(valid.verify_package(&mut &b"tent"[..]), Err(VerifyError::Hash));
     let mut changed = bytes.to_vec();
     changed[0] = b'[';
     assert_eq!(
@@ -43,10 +40,7 @@ fn signed_metadata_policy_vectors_and_package_tampering() {
         (fixture!("artifact"), VerifyError::Policy),
         (fixture!("length"), VerifyError::Policy),
     ] {
-        assert_eq!(
-            verify_manifest(bytes, signature, &policy, 100).unwrap_err(),
-            expected
-        );
+        assert_eq!(verify_manifest(bytes, signature, &policy, 100).unwrap_err(), expected);
     }
     let (bytes, signature) = fixture!("hash");
     assert_eq!(

@@ -1,0 +1,9 @@
+{
+  "command": "bareline --version",
+  "stdout": "Bareline 0.1.0\n",
+  "stderr": "",
+  "exit_code": 0,
+  "roaming_settings_exists": false,
+  "local_settings_exists": true,
+  "cache_sentinel_exists": false
+}

@@ -4,6 +4,10 @@ Source harness only; no native journey result is implied. `journeys.json` define
 the thirteen required journeys, bounded deadlines, actions and observable checks.
 `journeys.schema.json` documents the versioned format; `runner.py validate` also
 enforces exact journey membership, duplicate rejection and step/deadline bounds.
+Each journey's `cases` list is a provisional traceability hint. It cannot qualify
+an acceptance case. Only a reviewed `qualification_mappings` entry can bind a
+complete acceptance outcome to explicit required steps. An unmapped or partially
+covered case remains unresolved.
 
 Run source validation through `cargo xtask qa validate`. The coordinator may add
 `python -m unittest discover -s tests/e2e -p test_runner.py` to the shared gate.
@@ -36,6 +40,8 @@ targeted. One journey is capped at 600 seconds and its response at 256 KiB. The
 xtask wrapper may use a 660-second outer deadline. Adapter stdout is not evidence;
 the bounded response is. Requests/results are exclusive new UUID directories in
 `results/`, retaining binary hash, commit, reviewer, OS, hardware, mode and DPI.
+The runner's final JSON line binds the absolute result path to its SHA-256 for
+T09 capture.
 
 Reuse `tests/perf`/`xtask perf` for performance and packaging's existing supply-chain
 verification for release artifacts. This runner neither duplicates those tools

@@ -12,9 +12,7 @@ pub fn boundaries(snapshot: &DocumentSnapshot, start: usize, end: usize) -> Opti
     while !snapshot.is_boundary(TextOffset(before)) {
         before += 1;
     }
-    let prefix = snapshot
-        .read(TextOffset(before)..TextOffset(start), 4)
-        .ok()?;
+    let prefix = snapshot.read(TextOffset(before)..TextOffset(start), 4).ok()?;
     if prefix.chars().next_back().is_some_and(is_word) {
         return Some(false);
     }

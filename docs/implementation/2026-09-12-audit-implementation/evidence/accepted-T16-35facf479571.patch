@@ -1,0 +1,291 @@
+diff --git a/crates/editor-surface/src/paged_navigation.rs b/crates/editor-surface/src/paged_navigation.rs
+index 79e879c..cf79fa9 100644
+--- a/crates/editor-surface/src/paged_navigation.rs
++++ b/crates/editor-surface/src/paged_navigation.rs
+@@ -1,12 +1,12 @@
+ // SPDX-License-Identifier: MPL-2.0
+ //! Global logical navigation over a captured paged root. All Pending page
+ //! resolution occurs on one bounded worker; the UI only submits and polls.
+-use crate::paged_view::PagedReadHandle;
+ use bareline_document::{
+     Budget, TextOffset,
+     line_lookup::{LineLookupPoll, LineTarget},
+     paged::{PagedSnapshot, SparseLineIndex},
+ };
++use bareline_file_io::paged_service::PagedReadHandle;
+ use std::sync::{
+     Arc, Mutex, RwLock,
+     atomic::{AtomicBool, Ordering},
+diff --git a/crates/editor-surface/src/paged_power.rs b/crates/editor-surface/src/paged_power.rs
+index f7526b2..b389812 100644
+--- a/crates/editor-surface/src/paged_power.rs
++++ b/crates/editor-surface/src/paged_power.rs
+@@ -3,7 +3,6 @@
+ //! publication is performed by the paged actor's journaled source transaction.
+ use crate::{
+     Selection,
+-    paged_view::PagedReadHandle,
+     power::{self, Rectangle, SelectionSet, consumer::Arguments},
+ };
+ use bareline_document::{
+@@ -14,6 +13,7 @@ use bareline_document::{
+         OwnedTextRange, PagedSnapshot, PreparedSourceTransaction, SourceEdit, SourceTransactionPoll, SparseLineIndex,
+     },
+ };
++use bareline_file_io::paged_service::PagedReadHandle;
+ use power::captured::{CapturedRangeReader, StagingOptions};
+ use std::{io::Read, ops::Range, sync::Arc};
+ 
+diff --git a/crates/editor-surface/src/paged_transfer.rs b/crates/editor-surface/src/paged_transfer.rs
+index b80e561..fbd8db2 100644
+--- a/crates/editor-surface/src/paged_transfer.rs
++++ b/crates/editor-surface/src/paged_transfer.rs
+@@ -1066,10 +1066,9 @@ mod tests {
+         assert_eq!(restored.transcoded.document.snapshot().len(), 12);
+         let group = source
+             .actor
+-            .lock()
++            .lock_document()
+             .unwrap()
+-            .transcoded
+-            .document
++            .document()
+             .history_group(true)
+             .unwrap();
+         unregister_group(group);
+@@ -1186,10 +1185,9 @@ mod tests {
+         assert_eq!(destination.snapshot.len(), 4);
+         let group = source
+             .actor
+-            .lock()
++            .lock_document()
+             .unwrap()
+-            .transcoded
+-            .document
++            .document()
+             .history_group(true)
+             .unwrap();
+         source.enqueue(Input::Undo);
+diff --git a/crates/editor-surface/src/paged_view.rs b/crates/editor-surface/src/paged_view.rs
+index 2a92a2e..5ecc1bf 100644
+--- a/crates/editor-surface/src/paged_view.rs
++++ b/crates/editor-surface/src/paged_view.rs
+@@ -112,28 +112,28 @@ impl Drop for JobWake {
+         self.fire();
+     }
+ }
+-struct JobCompletion<T> {
+-    sender: Option<SyncSender<Result<T, PagedOperationError>>>,
++struct JobCompletion<T, E: From<String> = PagedOperationError> {
++    sender: Option<SyncSender<Result<T, E>>>,
+     wake: JobWake,
+ }
+-impl<T> JobCompletion<T> {
+-    fn new(sender: SyncSender<Result<T, PagedOperationError>>, notify: Arc<dyn Fn() + Send + Sync>) -> Self {
++impl<T, E: From<String>> JobCompletion<T, E> {
++    fn new(sender: SyncSender<Result<T, E>>, notify: Arc<dyn Fn() + Send + Sync>) -> Self {
+         Self {
+             sender: Some(sender),
+             wake: JobWake::new(notify),
+         }
+     }
+-    fn complete(mut self, result: Result<T, PagedOperationError>) {
++    fn complete(mut self, result: Result<T, E>) {
+         if let Some(sender) = self.sender.take() {
+             let _ = sender.try_send(result);
+         }
+         self.wake.fire();
+     }
+ }
+-impl<T> Drop for JobCompletion<T> {
++impl<T, E: From<String>> Drop for JobCompletion<T, E> {
+     fn drop(&mut self) {
+         if let Some(sender) = self.sender.take() {
+-            let _ = sender.try_send(Err(PagedOperationError::Message("Paged worker failed".into())));
++            let _ = sender.try_send(Err("Paged worker failed".to_owned().into()));
+         }
+         self.wake.fire();
+     }
+@@ -351,7 +351,7 @@ impl PagedEditorSurface {
+             .read_handle(self.snapshot.clone(), self.view_generation.clone(), self.views.clone())
+     }
+     pub fn new(opened: Box<PagedOpened>, budget: Budget, notify: Arc<dyn Fn() + Send + Sync>) -> Result<Self, String> {
+-        let snapshot = opened.document().snapshot();
++        let snapshot = opened.transcoded.document.snapshot();
+         let prefix = DocumentBuilder::new(budget.clone(), Budget::new(0))
+             .map_err(|error| format!("{error:?}"))?
+             .prefix();
+@@ -362,10 +362,10 @@ impl PagedEditorSurface {
+         surface.user_read_only = opened.transcoded.store.state.binary_warning;
+         let initial_eol = (opened.recovery_origin.is_none()
+             && snapshot.revision.0 == 0
+-            && snapshot.content_state == opened.document().saved_content_state())
++            && snapshot.content_state == opened.transcoded.document.saved_content_state())
+         .then_some((snapshot.identity_token(), opened.transcoded.store.eol));
+-        let can_undo = opened.document().can_undo();
+-        let can_redo = opened.document().can_redo();
++        let can_undo = opened.transcoded.document.can_undo();
++        let can_redo = opened.transcoded.document.can_redo();
+         let actor = PagedSession::new(opened);
+         let generation_owner = actor.current_generation_owner();
+         let mut view = Self {
+@@ -3377,10 +3377,7 @@ mod peer_tests {
+     use std::{
+         fs::File,
+         path::Path,
+-        sync::{
+-            Arc, Barrier,
+-            atomic::{AtomicBool, Ordering},
+-        },
++        sync::Arc,
+         time::{Duration, Instant},
+     };
+     #[test]
+@@ -3397,10 +3394,10 @@ mod peer_tests {
+             )
+             .unwrap();
+         wake_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+-        assert_eq!(
++        assert!(matches!(
+             result_rx.recv_timeout(Duration::from_secs(5)).unwrap(),
+-            Err("Paged worker failed".into())
+-        );
++            Err(PagedOperationError::Message(error)) if error == "Paged worker failed"
++        ));
+     }
+     struct Platform;
+     impl LocalFileSystem for Platform {
+diff --git a/crates/editor-surface/src/power/captured.rs b/crates/editor-surface/src/power/captured.rs
+index 5340254..e133a64 100644
+--- a/crates/editor-surface/src/power/captured.rs
++++ b/crates/editor-surface/src/power/captured.rs
+@@ -1,11 +1,11 @@
+ // SPDX-License-Identifier: MPL-2.0
+ //! Worker-only, bounded reads of the actual captured document selection.
+-use crate::paged_view::PagedReadHandle;
+ use bareline_document::{
+     Budget, TextOffset,
+     paged::{TextWindow, WindowPoll},
+ };
+ use bareline_file_io::cancellation::Cancellation;
++use bareline_file_io::paged_service::PagedReadHandle;
+ use std::{
+     io::{self, Read, Seek, SeekFrom},
+     ops::Range,
+diff --git a/crates/file-io/src/paged_service.rs b/crates/file-io/src/paged_service.rs
+index a2791d5..74738f3 100644
+--- a/crates/file-io/src/paged_service.rs
++++ b/crates/file-io/src/paged_service.rs
+@@ -15,13 +15,13 @@ use crate::cancellation::Cancellation;
+ use crate::codecs::disk::DiskDecoded;
+ use crate::codecs::failure::EncodingFailure;
+ use crate::lifecycle::{
+-    DestinationCondition, FileError, Fingerprint, PagedOpened, PagedSavePolicy, PreparedDestination, SaveCleanup,
+-    SaveConflict, guard_copy_source, save_paged_to_cancellable,
++    FileError, Fingerprint, PagedOpened, PagedSavePolicy, PreparedDestination, SaveCleanup, SaveConflict,
++    guard_copy_source, save_paged_to_cancellable,
+ };
+ use bareline_document::source::Generation;
+ use bareline_document::{ContentStateId, Revision, paged::PagedSnapshot};
+ use bareline_platform::LocalFileSystem;
+-use std::path::{Path, PathBuf};
++use std::path::PathBuf;
+ use std::sync::{
+     Arc, Condvar, Mutex, MutexGuard, TryLockError,
+     atomic::{AtomicU64, Ordering},
+@@ -1378,13 +1378,17 @@ mod lifecycle_contract_tests {
+     use super::*;
+     use crate::{
+         codecs::{Encoding, disk::DiskOptions},
+-        lifecycle::{DestinationConsent, PagedOpenRequest, SaveOperation, TranscodeOutcome, open_paged_encoded},
++        lifecycle::{
++            DestinationCondition, DestinationConsent, PagedOpenRequest, SaveOperation, TranscodeOutcome,
++            open_paged_encoded,
++        },
+         source::SourceOptions,
+     };
+     use bareline_document::{Budget, Edit, EditTransaction, TextOffset, paged::WindowPoll};
+     use bareline_platform::{CommitReceipt, FileIdentity, PreparedCommit};
+     use std::{
+         fs::File,
++        path::Path,
+         sync::mpsc,
+         time::{SystemTime, UNIX_EPOCH},
+     };
+@@ -1416,6 +1420,18 @@ mod lifecycle_contract_tests {
+                     .as_nanos() as u64,
+             })
+         }
++        fn prepare_commit(
++            &self,
++            staged: &Path,
++            target: &Path,
++            mode: bareline_platform::CommitMode,
++            cancellation: &dyn bareline_platform::CommitCancellation,
++        ) -> std::io::Result<PreparedCommit> {
++            bareline_platform::prepare_simulated_commit(self, staged, target, mode, cancellation)
++        }
++        fn commit_transaction(&self, transaction: PreparedCommit) -> std::io::Result<CommitReceipt> {
++            bareline_platform::simulate_commit_transaction(self, transaction)
++        }
+         fn commit(&self, stage: &Path, target: &Path, _: bool) -> std::io::Result<()> {
+             std::fs::rename(stage, target)
+         }
+@@ -1571,10 +1587,14 @@ mod lifecycle_contract_tests {
+             &Cancellation::default(),
+         );
+         assert!(receipt.applies_to(session.state().unwrap().stamp));
+-        assert!(matches!(
+-            &receipt.terminal,
+-            Ok(PagedTerminalOutcome::Saved { copy_only: true, .. })
+-        ));
++        assert!(
++            matches!(
++                &receipt.terminal,
++                Ok(PagedTerminalOutcome::Saved { copy_only: true, .. })
++            ),
++            "unexpected save-copy receipt: {:?}",
++            receipt.terminal
++        );
+         assert_eq!(std::fs::read(copy).unwrap(), bytes);
+         assert_eq!(session.path(), source);
+         let mut stale = session.state().unwrap().stamp;
+@@ -1640,7 +1660,11 @@ mod lifecycle_contract_tests {
+ 
+         replace_prefix(&session, "😀".len(), "A");
+         let saved = save_as(&session, &target, platform);
+-        assert!(matches!(saved.terminal, Ok(PagedTerminalOutcome::Saved { .. })));
++        assert!(
++            matches!(&saved.terminal, Ok(PagedTerminalOutcome::Saved { .. })),
++            "unexpected successful encoding retry receipt: {:?}",
++            saved.terminal
++        );
+         assert!(session.encoding_failure().is_none());
+         assert_eq!(std::fs::read(&target).unwrap(), b"A\n");
+         drop(session);
+@@ -1818,8 +1842,8 @@ mod lifecycle_contract_tests {
+         let mut restored = crate::paged_recovery::restore(
+             &recovery_directory,
+             recovery_platform,
+-            Budget::new(4 * 1024 * 1024),
+-            Budget::new(1024 * 1024),
++            Budget::new(64 * 1024 * 1024),
++            Budget::new(16 * 1024 * 1024),
+             &Cancellation::default(),
+         )
+         .unwrap();
+@@ -1846,11 +1870,11 @@ mod lifecycle_contract_tests {
+         let TranscodeOutcome::Complete(opened) = open_paged_encoded(
+             PagedOpenRequest {
+                 path: source,
+-                bytes: Budget::new(1024 * 1024),
+-                history: Budget::new(1024 * 1024),
++                bytes: Budget::new(4 * 1024 * 1024),
++                history: Budget::new(4 * 1024 * 1024),
+                 cache: root.clone(),
+                 options: DiskOptions {
+-                    temp_quota_bytes: 1024 * 1024,
++                    temp_quota_bytes: 4 * 1024 * 1024,
+                     interpret: None,
+                 },
+                 source_options: SourceOptions {

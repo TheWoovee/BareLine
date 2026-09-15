@@ -1,0 +1,17 @@
+{
+  "arguments": [
+    "test",
+    "-p",
+    "bareline",
+    "--bin",
+    "bareline",
+    "menu_",
+    "--offline",
+    "--locked"
+  ],
+  "completed_utc": "2026-09-12T11:43:07.9477367Z",
+  "integration_snapshot": "e7648af1715ecf5a0214377db2f802f7e330a9e4",
+  "exit_code": 101,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\U04-menu-state-central.log"
+}

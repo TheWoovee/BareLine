@@ -1,0 +1,18 @@
+diff --git a/apps/bareline/src/windows_app/inventory.rs b/apps/bareline/src/windows_app/inventory.rs
+index d28d328..2a28e49 100644
+--- a/apps/bareline/src/windows_app/inventory.rs
++++ b/apps/bareline/src/windows_app/inventory.rs
+@@ -3,7 +3,12 @@
+ use super::extensions::{WorkerCompletion, extension_worker};
+ use super::*;
+ use bareline_platform::executor::WorkKind;
+-use std::{collections::BTreeSet, ffi::OsString, io::Write, sync::mpsc};
++use std::{
++    collections::BTreeSet,
++    ffi::OsString,
++    io::Write,
++    sync::{Arc, mpsc},
++};
+ 
+ static INVENTORY_STAGE_SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+ pub(super) struct Request {

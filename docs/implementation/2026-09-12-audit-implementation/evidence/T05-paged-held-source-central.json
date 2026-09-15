@@ -1,0 +1,16 @@
+{
+  "arguments": [
+    "test",
+    "-p",
+    "bareline-app",
+    "--lib",
+    "workspace::tests::paged_recovery_restart_preserves_opaque_undo_and_recovers_stale_pointer",
+    "--offline",
+    "--locked"
+  ],
+  "completed_utc": "2026-09-12T10:20:25.1890245Z",
+  "integration_snapshot": "67ee505ba9fc5e9754b237c6b18ea5fd1916d90a",
+  "exit_code": 0,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\T05-paged-held-source-central.log"
+}

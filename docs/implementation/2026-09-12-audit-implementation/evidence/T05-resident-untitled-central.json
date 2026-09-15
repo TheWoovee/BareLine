@@ -1,0 +1,16 @@
+{
+  "arguments": [
+    "test",
+    "-p",
+    "bareline-app",
+    "--lib",
+    "resident_and_untitled_automatic_recovery_restore_current_text",
+    "--offline",
+    "--locked"
+  ],
+  "completed_utc": "2026-09-12T09:48:22.7686298Z",
+  "integration_snapshot": "51793aef4d16fd56cf365da3c0e59adb49971a0a",
+  "exit_code": 0,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\T05-resident-untitled-central.log"
+}

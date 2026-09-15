@@ -1,0 +1,602 @@
+diff --git a/crates/app/src/workspace.rs b/crates/app/src/workspace.rs
+index c4306be..0f74333 100644
+--- a/crates/app/src/workspace.rs
++++ b/crates/app/src/workspace.rs
+@@ -636,6 +636,7 @@ pub struct Workspace {
+     file_system: Arc<dyn LocalFileSystem>,
+     io: Option<IoService>,
+     pending_io: Vec<PendingIo>,
++    pending_paged_saves: std::collections::BTreeSet<bareline_editor_surface::paged_view::PagedSaveOwner>,
+     open_outcomes: Vec<LaunchOpenOutcome>,
+     next_recovery_restore_request: u64,
+     recovery_restore_outcomes: Vec<RecoveryRestoreOutcome>,
+@@ -852,6 +853,7 @@ impl Workspace {
+             file_system,
+             io: None,
+             pending_io: Vec::new(),
++            pending_paged_saves: std::collections::BTreeSet::new(),
+             open_outcomes: Vec::new(),
+             next_recovery_restore_request: 1,
+             recovery_restore_outcomes: Vec::new(),
+@@ -1050,6 +1052,27 @@ impl Workspace {
+             }
+             changed |= editor.pump();
+             if let WorkspaceEditor::Paged(paged) = editor {
++                while let Some(terminal) = paged.take_save_terminal() {
++                    let owned = terminal.receipt.requested.document == terminal.owner.document.0
++                        && self.pending_paged_saves.remove(&terminal.owner);
++                    if !owned {
++                        continue;
++                    }
++                    changed = true;
++                    match terminal.receipt.terminal {
++                        Ok(bareline_file_io::paged_service::PagedTerminalOutcome::Saved { .. }) => {
++                            let resident_save_pending = self.pending_io.iter().any(|pending| pending.save.is_some());
++                            if self.pending_paged_saves.is_empty()
++                                && !resident_save_pending
++                                && self.message.as_deref() == Some("Saving…")
++                            {
++                                self.message = None;
++                            }
++                        }
++                        Ok(_) => {}
++                        Err(error) => self.message = Some(error.to_string()),
++                    }
++                }
+                 if let Some(error) = &paged.error {
+                     self.message = Some(error.clone());
+                 }
+@@ -1066,6 +1089,16 @@ impl Workspace {
+                 }
+             }
+         }
++        let active_paged_saves: std::collections::BTreeSet<_> = self
++            .editors
++            .iter()
++            .filter_map(|editor| match editor {
++                WorkspaceEditor::Paged(paged) => paged.pending_save_owner(),
++                WorkspaceEditor::Resident(_) => None,
++            })
++            .collect();
++        self.pending_paged_saves
++            .retain(|owner| active_paged_saves.contains(owner));
+         let mut publication = 0;
+         while publication < self.pending_recovery_restore_publications.len() {
+             let terminal = self.pending_recovery_restore_publications[publication]
+@@ -2765,12 +2798,15 @@ impl Workspace {
+         }
+         if let Some(WorkspaceEditor::Paged(editor)) = self.editors.get_mut(index) {
+             let submitted = if copy_only {
+-                editor.save_copy_prepared(destination, self.file_system.clone())
++                editor.save_copy_prepared_tracked(destination, self.file_system.clone())
+             } else {
+-                editor.save_prepared(destination, self.file_system.clone())
++                editor.save_prepared_tracked(destination, self.file_system.clone())
+             };
+             self.message = match &submitted {
+-                Ok(()) => Some("Saving…".into()),
++                Ok(owner) => {
++                    self.pending_paged_saves.insert(*owner);
++                    Some("Saving…".into())
++                }
+                 Err(error) => Some(error.clone()),
+             };
+             return submitted.is_ok();
+@@ -4058,6 +4094,10 @@ mod tests {
+         workspace.save(0, saved.clone());
+         settle(&mut workspace);
+         assert_eq!(std::fs::read_to_string(&saved).unwrap(), format!("edited {content}"));
++        assert_eq!(
++            workspace.message, None,
++            "paged save banner did not reach terminal state"
++        );
+         assert_eq!(workspace.path(0), Some(saved.as_path()));
+         assert!(!workspace.editors[0].dirty());
+         drop(workspace);
+@@ -4955,7 +4995,33 @@ mod tests {
+         drop(workspace);
+         std::fs::remove_dir_all(root).unwrap();
+     }
+-    struct RetirementFileSystem(std::sync::Arc<std::sync::atomic::AtomicBool>);
++    struct RetirementGate {
++        entered: std::sync::mpsc::SyncSender<()>,
++        released: std::sync::Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>,
++    }
++    impl RetirementGate {
++        fn wait(&self) {
++            let _ = self.entered.try_send(());
++            let (released, wake) = &*self.released;
++            let mut released = released.lock().unwrap();
++            while !*released {
++                released = wake.wait(released).unwrap();
++            }
++        }
++    }
++    struct RetirementRelease(std::sync::Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>);
++    impl Drop for RetirementRelease {
++        fn drop(&mut self) {
++            let (released, wake) = &*self.0;
++            *released.lock().unwrap_or_else(|error| error.into_inner()) = true;
++            wake.notify_all();
++        }
++    }
++    struct RetirementFileSystem {
++        deny: std::sync::Arc<std::sync::atomic::AtomicBool>,
++        retirement_gate: Option<RetirementGate>,
++        save_gate: Option<(std::ffi::OsString, RetirementGate)>,
++    }
+     impl LocalFileSystem for RetirementFileSystem {
+         fn cache_directory_guard(
+             &self,
+@@ -5018,15 +5084,178 @@ mod tests {
+             bareline_platform::simulate_commit_transaction(self, transaction)
+         }
+         fn commit(&self, staged: &std::path::Path, target: &std::path::Path, existed: bool) -> std::io::Result<()> {
+-            if self.0.load(std::sync::atomic::Ordering::SeqCst)
+-                && target.file_name().is_some_and(|name| name == "retired.json")
++            if let Some((name, gate)) = &self.save_gate
++                && target.file_name() == Some(name.as_os_str())
+             {
+-                return Err(std::io::Error::other("injected retirement failure"));
++                gate.wait();
++            }
++            if target.file_name().is_some_and(|name| name == "retired.json") {
++                if let Some(gate) = &self.retirement_gate {
++                    gate.wait();
++                }
++                if self.deny.load(std::sync::atomic::Ordering::SeqCst) {
++                    return Err(std::io::Error::other("injected retirement failure"));
++                }
+             }
+             PagedFileSystem.commit(staged, target, existed)
+         }
+     }
+     #[test]
++    fn paged_save_publishes_terminal_before_recovery_retirement_finishes() {
++        let root = std::env::temp_dir().join(format!(
++            "bareline-save-terminal-{}-{}",
++            std::process::id(),
++            std::time::SystemTime::now()
++                .duration_since(std::time::UNIX_EPOCH)
++                .unwrap()
++                .as_nanos()
++        ));
++        std::fs::create_dir(&root).unwrap();
++        let source = root.join("source.txt");
++        let saved = root.join("saved.txt");
++        std::fs::write(&source, b"abcde").unwrap();
++        let (entered, retirement_entered) = std::sync::mpsc::sync_channel(1);
++        let released = std::sync::Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
++        let release_retirement = RetirementRelease(released.clone());
++        let platform = Arc::new(RetirementFileSystem {
++            deny: Arc::new(std::sync::atomic::AtomicBool::new(false)),
++            retirement_gate: Some(RetirementGate {
++                entered,
++                released: released.clone(),
++            }),
++            save_gate: None,
++        });
++        let mut workspace = Workspace::new(Arc::new(|| {}), platform).unwrap();
++        workspace.resident_max_bytes = 4;
++        workspace.recovery_root = Some(root.join("recovery"));
++        workspace.open(source);
++        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
++        loop {
++            workspace.pump();
++            if workspace.editors.len() == 1 && !workspace.io_busy() {
++                break;
++            }
++            assert!(std::time::Instant::now() < deadline, "{:?}", workspace.message);
++            std::thread::yield_now();
++        }
++        workspace.editors[0].enqueue(Input::Insert("X".into()));
++        loop {
++            workspace.pump();
++            let status = workspace.editors[0].recovery_status();
++            assert!(status.error.is_none(), "{:?}", status.error);
++            if status.complete && !workspace.editors[0].busy() {
++                break;
++            }
++            assert!(std::time::Instant::now() < deadline);
++            std::thread::yield_now();
++        }
++        assert!(workspace.save(0, saved.clone()));
++        assert_eq!(workspace.message.as_deref(), Some("Saving…"));
++        retirement_entered
++            .recv_timeout(std::time::Duration::from_secs(10))
++            .expect("save committed but retirement did not reach its controlled hold");
++
++        workspace.message = Some("A newer status".into());
++        workspace.pump();
++        assert_eq!(std::fs::read(&saved).unwrap(), b"Xabcde");
++        assert_eq!(workspace.message.as_deref(), Some("A newer status"));
++        assert!(
++            workspace.editors[0].busy(),
++            "retirement hold must keep close safety busy"
++        );
++
++        drop(release_retirement);
++        while workspace.io_busy() {
++            workspace.pump();
++            assert!(std::time::Instant::now() < deadline);
++            std::thread::yield_now();
++        }
++        drop(workspace);
++        std::fs::remove_dir_all(root).unwrap();
++    }
++    #[test]
++    fn late_paged_terminal_does_not_clear_resident_save_banner() {
++        let root = std::env::temp_dir().join(format!(
++            "bareline-save-terminal-owner-{}-{}",
++            std::process::id(),
++            std::time::SystemTime::now()
++                .duration_since(std::time::UNIX_EPOCH)
++                .unwrap()
++                .as_nanos()
++        ));
++        std::fs::create_dir(&root).unwrap();
++        let source = root.join("source.txt");
++        let paged_target = root.join("paged.txt");
++        let resident_target = root.join("resident.txt");
++        std::fs::write(&source, b"abcde").unwrap();
++        let (entered, save_entered) = std::sync::mpsc::sync_channel(1);
++        let released = std::sync::Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
++        let release_save = RetirementRelease(released.clone());
++        let platform = Arc::new(RetirementFileSystem {
++            deny: Arc::new(std::sync::atomic::AtomicBool::new(false)),
++            retirement_gate: None,
++            save_gate: Some((
++                resident_target.file_name().unwrap().to_os_string(),
++                RetirementGate { entered, released },
++            )),
++        });
++        let mut workspace = Workspace::new(Arc::new(|| {}), platform).unwrap();
++        workspace.resident_max_bytes = 4;
++        workspace.recovery_root = Some(root.join("recovery"));
++        workspace.open(source);
++        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
++        loop {
++            workspace.pump();
++            if workspace.editors.len() == 1 && !workspace.io_busy() {
++                break;
++            }
++            assert!(std::time::Instant::now() < deadline, "{:?}", workspace.message);
++            std::thread::yield_now();
++        }
++        workspace.editors[0].enqueue(Input::Insert("X".into()));
++        loop {
++            workspace.pump();
++            let status = workspace.editors[0].recovery_status();
++            if status.complete && !workspace.editors[0].busy() {
++                break;
++            }
++            assert!(status.error.is_none(), "{:?}", status.error);
++            assert!(std::time::Instant::now() < deadline);
++            std::thread::yield_now();
++        }
++        workspace.new_document().unwrap();
++        workspace.editors[1].enqueue(Input::Insert("resident".into()));
++        while workspace.editors[1].busy() {
++            workspace.pump();
++            assert!(std::time::Instant::now() < deadline);
++            std::thread::yield_now();
++        }
++
++        assert!(workspace.save(1, resident_target));
++        save_entered
++            .recv_timeout(std::time::Duration::from_secs(10))
++            .expect("resident save did not reach its controlled hold");
++        assert!(workspace.save(0, paged_target.clone()));
++        while !workspace.pending_paged_saves.is_empty() {
++            workspace.pump();
++            assert!(std::time::Instant::now() < deadline, "{:?}", workspace.message);
++            std::thread::yield_now();
++        }
++        assert_eq!(std::fs::read(&paged_target).unwrap(), b"Xabcde");
++        assert_eq!(workspace.message.as_deref(), Some("Saving…"));
++        assert!(workspace.pending_io.iter().any(|pending| pending.save.is_some()));
++
++        drop(release_save);
++        while workspace.io_busy() {
++            workspace.pump();
++            assert!(std::time::Instant::now() < deadline);
++            std::thread::yield_now();
++        }
++        assert_eq!(workspace.message, None);
++        drop(workspace);
++        std::fs::remove_dir_all(root).unwrap();
++    }
++    #[test]
+     fn paged_recovery_failed_retirement_is_retryable() {
+         let root = std::env::temp_dir().join(format!(
+             "bareline-retire-retry-{}-{}",
+@@ -5040,7 +5269,15 @@ mod tests {
+         let original = root.join("original.txt");
+         std::fs::write(&original, "abcde").unwrap();
+         let deny = Arc::new(std::sync::atomic::AtomicBool::new(false));
+-        let mut workspace = Workspace::new(Arc::new(|| {}), Arc::new(RetirementFileSystem(deny.clone()))).unwrap();
++        let mut workspace = Workspace::new(
++            Arc::new(|| {}),
++            Arc::new(RetirementFileSystem {
++                deny: deny.clone(),
++                retirement_gate: None,
++                save_gate: None,
++            }),
++        )
++        .unwrap();
+         workspace.resident_max_bytes = 4;
+         workspace.recovery_root = Some(root.join("recovery"));
+         workspace.open(original);
+diff --git a/crates/editor-surface/src/paged_view.rs b/crates/editor-surface/src/paged_view.rs
+index e4b4556..ec9b519 100644
+--- a/crates/editor-surface/src/paged_view.rs
++++ b/crates/editor-surface/src/paged_view.rs
+@@ -191,11 +191,29 @@ enum Action {
+     Undo,
+     Redo,
+     Save {
++        owner: Option<PagedSaveOwner>,
+         copy_only: bool,
+         destination: bareline_file_io::lifecycle::PreparedDestination,
+         platform: Arc<dyn LocalFileSystem>,
+     },
+ }
++/// Presentation owner for one admitted paged save. This is separate from the
++/// file-layer operation generation so a delayed receipt cannot resolve a later
++/// save submitted by the same view.
++#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
++pub struct PagedSaveOwner {
++    pub document: (u64, u64),
++    pub generation: u64,
++}
++
++/// The exact file-layer terminal paired with the presentation request that
++/// admitted it. Publication does not release the surface worker: recovery
++/// retirement and viewport refresh remain protected by `busy()`.
++#[derive(Debug)]
++pub struct PagedSaveTerminal {
++    pub owner: PagedSaveOwner,
++    pub receipt: bareline_file_io::paged_service::PagedLifecycleReceipt,
++}
+ struct Completed {
+     selections: Option<crate::power::SelectionSet>,
+     append_receipt: Option<bareline_file_io::tail::AppendReceipt>,
+@@ -286,6 +304,9 @@ pub struct PagedEditorSurface {
+     can_redo: bool,
+     budget: Budget,
+     pending: Option<Receiver<Result<Completed, PagedOperationError>>>,
++    save_generation: Arc<std::sync::atomic::AtomicU64>,
++    pending_save_owner: Option<PagedSaveOwner>,
++    save_terminals: Arc<Mutex<std::collections::VecDeque<PagedSaveTerminal>>>,
+     pending_input: Option<Input>,
+     cancellation: Cancellation,
+     notify: Arc<dyn Fn() + Send + Sync>,
+@@ -438,6 +459,9 @@ impl PagedEditorSurface {
+             actor,
+             budget,
+             pending: None,
++            save_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
++            pending_save_owner: None,
++            save_terminals: Arc::new(Mutex::new(Default::default())),
+             pending_input: None,
+             cancellation: Cancellation::default(),
+             notify,
+@@ -554,6 +578,9 @@ impl PagedEditorSurface {
+             can_redo: self.can_redo,
+             budget: self.budget.clone(),
+             pending: None,
++            save_generation: self.save_generation.clone(),
++            pending_save_owner: None,
++            save_terminals: Arc::new(Mutex::new(Default::default())),
+             pending_input: None,
+             cancellation: self.cancellation.clone(),
+             notify: self.notify.clone(),
+@@ -2252,11 +2279,30 @@ impl PagedEditorSurface {
+             return Err("Document is read only.".into());
+         }
+         self.submit(Action::Save {
++            owner: None,
+             copy_only: false,
+             destination,
+             platform,
+         })
+     }
++    pub fn save_prepared_tracked(
++        &mut self,
++        destination: bareline_file_io::lifecycle::PreparedDestination,
++        platform: Arc<dyn LocalFileSystem>,
++    ) -> Result<PagedSaveOwner, String> {
++        if self.surface.user_read_only {
++            return Err("Document is read only.".into());
++        }
++        let owner = self.next_save_owner();
++        self.submit(Action::Save {
++            owner: Some(owner),
++            copy_only: false,
++            destination,
++            platform,
++        })?;
++        self.pending_save_owner = Some(owner);
++        Ok(owner)
++    }
+     pub fn save(
+         &mut self,
+         target: PathBuf,
+@@ -2284,11 +2330,27 @@ impl PagedEditorSurface {
+         platform: Arc<dyn LocalFileSystem>,
+     ) -> Result<(), String> {
+         self.submit(Action::Save {
++            owner: None,
+             copy_only: true,
+             destination,
+             platform,
+         })
+     }
++    pub fn save_copy_prepared_tracked(
++        &mut self,
++        destination: bareline_file_io::lifecycle::PreparedDestination,
++        platform: Arc<dyn LocalFileSystem>,
++    ) -> Result<PagedSaveOwner, String> {
++        let owner = self.next_save_owner();
++        self.submit(Action::Save {
++            owner: Some(owner),
++            copy_only: true,
++            destination,
++            platform,
++        })?;
++        self.pending_save_owner = Some(owner);
++        Ok(owner)
++    }
+     pub fn save_copy(&mut self, target: PathBuf, platform: Arc<dyn LocalFileSystem>) -> Result<(), String> {
+         self.save_copy_prepared(
+             bareline_file_io::lifecycle::PreparedDestination {
+@@ -2307,6 +2369,21 @@ impl PagedEditorSurface {
+             peer.epoch = peer.epoch.wrapping_add(1);
+         }
+     }
++    fn next_save_owner(&mut self) -> PagedSaveOwner {
++        PagedSaveOwner {
++            document: self.snapshot.identity_token(),
++            generation: self
++                .save_generation
++                .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
++                .wrapping_add(1),
++        }
++    }
++    pub fn pending_save_owner(&self) -> Option<PagedSaveOwner> {
++        self.pending_save_owner
++    }
++    pub fn take_save_terminal(&self) -> Option<PagedSaveTerminal> {
++        self.save_terminals.lock().ok()?.pop_front()
++    }
+     pub fn acknowledge_tracked_power(
+         &mut self,
+         receipt: &crate::TrackedEditReceipt,
+@@ -2741,6 +2818,7 @@ impl PagedEditorSurface {
+         let budget = self.budget.clone();
+         let cancellation = self.cancellation.clone();
+         let notify = self.notify.clone();
++        let save_terminals = self.save_terminals.clone();
+         let revision = self.snapshot.revision;
+         let current_start = self.viewport_start;
+         let current_caret = self.global_selections.primary().caret;
+@@ -3042,6 +3120,7 @@ impl PagedEditorSurface {
+                                 streaming_protected = true;
+                             }
+                             Action::Save {
++                                owner,
+                                 copy_only,
+                                 destination,
+                                 platform,
+@@ -3074,13 +3153,23 @@ impl PagedEditorSurface {
+                                 );
+                                 let saved_stamp = receipt.requested;
+                                 let applies = actor.receipt_applies(&receipt);
+-                                let result = receipt.terminal.map_err(PagedOperationError::Lifecycle)?;
+-                                if let bareline_file_io::paged_service::PagedTerminalOutcome::Saved {
+-                                    fingerprint,
+-                                    copy_only: false,
+-                                } = result
+-                                    && applies
+-                                {
++                                let disposition = match &receipt.terminal {
++                                    Ok(bareline_file_io::paged_service::PagedTerminalOutcome::Saved {
++                                        fingerprint,
++                                        copy_only,
++                                    }) => Ok((fingerprint.clone(), *copy_only)),
++                                    Ok(_) => Err("Unexpected save receipt".to_owned()),
++                                    Err(error) => Err(error.to_string()),
++                                };
++                                if let Some(owner) = owner {
++                                    if let Ok(mut terminals) = save_terminals.lock() {
++                                        terminals.push_back(PagedSaveTerminal { owner, receipt });
++                                    }
++                                    notify();
++                                }
++                                let (fingerprint, receipt_copy_only) =
++                                    disposition.map_err(PagedOperationError::Message)?;
++                                if !receipt_copy_only && applies {
+                                     saved = Some(fingerprint);
+                                     let _ = actor.execute(
+                                         bareline_file_io::paged_service::PagedLifecycleCommand::RetireRecovery {
+@@ -3189,6 +3278,7 @@ impl PagedEditorSurface {
+             Err(TryRecvError::Disconnected) => Err("Paged worker stopped.".into()),
+         };
+         self.pending = None;
++        self.pending_save_owner = None;
+         let moves_selection = std::mem::take(&mut self.pending_moves_selection);
+         match result {
+             Ok(completed) => {
+diff --git a/docs/implementation/2026-09-12-audit-implementation/PR-T16-R8.md b/docs/implementation/2026-09-12-audit-implementation/PR-T16-R8.md
+new file mode 100644
+index 0000000..f6f94af
+--- /dev/null
++++ b/docs/implementation/2026-09-12-audit-implementation/PR-T16-R8.md
+@@ -0,0 +1,67 @@
++# PR-T16 R8 — Paged save terminal publication
++
++## Base
++
++- Reviewed local snapshot: `ab3e4ce1adb7c93d31810c1bc07a2f07c6549d65`
++- Branch: `codex/audit-20260912-t16-paged-save-terminal-r8`
++
++## Native evidence and diagnosis
++
++The R6 native fixture committed the exact edited bytes and the paged file service published its
++saved content state: the on-disk length and hash changed and the tab's dirty marker cleared. The
++workspace nevertheless continued to show `Saving…` because the paged save submission is the only
++save path that sets that transient message without owning or consuming a corresponding terminal
++receipt. `Workspace::pump` pumps the paged surface, conflicts, and cleanup warnings, but it never
++clears the paged save message after the surface receives the worker completion.
++
++The concurrently visible `Line numbers estimated · indexing` state has a separate producer.
++`GlobalNavigation` runs its scan on `bareline-global-line` and publishes a generation-qualified
++nonblocking `IndexReceipt`; the surface reads that receipt without polling the worker index lock.
++Its continued CPU use can explain the long indexing interval, but it cannot resolve the save
++message and is not evidence that the already committed save lacked a terminal receipt.
++
++## Intended correction
++
++Carry the typed paged lifecycle outcome through the existing surface worker completion and expose
++it once to the workspace. The workspace will resolve only the matching `Saving…` presentation
++state when that terminal is consumed, while preserving typed conflicts, encoding failures, and
++cleanup warnings as the authoritative outcomes. Add a controlled small-fixture regression that
++observes submission, committed bytes, terminal pumping, and removal of the transient message.
++
++## Implemented boundary
++
++- Each admitted surface save receives a document-qualified, monotonically generated
++  `PagedSaveOwner`, shared across peer views of the same actor.
++- The surface publishes the actual `PagedLifecycleReceipt` to its presentation queue immediately
++  after `PagedSession::execute(Save)` returns. Recovery retirement, actor reacquisition, viewport
++  refresh, and the general worker completion continue afterwards, so `busy()` still protects close
++  and recovery ownership.
++- The workspace tracks admitted owners, consumes only an exact matching document/generation
++  terminal, and clears only the still-current `Saving…` text. A later unrelated message is left
++  intact. Typed errors replace the transient message; completions which fail before producing a
++  file-layer receipt are retired when the surface worker reaches its terminal state.
++- The regression uses a five-byte forced-paged source, makes one exact-byte edit, and holds the
++  recovery retirement commit. It verifies the saved six bytes and terminal banner while the
++  surface remains busy, then verifies a later message survives and releases maintenance.
++
++## Validation ownership
++
++The implementation worktree receives source edits, formatting, and diff inspection only. The root
++agent owns Cargo compilation and tests in the serialized original checkout.
++
++Performed here: `rustfmt --edition 2024` on the two edited Rust files and `git diff --check`.
++Cargo/build/native execution was intentionally not run.
++
++## R1 ownership tightening
++
++- Only the tracked workspace entry points allocate an owner and publish into the receipt mailbox.
++  Compatibility `save_prepared` and `save_copy_prepared` calls retain their prior completion model
++  and cannot accumulate orphaned receipts.
++- Banner resolution also requires that no resident save ticket remains pending. A paged terminal
++  therefore cannot clear the identical `Saving…` text owned by a later resident save.
++- Workspace tracking is intersected with the active owners still held by live paged surfaces after
++  every pump, retiring admissions which failed before producing a file-layer receipt or whose view
++  was retired.
++- The maintenance-hold check now installs the newer message before consuming the paged receipt.
++  A second controlled test blocks a resident commit, completes a paged save, and verifies the
++  resident banner remains until its own ticket completes.

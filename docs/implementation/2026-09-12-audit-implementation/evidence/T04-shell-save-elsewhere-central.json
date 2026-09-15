@@ -1,0 +1,15 @@
+{
+  "arguments": [
+    "test",
+    "-p",
+    "bareline",
+    "--bin",
+    "bareline",
+    "tracked_save_elsewhere_reaches_picker_and_preflight"
+  ],
+  "completed_utc": "2026-09-12T09:30:13.3000694Z",
+  "integration_snapshot": "8c38e8b520bb85cc141f6842dfaea7588f39f389",
+  "exit_code": 0,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\T04-shell-save-elsewhere-central.log"
+}

@@ -1,0 +1,23 @@
+diff --git a/crates/file-io/src/paged_service.rs b/crates/file-io/src/paged_service.rs
+index 28d9ef1..a2791d5 100644
+--- a/crates/file-io/src/paged_service.rs
++++ b/crates/file-io/src/paged_service.rs
+@@ -204,7 +204,7 @@ impl PagedTailGuard<'_> {
+         cancellation: Cancellation,
+     ) -> Result<(), PagedLifecycleError> {
+         if self.0.is_none() {
+-            self.0 = Some(
++            *self.0 = Some(
+                 crate::tail::TailSession::new(&actor.0, platform, budget, cancellation).map_err(classify_file_error)?,
+             );
+         }
+@@ -1381,8 +1381,7 @@ mod lifecycle_contract_tests {
+         lifecycle::{DestinationConsent, PagedOpenRequest, SaveOperation, TranscodeOutcome, open_paged_encoded},
+         source::SourceOptions,
+     };
+-    use bareline_document::Budget;
+-    use bareline_document::{Edit, EditTransaction, TextOffset, WindowPoll};
++    use bareline_document::{Budget, Edit, EditTransaction, TextOffset, paged::WindowPoll};
+     use bareline_platform::{CommitReceipt, FileIdentity, PreparedCommit};
+     use std::{
+         fs::File,

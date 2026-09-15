@@ -146,10 +146,7 @@ pub struct List {
 }
 impl List {
     fn count(&self, source: &impl ItemSource) -> usize {
-        source
-            .len()
-            .unwrap_or(source.discovered())
-            .min(source.discovered())
+        source.len().unwrap_or(source.discovered()).min(source.discovered())
     }
     pub fn visible(&self, source: &impl ItemSource) -> std::ops::Range<usize> {
         visible_rows(
@@ -197,8 +194,7 @@ impl List {
         }
         match event {
             UiEvent::PointerDown(p) if self.bounds.contains(p) => {
-                let index =
-                    ((p.y - self.bounds.y) as f64 + self.offset) / self.metrics.row_height as f64;
+                let index = ((p.y - self.bounds.y) as f64 + self.offset) / self.metrics.row_height as f64;
                 let index = index.max(0.0) as usize;
                 if index < count && source.enabled(index) {
                     self.select(index)
@@ -210,22 +206,13 @@ impl List {
                 .selected
                 .filter(|i| *i < count && source.enabled(*i))
                 .map(|_| ControlAction::Activated),
-            UiEvent::Key(key @ (Key::Up | Key::Down | Key::Home | Key::End))
-                if self.state.focused =>
-            {
+            UiEvent::Key(key @ (Key::Up | Key::Down | Key::Home | Key::End)) if self.state.focused => {
                 let reverse = matches!(key, Key::Up | Key::End);
                 let start = match key {
                     Key::Home => 0,
                     Key::End => count - 1,
-                    Key::Up => self
-                        .selected
-                        .unwrap_or(count)
-                        .saturating_sub(1)
-                        .min(count - 1),
-                    _ => self
-                        .selected
-                        .map_or(0, |i| i.saturating_add(1))
-                        .min(count - 1),
+                    Key::Up => self.selected.unwrap_or(count).saturating_sub(1).min(count - 1),
+                    _ => self.selected.map_or(0, |i| i.saturating_add(1)).min(count - 1),
                 };
                 let index = if reverse {
                     (0..=start).rev().find(|i| source.enabled(*i))
@@ -263,16 +250,9 @@ impl List {
         }
     }
     pub fn semantics(&self, id: ViewId, name: &str, command: &str) -> Semantics {
-        let mut node = Semantics::new(
-            id,
-            SemanticRole::List,
-            name,
-            command,
-            self.bounds,
-            self.state,
-        )
-        .action(SemanticAction::Focus)
-        .action(SemanticAction::Select);
+        let mut node = Semantics::new(id, SemanticRole::List, name, command, self.bounds, self.state)
+            .action(SemanticAction::Focus)
+            .action(SemanticAction::Select);
         node.value = self.selected.map(|i| i.to_string());
         node
     }
@@ -304,12 +284,7 @@ impl Combo {
         self.search.clear();
         self.last_input_ms = None;
     }
-    pub fn search(
-        &mut self,
-        committed: &str,
-        now_ms: u64,
-        source: &impl ItemSource,
-    ) -> Option<ControlAction> {
+    pub fn search(&mut self, committed: &str, now_ms: u64, source: &impl ItemSource) -> Option<ControlAction> {
         if self.list.state.disabled
             || !self.list.state.focused
             || committed.is_empty()
@@ -317,10 +292,7 @@ impl Combo {
         {
             return None;
         }
-        if self
-            .last_input_ms
-            .is_none_or(|last| now_ms.saturating_sub(last) > 1000)
-        {
+        if self.last_input_ms.is_none_or(|last| now_ms.saturating_sub(last) > 1000) {
             self.search.clear();
         }
         if self.search.len() + committed.len() > 256 {
@@ -329,9 +301,8 @@ impl Combo {
         self.search.push_str(&committed.to_lowercase());
         self.last_input_ms = Some(now_ms);
         // Form choices are deliberately bounded, unlike the virtual results list.
-        let index = (0..self.list.count(source).min(4096)).find(|i| {
-            source.enabled(*i) && source.label(*i).to_lowercase().starts_with(&self.search)
-        });
+        let index = (0..self.list.count(source).min(4096))
+            .find(|i| source.enabled(*i) && source.label(*i).to_lowercase().starts_with(&self.search));
         index.and_then(|i| self.list.select(i))
     }
     pub fn event(&mut self, event: UiEvent, source: &impl ItemSource) -> Option<ControlAction> {
@@ -361,13 +332,7 @@ impl Combo {
         }
     }
     /// Header bounds are distinct from the owner's anchored dropdown bounds.
-    pub fn paint(
-        &self,
-        bounds: Rect,
-        source: &impl ItemSource,
-        theme: Theme,
-        ops: &mut Vec<DrawOp>,
-    ) {
+    pub fn paint(&self, bounds: Rect, source: &impl ItemSource, theme: Theme, ops: &mut Vec<DrawOp>) {
         ops.push(DrawOp::FillRounded(bounds, theme.surface, 4.0));
         ops.push(DrawOp::StrokeRounded(
             bounds,
@@ -415,21 +380,14 @@ impl Combo {
         bounds: Rect,
         source: &impl ItemSource,
     ) -> Semantics {
-        let mut node = Semantics::new(
-            id,
-            SemanticRole::Combo,
-            name,
-            command,
-            bounds,
-            self.list.state,
-        )
-        .action(SemanticAction::Focus)
-        .action(if self.open {
-            SemanticAction::Collapse
-        } else {
-            SemanticAction::Expand
-        })
-        .action(SemanticAction::Select);
+        let mut node = Semantics::new(id, SemanticRole::Combo, name, command, bounds, self.list.state)
+            .action(SemanticAction::Focus)
+            .action(if self.open {
+                SemanticAction::Collapse
+            } else {
+                SemanticAction::Expand
+            })
+            .action(SemanticAction::Select);
         node.expanded = Some(self.open);
         node.value = self
             .list
@@ -554,11 +512,7 @@ impl Checkbox {
         );
         ops.push(DrawOp::StrokeRounded(
             marker,
-            if self.state.checked {
-                theme.focus
-            } else {
-                theme.border
-            },
+            if self.state.checked { theme.focus } else { theme.border },
             3.0,
             1.0,
         ));
@@ -570,11 +524,7 @@ impl Checkbox {
                 marker.y,
                 "✓",
                 13.0,
-                if self.state.disabled {
-                    theme.muted
-                } else {
-                    theme.focus
-                },
+                if self.state.disabled { theme.muted } else { theme.focus },
             );
         }
         text(
@@ -583,11 +533,7 @@ impl Checkbox {
             self.bounds.y + 6.0,
             label,
             13.0,
-            if self.state.disabled {
-                theme.muted
-            } else {
-                theme.text
-            },
+            if self.state.disabled { theme.muted } else { theme.text },
         );
         ops.push(DrawOp::PopClip);
         if self.state.focused {
@@ -595,16 +541,9 @@ impl Checkbox {
         }
     }
     pub fn semantics(&self, name: &str, command: &str) -> Semantics {
-        Semantics::new(
-            self.id,
-            SemanticRole::Checkbox,
-            name,
-            command,
-            self.bounds,
-            self.state,
-        )
-        .action(SemanticAction::Focus)
-        .action(SemanticAction::Toggle)
+        Semantics::new(self.id, SemanticRole::Checkbox, name, command, self.bounds, self.state)
+            .action(SemanticAction::Focus)
+            .action(SemanticAction::Toggle)
     }
 }
 
@@ -696,11 +635,9 @@ impl Slider {
             UiEvent::Key(key) if self.state.focused => return self.range.key(key),
             _ => None,
         }?;
-        let fraction = ((point.x - self.bounds.x - 6.0) / (self.bounds.width - 12.0).max(1.0))
-            .clamp(0.0, 1.0) as f64;
+        let fraction = ((point.x - self.bounds.x - 6.0) / (self.bounds.width - 12.0).max(1.0)).clamp(0.0, 1.0) as f64;
         let value = self.range.min + fraction * (self.range.max - self.range.min);
-        let snapped =
-            self.range.min + ((value - self.range.min) / self.range.step).round() * self.range.step;
+        let snapped = self.range.min + ((value - self.range.min) / self.range.step).round() * self.range.step;
         self.range.set(snapped)
     }
     pub fn paint(&self, theme: Theme, ops: &mut Vec<DrawOp>) {
@@ -725,11 +662,7 @@ impl Slider {
                 12.0,
                 12.0,
             ),
-            if self.state.disabled {
-                theme.muted
-            } else {
-                theme.focus
-            },
+            if self.state.disabled { theme.muted } else { theme.focus },
             6.0,
         ));
         if self.state.focused {
@@ -737,16 +670,9 @@ impl Slider {
         }
     }
     pub fn semantics(&self, id: ViewId, name: &str, command: &str) -> Semantics {
-        let mut node = Semantics::new(
-            id,
-            SemanticRole::Slider,
-            name,
-            command,
-            self.bounds,
-            self.state,
-        )
-        .action(SemanticAction::Focus)
-        .action(SemanticAction::SetValue);
+        let mut node = Semantics::new(id, SemanticRole::Slider, name, command, self.bounds, self.state)
+            .action(SemanticAction::Focus)
+            .action(SemanticAction::SetValue);
         node.value = Some(self.range.value.to_string());
         node
     }
@@ -768,15 +694,12 @@ impl Stepper {
         }
         match event {
             UiEvent::Key(key) if self.state.focused => self.range.key(key),
-            UiEvent::PointerDown(p)
-                if self.bounds.contains(p) && p.x >= self.bounds.x + self.bounds.width - 24.0 =>
-            {
-                self.range
-                    .key(if p.y < self.bounds.y + self.bounds.height / 2.0 {
-                        Key::Up
-                    } else {
-                        Key::Down
-                    })
+            UiEvent::PointerDown(p) if self.bounds.contains(p) && p.x >= self.bounds.x + self.bounds.width - 24.0 => {
+                self.range.key(if p.y < self.bounds.y + self.bounds.height / 2.0 {
+                    Key::Up
+                } else {
+                    Key::Down
+                })
             }
             _ => None,
         }
@@ -796,11 +719,7 @@ impl Stepper {
         ops.push(DrawOp::FillRounded(self.bounds, theme.surface, 4.0));
         ops.push(DrawOp::StrokeRounded(
             self.bounds,
-            if self.state.focused {
-                theme.focus
-            } else {
-                theme.border
-            },
+            if self.state.focused { theme.focus } else { theme.border },
             4.0,
             if self.state.focused { 2.0 } else { 1.0 },
         ));
@@ -811,11 +730,7 @@ impl Stepper {
             self.bounds.y + 6.0,
             self.range.value.to_string(),
             13.0,
-            if self.state.disabled {
-                theme.muted
-            } else {
-                theme.text
-            },
+            if self.state.disabled { theme.muted } else { theme.text },
         );
         text(
             ops,
@@ -836,16 +751,9 @@ impl Stepper {
         ops.push(DrawOp::PopClip);
     }
     pub fn semantics(&self, id: ViewId, name: &str, command: &str) -> Semantics {
-        let mut node = Semantics::new(
-            id,
-            SemanticRole::SpinButton,
-            name,
-            command,
-            self.bounds,
-            self.state,
-        )
-        .action(SemanticAction::Focus)
-        .action(SemanticAction::SetValue);
+        let mut node = Semantics::new(id, SemanticRole::SpinButton, name, command, self.bounds, self.state)
+            .action(SemanticAction::Focus)
+            .action(SemanticAction::SetValue);
         node.value = Some(self.range.value.to_string());
         node
     }
@@ -907,27 +815,206 @@ impl Splitter {
     pub fn paint(&self, theme: Theme, ops: &mut Vec<DrawOp>) {
         ops.push(DrawOp::Fill(
             self.bounds,
-            if self.state.focused {
-                theme.focus
-            } else {
-                theme.border
-            },
+            if self.state.focused { theme.focus } else { theme.border },
         ));
     }
     pub fn semantics(&self, id: ViewId, name: &str, command: &str) -> Semantics {
-        let mut node = Semantics::new(
-            id,
-            SemanticRole::Separator,
-            name,
-            command,
-            self.bounds,
-            self.state,
-        )
-        .action(SemanticAction::Focus)
-        .action(SemanticAction::SetValue);
+        let mut node = Semantics::new(id, SemanticRole::Separator, name, command, self.bounds, self.state)
+            .action(SemanticAction::Focus)
+            .action(SemanticAction::SetValue);
         node.value = Some(self.range.value.to_string());
         node
     }
+}
+
+/// Which docks are currently showing. Open state is derived from the panels
+/// each frame; only the widths persist.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct DockVisibility {
+    pub left: bool,
+    pub right: bool,
+    pub bottom: bool,
+}
+/// Persisted dock widths/heights in logical pixels. Values are clamped on every
+/// layout, so a stale or corrupt persisted value can never push the tab strip
+/// or the editor off-screen.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct DockWidths {
+    pub left: f32,
+    pub right: f32,
+    pub bottom: f32,
+}
+impl Default for DockWidths {
+    fn default() -> Self {
+        Self {
+            left: 238.0,
+            right: 240.0,
+            bottom: 180.0,
+        }
+    }
+}
+impl DockWidths {
+    pub const MIN: f32 = 120.0;
+    pub const MIN_BOTTOM: f32 = 80.0;
+    /// Draggable splitter thickness / hit zone (UX-50).
+    pub const SPLITTER: f32 = 6.0;
+    /// Compact, human-diffable persistence form; round-trips through [`parse`].
+    pub fn serialize(&self) -> String {
+        format!(
+            "left={:.1};right={:.1};bottom={:.1}",
+            self.left, self.right, self.bottom
+        )
+    }
+    /// Parse the persisted form. Unknown keys, non-finite or unparsable values
+    /// fall back to the default for that field, so persistence never fails.
+    pub fn parse(text: &str) -> Self {
+        let mut widths = Self::default();
+        for part in text.split(';') {
+            let Some((key, value)) = part.split_once('=') else {
+                continue;
+            };
+            let Ok(value) = value.trim().parse::<f32>() else {
+                continue;
+            };
+            if !value.is_finite() {
+                continue;
+            }
+            match key.trim() {
+                "left" => widths.left = value,
+                "right" => widths.right = value,
+                "bottom" => widths.bottom = value,
+                _ => {}
+            }
+        }
+        widths
+    }
+    fn clamped(self, width: f32, content_height: f32) -> Self {
+        let max_side = (width * 0.6).max(Self::MIN);
+        let max_bottom = (content_height * 0.7).max(Self::MIN_BOTTOM);
+        Self {
+            left: self.left.clamp(Self::MIN, max_side),
+            right: self.right.clamp(Self::MIN, max_side),
+            bottom: self.bottom.clamp(Self::MIN_BOTTOM, max_bottom),
+        }
+    }
+}
+/// Rects produced by [`DockLayout::compute`]. Every dock rect is guaranteed to
+/// sit at or below `tab_strip.y + tab_strip.height`, so toggling any panel
+/// never overlaps the tab strip (fixes ISSUE-016/018).
+#[derive(Clone, Copy, Debug)]
+pub struct DockRects {
+    pub tab_strip: Rect,
+    pub left: Option<Rect>,
+    pub right: Option<Rect>,
+    pub bottom: Option<Rect>,
+    pub editor: Rect,
+    pub left_splitter: Option<Rect>,
+    pub right_splitter: Option<Rect>,
+    pub bottom_splitter: Option<Rect>,
+}
+/// Pure dock geometry. The tab strip is laid out first, full width, and every
+/// dock is placed strictly below it; the editor takes whatever remains.
+pub struct DockLayout;
+impl DockLayout {
+    pub fn compute(
+        width: f32,
+        height: f32,
+        tab_height: f32,
+        status_height: f32,
+        visibility: DockVisibility,
+        widths: DockWidths,
+    ) -> DockRects {
+        let s = DockWidths::SPLITTER;
+        let content_top = tab_height;
+        let content_bottom = (height - status_height).max(content_top);
+        let content_height = (content_bottom - content_top).max(0.0);
+        let widths = widths.clamped(width, content_height);
+        let tab_strip = rect(0.0, 0.0, width.max(0.0), tab_height.max(0.0));
+
+        let left = visibility
+            .left
+            .then(|| rect(0.0, content_top, widths.left, content_height));
+        let left_splitter = visibility
+            .left
+            .then(|| rect(widths.left, content_top, s, content_height));
+        let right = visibility.right.then(|| {
+            rect(
+                (width - widths.right).max(0.0),
+                content_top,
+                widths.right,
+                content_height,
+            )
+        });
+        let right_splitter = visibility
+            .right
+            .then(|| rect((width - widths.right - s).max(0.0), content_top, s, content_height));
+
+        let center_x = if visibility.left { widths.left + s } else { 0.0 };
+        let center_right = if visibility.right {
+            width - widths.right - s
+        } else {
+            width
+        };
+        let center_width = (center_right - center_x).max(0.0);
+
+        let (bottom, bottom_splitter, editor_height) = if visibility.bottom {
+            let bottom_height = widths.bottom.min((content_height - s).max(0.0));
+            let bottom = rect(center_x, content_bottom - bottom_height, center_width, bottom_height);
+            let splitter = rect(center_x, content_bottom - bottom_height - s, center_width, s);
+            (
+                Some(bottom),
+                Some(splitter),
+                (content_height - bottom_height - s).max(0.0),
+            )
+        } else {
+            (None, None, content_height)
+        };
+        let editor = rect(center_x, content_top, center_width, editor_height);
+        DockRects {
+            tab_strip,
+            left,
+            right,
+            bottom,
+            editor,
+            left_splitter,
+            right_splitter,
+            bottom_splitter,
+        }
+    }
+}
+/// One stacked, collapsible section in the left dock (Workspace / Document List
+/// / Outline). Each carries a header with a title, a collapse chevron and an ×.
+#[derive(Clone, Copy, Debug)]
+pub struct SectionLayout {
+    pub header: Rect,
+    pub body: Option<Rect>,
+    /// The × hit box at the right of the header.
+    pub close: Rect,
+}
+pub const SECTION_HEADER: f32 = 26.0;
+/// Lay out stacked collapsible sections inside `dock`. Collapsed sections keep
+/// only their header; the remaining height is split evenly among expanded ones,
+/// so two (or three) sections can be open on the left at once (UX-50).
+pub fn stack_sections(dock: Rect, collapsed: &[bool]) -> Vec<SectionLayout> {
+    let expanded = collapsed.iter().filter(|c| !**c).count().max(1);
+    let bodies_height = (dock.height - collapsed.len() as f32 * SECTION_HEADER).max(0.0);
+    let each = bodies_height / expanded as f32;
+    let mut y = dock.y;
+    let mut out = Vec::with_capacity(collapsed.len());
+    for &is_collapsed in collapsed {
+        let header = rect(dock.x, y, dock.width, SECTION_HEADER);
+        let close = rect(dock.x + dock.width - 24.0, y + 3.0, 20.0, 20.0);
+        y += SECTION_HEADER;
+        let body = if is_collapsed {
+            None
+        } else {
+            let body = rect(dock.x, y, dock.width, each);
+            y += each;
+            Some(body)
+        };
+        out.push(SectionLayout { header, body, close });
+    }
+    out
 }
 
 impl crate::controls::Button {
@@ -961,16 +1048,9 @@ impl crate::text_field::TextField {
         bounds: Rect,
         state: ControlState,
     ) -> Semantics {
-        let mut node = Semantics::new(
-            id,
-            SemanticRole::TextField,
-            localized_name,
-            command,
-            bounds,
-            state,
-        )
-        .action(SemanticAction::Focus)
-        .action(SemanticAction::SetValue);
+        let mut node = Semantics::new(id, SemanticRole::TextField, localized_name, command, bounds, state)
+            .action(SemanticAction::Focus)
+            .action(SemanticAction::SetValue);
         // Only committed text is exposed, never an in-progress IME composition.
         node.value = Some(self.semantic_value());
         node.invalid = self.validation().map(str::to_owned);
@@ -978,22 +1058,9 @@ impl crate::text_field::TextField {
     }
 }
 impl crate::controls::Scrollbar {
-    pub fn semantics(
-        &self,
-        id: ViewId,
-        localized_name: &str,
-        command: &str,
-        state: ControlState,
-    ) -> Semantics {
-        let mut node = Semantics::new(
-            id,
-            SemanticRole::Scrollbar,
-            localized_name,
-            command,
-            self.bounds,
-            state,
-        )
-        .action(SemanticAction::Scroll);
+    pub fn semantics(&self, id: ViewId, localized_name: &str, command: &str, state: ControlState) -> Semantics {
+        let mut node = Semantics::new(id, SemanticRole::Scrollbar, localized_name, command, self.bounds, state)
+            .action(SemanticAction::Scroll);
         node.value = Some(self.offset.to_string());
         node
     }
@@ -1080,10 +1147,7 @@ mod tests {
         let mut combo = Combo::new(list());
         combo.list.selected = Some(0);
         combo.set_open(true);
-        assert_eq!(
-            combo.search("g", 10, &source),
-            Some(ControlAction::Selected(2))
-        );
+        assert_eq!(combo.search("g", 10, &source), Some(ControlAction::Selected(2)));
         assert_eq!(combo.search("a", 30, &source), None);
         assert_eq!(combo.list.selected, Some(2));
         assert_eq!(
@@ -1092,19 +1156,10 @@ mod tests {
         );
         assert!(!combo.open);
         assert_eq!(combo.search("b", 2000, &source), None);
-        assert_eq!(
-            combo.search("g", 4000, &source),
-            Some(ControlAction::Selected(2))
-        );
+        assert_eq!(combo.search("g", 4000, &source), Some(ControlAction::Selected(2)));
         assert_eq!(
             combo
-                .semantics(
-                    ViewId(2),
-                    "Font",
-                    "settings.font",
-                    rect(0.0, 0.0, 100.0, 28.0),
-                    &source
-                )
+                .semantics(ViewId(2), "Font", "settings.font", rect(0.0, 0.0, 100.0, 28.0), &source)
                 .value
                 .as_deref(),
             Some("Gamma")
@@ -1127,10 +1182,7 @@ mod tests {
             Some(10.0)
         );
         slider.event(UiEvent::Focus(false));
-        assert_eq!(
-            slider.event(UiEvent::PointerMove(Point { x: 0.0, y: 14.0 })),
-            None
-        );
+        assert_eq!(slider.event(UiEvent::PointerMove(Point { x: 0.0, y: 14.0 })), None);
         let mut stepper = Stepper {
             bounds: slider.bounds,
             state: ControlState::default(),
@@ -1152,10 +1204,7 @@ mod tests {
             splitter.event(UiEvent::PointerUp(Point { x: 200.0, y: 1.0 })),
             Some(80.0)
         );
-        assert_eq!(
-            splitter.event(UiEvent::PointerMove(Point { x: 30.0, y: 1.0 })),
-            None
-        );
+        assert_eq!(splitter.event(UiEvent::PointerMove(Point { x: 30.0, y: 1.0 })), None);
     }
     #[test]
     fn controls_render_balanced_logical_geometry_at_required_scales() {
@@ -1192,7 +1241,9 @@ mod tests {
                 .unwrap();
             backend.render(&ops).unwrap();
             assert_eq!(backend.operations.len(), ops.len());
-            assert!(backend.operations.iter().any(|op| matches!(op, DrawOp::Stroke(bounds, _, width) if *bounds == checkbox.bounds && *width == 2.0)));
+            assert!(backend.operations.iter().any(
+                |op| matches!(op, DrawOp::Stroke(bounds, _, width) if *bounds == checkbox.bounds && *width == 2.0)
+            ));
         }
     }
     #[test]
@@ -1212,5 +1263,102 @@ mod tests {
         );
         assert_eq!(node.value.as_deref(), Some("saved"));
         assert!(node.actions.is_empty());
+    }
+    fn overlaps(a: Rect, b: Rect) -> bool {
+        a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height
+    }
+    #[test]
+    fn dock_layout_never_overlaps_the_tab_strip_for_any_panel_combination() {
+        let tab_height = 28.0;
+        let status_height = 24.0;
+        let widths = DockWidths::default();
+        let mut reference_tab = None;
+        for mask in 0..8u8 {
+            let visibility = DockVisibility {
+                left: mask & 1 != 0,
+                right: mask & 2 != 0,
+                bottom: mask & 4 != 0,
+            };
+            let rects = DockLayout::compute(1200.0, 800.0, tab_height, status_height, visibility, widths);
+            // The tab strip is identical regardless of which panels are open.
+            let tab = reference_tab.get_or_insert(rects.tab_strip);
+            assert_eq!(rects.tab_strip.x, tab.x);
+            assert_eq!(rects.tab_strip.y, tab.y);
+            assert_eq!(rects.tab_strip.width, tab.width);
+            assert_eq!(rects.tab_strip.height, tab.height);
+            for dock in [rects.left, rects.right, rects.bottom] {
+                if let Some(dock) = dock {
+                    assert!(
+                        !overlaps(dock, rects.tab_strip),
+                        "dock {dock:?} overlaps tab strip for mask {mask}"
+                    );
+                    assert!(dock.y >= tab_height - f32::EPSILON);
+                }
+            }
+            assert!(!overlaps(rects.editor, rects.tab_strip));
+            assert!(rects.editor.y >= tab_height - f32::EPSILON);
+            // Docks never overlap each other or the editor.
+            if let (Some(l), Some(r)) = (rects.left, rects.right) {
+                assert!(!overlaps(l, r));
+            }
+            if let Some(b) = rects.bottom {
+                assert!(!overlaps(b, rects.editor));
+            }
+        }
+    }
+    #[test]
+    fn splitter_widths_round_trip_through_persistence() {
+        let widths = DockWidths {
+            left: 200.5,
+            right: 264.0,
+            bottom: 150.0,
+        };
+        assert_eq!(DockWidths::parse(&widths.serialize()), widths);
+        // Defaults survive missing / corrupt fields.
+        let defaults = DockWidths::default();
+        assert_eq!(DockWidths::parse(""), defaults);
+        assert_eq!(DockWidths::parse("left=NaN;right=oops"), defaults);
+        assert_eq!(
+            DockWidths::parse("left=300"),
+            DockWidths {
+                left: 300.0,
+                ..defaults
+            }
+        );
+        // A stale, oversized persisted value is clamped rather than hiding the editor.
+        let huge = DockWidths {
+            left: 5000.0,
+            right: 5000.0,
+            bottom: 5000.0,
+        };
+        let rects = DockLayout::compute(
+            1000.0,
+            600.0,
+            28.0,
+            24.0,
+            DockVisibility {
+                left: true,
+                right: true,
+                bottom: true,
+            },
+            huge,
+        );
+        assert!(rects.editor.width >= 0.0);
+        assert!(!overlaps(rects.editor, rects.tab_strip));
+    }
+    #[test]
+    fn two_left_sections_can_be_open_at_once() {
+        let dock = rect(0.0, 28.0, 238.0, 600.0);
+        let sections = stack_sections(dock, &[false, false, true]);
+        assert_eq!(sections.len(), 3);
+        // First two are expanded (have a body), the third is collapsed.
+        assert!(sections[0].body.is_some());
+        assert!(sections[1].body.is_some());
+        assert!(sections[2].body.is_none());
+        // Headers stack downward and stay inside the dock.
+        assert!(sections[1].header.y > sections[0].header.y);
+        for section in &sections {
+            assert!(section.close.x + section.close.width <= dock.x + dock.width);
+        }
     }
 }

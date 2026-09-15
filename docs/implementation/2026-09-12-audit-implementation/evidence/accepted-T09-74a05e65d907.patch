@@ -1,0 +1,295 @@
+diff --git a/docs/implementation/2026-09-12-audit-implementation/PR-T09-R5.md b/docs/implementation/2026-09-12-audit-implementation/PR-T09-R5.md
+index 7f96596..b6eb133 100644
+--- a/docs/implementation/2026-09-12-audit-implementation/PR-T09-R5.md
++++ b/docs/implementation/2026-09-12-audit-implementation/PR-T09-R5.md
+@@ -9,4 +9,7 @@
+ - Input derives the exact replacement from the provider's single UIA selection/caret in UTF-16 units. It records posted units/errors, foreground/editor focus before and after, one provider focus correction, SendInput inserted count/error, and the exact expected TextPattern transition. Partial delivery is polled to the deadline and never retried; only text still unchanged after that deadline can receive one fallback attempt. Every prerequisite failure writes provider/target/attempt/screenshot evidence. P4-4 samples the first rows inside the observed provider bounds and retains its stable-frame and saturated-glyph requirements.
+ - Both P0-3 Exit and P0-7 Close are injected once; the harness waits for the product-owned deferred intent instead of masking it with repeated commands.
+ - R6 retained failure: run `30764-1789232596214818600` stopped before input because the real single-view provider was the focused, enabled `Editor`, while the first R5 review incorrectly treated every production editor provider as a split `Pane <number>` name. The corrected predicate follows the source contract in `crates/app/src/accessibility.rs` and `windows_app/accessibility.rs` and keeps every other provider guard.
++- R6 input correction: retained P0-7 evidence under `p0-7-27100-1789233341310762400` observed the exact visible phrase but correctly rejected the requested trailing LF. Raw Unicode LF is not the app's Enter command contract, and a single-line edit is sufficient to make P0-7 and P0-5 dirty, so those fixtures no longer request or claim a newline. Exact content matching remains unchanged.
++- R6 Exit diagnosis: retained P0-3 evidence under `p0-3-22424-1789233242071517200` shows one dynamically resolved File > Exit command and no prompt. Menu receipts now retain the same-HWND root menu, exact matched labels/positions/id, a second observation immediately before posting, and whether that lookup changed. A stable lookup posts its dynamically resolved id once. A changed or missing second lookup returns both snapshots and explicitly records that no command was posted; the harness does not hardcode, substitute or reinject Exit.
++- R6 Unicode diagnosis: retained P4-4 evidence under `p4-4-9172-1789233424038018700` reports successful standalone `WM_CHAR` posts and `SendInput` insertion counts while TextPattern stayed empty; sanctioned native typing immediately produced the exact emoji and colour glyphs. Winit 0.30's Windows keyboard builder explicitly ignores `WM_CHAR` without pending key-event state and collects consecutive surrogate `WM_CHAR` units after `WM_KEYDOWN`. The primary targeted injector now posts one `VK_PACKET` keydown, the scalar's one or two UTF-16 `WM_CHAR` units, and one keyup as a single ordered transaction. Exact TextPattern and colour-glyph assertions remain required; the retained failed run is not reclassified.
+ - Root verification: focused xtask helper tests followed by isolated P0-3, P0-7 and P4-4 against the integrated native binary.
+diff --git a/xtask/src/journey.rs b/xtask/src/journey.rs
+index a855b9f..ff75282 100644
+--- a/xtask/src/journey.rs
++++ b/xtask/src/journey.rs
+@@ -34,13 +34,13 @@ use windows::Win32::UI::Accessibility::{
+ };
+ use windows::Win32::UI::Input::KeyboardAndMouse::{
+     INPUT, INPUT_KEYBOARD, KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, SendInput, SetFocus,
+-    VIRTUAL_KEY, VK_CONTROL, VK_ESCAPE, VK_SHIFT,
++    VIRTUAL_KEY, VK_CONTROL, VK_ESCAPE, VK_PACKET, VK_SHIFT,
+ };
+ use windows::Win32::UI::WindowsAndMessaging::{
+     BringWindowToTop, EnumChildWindows, EnumWindows, GetClassNameW, GetClientRect, GetForegroundWindow, GetMenu,
+     GetMenuItemCount, GetMenuItemID, GetMenuStringW, GetSubMenu, GetWindowRect, GetWindowTextW,
+     GetWindowThreadProcessId, HWND_TOP, IsWindowVisible, MF_BYPOSITION, PostMessageW, SW_SHOW, SWP_NOMOVE, SWP_NOSIZE,
+-    SWP_SHOWWINDOW, SetForegroundWindow, SetWindowPos, ShowWindow, WM_CHAR, WM_COMMAND,
++    SWP_SHOWWINDOW, SetForegroundWindow, SetWindowPos, ShowWindow, WM_CHAR, WM_COMMAND, WM_KEYDOWN, WM_KEYUP,
+ };
+ use windows::core::BOOL;
+ 
+@@ -1146,29 +1146,52 @@ fn send(inputs: &[INPUT]) -> serde_json::Value {
+     })
+ }
+ 
+-/// Type Unicode text into the app window as posted `WM_CHAR` messages. Posting
+-/// needs no foreground ownership (SendInput can leak into another application
+-/// when activation races) and winit translates `WM_CHAR` into the same text /
+-/// IME-commit events the editor and overlays already handle.
++fn packet_message_plan(text: &str) -> Vec<(u32, usize, isize)> {
++    let mut messages = Vec::with_capacity(text.encode_utf16().count() + text.chars().count() * 2);
++    for character in text.chars() {
++        messages.push((WM_KEYDOWN, VK_PACKET.0 as usize, 1));
++        let mut units = [0u16; 2];
++        messages.extend(
++            character
++                .encode_utf16(&mut units)
++                .iter()
++                .map(|unit| (WM_CHAR, *unit as usize, 1)),
++        );
++        messages.push((WM_KEYUP, VK_PACKET.0 as usize, 0xC000_0001_u32 as isize));
++    }
++    messages
++}
++
++/// Post complete VK_PACKET key transactions to the target window. Winit ignores
++/// a standalone WM_CHAR when no preceding keydown created its event state; the
++/// framing also keeps both surrogate WM_CHAR units in one logical key event.
+ fn type_text(hwnd: HWND, text: &str) -> serde_json::Value {
+-    // The caller has already established and recorded foreground ownership.
++    let plan = packet_message_plan(text);
+     let mut posted = 0usize;
++    let mut posted_units = 0usize;
+     let mut errors = Vec::new();
+-    for ch in text.chars() {
+-        let mut units = [0u16; 2];
+-        for unit in ch.encode_utf16(&mut units) {
+-            // SAFETY: `hwnd` is a live window; the message is well-formed.
+-            match unsafe { PostMessageW(Some(hwnd), WM_CHAR, WPARAM(*unit as usize), LPARAM(0)) } {
+-                Ok(()) => posted += 1,
+-                Err(error) => errors.push(error.to_string()),
++    for (message, wparam, lparam) in &plan {
++        // SAFETY: `hwnd` is the verified live target and each tuple is a
++        // well-formed VK_PACKET key or character message.
++        match unsafe { PostMessageW(Some(hwnd), *message, WPARAM(*wparam), LPARAM(*lparam)) } {
++            Ok(()) => {
++                posted += 1;
++                posted_units += usize::from(*message == WM_CHAR);
+             }
++            Err(error) => errors.push(serde_json::json!({
++                "message": message,
++                "error": error.to_string(),
++            })),
+         }
+-        std::thread::sleep(Duration::from_millis(6));
+     }
+     serde_json::json!({
+-        "channel": "WM_CHAR",
++        "channel": "PostMessage VK_PACKET transaction",
++        "framing": ["WM_KEYDOWN VK_PACKET", "WM_CHAR UTF-16 unit(s)", "WM_KEYUP VK_PACKET"],
++        "requested_scalars": text.chars().count(),
+         "requested_units": text.encode_utf16().count(),
+-        "posted_units": posted,
++        "requested_messages": plan.len(),
++        "posted_messages": posted,
++        "posted_units": posted_units,
+         "errors": errors,
+     })
+ }
+@@ -1619,28 +1642,64 @@ fn menu_only_command_label(menu: windows::Win32::UI::WindowsAndMessaging::HMENU)
+     String::new()
+ }
+ 
+-/// Resolve a menu-path (`["Search", "Go To Line"]`) to a command id by walking
+-/// the native menu bar, matching each segment as a normalized prefix.
+-fn menu_command_id(hwnd: HWND, path: &[&str]) -> Option<u32> {
++struct MenuResolution {
++    id: u32,
++    root_menu: usize,
++    positions: Vec<i32>,
++    labels: Vec<String>,
++}
++
++impl MenuResolution {
++    fn evidence(&self) -> serde_json::Value {
++        serde_json::json!({
++            "command_id": self.id,
++            "root_menu": self.root_menu,
++            "positions": self.positions,
++            "labels": self.labels,
++        })
++    }
++
++    fn same_target(&self, other: &Self) -> bool {
++        self.id == other.id
++            && self.root_menu == other.root_menu
++            && self.positions == other.positions
++            && self.labels == other.labels
++    }
++}
++
++/// Resolve a menu path (`["Search", "Go To Line"]`) to the exact native labels,
++/// positions and command id on this HWND's current menu tree.
++fn menu_command_resolution(hwnd: HWND, path: &[&str]) -> Option<MenuResolution> {
+     // SAFETY: `hwnd` is a live top-level window.
+     let mut menu = unsafe { GetMenu(hwnd) };
+     if menu.0.is_null() {
+         return None;
+     }
++    let root_menu = menu.0 as usize;
++    let mut positions = Vec::with_capacity(path.len());
++    let mut labels = Vec::with_capacity(path.len());
+     for (depth, segment) in path.iter().enumerate() {
+         let target = normalize_label(segment);
+         // SAFETY: `menu` live.
+         let count = unsafe { GetMenuItemCount(Some(menu)) };
+         let mut advanced = false;
+         for position in 0..count {
+-            let label = normalize_label(&menu_label(menu, position));
++            let raw_label = menu_label(menu, position);
++            let label = normalize_label(&raw_label);
+             if label.is_empty() || !(label == target || label.starts_with(&target)) {
+                 continue;
+             }
++            positions.push(position);
++            labels.push(raw_label);
+             if depth + 1 == path.len() {
+                 // SAFETY: `menu` live; `position` in range.
+                 let id = unsafe { GetMenuItemID(menu, position) };
+-                return if id == u32::MAX { None } else { Some(id) };
++                return (id != u32::MAX).then_some(MenuResolution {
++                    id,
++                    root_menu,
++                    positions,
++                    labels,
++                });
+             }
+             // SAFETY: `menu` live; `position` in range.
+             let sub = unsafe { GetSubMenu(menu, position) };
+@@ -1664,9 +1723,9 @@ fn invoke_menu(hwnd: HWND, path: &[&str]) -> Result<serde_json::Value, String> {
+     // The native menu is rebuilt when the visible command set changes, so a
+     // lookup can land between destroy and re-create; retry briefly.
+     let deadline = Instant::now() + Duration::from_secs(1);
+-    let id = loop {
+-        if let Some(id) = menu_command_id(hwnd, path) {
+-            break id;
++    let lookup = loop {
++        if let Some(resolution) = menu_command_resolution(hwnd, path) {
++            break resolution;
+         }
+         if Instant::now() >= deadline {
+             return Err(format!(
+@@ -1676,15 +1735,41 @@ fn invoke_menu(hwnd: HWND, path: &[&str]) -> Result<serde_json::Value, String> {
+         }
+         std::thread::sleep(Duration::from_millis(50));
+     };
++    // Recheck once immediately before posting. A changed lookup is an explicit
++    // prerequisite failure: never knowingly send the stale id or substitute a
++    // different command.
++    let immediately_before_post = menu_command_resolution(hwnd, path);
++    let lookup_to_post_changed = immediately_before_post
++        .as_ref()
++        .is_none_or(|current| !lookup.same_target(current));
++    if lookup_to_post_changed {
++        let receipt = serde_json::json!({
++            "path": path,
++            "target_hwnd": hwnd.0 as usize,
++            "lookup": lookup.evidence(),
++            "immediately_before_post": immediately_before_post
++                .as_ref()
++                .map(MenuResolution::evidence),
++            "lookup_to_post_changed": true,
++            "post_message_succeeded": false,
++            "command_posted": false,
++        });
++        return Err(format!(
++            "menu changed between lookup and command post; no command was posted; receipt={receipt}"
++        ));
++    }
+     // SAFETY: `hwnd` is a live window; the message is well-formed.
+     unsafe {
+-        PostMessageW(Some(hwnd), WM_COMMAND, WPARAM(id as usize), LPARAM(0))
++        PostMessageW(Some(hwnd), WM_COMMAND, WPARAM(lookup.id as usize), LPARAM(0))
+             .map_err(|e| format!("PostMessage WM_COMMAND failed: {e}"))
+     }?;
+     Ok(serde_json::json!({
+         "path": path,
+-        "command_id": id,
++        "command_id": lookup.id,
+         "target_hwnd": hwnd.0 as usize,
++        "lookup": lookup.evidence(),
++        "immediately_before_post": immediately_before_post.map(|resolution| resolution.evidence()),
++        "lookup_to_post_changed": lookup_to_post_changed,
+         "post_message_succeeded": true,
+     }))
+ }
+@@ -2112,7 +2197,7 @@ fn journey_p0_5(env: &Env) -> Result<(), String> {
+         type_text_until_observed_change(
+             &session,
+             hwnd,
+-            "recovered content for P0-5 journey\n",
++            "recovered content for P0-5 journey",
+             Duration::from_secs(15),
+         )?;
+         wait_until_stable(hwnd, Duration::from_secs(8));
+@@ -2159,7 +2244,7 @@ fn journey_p0_7(env: &Env) -> Result<(), String> {
+     let typing = type_text_until_observed_change(
+         &session,
+         hwnd,
+-        "unsaved edit for the close prompt\n",
++        "unsaved edit for the close prompt",
+         Duration::from_secs(15),
+     )?;
+     let frame = wait_until_stable(hwnd, Duration::from_secs(8));
+@@ -2190,7 +2275,7 @@ fn journey_p0_7(env: &Env) -> Result<(), String> {
+             evidence.display()
+         ));
+     };
+-    if provider_text != "unsaved edit for the close prompt\n" {
++    if provider_text != "unsaved edit for the close prompt" {
+         return Err(format!(
+             "UIA prerequisite did not observe the posted close-prompt text; evidence={}",
+             evidence.display()
+@@ -2690,6 +2775,40 @@ mod evidence_tests {
+         }
+     }
+ 
++    #[test]
++    fn menu_resolution_change_receipt_compares_handle_path_labels_and_id() {
++        let resolution = MenuResolution {
++            id: 45,
++            root_menu: 100,
++            positions: vec![0, 8],
++            labels: vec!["&File".into(), "E&xit".into()],
++        };
++        let same = MenuResolution {
++            id: 45,
++            root_menu: 100,
++            positions: vec![0, 8],
++            labels: vec!["&File".into(), "E&xit".into()],
++        };
++        assert!(resolution.same_target(&same));
++        assert!(!resolution.same_target(&MenuResolution { id: 48, ..same }));
++    }
++
++    #[test]
++    fn packet_message_plan_frames_astral_text_in_one_winit_key_event() {
++        let plan = packet_message_plan("A🎉");
++        assert_eq!(
++            plan.iter().map(|(message, _, _)| *message).collect::<Vec<_>>(),
++            [WM_KEYDOWN, WM_CHAR, WM_KEYUP, WM_KEYDOWN, WM_CHAR, WM_CHAR, WM_KEYUP,]
++        );
++        assert_eq!(plan[4].1, 0xD83C);
++        assert_eq!(plan[5].1, 0xDF89);
++        assert!(
++            plan.iter()
++                .filter(|(message, _, _)| *message == WM_KEYDOWN || *message == WM_KEYUP)
++                .all(|(_, wparam, _)| *wparam == VK_PACKET.0 as usize)
++        );
++    }
++
+     #[test]
+     fn failure_classification_keeps_timeout_harness_and_product_results_distinct() {
+         assert_eq!(classify_failure("timed out waiting for prompt"), "timeout");

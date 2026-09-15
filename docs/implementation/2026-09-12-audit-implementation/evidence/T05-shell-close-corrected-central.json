@@ -1,0 +1,17 @@
+{
+  "arguments": [
+    "test",
+    "-p",
+    "bareline",
+    "--bin",
+    "bareline",
+    "deferred_close_tests",
+    "--offline",
+    "--locked"
+  ],
+  "completed_utc": "2026-09-12T09:54:11.6841925Z",
+  "integration_snapshot": "34d45223859823ea71e65529a32e2a1864543885",
+  "exit_code": 101,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\T05-shell-close-corrected-central.log"
+}

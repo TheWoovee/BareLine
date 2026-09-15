@@ -24,9 +24,6 @@ impl DocumentMetadata {
         &self.0
     }
     pub(crate) fn charge(&self) -> usize {
-        self.0
-            .iter()
-            .map(|(key, value)| key.len() + value.len() + 128)
-            .sum()
+        self.0.iter().map(|(key, value)| key.len() + value.len() + 128).sum()
     }
 }

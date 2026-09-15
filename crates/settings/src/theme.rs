@@ -22,9 +22,7 @@ impl ThemeColor {
         Self { rgb, alpha: 255 }
     }
     pub fn parse(value: &str) -> Result<Self, String> {
-        let hex = value
-            .strip_prefix('#')
-            .ok_or("Colors require #RRGGBB or #RRGGBBAA")?;
+        let hex = value.strip_prefix('#').ok_or("Colors require #RRGGBB or #RRGGBBAA")?;
         if !matches!(hex.len(), 6 | 8) || !hex.is_ascii() {
             return Err("Colors require #RRGGBB or #RRGGBBAA".into());
         }
@@ -148,9 +146,7 @@ impl Theme {
             let focus = ThemeColor::opaque(if dark { 0xffff00 } else { 0x000080 });
             for key in TOKEN_NAMES {
                 let value = if key.starts_with("surface")
-                    || key.starts_with("diff.")
-                        && !key.ends_with("gutter")
-                        && !key.ends_with("overview")
+                    || key.starts_with("diff.") && !key.ends_with("gutter") && !key.ends_with("overview")
                     || key.starts_with("mark.")
                 {
                     bg
@@ -211,10 +207,7 @@ impl Theme {
             ("mark.style4", 0xFBE4E4, 0x3D2426),
             ("mark.style5", 0xEEE5F6, 0x342740),
         ] {
-            tokens.insert(
-                key.into(),
-                ThemeColor::opaque(if dark { dark_color } else { light }),
-            );
+            tokens.insert(key.into(), ThemeColor::opaque(if dark { dark_color } else { light }));
         }
         tokens.insert(
             "selection".into(),
@@ -224,11 +217,7 @@ impl Theme {
             },
         );
         for name in ["added", "removed", "changed", "moved", "current"] {
-            let color = tokens[if name == "current" {
-                "focus.ring"
-            } else {
-                "text"
-            }];
+            let color = tokens[if name == "current" { "focus.ring" } else { "text" }];
             for variant in ["gutter", "overview"] {
                 tokens.insert(format!("diff.{name}.{variant}"), color);
             }
@@ -289,13 +278,7 @@ impl Theme {
         }
         Ok(())
     }
-    fn check_pair(
-        &self,
-        key: &str,
-        bg: ThemeColor,
-        minimum: f64,
-        surface: &str,
-    ) -> Result<(), String> {
+    fn check_pair(&self, key: &str, bg: ThemeColor, minimum: f64, surface: &str) -> Result<(), String> {
         let ratio = self.tokens[key].contrast(bg);
         if ratio < minimum {
             return Err(format!(

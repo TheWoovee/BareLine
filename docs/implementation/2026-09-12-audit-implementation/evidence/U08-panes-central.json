@@ -1,0 +1,19 @@
+{
+  "arguments": [
+    "test",
+    "--offline",
+    "--locked",
+    "-p",
+    "bareline",
+    "--bin",
+    "bareline",
+    "split_panes_publish_independent_text_owners_and_retire_closed_provider",
+    "--",
+    "--test-threads=1"
+  ],
+  "completed_utc": "2026-09-12T08:20:56.6490153Z",
+  "integration_snapshot": "232b037b42dacb0ef1d88c4c1031ef02d573aa1c",
+  "exit_code": 101,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\U08-panes-central.log"
+}

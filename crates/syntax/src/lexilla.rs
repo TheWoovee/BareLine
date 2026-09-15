@@ -1,28 +1,18 @@
 // SPDX-License-Identifier: MPL-2.0
 use crate::{Error, Language, MAX_SPANS, StyleKind, StyleSpan};
 use bareline_document::TextOffset;
-pub(crate) fn spans(
-    text: &str,
-    language: Language,
-    styles: &[u8],
-) -> Result<Vec<StyleSpan>, Error> {
+pub(crate) fn spans(text: &str, language: Language, styles: &[u8]) -> Result<Vec<StyleSpan>, Error> {
     if styles.len() != text.len() {
         return Err(Error::InvalidRange);
     }
     let mut output: Vec<StyleSpan> = Vec::new();
     for (offset, c) in text.char_indices() {
         let style = styles[offset];
-        if !styles[offset..offset + c.len_utf8()]
-            .iter()
-            .all(|s| *s == style)
-        {
+        if !styles[offset..offset + c.len_utf8()].iter().all(|s| *s == style) {
             return Err(Error::InvalidRange);
         }
         if let Some(kind) = kind(language, style) {
-            if let Some(last) = output
-                .last_mut()
-                .filter(|s| s.kind == kind && s.range.end.0 == offset)
-            {
+            if let Some(last) = output.last_mut().filter(|s| s.kind == kind && s.range.end.0 == offset) {
                 last.range.end = TextOffset(offset + c.len_utf8());
             } else {
                 if output.len() >= MAX_SPANS {

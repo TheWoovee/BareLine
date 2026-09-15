@@ -1,0 +1,19 @@
+diff --git a/docs/IMPLEMENTATION_STATUS.md b/docs/IMPLEMENTATION_STATUS.md
+index 9fdbd61..06c7a5a 100644
+--- a/docs/IMPLEMENTATION_STATUS.md
++++ b/docs/IMPLEMENTATION_STATUS.md
+@@ -2,6 +2,14 @@
+ 
+ **Implementation underway, 2026-09-12:** the owner authorized parallel Sol medium implementation and root review of the [31 audit PR plans](qa/2026-09-12-local-audit/PR_INDEX.md). Follow the [orchestration record](implementation/2026-09-12-audit-implementation/ORCHESTRATION.md) and its live status. Only contained checks run per fix; full integrated qualification and a fresh independent audit follow implementation.
+ 
++**Current capability authority:** use the 52-row
++[capability ledger](parity/index.json) and its [evidence contract](parity/README.md)
++for present implementation, defect, intentional-limit, deferred and qualification
++state. The older package rows and pass counts below are preserved historical
++receipts. They do not override the current ledger or establish the final source/
++binary identity. PR-T03 owns overwrite/default-save behavior for this audit;
++older PR-004 ownership text remains historical.
++
+ **TECH-019 source implemented pending central qualification:** PR-T16 gives every paged document one file-io `PagedSession` owner for path/fingerprint, savepoint, encoding/conflict/cleanup state, and recovery generations. Paged views share that owner and keep presentation state locally; save completion is a typed identity/revision/content/source/operation-generation-fenced receipt. See [PR-T16 evidence](implementation/2026-09-12-audit-implementation/PR-T16.md).
+ 
+ **Current audit, 2026-09-12:** the [local working-tree review](qa/2026-09-12-local-audit/README.md) records newly reproduced data-safety and native usability defects, fresh test results, and [implementor-ready PR plans](qa/2026-09-12-local-audit/PR_INDEX.md). Use that audit to qualify the historical completion statements below; source completion is not current runtime acceptance.

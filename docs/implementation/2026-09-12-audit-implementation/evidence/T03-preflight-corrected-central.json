@@ -1,0 +1,16 @@
+{
+  "arguments": [
+    "test",
+    "-p",
+    "bareline-file-io",
+    "--lib",
+    "lifecycle::encoded_tests::destination_",
+    "--offline",
+    "--locked"
+  ],
+  "completed_utc": "2026-09-12T06:27:45.2400059Z",
+  "integration_snapshot": "1708befe0a119506cab01d854467cc8fc4130335",
+  "exit_code": 0,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\T03-preflight-corrected-central.log"
+}

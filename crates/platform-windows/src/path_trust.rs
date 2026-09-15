@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Conservative path classification before any destination access. Grants are action-scoped.
-use bareline_platform::{
-    PathOperation, PathOrigin, PathTrust, PathTrustProvider, StorageKind, TrustedRead,
-};
+use bareline_platform::{PathOperation, PathOrigin, PathTrust, PathTrustProvider, StorageKind, TrustedRead};
 use std::{
     fs::{File, OpenOptions},
     io,
@@ -17,55 +15,35 @@ use windows::{
 #[derive(Default)]
 pub struct WindowsPathTrustProvider;
 impl WindowsPathTrustProvider {
-    /// A follow reader pins the approved directory chain but permits writers and
-    /// rotation of the final file. OPEN_REPARSE_POINT prevents a final-name race from
-    /// authenticating to a substituted remote target.
-    pub fn open_follow_read(&self, path: &Path) -> io::Result<(File, std::sync::Arc<dyn Send + Sync>)> {
-        let name = path.file_name().ok_or_else(denied)?;
-        if reserved_device(name) || name.encode_wide().any(|u| u == 0 || u == b':' as u16) { return Err(denied()); }
-        let parent = path.parent().ok_or_else(denied)?;
-        let guard = self.open_read(parent, PathOrigin::User)?;
-        let file = OpenOptions::new().read(true)
-            .share_mode(FILE_SHARE_READ.0 | FILE_SHARE_WRITE.0 | FILE_SHARE_DELETE.0)
-            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT.0).open(path)?;
-        let mut info = BY_HANDLE_FILE_INFORMATION::default();
-        // SAFETY: file owns the handle and the output buffer lives through the call.
-        unsafe { GetFileInformationByHandle(HANDLE(file.as_raw_handle()), &mut info) }
-            .map_err(|e| io::Error::from_raw_os_error(e.code().0 & 0xffff))?;
-        if info.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT.0 | FILE_ATTRIBUTE_OFFLINE.0 | FILE_ATTRIBUTE_DIRECTORY.0) != 0 { return Err(denied()); }
-        Ok((file, std::sync::Arc::new(guard)))
+    /// Pin a destination directory without requesting directory-list access.
+    /// All ancestors still reject reparse/offline paths and deny write/delete sharing.
+    pub(crate) fn guard_directory(&self, path: &Path) -> io::Result<TrustedRead> {
+        let guard = self.open_pinned(path, PathOrigin::User, FILE_READ_ATTRIBUTES.0)?;
+        if !guard.file.metadata()?.is_dir() {
+            return Err(denied());
+        }
+        Ok(guard)
     }
-}
-fn denied() -> io::Error {
-    io::Error::new(
-        io::ErrorKind::PermissionDenied,
-        "path requires explicit supported local access",
-    )
-}
-fn reserved_device(name: &std::ffi::OsStr) -> bool {
-    let units: Vec<u16> = name
-        .encode_wide()
-        .take_while(|u| *u != b'.' as u16)
-        .collect();
-    let base = String::from_utf16_lossy(&units)
-        .trim_end_matches(' ')
-        .to_ascii_uppercase();
-    matches!(
-        base.as_str(),
-        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
-    ) || ["COM", "LPT"].iter().any(|prefix| {
-        base.strip_prefix(prefix).is_some_and(|n| {
-            n.chars().count() == 1
-                && n.chars()
-                    .all(|c| c.is_ascii_digit() || matches!(c, '¹' | '²' | '³'))
-        })
-    })
-}
-impl PathTrustProvider for WindowsPathTrustProvider {
-    fn canonicalize(&self, path: &Path, origin: PathOrigin) -> io::Result<PathTrust> {
-        Ok(self.open_read(path, origin)?.trust)
+    pub(crate) fn guard_migration_entry(&self, path: &Path) -> io::Result<TrustedRead> {
+        self.open_pinned_shared(
+            path,
+            PathOrigin::User,
+            FILE_READ_ATTRIBUTES.0 | DELETE.0,
+            FILE_SHARE_READ.0,
+            FILE_SHARE_READ.0 | FILE_SHARE_DELETE.0,
+        )
     }
-    fn open_read(&self, path: &Path, origin: PathOrigin) -> io::Result<TrustedRead> {
+    fn open_pinned(&self, path: &Path, origin: PathOrigin, final_access: u32) -> io::Result<TrustedRead> {
+        self.open_pinned_shared(path, origin, final_access, FILE_SHARE_READ.0, FILE_SHARE_READ.0)
+    }
+    fn open_pinned_shared(
+        &self,
+        path: &Path,
+        origin: PathOrigin,
+        final_access: u32,
+        final_sharing: u32,
+        ancestor_sharing: u32,
+    ) -> io::Result<TrustedRead> {
         // Reject metadata-supplied paths before canonicalization, metadata, shell or network calls.
         if origin != PathOrigin::User || !path.is_absolute() {
             return Err(denied());
@@ -91,20 +69,22 @@ impl PathTrustProvider for WindowsPathTrustProvider {
         for ancestor in path.ancestors().collect::<Vec<_>>().into_iter().rev() {
             let file = OpenOptions::new()
                 .access_mode(if ancestor == path {
-                    FILE_GENERIC_READ.0
+                    final_access
                 } else {
                     FILE_READ_ATTRIBUTES.0
                 })
-                .share_mode(FILE_SHARE_READ.0)
+                .share_mode(if ancestor == path {
+                    final_sharing
+                } else {
+                    ancestor_sharing
+                })
                 .custom_flags(FILE_FLAG_BACKUP_SEMANTICS.0 | FILE_FLAG_OPEN_REPARSE_POINT.0)
                 .open(ancestor)?;
             let mut info = BY_HANDLE_FILE_INFORMATION::default();
             // SAFETY: owned handle and valid output structure.
             unsafe { GetFileInformationByHandle(HANDLE(file.as_raw_handle()), &mut info) }
                 .map_err(|e| io::Error::from_raw_os_error(e.code().0 & 0xffff))?;
-            if info.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT.0 | FILE_ATTRIBUTE_OFFLINE.0)
-                != 0
-            {
+            if info.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT.0 | FILE_ATTRIBUTE_OFFLINE.0) != 0 {
                 return Err(denied());
             }
             held.push(file);
@@ -122,6 +102,60 @@ impl PathTrustProvider for WindowsPathTrustProvider {
             file,
             ancestors: held,
         })
+    }
+
+    /// A follow reader pins the approved directory chain but permits writers and
+    /// rotation of the final file. OPEN_REPARSE_POINT prevents a final-name race from
+    /// authenticating to a substituted remote target.
+    pub fn open_follow_read(&self, path: &Path) -> io::Result<(File, std::sync::Arc<dyn Send + Sync>)> {
+        let name = path.file_name().ok_or_else(denied)?;
+        if reserved_device(name) || name.encode_wide().any(|u| u == 0 || u == b':' as u16) {
+            return Err(denied());
+        }
+        let parent = path.parent().ok_or_else(denied)?;
+        let guard = self.open_read(parent, PathOrigin::User)?;
+        let file = OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ.0 | FILE_SHARE_WRITE.0 | FILE_SHARE_DELETE.0)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT.0)
+            .open(path)?;
+        let mut info = BY_HANDLE_FILE_INFORMATION::default();
+        // SAFETY: file owns the handle and the output buffer lives through the call.
+        unsafe { GetFileInformationByHandle(HANDLE(file.as_raw_handle()), &mut info) }
+            .map_err(|e| io::Error::from_raw_os_error(e.code().0 & 0xffff))?;
+        if info.dwFileAttributes
+            & (FILE_ATTRIBUTE_REPARSE_POINT.0 | FILE_ATTRIBUTE_OFFLINE.0 | FILE_ATTRIBUTE_DIRECTORY.0)
+            != 0
+        {
+            return Err(denied());
+        }
+        Ok((file, std::sync::Arc::new(guard)))
+    }
+}
+fn denied() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::PermissionDenied,
+        "path requires explicit supported local access",
+    )
+}
+fn reserved_device(name: &std::ffi::OsStr) -> bool {
+    let units: Vec<u16> = name.encode_wide().take_while(|u| *u != b'.' as u16).collect();
+    let base = String::from_utf16_lossy(&units)
+        .trim_end_matches(' ')
+        .to_ascii_uppercase();
+    matches!(base.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$")
+        || ["COM", "LPT"].iter().any(|prefix| {
+            base.strip_prefix(prefix).is_some_and(|n| {
+                n.chars().count() == 1 && n.chars().all(|c| c.is_ascii_digit() || matches!(c, '¹' | '²' | '³'))
+            })
+        })
+}
+impl PathTrustProvider for WindowsPathTrustProvider {
+    fn canonicalize(&self, path: &Path, origin: PathOrigin) -> io::Result<PathTrust> {
+        Ok(self.open_read(path, origin)?.trust)
+    }
+    fn open_read(&self, path: &Path, origin: PathOrigin) -> io::Result<TrustedRead> {
+        self.open_pinned(path, origin, FILE_GENERIC_READ.0)
     }
     fn permits(&self, trust: &PathTrust, operation: PathOperation) -> bool {
         trust.origin == PathOrigin::User
@@ -186,12 +220,9 @@ mod tests {
     #[test]
     fn retained_read_prevents_retarget_and_reads_approved_object() {
         use std::io::Read;
-        let path =
-            std::env::temp_dir().join(format!("bareline-trust-retain-{}", std::process::id()));
+        let path = std::env::temp_dir().join(format!("bareline-trust-retain-{}", std::process::id()));
         std::fs::write(&path, b"approved").unwrap();
-        let mut opened = WindowsPathTrustProvider
-            .open_read(&path, PathOrigin::User)
-            .unwrap();
+        let mut opened = WindowsPathTrustProvider.open_read(&path, PathOrigin::User).unwrap();
         assert!(std::fs::rename(&path, path.with_extension("moved")).is_err());
         let mut bytes = Vec::new();
         opened.file.read_to_end(&mut bytes).unwrap();
@@ -209,16 +240,10 @@ mod tests {
         assert!(!p.permits(&trust, PathOperation::Write));
         assert!(!p.permits(&trust, PathOperation::Execute));
         assert!(
-            p.open_read(
-                Path::new(r"\\never-contact.invalid\share\x"),
-                PathOrigin::Session
-            )
-            .is_err()
-        );
-        assert!(
-            p.open_read(&trust.canonical, PathOrigin::Extension)
+            p.open_read(Path::new(r"\\never-contact.invalid\share\x"), PathOrigin::Session)
                 .is_err()
         );
+        assert!(p.open_read(&trust.canonical, PathOrigin::Extension).is_err());
     }
     #[test]
     fn real_local_path_classified_and_execute_denied() {
@@ -232,47 +257,104 @@ mod tests {
     }
 }
 
-impl WindowsPathTrustProvider{
+impl WindowsPathTrustProvider {
     /// This method is reachable only with an admitted exact-path read capability.
     /// Every ancestor is opened no-follow and pinned before its descendant.
-    pub(crate) fn open_remote_read(&self,path:&Path,access:&bareline_platform::RemoteReadAccess)->io::Result<TrustedRead>{
+    pub(crate) fn open_remote_read(
+        &self,
+        path: &Path,
+        access: &bareline_platform::RemoteReadAccess,
+    ) -> io::Result<TrustedRead> {
         access.check(path)?;
-        if !path.is_absolute(){return Err(denied());}
-        match path.components().next(){
-            Some(Component::Prefix(prefix))=>match prefix.kind(){
-                Prefix::UNC(server,share)|Prefix::VerbatimUNC(server,share)=>{if server.is_empty()||share.is_empty()||[server,share].iter().any(|part|part.encode_wide().any(|u|u==0||u==b':' as u16)){return Err(denied());}},
-                Prefix::Disk(drive)|Prefix::VerbatimDisk(drive)=>{let root=[drive as u16,b':' as u16,b'\\' as u16,0];if unsafe{GetDriveTypeW(PCWSTR(root.as_ptr()))}!=4{return Err(denied());}},
-                _=>return Err(denied()),
+        if !path.is_absolute() {
+            return Err(denied());
+        }
+        match path.components().next() {
+            Some(Component::Prefix(prefix)) => match prefix.kind() {
+                Prefix::UNC(server, share) | Prefix::VerbatimUNC(server, share) => {
+                    if server.is_empty()
+                        || share.is_empty()
+                        || [server, share]
+                            .iter()
+                            .any(|part| part.encode_wide().any(|u| u == 0 || u == b':' as u16))
+                    {
+                        return Err(denied());
+                    }
+                }
+                Prefix::Disk(drive) | Prefix::VerbatimDisk(drive) => {
+                    let root = [drive as u16, b':' as u16, b'\\' as u16, 0];
+                    if unsafe { GetDriveTypeW(PCWSTR(root.as_ptr())) } != 4 {
+                        return Err(denied());
+                    }
+                }
+                _ => return Err(denied()),
             },
-            _=>return Err(denied()),
+            _ => return Err(denied()),
         }
         if path.components().any(|part|matches!(part,Component::ParentDir)|matches!(part,Component::Normal(name) if reserved_device(name)||name.encode_wide().any(|u|u==0||u==b':' as u16))){return Err(denied());}
-        let mut held=Vec::new();
-        for ancestor in path.ancestors().collect::<Vec<_>>().into_iter().rev(){
+        let mut held = Vec::new();
+        for ancestor in path.ancestors().collect::<Vec<_>>().into_iter().rev() {
             access.check(path)?;
-            let final_file=ancestor==path;
-            let sharing=if final_file&&access.action()==bareline_platform::RemoteReadAction::Follow{FILE_SHARE_READ.0|FILE_SHARE_WRITE.0|FILE_SHARE_DELETE.0}else{FILE_SHARE_READ.0};
-            let file=OpenOptions::new().access_mode(if final_file{FILE_GENERIC_READ.0}else{FILE_READ_ATTRIBUTES.0}).share_mode(sharing).custom_flags(FILE_FLAG_BACKUP_SEMANTICS.0|FILE_FLAG_OPEN_REPARSE_POINT.0).open(ancestor)?;
-            let mut info=BY_HANDLE_FILE_INFORMATION::default();
+            let final_file = ancestor == path;
+            let sharing = if final_file && access.action() == bareline_platform::RemoteReadAction::Follow {
+                FILE_SHARE_READ.0 | FILE_SHARE_WRITE.0 | FILE_SHARE_DELETE.0
+            } else {
+                FILE_SHARE_READ.0
+            };
+            let file = OpenOptions::new()
+                .access_mode(if final_file {
+                    FILE_GENERIC_READ.0
+                } else {
+                    FILE_READ_ATTRIBUTES.0
+                })
+                .share_mode(sharing)
+                .custom_flags(FILE_FLAG_BACKUP_SEMANTICS.0 | FILE_FLAG_OPEN_REPARSE_POINT.0)
+                .open(ancestor)?;
+            let mut info = BY_HANDLE_FILE_INFORMATION::default();
             // SAFETY: the file retains its handle and the output buffer is live.
-            unsafe{GetFileInformationByHandle(HANDLE(file.as_raw_handle()),&mut info)}.map_err(|error|io::Error::from_raw_os_error(error.code().0&0xffff))?;
-            if info.dwFileAttributes&(FILE_ATTRIBUTE_REPARSE_POINT.0|FILE_ATTRIBUTE_OFFLINE.0)!=0||final_file&&info.dwFileAttributes&FILE_ATTRIBUTE_DIRECTORY.0!=0{return Err(denied());}
+            unsafe { GetFileInformationByHandle(HANDLE(file.as_raw_handle()), &mut info) }
+                .map_err(|error| io::Error::from_raw_os_error(error.code().0 & 0xffff))?;
+            if info.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT.0 | FILE_ATTRIBUTE_OFFLINE.0) != 0
+                || final_file && info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY.0 != 0
+            {
+                return Err(denied());
+            }
             held.push(file);
         }
         access.check(path)?;
-        let file=held.pop().ok_or_else(denied)?;
-        Ok(TrustedRead{trust:PathTrust{canonical:path.into(),storage:StorageKind::Network,origin:PathOrigin::User,traverses_reparse_point:false},file,ancestors:held})
+        let file = held.pop().ok_or_else(denied)?;
+        Ok(TrustedRead {
+            trust: PathTrust {
+                canonical: path.into(),
+                storage: StorageKind::Network,
+                origin: PathOrigin::User,
+                traverses_reparse_point: false,
+            },
+            file,
+            ancestors: held,
+        })
     }
 }
 
 #[cfg(test)]
-mod remote_rejection_tests{
+mod remote_rejection_tests {
     use super::*;
     #[test]
-    fn unsafe_remote_components_fail_before_destination_access(){
-        use bareline_platform::{RemoteReadGrant,RemoteReadAction};
-        for path in [r"\\never-contact.invalid\share\..\file",r"\\never-contact.invalid\share\file:stream",r"\\never-contact.invalid\share\NUL"]{
-            let path=Path::new(path);let grant=RemoteReadGrant::after_consent(path.into(),RemoteReadAction::Open,std::time::Duration::from_secs(1)).unwrap();let access=grant.claim(path,RemoteReadAction::Open,std::sync::Arc::new(||false)).unwrap();assert!(WindowsPathTrustProvider.open_remote_read(path,&access).is_err());
+    fn unsafe_remote_components_fail_before_destination_access() {
+        use bareline_platform::{RemoteReadAction, RemoteReadGrant};
+        for path in [
+            r"\\never-contact.invalid\share\..\file",
+            r"\\never-contact.invalid\share\file:stream",
+            r"\\never-contact.invalid\share\NUL",
+        ] {
+            let path = Path::new(path);
+            let grant =
+                RemoteReadGrant::after_consent(path.into(), RemoteReadAction::Open, std::time::Duration::from_secs(1))
+                    .unwrap();
+            let access = grant
+                .claim(path, RemoteReadAction::Open, std::sync::Arc::new(|| false))
+                .unwrap();
+            assert!(WindowsPathTrustProvider.open_remote_read(path, &access).is_err());
         }
     }
 }

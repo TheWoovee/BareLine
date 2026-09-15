@@ -1,0 +1,5 @@
+# P5-4 (ARCH-07): no window_app function may exceed 300 lines. The
+# `clippy::too_many_lines` lint is allow-by-default, so this threshold only
+# takes effect when that lint is explicitly enabled
+# (`cargo clippy -p bareline -W clippy::too_many_lines`).
+too-many-lines-threshold = 300

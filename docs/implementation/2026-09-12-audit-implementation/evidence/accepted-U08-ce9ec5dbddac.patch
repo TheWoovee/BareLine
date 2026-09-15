@@ -1,0 +1,37 @@
+diff --git a/apps/bareline/src/windows_app/accessibility.rs b/apps/bareline/src/windows_app/accessibility.rs
+index 5bcdb16..5a8520e 100644
+--- a/apps/bareline/src/windows_app/accessibility.rs
++++ b/apps/bareline/src/windows_app/accessibility.rs
+@@ -1565,6 +1565,7 @@ impl Shell {
+ pub(super) mod tests {
+     use super::super::{compare, launch, shortcuts, utilities, views};
+     use super::*;
++    use bareline_app::workspace::Input;
+     type ShellSetup = fn(&mut Shell, &str);
+     type SetupCases = (&'static str, ShellSetup, &'static [&'static str], u64);
+ 
+@@ -1816,7 +1817,7 @@ pub(super) mod tests {
+             assert_eq!(reads[0], reads[1], "shared edits must reach both pane providers");
+ 
+             let retired = shell_snapshot(&shell).text_views[0].context.source_identity;
+-            assert!(shell.tabs_dispatch("view.close_split"));
++            assert!(views::accessibility_test_close_split(&mut shell));
+             assert!(!shell.views.open());
+             assert!(shell.accessibility_editor_mut(retired).is_none());
+         }
+diff --git a/apps/bareline/src/windows_app/views.rs b/apps/bareline/src/windows_app/views.rs
+index d46d6a7..e5ef533 100644
+--- a/apps/bareline/src/windows_app/views.rs
++++ b/apps/bareline/src/windows_app/views.rs
+@@ -109,6 +109,11 @@ pub(super) fn accessibility_test_setup(shell: &mut Shell, scenario: &str) {
+     }
+ }
+ 
++#[cfg(test)]
++pub(super) fn accessibility_test_close_split(shell: &mut Shell) -> bool {
++    shell.tabs_dispatch("view.close_split")
++}
++
+ #[cfg(test)]
+ mod tests {
+     use super::*;

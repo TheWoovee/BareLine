@@ -64,25 +64,18 @@ impl Readers {
     }
     pub fn raw(&mut self, range: RawRange) -> Result<Vec<u8>, String> {
         self.check()?;
-        let source = self
-            .original
-            .as_ref()
-            .ok_or("Original byte source unavailable")?;
+        let source = self.original.as_ref().ok_or("Original byte source unavailable")?;
         if range.start > range.end || range.end > source.len() || range.end - range.start > 65536 {
             return Err("Original range limit".into());
         }
         match source {
-            OriginalSource::Resident(bytes) => {
-                Ok(bytes[range.start as usize..range.end as usize].to_vec())
-            }
+            OriginalSource::Resident(bytes) => Ok(bytes[range.start as usize..range.end as usize].to_vec()),
             OriginalSource::File { .. } => {
                 if self.file.is_none() {
                     self.file = source.verified_file(&self.cancel)?;
                 }
                 let reader = self.file.as_mut().ok_or("Original file unavailable")?;
-                reader
-                    .seek(SeekFrom::Start(range.start))
-                    .map_err(|e| e.to_string())?;
+                reader.seek(SeekFrom::Start(range.start)).map_err(|e| e.to_string())?;
                 let mut bytes = vec![0; (range.end - range.start) as usize];
                 reader.read_exact(&mut bytes).map_err(|e| e.to_string())?;
                 self.check()?;
@@ -92,18 +85,14 @@ impl Readers {
                 if self.sealed.is_none() {
                     self.sealed = Some(
                         store
-                            .sealed_original_reader(
-                                &bareline_file_io::cancellation::Cancellation::from_flag(
-                                    self.cancel.clone(),
-                                ),
-                            )
+                            .sealed_original_reader(&bareline_file_io::cancellation::Cancellation::from_flag(
+                                self.cancel.clone(),
+                            ))
                             .map_err(|e| format!("Original source: {e:?}"))?,
                     );
                 }
                 let reader = self.sealed.as_mut().unwrap();
-                reader
-                    .seek(SeekFrom::Start(range.start))
-                    .map_err(|e| e.to_string())?;
+                reader.seek(SeekFrom::Start(range.start)).map_err(|e| e.to_string())?;
                 let mut bytes = vec![0; (range.end - range.start) as usize];
                 reader.read_exact(&mut bytes).map_err(|e| e.to_string())?;
                 self.check()?;
@@ -138,7 +127,7 @@ impl Readers {
                     return Ok(window.text().as_bytes()[start - base..end - base].to_vec());
                 }
                 WindowPoll::Pending(ticket) => {
-                    if !handle.resolve_page(ticket)? {
+                    if !handle.resolve_page(ticket).map_err(|error| error.to_string())? {
                         std::thread::yield_now();
                     }
                 }

@@ -3,6 +3,12 @@ name = "bareline-update-helper"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+rust-version.workspace = true
+
+[features]
+default = []
+configured-release = []
+fixture-release = []
 
 [dependencies]
 bareline-distribution = { path = "../../crates/distribution" }

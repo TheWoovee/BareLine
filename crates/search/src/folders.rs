@@ -3,9 +3,7 @@
 use super::*;
 use bareline_document::Budget;
 use bareline_file_io::lifecycle::{DecodeOptions, FileError, Fingerprint, open_encoded_streaming};
-use bareline_platform::{
-    LocalFileSystem, PathOperation, PathOrigin, PathTrustProvider, TrustedRead,
-};
+use bareline_platform::{LocalFileSystem, PathOperation, PathOrigin, PathTrustProvider, TrustedRead};
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -111,13 +109,11 @@ pub fn collect_folder(
                     });
                 }
                 let group = groups.last_mut().unwrap();
-                group
-                    .matches
-                    .extend(matches.iter().map(|matched| FolderMatch {
-                        range: matched.range.clone(),
-                        excerpt_start: matched.excerpt_start,
-                        excerpt: matched.excerpt.clone(),
-                    }));
+                group.matches.extend(matches.iter().map(|matched| FolderMatch {
+                    range: matched.range.clone(),
+                    excerpt_start: matched.excerpt_start,
+                    excerpt: matched.excerpt.clone(),
+                }));
             }
             FolderEvent::Skipped { path, reason } => {
                 // Diagnostics have an independent finite cap; terminal summary retains total skips.
@@ -127,18 +123,9 @@ pub fn collect_folder(
             }
         },
     );
-    FolderResults {
-        groups,
-        skips,
-        summary,
-    }
+    FolderResults { groups, skips, summary }
 }
-fn skip(
-    summary: &mut FolderSummary,
-    path: &Path,
-    reason: FolderSkip,
-    emit: &mut impl FnMut(FolderEvent<'_>),
-) {
+fn skip(summary: &mut FolderSummary, path: &Path, reason: FolderSkip, emit: &mut impl FnMut(FolderEvent<'_>)) {
     summary.skipped_files += 1;
     if reason != FolderSkip::Binary && summary.completeness == Completeness::Complete {
         summary.completeness = Completeness::Unsupported;
@@ -154,9 +141,7 @@ fn trusted(
     if path.as_os_str().len() > MAX_PATH {
         return Err(FolderSkip::ResourceLimit);
     }
-    let approved = trust
-        .open_read(path, scope.origin)
-        .map_err(|_| FolderSkip::Untrusted)?;
+    let approved = trust.open_read(path, scope.origin).map_err(|_| FolderSkip::Untrusted)?;
     let classified = &approved.trust;
     if !trust.permits(&classified, PathOperation::Read) {
         return Err(FolderSkip::Untrusted);
@@ -291,15 +276,12 @@ fn scan_folder_impl(
             continue;
         }
         if !scope.extensions.is_empty()
-            && !path
-                .extension()
-                .and_then(|s| s.to_str())
-                .is_some_and(|extension| {
-                    scope
-                        .extensions
-                        .iter()
-                        .any(|filter| extension.eq_ignore_ascii_case(filter))
-                })
+            && !path.extension().and_then(|s| s.to_str()).is_some_and(|extension| {
+                scope
+                    .extensions
+                    .iter()
+                    .any(|filter| extension.eq_ignore_ascii_case(filter))
+            })
         {
             continue;
         }
@@ -450,14 +432,13 @@ fn scan_large_file(
     summary: &mut FolderSummary,
     emit: &mut impl FnMut(FolderEvent<'_>),
 ) -> Result<(), FolderSkip> {
-    let mut opened =
-        super::disk_source::open(path, trust, platform, job).map_err(|_| FolderSkip::Io)?;
+    let mut opened = super::disk_source::open(path, trust, platform, job).map_err(|_| FolderSkip::Io)?;
     let snapshot = opened.transcoded.document.snapshot();
     if !scope.include_binary {
         let mut at = 0;
         while at < snapshot.len() {
-            let window = super::disk_source::window(&mut opened, &snapshot, at, 1024 * 1024, job)
-                .map_err(|_| FolderSkip::Io)?;
+            let window =
+                super::disk_source::window(&mut opened, &snapshot, at, 1024 * 1024, job).map_err(|_| FolderSkip::Io)?;
             if window.text().as_bytes().contains(&0) {
                 return Err(FolderSkip::Binary);
             }
@@ -493,8 +474,7 @@ fn scan_large_file(
             job,
         )
         .map_err(|_| FolderSkip::Io)?;
-        let used =
-            std::mem::size_of::<FolderMatch>() + excerpt.text().len() + path.as_os_str().len();
+        let used = std::mem::size_of::<FolderMatch>() + excerpt.text().len() + path.as_os_str().len();
         if used > *remaining {
             summary.completeness = Completeness::ResultLimit;
             break;
@@ -637,10 +617,7 @@ mod tests {
         // The PR-007 encoded lifecycle now searches the decoded legacy/opaque
         // text view too; it has no "x" hit and retains the original byte provenance.
         assert_eq!(summary.searched_files, 2);
-        assert_eq!(
-            ranges,
-            [TextOffset(0)..TextOffset(1), TextOffset(2)..TextOffset(3)]
-        );
+        assert_eq!(ranges, [TextOffset(0)..TextOffset(1), TextOffset(2)..TextOffset(3)]);
         assert!(skips.contains(&FolderSkip::Binary));
         assert!(!skips.contains(&FolderSkip::UnsupportedEncoding));
         assert_eq!(summary.completeness, Completeness::Complete);
@@ -655,43 +632,29 @@ mod tests {
             allow: false,
             fail_identity: false,
         };
-        let summary = scan_folder(
-            &scope,
-            &query,
-            &SearchJob::default(),
-            &denied,
-            &denied,
-            |event| {
-                assert!(matches!(
-                    event,
-                    FolderEvent::Skipped {
-                        reason: FolderSkip::Untrusted,
-                        ..
-                    }
-                ))
-            },
-        );
+        let summary = scan_folder(&scope, &query, &SearchJob::default(), &denied, &denied, |event| {
+            assert!(matches!(
+                event,
+                FolderEvent::Skipped {
+                    reason: FolderSkip::Untrusted,
+                    ..
+                }
+            ))
+        });
         assert_eq!(summary.count, 0);
         let failed = TestPlatform {
             allow: true,
             fail_identity: true,
         };
-        let summary = scan_folder(
-            &scope,
-            &query,
-            &SearchJob::default(),
-            &failed,
-            &failed,
-            |event| {
-                assert!(matches!(
-                    event,
-                    FolderEvent::Skipped {
-                        reason: FolderSkip::Io,
-                        ..
-                    }
-                ))
-            },
-        );
+        let summary = scan_folder(&scope, &query, &SearchJob::default(), &failed, &failed, |event| {
+            assert!(matches!(
+                event,
+                FolderEvent::Skipped {
+                    reason: FolderSkip::Io,
+                    ..
+                }
+            ))
+        });
         assert_eq!(summary.completeness, Completeness::Unsupported);
         let platform = TestPlatform {
             allow: true,
@@ -707,14 +670,7 @@ mod tests {
         assert_eq!(summary.completeness, Completeness::Cancelled);
         let mut bounded = query;
         bounded.results_ram_bytes = 1;
-        let summary = scan_folder(
-            &scope,
-            &bounded,
-            &SearchJob::default(),
-            &platform,
-            &platform,
-            |_| {},
-        );
+        let summary = scan_folder(&scope, &bounded, &SearchJob::default(), &platform, &platform, |_| {});
         assert_eq!(summary.count, 0);
         assert_eq!(summary.completeness, Completeness::ResultLimit);
     }

@@ -41,19 +41,15 @@ impl TextPrototype {
         if text.len() + self.text.len() > LIMIT || text.contains(['\r', '\n']) {
             return;
         }
-        let cursor = cursor.filter(|&(start, end)| {
-            start <= end && text.is_char_boundary(start) && text.is_char_boundary(end)
-        });
+        let cursor =
+            cursor.filter(|&(start, end)| start <= end && text.is_char_boundary(start) && text.is_char_boundary(end));
         self.composition = Some(Composition { text, cursor });
     }
     pub fn cancel(&mut self) {
         self.composition = None;
     }
     pub fn insert(&mut self, text: &str) {
-        if self.composing()
-            || text.chars().any(char::is_control)
-            || self.text.len() + text.len() > LIMIT
-        {
+        if self.composing() || text.chars().any(char::is_control) || self.text.len() + text.len() > LIMIT {
             return;
         }
         self.text.insert_str(self.caret, text);

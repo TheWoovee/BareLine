@@ -1,0 +1,34 @@
+[
+  {
+    "check": "workspace tests",
+    "passed": 612,
+    "failed": 1,
+    "ignored": 7,
+    "exit_code": 101,
+    "note": "Top-level only; excludes five subprocess fixture summaries"
+  },
+  {
+    "check": "first-party release integration",
+    "passed": 4,
+    "failed": 0,
+    "ignored": 0,
+    "exit_code": 0,
+    "note": "Current WASI release artifacts and release host, serial"
+  },
+  {
+    "check": "first-party debug integration",
+    "passed": 1,
+    "failed": 3,
+    "ignored": 0,
+    "exit_code": 101,
+    "note": "Profile-sensitive timeout failures"
+  },
+  {
+    "check": "multi-GB synthetic diff",
+    "passed": 1,
+    "failed": 0,
+    "ignored": 0,
+    "exit_code": 0,
+    "note": "Four GiB of synthesized pages, not disk throughput"
+  }
+]

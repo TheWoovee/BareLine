@@ -1,8 +1,9 @@
 [package]
 name = "bareline-lexilla-bridge"
 version = "0.1.0"
-edition = "2024"
+edition.workspace = true
 license = "MPL-2.0"
+rust-version.workspace = true
 
 [build-dependencies]
 cc = "1"

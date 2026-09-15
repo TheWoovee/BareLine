@@ -1,0 +1,14 @@
+{
+  "arguments": [
+    "test",
+    "-p",
+    "bareline-app",
+    "--lib",
+    "stale_worker_disconnect_cannot_replace_the_current_document_status"
+  ],
+  "completed_utc": "2026-09-12T08:57:20.5207505Z",
+  "integration_snapshot": "91cc150ceb2e72c61208bbc7c155e5f231ee246c",
+  "exit_code": 0,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\U09-app-terminal-central.log"
+}

@@ -1,0 +1,11 @@
+Manual native observation; isolated scratch profile; copied binary SHA-256 C6B2318BCB92AAA47525320689971C690550C52358FB09CC7716409EB9F4C58F.
+
+Fixture destination before: existing.txt = ORIGINAL DESTINATION
+Untitled editor content: replacement payload
+Action: File > Save As; selected existing.txt; accepted Windows overwrite confirmation.
+Actual UI: dialog closed; tab remained dirty; status/toast reported:
+File changed; destination was preserved. Your staged copy is at ...\.bareline-9612-1.tmp
+Disk after: existing.txt still ORIGINAL DESTINATION
+Staged file: replacement payload
+
+The screenshot returned by the earlier sanctioned session was not retained before that session reset. This transcript and the exact scratch-file checks are the retained raw evidence.

@@ -7,9 +7,8 @@ use bareline_renderer::{DrawOp, Rect};
 use bareline_search::{
     Completeness, MAX_RESULT_BYTES, ReplaceScope, SearchJob,
     replace_disk::{
-        DiskApplySummary, DiskReplaceOptions, DiskReplacePreview, ReplaceReceipt,
-        apply_disk_files_with_paging, preview_disk_files_with_paging_options,
-        rollback_receipt_with_paging,
+        DiskApplySummary, DiskReplaceOptions, DiskReplacePreview, ReplaceReceipt, apply_disk_files_with_paging,
+        preview_disk_files_with_paging_options, rollback_receipt_with_paging,
     },
     replace_files::{OpenReplacePreview, preview_open_documents_options},
     service::{BackgroundTicket, SearchWorker},
@@ -73,11 +72,7 @@ impl Preview {
                 .iter()
                 .map(|file| file.changes.len() + 1)
                 .sum::<usize>()
-        }) + self
-            .paged
-            .iter()
-            .map(|file| file.changes.len() + 1)
-            .sum::<usize>()
+        }) + self.paged.iter().map(|file| file.changes.len() + 1).sum::<usize>()
             + self
                 .disk
                 .files()
@@ -86,9 +81,7 @@ impl Preview {
                 .sum::<usize>()
     }
     fn selected(&self) -> usize {
-        self.open
-            .as_ref()
-            .map_or(0, OpenReplacePreview::selected_matches)
+        self.open.as_ref().map_or(0, OpenReplacePreview::selected_matches)
             + self
                 .paged
                 .iter()
@@ -102,6 +95,38 @@ impl Preview {
                 .filter(|file| file.included)
                 .map(|file| file.changes.iter().filter(|change| change.included).count())
                 .sum::<usize>()
+    }
+    fn selected_sources_current(&self, workspace: &bareline_app::workspace::Workspace) -> bool {
+        let resident_current = self.open.as_ref().is_none_or(|open| {
+            open.documents()
+                .iter()
+                .filter(|document| document.included && document.changes.iter().any(|change| change.included))
+                .all(|document| {
+                    workspace.editors.iter().any(|editor| {
+                        matches!(editor, WorkspaceEditor::Resident(surface)
+                            if !surface.read_only()
+                                && !surface.busy()
+                                && surface.snapshot().same_document(&document.snapshot)
+                                && surface.snapshot().revision == document.snapshot.revision
+                                && surface.snapshot().content_state == document.snapshot.content_state)
+                    })
+                })
+        });
+        let paged_current = self
+            .paged
+            .iter()
+            .filter(|document| document.included && document.changes.iter().any(|change| change.included))
+            .all(|document| {
+                workspace.editors.iter().any(|editor| {
+                    matches!(editor, WorkspaceEditor::Paged(surface)
+                        if !surface.user_read_only()
+                            && !surface.busy()
+                            && surface.snapshot().same_document(&document.source)
+                            && surface.snapshot().revision == document.source.revision
+                            && surface.snapshot().content_state == document.source.content_state)
+                })
+            });
+        resident_current && paged_current
     }
     fn toggle_all(&mut self, included: bool) {
         if let Some(open) = &mut self.open {
@@ -138,8 +163,7 @@ impl Preview {
             }
             Some(Location::Paged(file, matched)) => {
                 if let Some(matched) = matched {
-                    self.paged[file].changes[matched].included =
-                        !self.paged[file].changes[matched].included;
+                    self.paged[file].changes[matched].included = !self.paged[file].changes[matched].included;
                 } else {
                     self.paged[file].included = !self.paged[file].included;
                 }
@@ -155,20 +179,14 @@ impl Preview {
                     let change = &item.changes[matched];
                     (
                         item.included && change.included,
-                        format!(
-                            "{}: {} → {}",
-                            change.range.start.0, change.before, change.after
-                        ),
+                        format!("{}: {} → {}", change.range.start.0, change.before, change.after),
                     )
                 } else {
                     (
                         item.included,
                         format!(
                             "Open document: {}",
-                            self.labels
-                                .get(file)
-                                .map(String::as_str)
-                                .unwrap_or("Document")
+                            self.labels.get(file).map(String::as_str).unwrap_or("Document")
                         ),
                     )
                 }
@@ -179,10 +197,7 @@ impl Preview {
                     let change = &item.changes[matched];
                     (
                         item.included && change.included,
-                        format!(
-                            "{}: {} → {}",
-                            change.edit.range.start.0, change.before, change.after
-                        ),
+                        format!("{}: {} → {}", change.edit.range.start.0, change.before, change.after),
                     )
                 } else {
                     (item.included, format!("Paged document: {}", item.label))
@@ -194,10 +209,7 @@ impl Preview {
                     let change = &item.changes[matched];
                     (
                         item.included && change.included,
-                        format!(
-                            "{}: {} → {}",
-                            change.range.start.0, change.before, change.after
-                        ),
+                        format!("{}: {} → {}", change.range.start.0, change.before, change.after),
                     )
                 } else {
                     (
@@ -237,6 +249,51 @@ struct PagedApply {
 enum Hit {
     Row(usize),
     Command(&'static str),
+}
+
+#[derive(Clone, Copy)]
+struct ReplacementMenuFacts {
+    open: bool,
+    busy: bool,
+    selected: Option<usize>,
+    current: bool,
+    has_receipt: bool,
+}
+
+fn replacement_command_state(id: &str, facts: ReplacementMenuFacts) -> bareline_commands::CommandState {
+    use bareline_commands::CommandState;
+    match id {
+        "search.replacePreview.apply" if facts.busy => CommandState::disabled("Wait for replacement work to stop"),
+        "search.replacePreview.apply" if facts.selected.is_none() => {
+            CommandState::disabled("Create and review a replacement preview first")
+        }
+        "search.replacePreview.apply" if facts.selected == Some(0) => {
+            CommandState::disabled("Select at least one reviewed replacement")
+        }
+        "search.replacePreview.apply" if !facts.current => {
+            CommandState::disabled("Reviewed replacements are stale; refresh the preview")
+        }
+        "search.replacePreview.apply" => CommandState::default(),
+        "search.replacePreview.toggleAll" if !facts.busy && facts.selected.is_some() => CommandState::default(),
+        "search.replacePreview.toggleAll" => CommandState::disabled("Create and review a replacement preview first"),
+        "search.replacePreview.refresh" if facts.open && !facts.busy => CommandState::default(),
+        "search.replacePreview.refresh" => CommandState::disabled(if facts.open {
+            "Wait for replacement work to stop"
+        } else {
+            "Open Replacement Preview first"
+        }),
+        "search.replacePreview.cancel" if facts.busy => CommandState::default(),
+        "search.replacePreview.cancel" => CommandState::disabled("No workspace replacement is running"),
+        "search.replacePreview.rollback" if !facts.busy && facts.has_receipt => CommandState::default(),
+        "search.replacePreview.rollback" => CommandState::disabled("No completed replacement backup is available"),
+        "search.replacePreview.close" if facts.open && !facts.busy => CommandState::default(),
+        "search.replacePreview.close" => CommandState::disabled(if facts.open {
+            "Cancel or finish replacement work before closing"
+        } else {
+            "Replacement Preview is closed"
+        }),
+        _ => CommandState::default(),
+    }
 }
 #[derive(Default)]
 pub(super) struct ReplaceRuntime {
@@ -280,10 +337,7 @@ pub(super) struct ReplaceRuntime {
 }
 pub(super) fn register(registry: &mut CommandRegistry) {
     for (id, title) in [
-        (
-            "search.replacePreview.preserveCase",
-            "Toggle Preserve Replacement Case",
-        ),
+        ("search.replacePreview.preserveCase", "Toggle Preserve Replacement Case"),
         (
             "search.replacePreview.includeBinary",
             "Toggle Binary Replacement Inclusion",
@@ -292,26 +346,14 @@ pub(super) fn register(registry: &mut CommandRegistry) {
             "search.replacePreview.backups",
             "Toggle Backups for This Replacement Job",
         ),
-        (
-            "search.replacePreview.refresh",
-            "Refresh Replacement Preview",
-        ),
+        ("search.replacePreview.refresh", "Refresh Replacement Preview"),
         ("search.replaceInFiles", "Replace in Files…"),
         ("search.replaceInWorkspace", "Replace in Workspace…"),
         ("search.replacePreview.apply", "Apply Reviewed Replacements"),
-        (
-            "search.replacePreview.toggleAll",
-            "Toggle All Preview Changes",
-        ),
-        (
-            "search.replacePreview.cancel",
-            "Cancel Workspace Replacement",
-        ),
+        ("search.replacePreview.toggleAll", "Toggle All Preview Changes"),
+        ("search.replacePreview.cancel", "Cancel Workspace Replacement"),
         ("search.replacePreview.close", "Close Replacement Preview"),
-        (
-            "search.replacePreview.rollback",
-            "Restore Last Replacement Backups",
-        ),
+        ("search.replacePreview.rollback", "Restore Last Replacement Backups"),
     ] {
         let id = CommandId(id);
         let _ = registry.register(CommandSpec {
@@ -324,7 +366,7 @@ pub(super) fn register(registry: &mut CommandRegistry) {
         let _ = registry.set_presentation(
             id,
             CommandPresentation {
-                menu_path: format!("Search > {title}"),
+                menu_path: "Search".into(),
                 accessible_name: Some(title.into()),
                 ..Default::default()
             },
@@ -358,17 +400,91 @@ impl ReplaceRuntime {
             || !self.paged_queue.is_empty()
             || self.disk_queue.is_some()
     }
-    pub(super) fn draw(&mut self, width: f32, height: f32, ops: &mut Vec<DrawOp>) {
+
+    fn command_state(
+        &self,
+        id: &str,
+        workspace: Option<&bareline_app::workspace::Workspace>,
+    ) -> bareline_commands::CommandState {
+        let facts = ReplacementMenuFacts {
+            open: self.open,
+            busy: self.busy(),
+            selected: self.preview.as_ref().map(Preview::selected),
+            current: self
+                .preview
+                .as_ref()
+                .zip(workspace)
+                .is_some_and(|(preview, workspace)| preview.selected_sources_current(workspace)),
+            has_receipt: self.receipt.is_some(),
+        };
+        replacement_command_state(id, facts)
+    }
+
+    pub(super) fn annotate_context(
+        &self,
+        context: &mut bareline_commands::CommandContext,
+        workspace: Option<&bareline_app::workspace::Workspace>,
+    ) {
+        use bareline_commands::{CommandId, CommandState};
+        let available = workspace.is_some();
+        for id in ["search.replaceInFiles", "search.replaceInWorkspace"] {
+            if !available {
+                context
+                    .states
+                    .insert(CommandId(id), CommandState::disabled("Open a document first"));
+            }
+        }
+        for (id, checked) in [
+            (
+                "search.replacePreview.preserveCase",
+                self.replacement_options.preserve_case,
+            ),
+            (
+                "search.replacePreview.includeBinary",
+                self.replacement_options.include_binary,
+            ),
+            ("search.replacePreview.backups", !self.disable_backup),
+        ] {
+            context.states.insert(
+                CommandId(id),
+                CommandState {
+                    enabled: self.open && !self.busy(),
+                    checked,
+                    disabled_reason: (!self.open || self.busy()).then(|| {
+                        if self.open {
+                            "Wait for replacement work to stop".into()
+                        } else {
+                            "Open Replacement Preview first".into()
+                        }
+                    }),
+                    ..Default::default()
+                },
+            );
+        }
+
+        for id in [
+            "search.replacePreview.apply",
+            "search.replacePreview.toggleAll",
+            "search.replacePreview.refresh",
+            "search.replacePreview.cancel",
+            "search.replacePreview.rollback",
+            "search.replacePreview.close",
+        ] {
+            context.states.insert(CommandId(id), self.command_state(id, workspace));
+        }
+    }
+    pub(super) fn draw(
+        &mut self,
+        workspace: Option<&bareline_app::workspace::Workspace>,
+        width: f32,
+        height: f32,
+        ops: &mut Vec<DrawOp>,
+    ) {
         if !self.open {
             return;
         }
         self.hits.clear();
-        let bounds = rect(
-            8.0,
-            (height - 340.0).max(0.0),
-            (width - 16.0).max(100.0),
-            320.0,
-        );
+        let bounds = rect(8.0, (height - 340.0).max(0.0), (width - 16.0).max(100.0), 320.0);
         ops.push(DrawOp::Fill(bounds, CHROME));
         ops.push(DrawOp::Stroke(bounds, BORDER, 1.0));
         text(
@@ -413,17 +529,12 @@ impl ReplaceRuntime {
         ] {
             text(ops, option_x, bounds.y + 35.0, label, 12.0, TEXT);
             if !self.busy() {
-                self.hits.push((
-                    rect(option_x, bounds.y + 30.0, 180.0, 24.0),
-                    Hit::Command(id),
-                ));
+                self.hits
+                    .push((rect(option_x, bounds.y + 30.0, 180.0, 24.0), Hit::Command(id)));
             }
             option_x += 190.0;
         }
-        let rows = self
-            .preview
-            .as_ref()
-            .map_or(self.report.len(), Preview::count_rows);
+        let rows = self.preview.as_ref().map_or(self.report.len(), Preview::count_rows);
         self.top = self.top.min(rows.saturating_sub(1));
         for visible in 0..6 {
             let row = self.top + visible;
@@ -453,27 +564,17 @@ impl ReplaceRuntime {
             12.0,
             MUTED,
         );
-        let selected = self.preview.as_ref().map_or(0, Preview::selected);
+        let apply_enabled = self.command_state("search.replacePreview.apply", workspace).enabled;
         let mut x = 24.0;
         for (label, id, enabled, w) in [
-            (
-                "Refresh",
-                "search.replacePreview.refresh",
-                !self.busy(),
-                80.0,
-            ),
+            ("Refresh", "search.replacePreview.refresh", !self.busy(), 80.0),
             (
                 "Toggle all",
                 "search.replacePreview.toggleAll",
                 !self.busy() && self.preview.is_some(),
                 100.0,
             ),
-            (
-                "Apply",
-                "search.replacePreview.apply",
-                !self.busy() && selected > 0,
-                76.0,
-            ),
+            ("Apply", "search.replacePreview.apply", apply_enabled, 76.0),
             ("Cancel", "search.replacePreview.cancel", self.busy(), 76.0),
             (
                 "Rollback",
@@ -522,8 +623,7 @@ impl Shell {
                     _ => self.search.replace.disable_backup ^= true,
                 }
                 self.search.replace.preview = None;
-                self.search.replace.status =
-                    "Options changed. Refresh and review before applying.".into();
+                self.search.replace.status = "Options changed. Refresh and review before applying.".into();
             }
             return true;
         }
@@ -546,26 +646,10 @@ impl Shell {
         if id == "search.replacePreview.cancel" {
             self.search.replace.cancel_requested = true;
             for job in [
-                self.search
-                    .replace
-                    .preparing
-                    .as_ref()
-                    .map(|ticket| &ticket.job),
-                self.search
-                    .replace
-                    .staging_paged
-                    .as_ref()
-                    .map(|ticket| &ticket.job),
-                self.search
-                    .replace
-                    .applying
-                    .as_ref()
-                    .map(|ticket| &ticket.job),
-                self.search
-                    .replace
-                    .rolling_back
-                    .as_ref()
-                    .map(|ticket| &ticket.job),
+                self.search.replace.preparing.as_ref().map(|ticket| &ticket.job),
+                self.search.replace.staging_paged.as_ref().map(|ticket| &ticket.job),
+                self.search.replace.applying.as_ref().map(|ticket| &ticket.job),
+                self.search.replace.rolling_back.as_ref().map(|ticket| &ticket.job),
             ]
             .into_iter()
             .flatten()
@@ -598,6 +682,13 @@ impl Shell {
             return true;
         }
         if id == "search.replacePreview.apply" {
+            let state = self.search.replace.command_state(id, self.workspace.as_ref());
+            if !state.enabled {
+                self.search.replace.status = state
+                    .disabled_reason
+                    .unwrap_or_else(|| "Reviewed replacements cannot be applied yet".into());
+                return true;
+            }
             self.search_apply_preview();
             return true;
         }
@@ -611,36 +702,28 @@ impl Shell {
             }
         }
         if id == "search.replacePreview.rollback" {
-            if let (Some(receipt), Some(workspace)) =
-                (self.search.replace.receipt.clone(), self.workspace.as_ref())
-            {
+            if let (Some(receipt), Some(workspace)) = (self.search.replace.receipt.clone(), self.workspace.as_ref()) {
                 let registry = workspace.replacement_registry();
-                self.search.replace.rolling_back =
-                    Some(self.search.replace.worker.as_ref().unwrap().operation(
-                        move |job| {
-                            rollback_receipt_with_paging(
-                                &receipt,
-                                &registry,
-                                job,
-                                &bareline_platform_windows::WindowsPathTrustProvider,
-                                Arc::new(bareline_platform_windows::WindowsFileSystem),
-                            )
-                            .map_err(|error| error.to_string())
-                        },
-                        self.notify.clone(),
-                    ));
-                self.search.replace.status =
-                    "Restoring unchanged targets from retained backups…".into();
+                self.search.replace.rolling_back = Some(self.search.replace.worker.as_ref().unwrap().operation(
+                    move |job| {
+                        rollback_receipt_with_paging(
+                            &receipt,
+                            &registry,
+                            job,
+                            &bareline_platform_windows::WindowsPathTrustProvider,
+                            Arc::new(bareline_platform_windows::WindowsFileSystem),
+                        )
+                        .map_err(|error| error.to_string())
+                    },
+                    self.notify.clone(),
+                ));
+                self.search.replace.status = "Restoring unchanged targets from retained backups…".into();
             }
             return true;
         }
         self.search.replace.workspace_scope = id == "search.replaceInWorkspace";
         let replacement_options = self.search.replace.replacement_options;
-        let root = match self
-            .platform
-            .as_ref()
-            .map(|platform| platform.pick_folder())
-        {
+        let root = match self.platform.as_ref().map(|platform| platform.pick_folder()) {
             Some(Ok(Some(root))) => root,
             Some(Err(error)) => {
                 self.search.replace.status = error;
@@ -652,8 +735,7 @@ impl Shell {
             return true;
         };
         if workspace.io_busy() {
-            self.search.replace.status =
-                "Wait for file operations to finish before previewing".into();
+            self.search.replace.status = "Wait for file operations to finish before previewing".into();
             return true;
         }
         let mut query = workspace.find.query();
@@ -665,9 +747,7 @@ impl Shell {
         let mut identities = Vec::new();
         let mut open_skips = Vec::new();
         for (index, editor) in workspace.editors.iter().enumerate() {
-            let in_scope = workspace
-                .path(index)
-                .is_some_and(|path| path.starts_with(&root))
+            let in_scope = workspace.path(index).is_some_and(|path| path.starts_with(&root))
                 || (id == "search.replaceInWorkspace" && workspace.path(index).is_none());
             if !in_scope {
                 continue;
@@ -705,184 +785,162 @@ impl Shell {
         self.search.replace.row = 0;
         self.search.replace.top = 0;
         self.search.replace.cancel_requested = false;
-        self.search.replace.preparing =
-            Some(self.search.replace.worker.as_ref().unwrap().operation(
-                move |job| {
-                    let platform: Arc<dyn bareline_platform::LocalFileSystem> =
-                        Arc::new(bareline_platform_windows::WindowsFileSystem);
-                    let trust = bareline_platform_windows::WindowsPathTrustProvider;
-                    let mut folder_scope = FolderScope::user(root);
-                    folder_scope.include_binary = replacement_options.include_binary;
-                    let found = bareline_search::folders::collect_folder(
-                        &folder_scope,
-                        &query,
-                        job,
-                        &trust,
-                        platform.clone(),
-                    );
-                    if found.summary.completeness != Completeness::Complete {
-                        return Err(format!(
-                            "Preview incomplete: {:?}; {} files skipped",
-                            found.summary.completeness, found.summary.skipped_files
-                        ));
-                    }
-                    let skipped = found.summary.skipped_files + open_skips.len();
-                    let disk_skip_reasons = found
-                        .skips
-                        .iter()
-                        .take(4)
-                        .map(|(path, reason)| format!("{}: {reason:?}", path.display()))
-                        .collect::<Vec<_>>()
-                        .join("; ");
-                    let skip_reasons = open_skips
-                        .iter()
-                        .take(4)
-                        .cloned()
-                        .chain(std::iter::once(disk_skip_reasons))
-                        .filter(|value| !value.is_empty())
-                        .collect::<Vec<_>>()
-                        .join("; ");
-                    let paths = found
-                        .groups
-                        .into_iter()
-                        .filter(|group| {
-                            !identities.iter().any(|identity| {
-                                identity.volume == group.fingerprint.identity.volume
-                                    && identity.file == group.fingerprint.identity.file
-                            })
+        self.search.replace.preparing = Some(self.search.replace.worker.as_ref().unwrap().operation(
+            move |job| {
+                let platform: Arc<dyn bareline_platform::LocalFileSystem> =
+                    Arc::new(bareline_platform_windows::WindowsFileSystem);
+                let trust = bareline_platform_windows::WindowsPathTrustProvider;
+                let mut folder_scope = FolderScope::user(root);
+                folder_scope.include_binary = replacement_options.include_binary;
+                let found =
+                    bareline_search::folders::collect_folder(&folder_scope, &query, job, &trust, platform.clone());
+                if found.summary.completeness != Completeness::Complete {
+                    return Err(format!(
+                        "Preview incomplete: {:?}; {} files skipped",
+                        found.summary.completeness, found.summary.skipped_files
+                    ));
+                }
+                let skipped = found.summary.skipped_files + open_skips.len();
+                let disk_skip_reasons = found
+                    .skips
+                    .iter()
+                    .take(4)
+                    .map(|(path, reason)| format!("{}: {reason:?}", path.display()))
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                let skip_reasons = open_skips
+                    .iter()
+                    .take(4)
+                    .cloned()
+                    .chain(std::iter::once(disk_skip_reasons))
+                    .filter(|value| !value.is_empty())
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                let paths = found
+                    .groups
+                    .into_iter()
+                    .filter(|group| {
+                        !identities.iter().any(|identity| {
+                            identity.volume == group.fingerprint.identity.volume
+                                && identity.file == group.fingerprint.identity.file
                         })
-                        .map(|group| group.path);
-                    let disk = preview_disk_files_with_paging_options(
-                        paths,
-                        &query,
-                        &replacement,
-                        job,
-                        &trust,
-                        platform,
-                        MAX_RESULT_BYTES / 3,
-                        replacement_options,
-                    )
-                    .map_err(|error| error.to_string())?;
-                    let open = if resident.is_empty() {
-                        None
-                    } else {
-                        Some(
-                            preview_open_documents_options(
-                                resident,
-                                &query,
-                                &replacement,
-                                job,
-                                MAX_RESULT_BYTES / 3,
-                                replacement_options,
-                            )
-                            .map_err(|error| format!("{error:?}"))?,
-                        )
-                    };
-                    let labels = open
-                        .as_ref()
-                        .map(|open| {
-                            open.documents()
-                                .iter()
-                                .map(|file| {
-                                    labels
-                                        .iter()
-                                        .find(|(snapshot, _)| {
-                                            snapshot.same_document(&file.snapshot)
-                                        })
-                                        .map(|(_, label)| label.clone())
-                                        .unwrap_or_else(|| "Document".into())
-                                })
-                                .collect()
-                        })
-                        .unwrap_or_default();
-                    let mut paged_preview = Vec::new();
-                    let mut remaining = MAX_RESULT_BYTES / 3;
-                    for (handle, label) in paged {
-                        let source = handle.snapshot().clone();
-                        let mut scoped = query.clone();
-                        scoped.results_ram_bytes = remaining;
-                        let found = bareline_search::paged::scan_paged(
-                            &source,
-                            &scoped,
+                    })
+                    .map(|group| group.path);
+                let disk = preview_disk_files_with_paging_options(
+                    paths,
+                    &query,
+                    &replacement,
+                    job,
+                    &trust,
+                    platform,
+                    MAX_RESULT_BYTES / 3,
+                    replacement_options,
+                )
+                .map_err(|error| error.to_string())?;
+                let open = if resident.is_empty() {
+                    None
+                } else {
+                    Some(
+                        preview_open_documents_options(
+                            resident,
+                            &query,
+                            &replacement,
                             job,
-                            |ticket| handle.resolve_page(ticket),
-                            |_| {},
-                        );
-                        if found.completeness != Completeness::Complete {
-                            return Err(format!(
-                                "Paged preview incomplete: {:?}",
-                                found.completeness
-                            ));
-                        }
-                        if found.matches.is_empty() {
-                            continue;
-                        }
-                        let mut transaction = found
-                            .prepare_replace_streaming(
-                                &source,
-                                &replacement,
-                                ReplaceScope::All,
-                                job,
-                                |ticket| handle.resolve_page(ticket),
-                            )
+                            MAX_RESULT_BYTES / 3,
+                            replacement_options,
+                        )
+                        .map_err(|error| format!("{error:?}"))?,
+                    )
+                };
+                let labels = open
+                    .as_ref()
+                    .map(|open| {
+                        open.documents()
+                            .iter()
+                            .map(|file| {
+                                labels
+                                    .iter()
+                                    .find(|(snapshot, _)| snapshot.same_document(&file.snapshot))
+                                    .map(|(_, label)| label.clone())
+                                    .unwrap_or_else(|| "Document".into())
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let mut paged_preview = Vec::new();
+                let mut remaining = MAX_RESULT_BYTES / 3;
+                for (handle, label) in paged {
+                    let source = handle.snapshot().clone();
+                    let mut scoped = query.clone();
+                    scoped.results_ram_bytes = remaining;
+                    let found = bareline_search::paged::scan_paged(
+                        &source,
+                        &scoped,
+                        job,
+                        |ticket| handle.resolve_page(ticket).map_err(|error| error.to_string()),
+                        |_| {},
+                    );
+                    if found.completeness != Completeness::Complete {
+                        return Err(format!("Paged preview incomplete: {:?}", found.completeness));
+                    }
+                    if found.matches.is_empty() {
+                        continue;
+                    }
+                    let mut transaction = found
+                        .prepare_replace_streaming(&source, &replacement, ReplaceScope::All, job, |ticket| {
+                            handle.resolve_page(ticket).map_err(|error| error.to_string())
+                        })
+                        .map_err(|error| format!("{error:?}"))?;
+                    if replacement_options.preserve_case {
+                        found
+                            .preserve_case(&mut transaction, job, |ticket| {
+                                handle.resolve_page(ticket).map_err(|error| error.to_string())
+                            })
                             .map_err(|error| format!("{error:?}"))?;
-                        if replacement_options.preserve_case {
-                            found
-                                .preserve_case(&mut transaction, job, |ticket| {
-                                    handle.resolve_page(ticket)
-                                })
-                                .map_err(|error| format!("{error:?}"))?;
+                    }
+                    let mut changes = Vec::new();
+                    for edit in transaction.edits {
+                        let before = bareline_search::paged::excerpt(&source, edit.range.start, job, |ticket| {
+                            handle.resolve_page(ticket).map_err(|error| error.to_string())
+                        })
+                        .map_err(|error| format!("{error:?}"))?;
+                        let mut end = edit.insert.len().min(160);
+                        while !edit.insert.is_char_boundary(end) {
+                            end -= 1;
                         }
-                        let mut changes = Vec::new();
-                        for edit in transaction.edits {
-                            let before = bareline_search::paged::excerpt(
-                                &source,
-                                edit.range.start,
-                                job,
-                                |ticket| handle.resolve_page(ticket),
+                        let after = edit.insert[..end].to_owned();
+                        remaining = remaining
+                            .checked_sub(
+                                std::mem::size_of::<PagedChange>() + edit.insert.len() + before.len() + after.len(),
                             )
-                            .map_err(|error| format!("{error:?}"))?;
-                            let mut end = edit.insert.len().min(160);
-                            while !edit.insert.is_char_boundary(end) {
-                                end -= 1;
-                            }
-                            let after = edit.insert[..end].to_owned();
-                            remaining = remaining
-                                .checked_sub(
-                                    std::mem::size_of::<PagedChange>()
-                                        + edit.insert.len()
-                                        + before.len()
-                                        + after.len(),
-                                )
-                                .ok_or("Preview budget reached")?;
-                            changes.push(PagedChange {
-                                edit,
-                                before,
-                                after,
-                                included: true,
-                            });
-                        }
-                        paged_preview.push(PagedPreview {
-                            source,
-                            label,
+                            .ok_or("Preview budget reached")?;
+                        changes.push(PagedChange {
+                            edit,
+                            before,
+                            after,
                             included: true,
-                            changes,
                         });
                     }
-                    Ok(Preview {
-                        open,
-                        labels,
-                        paged: paged_preview,
-                        disk,
-                        skipped,
-                        skip_reasons,
-                        open_skips,
-                    })
-                },
-                self.notify.clone(),
-            ));
-        self.search.replace.status =
-            "Preparing read-only preview; no files are being changed…".into();
+                    paged_preview.push(PagedPreview {
+                        source,
+                        label,
+                        included: true,
+                        changes,
+                    });
+                }
+                Ok(Preview {
+                    open,
+                    labels,
+                    paged: paged_preview,
+                    disk,
+                    skipped,
+                    skip_reasons,
+                    open_skips,
+                })
+            },
+            self.notify.clone(),
+        ));
+        self.search.replace.status = "Preparing read-only preview; no files are being changed…".into();
         true
     }
     fn search_apply_preview(&mut self) {
@@ -934,16 +992,12 @@ impl Shell {
                     Some(editor) if editor.read_only() => {
                         Some("Skipped: document became read-only; unlock and refresh preview")
                     }
-                    Some(editor) if editor.busy() => {
-                        Some("Skipped: document is busy; wait and refresh preview")
-                    }
+                    Some(editor) if editor.busy() => Some("Skipped: document is busy; wait and refresh preview"),
                     None => Some("Skipped: document closed; refresh preview"),
                     _ => None,
                 };
                 if let Some(reason) = reason {
-                    self.search
-                        .replace
-                        .record_open(source.identity_token(), reason);
+                    self.search.replace.record_open(source.identity_token(), reason);
                     self.search.replace.skipped_preview += 1;
                     open.set_document_included(index, false);
                 }
@@ -952,9 +1006,7 @@ impl Shell {
             let selected_tokens: Vec<_> = open
                 .documents()
                 .iter()
-                .filter(|document| {
-                    document.included && document.changes.iter().any(|change| change.included)
-                })
+                .filter(|document| document.included && document.changes.iter().any(|change| change.included))
                 .map(|document| document.snapshot.identity_token())
                 .collect();
             if count > 0 {
@@ -963,24 +1015,15 @@ impl Shell {
                         let mut transactions = prepared.into_transactions();
                         if transactions.len() == 1 {
                             let (source, transaction) = transactions.remove(0);
-                            let target =
-                                workspace
-                                    .editors
-                                    .iter_mut()
-                                    .find_map(|editor| match editor {
-                                        WorkspaceEditor::Resident(editor)
-                                            if source.same_document(editor.snapshot()) =>
-                                        {
-                                            Some(editor)
-                                        }
-                                        _ => None,
-                                    });
-                            match target
-                                .map(|editor| editor.apply_prepared_tracked(&source, transaction))
-                            {
+                            let target = workspace.editors.iter_mut().find_map(|editor| match editor {
+                                WorkspaceEditor::Resident(editor) if source.same_document(editor.snapshot()) => {
+                                    Some(editor)
+                                }
+                                _ => None,
+                            });
+                            match target.map(|editor| editor.apply_prepared_tracked(&source, transaction)) {
                                 Some(Ok(receipt)) => {
-                                    self.search.replace.pending_open =
-                                        Some(PendingOpen::Single(receipt, count))
+                                    self.search.replace.pending_open = Some(PendingOpen::Single(receipt, count))
                                 }
                                 error => {
                                     self.search.replace.failed_open += 1;
@@ -988,28 +1031,20 @@ impl Shell {
                                         Some(Err(error)) => error,
                                         _ => "Document unavailable",
                                     };
-                                    self.search
-                                        .replace
-                                        .record_open(source.identity_token(), reason);
+                                    self.search.replace.record_open(source.identity_token(), reason);
                                 }
                             }
                         } else {
-                            let sources: Vec<_> = transactions
-                                .iter()
-                                .map(|(source, _)| source.clone())
-                                .collect();
+                            let sources: Vec<_> = transactions.iter().map(|(source, _)| source.clone()).collect();
                             let failed_sources = sources.clone();
                             match workspace.apply_reviewed_open(transactions) {
                                 Ok(group) => {
-                                    self.search.replace.pending_open =
-                                        Some(PendingOpen::Group(group, sources, count))
+                                    self.search.replace.pending_open = Some(PendingOpen::Group(group, sources, count))
                                 }
                                 Err(error) => {
                                     self.search.replace.failed_open += failed_sources.len();
                                     for source in failed_sources {
-                                        self.search
-                                            .replace
-                                            .record_open(source.identity_token(), &error);
+                                        self.search.replace.record_open(source.identity_token(), &error);
                                     }
                                     self.search.replace.status = error;
                                 }
@@ -1048,8 +1083,7 @@ impl Shell {
             }
         }
         self.search.replace.disk_queue = Some(preview.disk);
-        self.search.replace.status =
-            "Applying reviewed changes; open documents remain unsaved…".into();
+        self.search.replace.status = "Applying reviewed changes; open documents remain unsaved…".into();
     }
     pub(super) fn search_replace_pump(&mut self) -> bool {
         let mut changed = false;
@@ -1082,10 +1116,7 @@ impl Shell {
             match pending {
                 PendingOpen::Group(mut group, sources, count) => {
                     match workspace.pump_reviewed_open(&mut group, &sources) {
-                        Ok(None) => {
-                            self.search.replace.pending_open =
-                                Some(PendingOpen::Group(group, sources, count))
-                        }
+                        Ok(None) => self.search.replace.pending_open = Some(PendingOpen::Group(group, sources, count)),
                         Ok(Some(_)) => {
                             self.search.replace.changed_open += sources.len();
                             self.search.replace.replaced_open += count;
@@ -1094,9 +1125,7 @@ impl Shell {
                         Err(error) => {
                             self.search.replace.failed_open += sources.len();
                             for source in &sources {
-                                self.search
-                                    .replace
-                                    .record_open(source.identity_token(), &error);
+                                self.search.replace.record_open(source.identity_token(), &error);
                             }
                             self.search.replace.status = error;
                             changed = true;
@@ -1104,9 +1133,7 @@ impl Shell {
                     }
                 }
                 PendingOpen::Single(receipt, count) => match receipt.terminal() {
-                    None => {
-                        self.search.replace.pending_open = Some(PendingOpen::Single(receipt, count))
-                    }
+                    None => self.search.replace.pending_open = Some(PendingOpen::Single(receipt, count)),
                     Some(Ok(_)) => {
                         self.search.replace.changed_open += 1;
                         self.search.replace.replaced_open += count;
@@ -1114,9 +1141,7 @@ impl Shell {
                     }
                     Some(Err(error)) => {
                         self.search.replace.failed_open += 1;
-                        self.search
-                            .replace
-                            .record_open(receipt.captured_identity_token, &error);
+                        self.search.replace.record_open(receipt.captured_identity_token, &error);
                         self.search.replace.status = error;
                         changed = true;
                     }
@@ -1131,33 +1156,24 @@ impl Shell {
                     changed = true;
                     let staging_token = self.search.replace.staging_token.take();
                     match result {
-                        Ok(Ok((source, prepared, count)))
-                            if !self.search.replace.cancel_requested =>
-                        {
+                        Ok(Ok((source, prepared, count))) if !self.search.replace.cancel_requested => {
                             let target = self.workspace.as_mut().and_then(|workspace| {
-                                workspace
-                                    .editors
-                                    .iter_mut()
-                                    .find_map(|editor| match editor {
-                                        WorkspaceEditor::Paged(editor)
-                                            if source.same_document(editor.snapshot()) =>
-                                        {
-                                            Some(editor)
-                                        }
-                                        _ => None,
-                                    })
+                                workspace.editors.iter_mut().find_map(|editor| match editor {
+                                    WorkspaceEditor::Paged(editor) if source.same_document(editor.snapshot()) => {
+                                        Some(editor)
+                                    }
+                                    _ => None,
+                                })
                             });
-                            match target.map(|editor| {
-                                editor.apply_prepared_source_tracked(&source, prepared)
-                            }) {
-                                Some(Ok(receipt)) => {
-                                    self.search.replace.paged_pending = Some((receipt, count))
-                                }
+                            match target.map(|editor| editor.apply_prepared_source_tracked(&source, prepared)) {
+                                Some(Ok(receipt)) => self.search.replace.paged_pending = Some((receipt, count)),
                                 _ => {
                                     self.search.replace.failed_open += 1;
-                                    self.search.replace.record_open(source.identity_token(), "Source changed or became read-only before apply; refresh preview");
-                                    self.search.replace.status =
-                                        "Paged replacement source changed before apply".into();
+                                    self.search.replace.record_open(
+                                        source.identity_token(),
+                                        "Source changed or became read-only before apply; refresh preview",
+                                    );
+                                    self.search.replace.status = "Paged replacement source changed before apply".into();
                                 }
                             }
                         }
@@ -1183,9 +1199,7 @@ impl Shell {
                 }
                 Some(Err(error)) => {
                     self.search.replace.failed_open += 1;
-                    self.search
-                        .replace
-                        .record_open(receipt.captured_identity_token, &error);
+                    self.search.replace.record_open(receipt.captured_identity_token, &error);
                     self.search.replace.status = error;
                     changed = true;
                 }
@@ -1197,20 +1211,13 @@ impl Shell {
         {
             if let Some(next) = self.search.replace.paged_queue.pop_front() {
                 let target = self.workspace.as_mut().and_then(|workspace| {
-                    workspace
-                        .editors
-                        .iter_mut()
-                        .find_map(|editor| match editor {
-                            WorkspaceEditor::Paged(editor)
-                                if next.source.same_document(editor.snapshot()) =>
-                            {
-                                Some(editor)
-                            }
-                            _ => None,
-                        })
+                    workspace.editors.iter_mut().find_map(|editor| match editor {
+                        WorkspaceEditor::Paged(editor) if next.source.same_document(editor.snapshot()) => Some(editor),
+                        _ => None,
+                    })
                 });
                 if let Some(editor) = target {
-                    if editor.surface.read_only() || editor.busy() {
+                    if editor.viewport().read_only() || editor.busy() {
                         self.search.replace.record_open(
                             next.source.identity_token(),
                             "Skipped: document became read-only or busy; refresh preview",
@@ -1220,26 +1227,22 @@ impl Shell {
                     }
                     self.search.replace.staging_token = Some(next.source.identity_token());
                     let handle = editor.read_handle();
-                    let cache = self
-                        .recovery_root
-                        .clone()
-                        .unwrap_or_else(std::env::temp_dir);
-                    self.search.replace.staging_paged =
-                        Some(self.search.replace.worker.as_ref().unwrap().operation(
-                            move |job| {
-                                let prepared = bareline_search::paged::stage_source_replacement(
-                                    &next.source,
-                                    next.transaction,
-                                    job,
-                                    |ticket| handle.resolve_page(ticket),
-                                    Arc::new(bareline_platform_windows::WindowsFileSystem),
-                                    &cache,
-                                    20u64 << 30,
-                                )?;
-                                Ok((next.source, prepared, next.matches))
-                            },
-                            self.notify.clone(),
-                        ));
+                    let cache = self.recovery_root.clone().unwrap_or_else(std::env::temp_dir);
+                    self.search.replace.staging_paged = Some(self.search.replace.worker.as_ref().unwrap().operation(
+                        move |job| {
+                            let prepared = bareline_search::paged::stage_source_replacement(
+                                &next.source,
+                                next.transaction,
+                                job,
+                                |ticket| handle.resolve_page(ticket).map_err(|error| error.to_string()),
+                                Arc::new(bareline_platform_windows::WindowsFileSystem),
+                                &cache,
+                                20u64 << 30,
+                            )?;
+                            Ok((next.source, prepared, next.matches))
+                        },
+                        self.notify.clone(),
+                    ));
                 } else {
                     self.search.replace.failed_open += 1;
                     self.search.replace.record_open(
@@ -1251,34 +1254,33 @@ impl Shell {
             } else if let Some(disk) = self.search.replace.disk_queue.take() {
                 if let Some(workspace) = &self.workspace {
                     let registry = workspace.replacement_registry();
-                    let directory = self
-                        .recovery_root
-                        .clone()
-                        .unwrap_or_else(std::env::temp_dir);
+                    let directory = self.recovery_root.clone().unwrap_or_else(std::env::temp_dir);
                     let disable_backup = std::mem::take(&mut self.search.replace.disable_backup);
                     let open_outcomes = self.search.replace.open_outcomes.clone();
                     let cancelled = self.search.replace.cancel_requested;
-                    self.search.replace.applying =
-                        Some(self.search.replace.worker.as_ref().unwrap().operation(
-                            move |job| {
-                                std::fs::create_dir_all(&directory)
-                                    .map_err(|error| error.to_string())?;
-                                let mut options = DiskReplaceOptions::new(directory);
-                                options.open_outcomes = open_outcomes;
-                                if cancelled { job.cancel(); }
-                                if disable_backup { options.backup = bareline_search::replace_disk::BackupPolicy::DisabledForThisJob; }
-                                apply_disk_files_with_paging(
-                                    disk,
-                                    &options,
-                                    &registry,
-                                    job,
-                                    &bareline_platform_windows::WindowsPathTrustProvider,
-                                    Arc::new(bareline_platform_windows::WindowsFileSystem),
-                                )
-                                .map_err(|error| error.to_string())
-                            },
-                            self.notify.clone(),
-                        ));
+                    self.search.replace.applying = Some(self.search.replace.worker.as_ref().unwrap().operation(
+                        move |job| {
+                            std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+                            let mut options = DiskReplaceOptions::new(directory);
+                            options.open_outcomes = open_outcomes;
+                            if cancelled {
+                                job.cancel();
+                            }
+                            if disable_backup {
+                                options.backup = bareline_search::replace_disk::BackupPolicy::DisabledForThisJob;
+                            }
+                            apply_disk_files_with_paging(
+                                disk,
+                                &options,
+                                &registry,
+                                job,
+                                &bareline_platform_windows::WindowsPathTrustProvider,
+                                Arc::new(bareline_platform_windows::WindowsFileSystem),
+                            )
+                            .map_err(|error| error.to_string())
+                        },
+                        self.notify.clone(),
+                    ));
                     changed = true;
                 }
             }
@@ -1307,16 +1309,25 @@ impl Shell {
                             self.search.replace.row = 0;
                             self.search.replace.changed_disk = summary.changed_files();
                             self.search.replace.replaced_disk = summary.replaced_matches();
-                            let failed=summary.receipt.files.iter().filter(|file|matches!(file.state,bareline_search::replace_disk::ReceiptState::Failed(_)|bareline_search::replace_disk::ReceiptState::Uncertain(_)|bareline_search::replace_disk::ReceiptState::Conflict)).count();
-                            let skipped = summary
+                            let failed = summary
                                 .receipt
                                 .files
                                 .iter()
                                 .filter(|file| {
                                     matches!(
                                         file.state,
-                                        bareline_search::replace_disk::ReceiptState::Skipped(_)
+                                        bareline_search::replace_disk::ReceiptState::Failed(_)
+                                            | bareline_search::replace_disk::ReceiptState::Uncertain(_)
+                                            | bareline_search::replace_disk::ReceiptState::Conflict
                                     )
+                                })
+                                .count();
+                            let skipped = summary
+                                .receipt
+                                .files
+                                .iter()
+                                .filter(|file| {
+                                    matches!(file.state, bareline_search::replace_disk::ReceiptState::Skipped(_))
                                 })
                                 .count();
                             self.search.replace.status = format!(
@@ -1329,16 +1340,16 @@ impl Shell {
                                 summary.receipt_path.display()
                             );
                             if !self.search.replace.skip_reasons.is_empty() {
-                                self.search.replace.status.push_str(&format!(
-                                    " Skipped examples: {}",
-                                    self.search.replace.skip_reasons
-                                ));
+                                self.search
+                                    .replace
+                                    .status
+                                    .push_str(&format!(" Skipped examples: {}", self.search.replace.skip_reasons));
                             }
                             if !summary.receipt.open_outcomes.is_empty() {
-                                self.search.replace.status.push_str(&format!(
-                                    " Open outcomes: {}",
-                                    summary.receipt.open_outcomes.join("; ")
-                                ));
+                                self.search
+                                    .replace
+                                    .status
+                                    .push_str(&format!(" Open outcomes: {}", summary.receipt.open_outcomes.join("; ")));
                             }
                             self.search.replace.receipt = Some(summary.receipt_path);
                         }
@@ -1368,14 +1379,12 @@ impl Shell {
                             receipt
                                 .files
                                 .iter()
-                                .filter(|file| file.state
-                                    == bareline_search::replace_disk::ReceiptState::RolledBack)
+                                .filter(|file| file.state == bareline_search::replace_disk::ReceiptState::RolledBack)
                                 .count(),
                             receipt
                                 .files
                                 .iter()
-                                .filter(|file| file.state
-                                    == bareline_search::replace_disk::ReceiptState::Conflict)
+                                .filter(|file| file.state == bareline_search::replace_disk::ReceiptState::Conflict)
                                 .count()
                         ),
                         Ok(Err(error)) => error,
@@ -1442,9 +1451,7 @@ impl Shell {
                 self.search_replace_command(id);
             }
             Key::Up => self.search.replace.row = self.search.replace.row.saturating_sub(1),
-            Key::Down => {
-                self.search.replace.row = (self.search.replace.row + 1).min(rows.saturating_sub(1))
-            }
+            Key::Down => self.search.replace.row = (self.search.replace.row + 1).min(rows.saturating_sub(1)),
             Key::Home => self.search.replace.row = 0,
             Key::End => self.search.replace.row = rows.saturating_sub(1),
             Key::Space => {
@@ -1465,5 +1472,121 @@ impl Shell {
             self.search.replace.top = self.search.replace.row.saturating_sub(5);
         }
         true
+    }
+}
+
+#[cfg(test)]
+mod menu_state_tests {
+    use super::*;
+    use bareline_app::workspace::{Input, Workspace};
+
+    fn facts(open: bool, busy: bool, selected: Option<usize>, current: bool) -> ReplacementMenuFacts {
+        ReplacementMenuFacts {
+            open,
+            busy,
+            selected,
+            current,
+            has_receipt: false,
+        }
+    }
+
+    #[test]
+    fn replacement_menu_state_covers_idle_running_cancelling_complete_and_stale() {
+        let idle = facts(false, false, None, false);
+        assert!(!replacement_command_state("search.replacePreview.apply", idle).enabled);
+        assert!(!replacement_command_state("search.replacePreview.cancel", idle).enabled);
+
+        let running = facts(true, true, None, false);
+        assert!(!replacement_command_state("search.replacePreview.apply", running).enabled);
+        assert!(replacement_command_state("search.replacePreview.cancel", running).enabled);
+
+        // Cancellation remains an in-flight/busy state until the worker acknowledges it.
+        let cancelling = facts(true, true, Some(3), true);
+        assert!(replacement_command_state("search.replacePreview.cancel", cancelling).enabled);
+        assert!(!replacement_command_state("search.replacePreview.close", cancelling).enabled);
+
+        let complete = facts(true, false, Some(3), true);
+        assert!(replacement_command_state("search.replacePreview.apply", complete).enabled);
+
+        let stale = facts(true, false, Some(3), false);
+        let stale_apply = replacement_command_state("search.replacePreview.apply", stale);
+        assert!(!stale_apply.enabled);
+        assert_eq!(
+            stale_apply.disabled_reason.as_deref(),
+            Some("Reviewed replacements are stale; refresh the preview")
+        );
+    }
+
+    fn settle(workspace: &mut Workspace) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while workspace.editors.iter().any(WorkspaceEditor::busy) {
+            workspace.pump();
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+    }
+
+    #[test]
+    fn apply_route_preserves_preview_when_a_selected_source_changed() {
+        let mut workspace =
+            Workspace::new(Arc::new(|| {}), Arc::new(bareline_platform_windows::WindowsFileSystem)).unwrap();
+        for _ in 0..2 {
+            workspace.new_document().unwrap();
+        }
+        for editor in &mut workspace.editors {
+            editor.enqueue(Input::Insert("needle".into()));
+        }
+        settle(&mut workspace);
+
+        let query = bareline_search::SearchQuery::literal("needle");
+        let targets = workspace.editors.iter().map(|editor| match editor {
+            WorkspaceEditor::Resident(surface) => (surface.document_service().unwrap(), surface.snapshot().clone()),
+            WorkspaceEditor::Paged(_) => unreachable!(),
+        });
+        let mut open = preview_open_documents_options(
+            targets,
+            &query,
+            "replacement",
+            &SearchJob::default(),
+            MAX_RESULT_BYTES,
+            Default::default(),
+        )
+        .unwrap();
+        assert!(open.set_document_included(1, false));
+        let disk = bareline_search::replace_disk::preview_disk_files(
+            Vec::<PathBuf>::new(),
+            &query,
+            "replacement",
+            &SearchJob::default(),
+            &bareline_platform_windows::WindowsPathTrustProvider,
+            &bareline_platform_windows::WindowsFileSystem,
+            MAX_RESULT_BYTES,
+        )
+        .unwrap();
+        let preview = Preview {
+            open: Some(open),
+            labels: vec!["selected".into(), "deselected".into()],
+            paged: Vec::new(),
+            disk,
+            skipped: 0,
+            skip_reasons: String::new(),
+            open_skips: Vec::new(),
+        };
+
+        workspace.editors[1].enqueue(Input::Insert(" changed".into()));
+        settle(&mut workspace);
+        assert!(preview.selected_sources_current(&workspace));
+
+        workspace.editors[0].enqueue(Input::Insert(" changed".into()));
+        settle(&mut workspace);
+        assert!(!preview.selected_sources_current(&workspace));
+
+        let mut shell = crate::windows_app::accessibility::tests::headless_shell();
+        shell.workspace = Some(workspace);
+        shell.search.replace.open = true;
+        shell.search.replace.preview = Some(preview);
+        assert!(shell.search_replace_command("search.replacePreview.apply"));
+        assert!(shell.search.replace.preview.is_some());
+        assert!(shell.search.replace.status.contains("stale"));
     }
 }

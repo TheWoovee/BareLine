@@ -3,10 +3,14 @@
 pub mod cancellation;
 pub mod codecs;
 pub mod lifecycle;
-pub mod owned_store;
+pub mod owned_cache;
 mod owned_read;
-pub mod recovery;
+pub mod owned_store;
 pub mod paged_recovery;
+pub mod paged_service;
+pub mod profile_migration;
+pub mod recovery;
+pub mod recovery_retirement;
 pub mod resident_recovery;
 pub mod session;
 pub mod source;
@@ -51,20 +55,10 @@ pub trait ByteSink {
 }
 pub trait StreamingDecoder {
     /// Consume only the input fitting the sink; retain incomplete code units across pushes.
-    fn push(
-        &mut self,
-        raw: &[u8],
-        end: bool,
-        out: &mut dyn DecodedSink,
-    ) -> Result<Progress, CodecError>;
+    fn push(&mut self, raw: &[u8], end: bool, out: &mut dyn DecodedSink) -> Result<Progress, CodecError>;
 }
 pub trait StreamingEncoder {
-    fn push(
-        &mut self,
-        spans: &[DecodedSpan<'_>],
-        end: bool,
-        out: &mut dyn ByteSink,
-    ) -> Result<Progress, CodecError>;
+    fn push(&mut self, spans: &[DecodedSpan<'_>], end: bool, out: &mut dyn ByteSink) -> Result<Progress, CodecError>;
 }
 pub trait Codec {
     fn bom_policy(&self) -> BomPolicy;

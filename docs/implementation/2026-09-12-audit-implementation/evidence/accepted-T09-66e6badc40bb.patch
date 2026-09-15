@@ -1,0 +1,1242 @@
+diff --git a/.github/workflows/run_test_evidence.py b/.github/workflows/run_test_evidence.py
+new file mode 100644
+index 0000000..7c603c2
+--- /dev/null
++++ b/.github/workflows/run_test_evidence.py
+@@ -0,0 +1,179 @@
++#!/usr/bin/env python3
++"""Run one top-level test command and retain its raw output and exact result."""
++
++from __future__ import annotations
++
++import argparse
++import hashlib
++import json
++import os
++from pathlib import Path
++import subprocess
++import sys
++import tempfile
++import time
++
++
++def git_bytes(cwd: Path, arguments: list[str]) -> bytes:
++    result = subprocess.run(["git", *arguments], cwd=cwd, capture_output=True, check=False)
++    if result.returncode != 0:
++        raise RuntimeError(result.stderr.decode("utf-8", "replace").strip())
++    return result.stdout
++
++
++def source_identity(cwd: Path, excluded: tuple[Path, ...] = ()) -> dict:
++    try:
++        pathspec = ["--", "."]
++        for path in excluded:
++            try:
++                relative = path.resolve().relative_to(cwd.resolve())
++            except ValueError:
++                continue
++            pathspec.append(f":(exclude){relative.as_posix()}")
++        head = git_bytes(cwd, ["rev-parse", "HEAD"]).decode("ascii").strip()
++        status = git_bytes(cwd, ["status", "--porcelain=v1", "-z", "--untracked-files=all", *pathspec])
++        diff = git_bytes(cwd, ["diff", "--binary", "--no-ext-diff", "HEAD", *pathspec])
++        untracked = git_bytes(cwd, ["ls-files", "--others", "--exclude-standard", "-z", *pathspec])
++        fingerprint = hashlib.sha256()
++        for label, value in ((b"status", status), (b"tracked-diff", diff)):
++            fingerprint.update(label + b"\0" + len(value).to_bytes(8, "little") + value)
++        for raw_path in (entry for entry in untracked.split(b"\0") if entry):
++            fingerprint.update(b"untracked\0" + len(raw_path).to_bytes(8, "little") + raw_path)
++            with (cwd / os.fsdecode(raw_path)).open("rb") as stream:
++                while block := stream.read(64 * 1024):
++                    fingerprint.update(len(block).to_bytes(8, "little") + block)
++            fingerprint.update((0).to_bytes(8, "little"))
++        return {
++            "available": True,
++            "head": head,
++            "working_tree_dirty": bool(status),
++            "source_manifest_sha256": fingerprint.hexdigest(),
++        }
++    except (OSError, RuntimeError, UnicodeError) as error:
++        return {"available": False, "reason": str(error)}
++
++
++def run_receipt(output: Path, command: list[str], cwd: Path, timeout: float | None) -> dict:
++    output.parent.mkdir(parents=True, exist_ok=True)
++    stdout_path = output.with_suffix(output.suffix + ".stdout.log")
++    stderr_path = output.with_suffix(output.suffix + ".stderr.log")
++    for path in (output, stdout_path, stderr_path):
++        if path.exists():
++            raise FileExistsError(f"refusing to replace retained evidence: {path}")
++
++    excluded = (output, stdout_path, stderr_path)
++    source_before = source_identity(cwd, excluded)
++    started = time.time_ns()
++    status = "completed"
++    try:
++        completed = subprocess.run(command, cwd=cwd, capture_output=True, timeout=timeout, check=False)
++        exit_code = completed.returncode
++        stdout = completed.stdout
++        stderr = completed.stderr
++    except subprocess.TimeoutExpired as error:
++        status = "timeout"
++        exit_code = None
++        stdout = error.stdout or b""
++        stderr = error.stderr or b""
++    except OSError as error:
++        status = "spawn_error"
++        exit_code = None
++        stdout = b""
++        stderr = str(error).encode("utf-8", "replace")
++    elapsed_ms = (time.time_ns() - started) // 1_000_000
++    source_after = source_identity(cwd, excluded)
++    with stdout_path.open("xb") as stream:
++        stream.write(stdout)
++    with stderr_path.open("xb") as stream:
++        stream.write(stderr)
++    summaries = [
++        line.decode("utf-8", "replace")
++        for line in stdout.splitlines() + stderr.splitlines()
++        if b"test result:" in line
++    ]
++    passed = status == "completed" and exit_code == 0
++    receipt = {
++        "schema_version": 1,
++        "command": command,
++        "cwd": str(cwd.resolve()),
++        "source_before": source_before,
++        "source_after": source_after,
++        "source_changed_during_run": (
++            source_before.get("available") is True
++            and source_after.get("available") is True
++            and (
++                source_before.get("head") != source_after.get("head")
++                or source_before.get("source_manifest_sha256") != source_after.get("source_manifest_sha256")
++            )
++        ),
++        "status": status,
++        "exit_code": exit_code,
++        "elapsed_ms": elapsed_ms,
++        "top_level_total": 1,
++        "top_level_passed": int(passed),
++        "top_level_failed": int(not passed),
++        "observed_nested_or_parent_summaries": summaries,
++        "summary_lines_are_not_aggregate_counts": True,
++        "stdout": {"path": str(stdout_path), "sha256": hashlib.sha256(stdout).hexdigest()},
++        "stderr": {"path": str(stderr_path), "sha256": hashlib.sha256(stderr).hexdigest()},
++    }
++    with output.open("x", encoding="utf-8", newline="\n") as stream:
++        json.dump(receipt, stream, indent=2, ensure_ascii=False)
++        stream.write("\n")
++    return receipt
++
++
++def self_test() -> None:
++    with tempfile.TemporaryDirectory(prefix="bareline-test-evidence-") as directory:
++        root = Path(directory)
++        receipt_path = root / "failed.json"
++        fixture = (
++            "print('running 1 test')\n"
++            "print('test child::fixture ... ok')\n"
++            "print('test result: ok. 1 passed; 0 failed')\n"
++            "print('test parent::owns_child ... FAILED')\n"
++            "print('test result: FAILED. 0 passed; 1 failed')\n"
++            "raise SystemExit(1)\n"
++        )
++        receipt = run_receipt(receipt_path, [sys.executable, "-c", fixture], root, 10)
++        assert receipt["top_level_total"] == 1
++        assert receipt["top_level_passed"] == 0
++        assert receipt["top_level_failed"] == 1
++        assert len(receipt["observed_nested_or_parent_summaries"]) == 2
++        assert receipt_path.is_file()
++        assert receipt_path.with_suffix(".json.stdout.log").is_file()
++        try:
++            run_receipt(receipt_path, [sys.executable, "-c", "pass"], root, 10)
++        except FileExistsError:
++            pass
++        else:
++            raise AssertionError("a retry replaced retained raw evidence")
++        spawn_path = root / "spawn-error.json"
++        spawn = run_receipt(spawn_path, [str(root / "missing-command")], root, 10)
++        assert spawn["status"] == "spawn_error"
++        assert spawn["top_level_failed"] == 1
++        assert spawn_path.is_file()
++    print("run_test_evidence self-test: passed")
++
++
++def main() -> int:
++    parser = argparse.ArgumentParser()
++    parser.add_argument("--output", type=Path)
++    parser.add_argument("--cwd", type=Path, default=Path.cwd())
++    parser.add_argument("--timeout", type=float)
++    parser.add_argument("--self-test", action="store_true")
++    parser.add_argument("command", nargs=argparse.REMAINDER)
++    args = parser.parse_args()
++    if args.self_test:
++        self_test()
++        return 0
++    command = args.command[1:] if args.command[:1] == ["--"] else args.command
++    if args.output is None or not command:
++        parser.error("--output and a command after -- are required")
++    receipt = run_receipt(args.output, command, args.cwd, args.timeout)
++    print(args.output)
++    return 0 if receipt["top_level_failed"] == 0 else 1
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/crates/editor-surface/src/paged_view.rs b/crates/editor-surface/src/paged_view.rs
+index 85b0a90..9e4b1a7 100644
+--- a/crates/editor-surface/src/paged_view.rs
++++ b/crates/editor-surface/src/paged_view.rs
+@@ -110,16 +110,54 @@ type Job = Box<dyn FnOnce() + Send + 'static>;
+ /// missed between the failed `try_lock` and the wait.
+ #[derive(Default)]
+ struct ActorGate {
+-    mutex: Mutex<()>,
++    generation: Mutex<u64>,
+     released: Condvar,
+ }
+ impl ActorGate {
+-    fn wait(&self, timeout: std::time::Duration) {
+-        let guard = self.mutex.lock().unwrap_or_else(|error| error.into_inner());
+-        let _ = self.released.wait_timeout(guard, timeout);
++    fn generation(&self) -> u64 {
++        *self.generation.lock().unwrap_or_else(|error| error.into_inner())
++    }
++    fn wait_after(&self, observed: u64, timeout: std::time::Duration) -> bool {
++        self.wait_after_inner(observed, timeout, || {})
++    }
++    fn wait_after_inner(
++        &self,
++        observed: u64,
++        timeout: std::time::Duration,
++        entered: impl FnOnce(),
++    ) -> bool {
++        let guard = self.generation.lock().unwrap_or_else(|error| error.into_inner());
++        if *guard != observed {
++            return true;
++        }
++        entered();
++        let (guard, _) = self
++            .released
++            .wait_timeout_while(guard, timeout, |generation| *generation == observed)
++            .unwrap_or_else(|error| error.into_inner());
++        *guard != observed
++    }
++    #[cfg(test)]
++    fn wait_after_with_entry_receipt(
++        &self,
++        observed: u64,
++        timeout: std::time::Duration,
++        entered: &mpsc::SyncSender<()>,
++    ) -> bool {
++        self.wait_after_inner(observed, timeout, || {
++            entered.send(()).expect("wait-entry receiver dropped");
++        })
+     }
+     fn signal(&self) {
+-        let _guard = self.mutex.lock().unwrap_or_else(|error| error.into_inner());
++        let mut generation = self.generation.lock().unwrap_or_else(|error| error.into_inner());
++        *generation = generation.wrapping_add(1);
++        self.released.notify_all();
++    }
++    #[cfg(test)]
++    fn spurious_notify_after_wait_entry(&self) {
++        // Acquiring the predicate mutex after the entry receipt proves the
++        // waiter atomically released it inside Condvar::wait_timeout_while.
++        let _guard = self.generation.lock().unwrap_or_else(|error| error.into_inner());
+         self.released.notify_all();
+     }
+ }
+@@ -2203,9 +2241,12 @@ impl PagedEditorSurface {
+                                 cancellation
+                                     .check()
+                                     .map_err(|e| format!("Selection validation: {e:?}"))?;
++                                let observed = handle.actor_gate.generation();
+                                 match handle.acquire_store() {
+                                     Ok(_) => break,
+-                                    Err(PagedError::Busy) => handle.actor_gate.wait(ACTOR_WAIT),
++                                    Err(PagedError::Busy) => {
++                                        handle.actor_gate.wait_after(observed, ACTOR_WAIT);
++                                    }
+                                     Err(error) => return Err(error.into()),
+                                 }
+                             }
+@@ -2219,6 +2260,7 @@ impl PagedEditorSurface {
+                                 cancellation
+                                     .check()
+                                     .map_err(|e| format!("Selection validation: {e:?}"))?;
++                                let observed = handle.actor_gate.generation();
+                                 match request.poll() {
+                                     WindowPoll::Ready(window) => {
+                                         let local = offset
+@@ -2237,7 +2279,7 @@ impl PagedEditorSurface {
+                                             handle.resolve_page(ticket)?
+                                         };
+                                         if !ready {
+-                                            handle.actor_gate.wait(ACTOR_WAIT);
++                                            handle.actor_gate.wait_after(observed, ACTOR_WAIT);
+                                         }
+                                     }
+                                     _ => return Err("Selection endpoint is unavailable".into()),
+@@ -2249,9 +2291,12 @@ impl PagedEditorSurface {
+                                 cancellation
+                                     .check()
+                                     .map_err(|e| format!("Selection validation: {e:?}"))?;
++                                let observed = handle.actor_gate.generation();
+                                 match handle.acquire_store() {
+                                     Ok(_) => break,
+-                                    Err(PagedError::Busy) => handle.actor_gate.wait(ACTOR_WAIT),
++                                    Err(PagedError::Busy) => {
++                                        handle.actor_gate.wait_after(observed, ACTOR_WAIT);
++                                    }
+                                     Err(error) => return Err(error.into()),
+                                 }
+                             }
+@@ -2892,11 +2937,12 @@ impl PagedEditorSurface {
+                                 .map_err(|e| format!("{e:?}"))?;
+                             let window = loop {
+                                 cancellation.check().map_err(|e| format!("{e:?}"))?;
++                                let observed = captured.actor_gate.generation();
+                                 match request.poll() {
+                                     WindowPoll::Ready(window) => break Ok(window),
+                                     WindowPoll::Pending(ticket) => {
+                                         if !captured.resolve_captured_page(ticket)? {
+-                                            captured.actor_gate.wait(ACTOR_WAIT);
++                                            captured.actor_gate.wait_after(observed, ACTOR_WAIT);
+                                         }
+                                     }
+                                     WindowPoll::Unavailable(reason) => {
+@@ -3714,6 +3760,10 @@ mod peer_tests {
+     use std::{
+         fs::File,
+         path::Path,
++        sync::{
++            Arc, Barrier,
++            atomic::{AtomicBool, Ordering},
++        },
+         time::{Duration, Instant},
+     };
+     #[test]
+@@ -3727,16 +3777,113 @@ mod peer_tests {
+         assert_eq!(rendered, "Paged source is busy");
+     }
+     #[test]
+-    fn actor_gate_wait_returns_within_the_timeout_when_the_worker_is_idle() {
+-        // No writer ever signals, so the wait must fall through on its own timeout
+-        // rather than block forever the way a lost-wakeup Condvar could.
++    fn actor_gate_idle_wait_completes_under_an_outer_watchdog() {
++        let gate = Arc::new(ActorGate::default());
++        let (done, completed) = mpsc::sync_channel(1);
++        std::thread::spawn(move || {
++            let observed = gate.generation();
++            done.send(gate.wait_after(observed, Duration::from_millis(20))).unwrap();
++        });
++        assert!(
++            !completed
++                .recv_timeout(Duration::from_secs(2))
++                .expect("idle wait deadlocked")
++        );
++    }
++    #[test]
++    fn actor_gate_observes_notification_before_wait() {
+         let gate = ActorGate::default();
+-        let timeout = Duration::from_millis(20);
+-        let start = Instant::now();
+-        gate.wait(timeout);
+-        let elapsed = start.elapsed();
+-        assert!(elapsed >= timeout, "returned before the timeout elapsed: {elapsed:?}");
+-        assert!(elapsed < timeout * 20, "wait overran its bound: {elapsed:?}");
++        let observed = gate.generation();
++        gate.signal();
++        assert!(gate.wait_after(observed, Duration::from_secs(2)));
++    }
++    #[test]
++    fn actor_gate_observes_notification_during_wait() {
++        let gate = Arc::new(ActorGate::default());
++        let (entered, waiting) = mpsc::sync_channel(1);
++        let (done, completed) = mpsc::sync_channel(1);
++        let waiter_gate = gate.clone();
++        std::thread::spawn(move || {
++            let observed = waiter_gate.generation();
++            done.send(waiter_gate.wait_after_with_entry_receipt(observed, Duration::from_secs(2), &entered))
++                .unwrap();
++        });
++        waiting
++            .recv_timeout(Duration::from_secs(2))
++            .expect("waiter never reached the generation-mutex boundary");
++        gate.signal();
++        assert!(
++            completed
++                .recv_timeout(Duration::from_secs(2))
++                .expect("release notification was lost")
++        );
++    }
++    #[test]
++    fn actor_gate_caller_rechecks_after_spurious_notification() {
++        let gate = Arc::new(ActorGate::default());
++        let released = Arc::new(AtomicBool::new(false));
++        let (entered, waiting) = mpsc::sync_channel(1);
++        let (attempted, attempts) = mpsc::sync_channel(2);
++        let (done, completed) = mpsc::sync_channel(1);
++        let waiter_gate = gate.clone();
++        let waiter_released = released.clone();
++        std::thread::spawn(move || {
++            let mut first = Some(entered);
++            while !waiter_released.load(Ordering::Acquire) {
++                let observed = waiter_gate.generation();
++                if waiter_released.load(Ordering::Acquire) {
++                    break;
++                }
++                let notified = if let Some(entered) = first.take() {
++                    waiter_gate.wait_after_with_entry_receipt(observed, Duration::from_millis(50), &entered)
++                } else {
++                    waiter_gate.wait_after(observed, Duration::from_millis(50))
++                };
++                attempted.send(notified).unwrap();
++            }
++            done.send(()).unwrap();
++        });
++        waiting
++            .recv_timeout(Duration::from_secs(2))
++            .expect("waiter never reached the generation-mutex boundary");
++        gate.spurious_notify_after_wait_entry();
++        assert!(
++            !attempts
++                .recv_timeout(Duration::from_secs(2))
++                .expect("waiter did not retry")
++        );
++        released.store(true, Ordering::Release);
++        gate.signal();
++        completed
++            .recv_timeout(Duration::from_secs(2))
++            .expect("predicate waiter did not progress");
++    }
++    #[test]
++    fn actor_gate_cancellation_exits_a_waiting_retry_loop() {
++        let gate = Arc::new(ActorGate::default());
++        let cancelled = Arc::new(AtomicBool::new(false));
++        let ready = Arc::new(Barrier::new(2));
++        let (done, completed) = mpsc::sync_channel(1);
++        let waiter_gate = gate.clone();
++        let waiter_cancelled = cancelled.clone();
++        let waiter_ready = ready.clone();
++        std::thread::spawn(move || {
++            waiter_ready.wait();
++            while !waiter_cancelled.load(Ordering::Acquire) {
++                let observed = waiter_gate.generation();
++                if waiter_cancelled.load(Ordering::Acquire) {
++                    break;
++                }
++                waiter_gate.wait_after(observed, Duration::from_secs(1));
++            }
++            done.send(()).unwrap();
++        });
++        ready.wait();
++        cancelled.store(true, Ordering::Release);
++        gate.signal();
++        completed
++            .recv_timeout(Duration::from_secs(2))
++            .expect("cancelled waiter did not exit");
+     }
+     #[test]
+     fn paged_adapter_reports_terminal_failure_and_wakes_after_unwind() {
+diff --git a/docs/implementation/2026-09-12-audit-implementation/PR-T09.md b/docs/implementation/2026-09-12-audit-implementation/PR-T09.md
+new file mode 100644
+index 0000000..fb5bb8e
+--- /dev/null
++++ b/docs/implementation/2026-09-12-audit-implementation/PR-T09.md
+@@ -0,0 +1,29 @@
++# PR-T09 — Reliable synchronization and test evidence
++
++- Issues: TECH-011/012
++- Baseline source: `7c1d60ec`
++- Scope: `ActorGate` contract tests, journey diagnostics, and truthful run/result accounting.
++
++## Contract decisions
++
++- Synchronization tests assert predicate progress, notifications, cancellation, and bounded completion without requiring a production condition variable to sleep for a minimum duration.
++- Journey evidence preserves failed aggregates and labels retries separately. Run identity binds the executable, HEAD, and working-tree source manifest.
++- Top-level journey totals exclude child fixture/subprocess summaries.
++- p0-7 and p4-4 diagnostics record provider-observed editor/window/frame state before deciding whether a failure is harness setup, product behavior, timeout, or environment blockage.
++- Every run writes a unique JSON ledger under `target/journey/results`; `--retry-of=<run-id>` links a retry without replacing the earlier result. The ledger hashes the exact executable plus a framed manifest of the HEAD-relative tracked diff and every untracked path/content, then records only explicit top-level journey outcomes.
++- p0-7 records its isolated roots, PID/HWND, foreground state, window/client bounds, DPI, renderer, live UI Automation focused element/TextPattern document and caret/selection, native menu injection path, diagnostic tail and complete dialog/control tree. The provider has no dirty property, so that field is explicitly unavailable; exact document text is required before Close. Prompt absence is retained as a timeout with screenshots and context.
++- p4-4 retains before/after screenshots, the exact sampled glyph region, input text hash/UTF-16 unit count/channel, live TextPattern document/caret, stable-frame receipt, window geometry/DPI/renderer and saturation values. It evaluates the color-glyph assertion only after UIA observes the intended emoji and the frame receipt is stable. Pixel change alone is recorded only as an input attempt.
++- `.github/workflows/run_test_evidence.py` wraps one top-level Cargo command, captures HEAD plus a fingerprinted dirty-source manifest before launch, excludes its own three output paths, and records the post-run identity and whether source changed. It preserves separate raw stdout/stderr with hashes, retains spawn errors and timeouts as harness failures, records the actual process result as one top-level result, and lists nested/parent `test result:` lines without adding their counts. It refuses to overwrite a prior run.
++
++## Focused checks
++
++- Root owns all Cargo and native runs after source review.
++- ActorGate normal scheduling, loaded scheduling, notification-before-wait, notification-during-wait, injected spurious notification, cancellation, and idle watchdog checks.
++- `cargo test -p bareline-editor-surface actor_gate_ --offline --locked`
++- `cargo test -p xtask --bin xtask journey::evidence_tests --offline --locked` validates failure classification and explicit top-level accounting without parsing child fixture output.
++- `python .github/workflows/run_test_evidence.py --self-test` exercises a failed parent command whose raw output contains both child and parent summaries, retains a spawn failure, and proves retry evidence cannot overwrite it.
++- Isolated p0-7 and p4-4 runs plus the full native suite from fresh private profiles remain pending the final integrated binary.
++
++## Unresolved qualification
++
++- Do not alter close behavior or weaken the emoji detector without a retained reproduction proving the product or detector defect.
+diff --git a/xtask/Cargo.toml b/xtask/Cargo.toml
+index 8f52253..0480ff7 100644
+--- a/xtask/Cargo.toml
++++ b/xtask/Cargo.toml
+@@ -27,7 +27,7 @@ bareline-platform = { path = "../crates/platform" }
+ bareline-app = { path = "../crates/app" }
+ bareline-platform-windows = { path = "../crates/platform-windows", features = ["offscreen"] }
+ bareline-renderer = { path = "../crates/renderer" }
+-windows = { workspace = true, features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_Threading"] }
++windows = { workspace = true, features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Accessibility", "Win32_System_Com", "Win32_System_Threading"] }
+ 
+ 
+ 
+diff --git a/xtask/src/journey.rs b/xtask/src/journey.rs
+index 9a7c80c..9c8b8dc 100644
+--- a/xtask/src/journey.rs
++++ b/xtask/src/journey.rs
+@@ -11,25 +11,35 @@
+ #![cfg(windows)]
+ 
+ use std::ffi::c_void;
++use std::io::Read;
+ use std::path::{Path, PathBuf};
+ use std::process::{Child, Command, Stdio};
+ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+ 
++use sha2::{Digest, Sha256};
++
+ use windows::Win32::Foundation::{HWND, LPARAM, RECT, WPARAM};
+ use windows::Win32::Graphics::Gdi::{
+     BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DIB_RGB_COLORS, DeleteDC,
+-    DeleteObject, GetDC, GetDIBits, ReleaseDC, SRCCOPY, SelectObject,
++    DeleteObject, GetDC, GetDIBits, GetDeviceCaps, LOGPIXELSX, ReleaseDC, SRCCOPY, SelectObject,
++};
++use windows::Win32::System::Com::{
++    CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, CoUninitialize,
+ };
+ use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
++use windows::Win32::UI::Accessibility::{
++    CUIAutomation8, IUIAutomation, IUIAutomationTextPattern, TextPatternRangeEndpoint_End,
++    TextPatternRangeEndpoint_Start, UIA_TextPatternId,
++};
+ use windows::Win32::UI::Input::KeyboardAndMouse::{
+     INPUT, INPUT_KEYBOARD, KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, SendInput, SetFocus,
+     VIRTUAL_KEY, VK_CONTROL, VK_ESCAPE, VK_SHIFT,
+ };
+ use windows::Win32::UI::WindowsAndMessaging::{
+-    BringWindowToTop, EnumChildWindows, EnumWindows, GetClassNameW, GetForegroundWindow, GetMenu, GetMenuItemCount,
+-    GetMenuItemID, GetMenuStringW, GetSubMenu, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, HWND_TOP,
+-    IsWindowVisible, MF_BYPOSITION, PostMessageW, SW_SHOW, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SetForegroundWindow,
+-    SetWindowPos, ShowWindow, WM_CHAR, WM_COMMAND,
++    BringWindowToTop, EnumChildWindows, EnumWindows, GetClassNameW, GetClientRect, GetForegroundWindow, GetMenu,
++    GetMenuItemCount, GetMenuItemID, GetMenuStringW, GetSubMenu, GetWindowRect, GetWindowTextW,
++    GetWindowThreadProcessId, HWND_TOP, IsWindowVisible, MF_BYPOSITION, PostMessageW, SW_SHOW, SWP_NOMOVE, SWP_NOSIZE,
++    SWP_SHOWWINDOW, SetForegroundWindow, SetWindowPos, ShowWindow, WM_CHAR, WM_COMMAND,
+ };
+ use windows::core::BOOL;
+ 
+@@ -116,6 +126,7 @@ fn journeys() -> Vec<Journey> {
+ 
+ pub fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+     let build = args.iter().any(|a| a == "--build");
++    let retry_of = args.iter().find_map(|arg| arg.strip_prefix("--retry-of="));
+     let selectors: Vec<&str> = args
+         .iter()
+         .filter(|a| !a.starts_with("--"))
+@@ -123,7 +134,7 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+         .collect();
+     let name = *selectors
+         .first()
+-        .ok_or("Usage: cargo xtask journey <name|all> [--build]")?;
++        .ok_or("Usage: cargo xtask journey <name|all> [--build] [--retry-of=<run-id>]")?;
+ 
+     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+         .parent()
+@@ -162,31 +173,179 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+         hit
+     };
+ 
+-    let env = Env { exe, root };
++    let run_identity = run_identity(&root, &exe, retry_of)?;
++    let run_id = run_identity["run_id"].as_str().ok_or("run id unavailable")?.to_owned();
++    let evidence_path = root.join("target/journey/results").join(format!("{run_id}.json"));
++    eprintln!("journey: run_identity={run_identity}");
++    let env = Env {
++        exe,
++        root,
++        run_id: run_id.clone(),
++    };
+     let mut failures = Vec::new();
++    let mut results = Vec::new();
++    persist_run_evidence(&evidence_path, &run_identity, selected.len(), &results)?;
+     for journey in &selected {
+         eprintln!("journey {} — {} …", journey.name, journey.summary);
+         match (journey.run)(&env) {
+-            Ok(()) => println!("PASS {}", journey.name),
++            Ok(()) => {
++                println!("PASS {}", journey.name);
++                results.push(serde_json::json!({"name": journey.name, "status": "passed"}));
++            }
+             Err(reason) => {
+                 println!("FAIL {} — {reason}", journey.name);
+                 failures.push(journey.name);
++                results.push(serde_json::json!({
++                    "name": journey.name,
++                    "status": "failed",
++                    "classification": classify_failure(&reason),
++                    "detail": reason,
++                }));
+             }
+         }
++        persist_run_evidence(&evidence_path, &run_identity, selected.len(), &results)?;
+     }
+ 
++    let passed = selected.len() - failures.len();
++    eprintln!(
++        "journey: top_level_passed={passed} top_level_failed={} top_level_total={}",
++        failures.len(),
++        selected.len()
++    );
++    eprintln!("journey: evidence={}", evidence_path.display());
+     if failures.is_empty() {
+-        eprintln!("journey: {} passed", selected.len());
+         Ok(())
+     } else {
+         Err(format!("{} journey(s) failed: {}", failures.len(), failures.join(", ")).into())
+     }
+ }
+ 
++fn run_identity(
++    root: &Path,
++    exe: &Path,
++    retry_of: Option<&str>,
++) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
++    let stamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
++    let run_id = format!("{}-{stamp}", std::process::id());
++    let head = git_output(root, &["rev-parse", "HEAD"])?;
++    let status = git_output_bytes(root, &["status", "--porcelain=v1", "-z", "--untracked-files=all"])?;
++    let tracked = git_output_bytes(root, &["diff", "--binary", "--no-ext-diff", "HEAD", "--"])?;
++    let untracked = git_output_bytes(root, &["ls-files", "--others", "--exclude-standard", "-z"])?;
++    let mut source = Sha256::new();
++    source.update(b"status\0");
++    source.update((status.len() as u64).to_le_bytes());
++    source.update(&status);
++    source.update(b"tracked-diff\0");
++    source.update((tracked.len() as u64).to_le_bytes());
++    source.update(&tracked);
++    source.update(b"untracked\0");
++    for raw in untracked.split(|byte| *byte == 0).filter(|path| !path.is_empty()) {
++        let relative = PathBuf::from(String::from_utf8(raw.to_vec())?);
++        source.update((raw.len() as u64).to_le_bytes());
++        source.update(raw);
++        let mut file = std::fs::File::open(root.join(&relative))?;
++        let mut buffer = vec![0u8; 64 * 1024];
++        loop {
++            let count = file.read(&mut buffer)?;
++            if count == 0 {
++                break;
++            }
++            source.update((count as u64).to_le_bytes());
++            source.update(&buffer[..count]);
++        }
++        source.update(0u64.to_le_bytes());
++    }
++    Ok(serde_json::json!({
++        "schema_version": 1,
++        "run_id": run_id,
++        "retry_of": retry_of,
++        "head": head,
++        "working_tree_dirty": !status.is_empty(),
++        "source_manifest_sha256": format!("{:x}", source.finalize()),
++        "executable": exe,
++        "executable_sha256": hash_file(exe)?,
++    }))
++}
++
++fn git_output(root: &Path, args: &[&str]) -> Result<String, Box<dyn std::error::Error>> {
++    let bytes = git_output_bytes(root, args)?;
++    Ok(String::from_utf8(bytes)?.trim().to_owned())
++}
++
++fn git_output_bytes(root: &Path, args: &[&str]) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
++    let output = Command::new("git").args(args).current_dir(root).output()?;
++    if !output.status.success() {
++        return Err(format!(
++            "git {} failed: {}",
++            args.join(" "),
++            String::from_utf8_lossy(&output.stderr)
++        )
++        .into());
++    }
++    Ok(output.stdout)
++}
++
++fn hash_file(path: &Path) -> Result<String, Box<dyn std::error::Error>> {
++    let mut file = std::fs::File::open(path)?;
++    let mut hash = Sha256::new();
++    let mut buffer = vec![0u8; 64 * 1024];
++    loop {
++        let count = file.read(&mut buffer)?;
++        if count == 0 {
++            break;
++        }
++        hash.update(&buffer[..count]);
++    }
++    Ok(format!("{:x}", hash.finalize()))
++}
++
++fn classify_failure(reason: &str) -> &'static str {
++    let reason = reason.to_ascii_lowercase();
++    if reason.contains("timed out") || reason.contains("timeout") {
++        "timeout"
++    } else if reason.contains("access is denied") || reason.contains("blocked environment") {
++        "blocked_environment"
++    } else if reason.contains("spawn failed")
++        || reason.contains("capture")
++        || reason.contains("getwindow")
++        || reason.contains("no window")
++        || reason.contains("typing never reached")
++        || reason.contains("uia prerequisite")
++    {
++        "harness_setup"
++    } else {
++        "product_assertion"
++    }
++}
++
++fn persist_run_evidence(
++    path: &Path,
++    identity: &serde_json::Value,
++    top_level_total: usize,
++    results: &[serde_json::Value],
++) -> Result<(), Box<dyn std::error::Error>> {
++    if let Some(parent) = path.parent() {
++        std::fs::create_dir_all(parent)?;
++    }
++    let passed = results.iter().filter(|result| result["status"] == "passed").count();
++    let failed = results.iter().filter(|result| result["status"] == "failed").count();
++    let document = serde_json::json!({
++        "identity": identity,
++        "top_level_total": top_level_total,
++        "top_level_completed": results.len(),
++        "top_level_passed": passed,
++        "top_level_failed": failed,
++        "results": results,
++    });
++    std::fs::write(path, serde_json::to_vec_pretty(&document)?)?;
++    Ok(())
++}
++
+ /// Static context shared by every journey.
+ struct Env {
+     exe: PathBuf,
+     root: PathBuf,
++    run_id: String,
+ }
+ 
+ impl Env {
+@@ -228,6 +387,8 @@ struct Session {
+     pid: u32,
+     home: PathBuf,
+     data_root: PathBuf,
++    run_id: String,
++    launch_files: Vec<PathBuf>,
+     hwnd: Option<HWND>,
+ }
+ 
+@@ -259,6 +420,8 @@ impl Session {
+             pid,
+             home,
+             data_root,
++            run_id: env.run_id.clone(),
++            launch_files: files.to_vec(),
+             hwnd: None,
+         })
+     }
+@@ -415,6 +578,163 @@ fn child_texts(parent: HWND) -> Vec<String> {
+         .collect()
+ }
+ 
++fn window_evidence(session: &Session, hwnd: HWND) -> serde_json::Value {
++    let window = window_rect(hwnd).map(|rect| [rect.left, rect.top, rect.right, rect.bottom]);
++    let mut client = RECT::default();
++    // SAFETY: `hwnd` is live and `client` is an owned output buffer.
++    let client = unsafe { GetClientRect(hwnd, &mut client) }
++        .ok()
++        .map(|_| [client.left, client.top, client.right, client.bottom]);
++    // SAFETY: the acquired window DC is released before returning.
++    let dpi = unsafe {
++        let dc = GetDC(Some(hwnd));
++        if dc.0.is_null() {
++            None
++        } else {
++            let dpi = GetDeviceCaps(Some(dc), LOGPIXELSX);
++            let _ = ReleaseDC(Some(hwnd), dc);
++            (dpi > 0).then_some(dpi)
++        }
++    };
++    // SAFETY: no arguments beyond querying the current foreground handle.
++    let foreground = unsafe { GetForegroundWindow() };
++    let dialogs: Vec<_> = auxiliary_windows(session.pid, hwnd)
++        .into_iter()
++        .map(|(handle, class, title)| {
++            serde_json::json!({
++                "hwnd": handle.0 as usize,
++                "class": class,
++                "title": title,
++                "children": child_texts(handle),
++            })
++        })
++        .collect();
++    let diagnostics = session.diagnostics();
++    let diagnostics_tail: Vec<_> = diagnostics.into_iter().rev().take(20).collect();
++    serde_json::json!({
++        "run_id": &session.run_id,
++        "pid": session.pid,
++        "hwnd": hwnd.0 as usize,
++        "foreground_hwnd": foreground.0 as usize,
++        "focused": foreground == hwnd,
++        "window_rect": window,
++        "client_rect": client,
++        "dpi": dpi,
++        "renderer": "software",
++        "window_title": window_title(hwnd),
++        "active_document_candidates": &session.launch_files,
++        "main_child_control_text": child_texts(hwnd),
++        "dialog_tree": dialogs,
++        "isolated_home": &session.home,
++        "isolated_data_root": &session.data_root,
++        "diagnostics_tail": diagnostics_tail,
++        "uia_provider": uia_provider_snapshot(hwnd),
++    })
++}
++
++fn uia_provider_snapshot(hwnd: HWND) -> serde_json::Value {
++    // SAFETY: this function balances a successful COM initialization before
++    // returning and holds every UIA interface only within that interval.
++    let initialized = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.ok();
++    if let Err(error) = initialized {
++        return serde_json::json!({
++            "available": false,
++            "reason": format!("COM initialization failed: {error}"),
++        });
++    }
++    let result = (|| -> windows::core::Result<serde_json::Value> {
++        // SAFETY: CUIAutomation is an in-process COM server and COM is initialized.
++        let automation: IUIAutomation = unsafe { CoCreateInstance(&CUIAutomation8, None, CLSCTX_INPROC_SERVER) }?;
++        // SAFETY: hwnd is the live journey window.
++        let root = unsafe { automation.ElementFromHandle(hwnd) }?;
++        let focused = unsafe { automation.GetFocusedElement() }?;
++        let root_name = unsafe { root.CurrentName() }?.to_string();
++        let focused_name = unsafe { focused.CurrentName() }?.to_string();
++        let root_process_id = unsafe { root.CurrentProcessId() }?;
++        let focused_process_id = unsafe { focused.CurrentProcessId() }?;
++        let control_type = unsafe { focused.CurrentControlType() }?.0;
++        let text = match unsafe { focused.GetCurrentPatternAs::<IUIAutomationTextPattern>(UIA_TextPatternId) } {
++            Ok(pattern) => {
++                let document = unsafe { pattern.DocumentRange() }?;
++                let document_text = unsafe { document.GetText(65_536) }?.to_string();
++                let selection = unsafe { pattern.GetSelection() }?;
++                let selection_count = unsafe { selection.Length() }?;
++                let selected = if selection_count > 0 {
++                    let range = unsafe { selection.GetElement(0) }?;
++                    let selected_text = unsafe { range.GetText(65_536) }?.to_string();
++                    let prefix = unsafe { document.Clone() }?;
++                    unsafe {
++                        prefix.MoveEndpointByRange(
++                            TextPatternRangeEndpoint_End,
++                            &range,
++                            TextPatternRangeEndpoint_Start,
++                        )?;
++                    }
++                    let caret_start_utf16 = unsafe { prefix.GetText(65_536) }?.to_string().encode_utf16().count();
++                    Some(serde_json::json!({
++                        "caret_start_utf16": caret_start_utf16,
++                        "selection_utf16": selected_text.encode_utf16().count(),
++                        "selected_text": selected_text,
++                    }))
++                } else {
++                    None
++                };
++                serde_json::json!({
++                    "available": true,
++                    "document_text": document_text,
++                    "document_text_limit_utf16": 65_536,
++                    "selection_count": selection_count,
++                    "selection": selected,
++                })
++            }
++            Err(error) => serde_json::json!({
++                "available": false,
++                "reason": format!("focused provider has no TextPattern: {error}"),
++            }),
++        };
++        Ok(serde_json::json!({
++            "available": true,
++            "root_name": root_name,
++            "focused_name": focused_name,
++            "root_process_id": root_process_id,
++            "focused_process_id": focused_process_id,
++            "focused_element_in_window_process": root_process_id == focused_process_id,
++            "focused_control_type": control_type,
++            "text_pattern": text,
++            "dirty_state": {
++                "available": false,
++                "reason": "provider exposes document text/caret but no dirty property",
++            },
++        }))
++    })();
++    // SAFETY: this balances the successful initialization above.
++    unsafe { CoUninitialize() };
++    result.unwrap_or_else(|error| {
++        serde_json::json!({
++            "available": false,
++            "reason": format!("UI Automation query failed: {error}"),
++        })
++    })
++}
++
++fn observed_uia_text(snapshot: &serde_json::Value) -> Option<&str> {
++    (snapshot["uia_provider"]["focused_element_in_window_process"].as_bool() == Some(true))
++        .then(|| snapshot["uia_provider"]["text_pattern"]["document_text"].as_str())
++        .flatten()
++}
++
++fn write_session_evidence(session: &Session, label: &str, value: &serde_json::Value) -> Result<PathBuf, String> {
++    let directory = session.home.join("evidence");
++    std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
++    let path = directory.join(format!("{label}.json"));
++    std::fs::write(
++        &path,
++        serde_json::to_vec_pretty(value).map_err(|error| error.to_string())?,
++    )
++    .map_err(|error| error.to_string())?;
++    Ok(path)
++}
++
+ // --------------------------------------------------------------- input driving
+ 
+ fn focus(hwnd: HWND) {
+@@ -485,20 +805,45 @@ fn focus(hwnd: HWND) {
+ 
+ /// Wait until two consecutive captures are effectively identical, so a close or
+ /// menu command is not raced by checkpoints, transcode progress or toasts.
+-fn wait_until_stable(hwnd: HWND, timeout: Duration) {
++fn wait_until_stable(hwnd: HWND, timeout: Duration) -> serde_json::Value {
++    let started = Instant::now();
+     let deadline = Instant::now() + timeout;
+     let mut previous = capture(hwnd).ok();
++    let mut captures = usize::from(previous.is_some());
++    let mut last_diff = None;
+     while Instant::now() < deadline {
+         std::thread::sleep(Duration::from_millis(250));
+-        let Ok(current) = capture(hwnd) else { return };
++        let Ok(current) = capture(hwnd) else {
++            return serde_json::json!({
++                "stable": false,
++                "capture_failed": true,
++                "captures": captures,
++                "elapsed_ms": started.elapsed().as_millis(),
++            });
++        };
++        captures += 1;
+         if let Some(prev) = &previous {
+             let full = (0, 0, current.width, current.height);
+-            if current.diff_fraction(prev, full) < 0.0002 {
+-                return;
++            let diff = current.diff_fraction(prev, full);
++            last_diff = Some(diff);
++            if diff < 0.0002 {
++                return serde_json::json!({
++                    "stable": true,
++                    "captures": captures,
++                    "last_diff_fraction": diff,
++                    "elapsed_ms": started.elapsed().as_millis(),
++                });
+             }
+         }
+         previous = Some(current);
+     }
++    serde_json::json!({
++        "stable": false,
++        "capture_failed": false,
++        "captures": captures,
++        "last_diff_fraction": last_diff,
++        "elapsed_ms": started.elapsed().as_millis(),
++    })
+ }
+ 
+ fn key_input(vk: VIRTUAL_KEY, flags: KEYBD_EVENT_FLAGS) -> INPUT {
+@@ -570,10 +915,15 @@ fn type_text_sendinput(text: &str) {
+     }
+ }
+ 
+-/// Type until the active tab visibly becomes dirty (its marker changes the tab
+-/// strip), alternating the posted and SendInput channels. Returns the first
+-/// clean→dirty transition; the text may be inserted more than once.
+-fn type_text_until_dirty(session: &Session, hwnd: HWND, text: &str, timeout: Duration) -> Result<(), String> {
++/// Type until pixels in the first editor line visibly change, alternating the
++/// posted and SendInput channels. This is an input-attempt receipt only; callers
++/// query the UI Automation TextPattern before claiming text delivery or state.
++fn type_text_until_observed_change(
++    session: &Session,
++    hwnd: HWND,
++    text: &str,
++    timeout: Duration,
++) -> Result<serde_json::Value, String> {
+     let before = capture(hwnd)?;
+     // Measure the editor body where typed text must appear. The tab strip is not
+     // used: focus chrome can change it without any edit.
+@@ -584,7 +934,9 @@ fn type_text_until_dirty(session: &Session, hwnd: HWND, text: &str, timeout: Dur
+     let body = (40, top, 240, top + 60);
+     let deadline = Instant::now() + timeout;
+     let mut sendinput = false;
++    let mut attempts = 0usize;
+     loop {
++        attempts += 1;
+         if sendinput {
+             focus(hwnd);
+             type_text_sendinput(text);
+@@ -595,8 +947,20 @@ fn type_text_until_dirty(session: &Session, hwnd: HWND, text: &str, timeout: Dur
+         let after = capture(hwnd)?;
+         // A real edit paints a line of text; repaint/focus artifacts are far
+         // smaller, so require a clearly visible body change.
+-        if after.diff_fraction(&before, body) >= 0.005 {
+-            return Ok(());
++        let body_diff = after.diff_fraction(&before, body);
++        if body_diff >= 0.005 {
++            let mut hash = Sha256::new();
++            hash.update(text.as_bytes());
++            return Ok(serde_json::json!({
++                "pixel_change_observed": true,
++                "body_region": [body.0, body.1, body.2, body.3],
++                "body_diff_fraction": body_diff,
++                "attempts": attempts,
++                "last_input_channel": if sendinput { "SendInput Unicode" } else { "WM_CHAR" },
++                "utf16_units_per_attempt": text.encode_utf16().count(),
++                "text_sha256": format!("{:x}", hash.finalize()),
++                "window_title_after": window_title(hwnd),
++            }));
+         }
+         if Instant::now() >= deadline {
+             let _ = shot(session, hwnd, "typing-failed");
+@@ -1042,7 +1406,7 @@ fn journey_p0_3(env: &Env) -> Result<(), String> {
+     let mut session = Session::launch(env, "p0-3", &[], &[])?;
+     let hwnd = session.wait_window(Duration::from_secs(20))?;
+     // Type well past a single checkpoint's worth of text.
+-    type_text_until_dirty(
++    type_text_until_observed_change(
+         &session,
+         hwnd,
+         &"the quick brown fox jumps over the lazy dog. ".repeat(12),
+@@ -1138,7 +1502,7 @@ fn journey_p0_5(env: &Env) -> Result<(), String> {
+     {
+         let mut session = Session::launch(env, "p0-5", &[], &[])?;
+         let hwnd = session.wait_window(Duration::from_secs(20))?;
+-        type_text_until_dirty(
++        type_text_until_observed_change(
+             &session,
+             hwnd,
+             "recovered content for P0-5 journey\n",
+@@ -1162,6 +1526,8 @@ fn journey_p0_5(env: &Env) -> Result<(), String> {
+         pid: 0,
+         home: home.clone(),
+         data_root: home.join("Bareline"),
++        run_id: env.run_id.clone(),
++        launch_files: Vec::new(),
+         hwnd: None,
+     };
+     session.pid = session.child.id();
+@@ -1183,13 +1549,40 @@ fn journey_p0_5(env: &Env) -> Result<(), String> {
+ fn journey_p0_7(env: &Env) -> Result<(), String> {
+     let mut session = Session::launch(env, "p0-7", &[], &[])?;
+     let hwnd = session.wait_window(Duration::from_secs(20))?;
+-    type_text_until_dirty(
++    let typing = type_text_until_observed_change(
+         &session,
+         hwnd,
+         "unsaved edit for the close prompt\n",
+         Duration::from_secs(15),
+     )?;
+-    wait_until_stable(hwnd, Duration::from_secs(8));
++    let frame = wait_until_stable(hwnd, Duration::from_secs(8));
++    let window = window_evidence(&session, hwnd);
++    let before_close = serde_json::json!({
++        "checkpoint": "input and provider prerequisites before close command",
++        "typing_receipt": typing,
++        "frame_receipt": frame,
++        "window": window,
++        "command_injection": "native menu File > Close via WM_COMMAND",
++    });
++    let evidence = write_session_evidence(&session, "p0-7-before-close", &before_close)?;
++    if frame["stable"].as_bool() != Some(true) {
++        return Err(format!(
++            "timeout waiting for a stable frame before close; evidence={}",
++            evidence.display()
++        ));
++    }
++    let Some(provider_text) = observed_uia_text(&window) else {
++        return Err(format!(
++            "UIA prerequisite unavailable before close; evidence={}",
++            evidence.display()
++        ));
++    };
++    if !provider_text.contains("unsaved edit for the close prompt") {
++        return Err(format!(
++            "UIA prerequisite did not observe the posted close-prompt text; evidence={}",
++            evidence.display()
++        ));
++    }
+     // A posted WM_COMMAND can be dropped while the menu rebuilds; retry until
+     // the owned prompt appears.
+     let mut prompt = None;
+@@ -1205,17 +1598,31 @@ fn journey_p0_7(env: &Env) -> Result<(), String> {
+         Some(dialog) => dialog,
+         None => {
+             let _ = shot(&session, hwnd, "p0-7-no-prompt");
++            let failure = serde_json::json!({
++                "checkpoint": "save prompt timeout",
++                "window": window_evidence(&session, hwnd),
++                "command_injection": "native menu File > Close via WM_COMMAND",
++            });
++            let evidence = write_session_evidence(&session, "p0-7-no-prompt", &failure)?;
+             let listed: Vec<String> = auxiliary_windows(session.pid, hwnd)
+                 .into_iter()
+                 .map(|(handle, _, _)| format!("{}:{:?}", window_class(handle), window_title(handle)))
+                 .collect();
+             return Err(format!(
+-                "no save prompt appeared on close; title={:?}; windows={listed:?}",
+-                window_title(hwnd)
++                "save prompt timeout after provider-observed text; title={:?}; windows={listed:?}; evidence={}",
++                window_title(hwnd),
++                evidence.display()
+             ));
+         }
+     };
+     let _ = shot(&session, hwnd, "p0-7-prompt");
++    let prompt_evidence = serde_json::json!({
++        "checkpoint": "save prompt observed",
++        "window": window_evidence(&session, hwnd),
++        "dialog_hwnd": dialog.0 as usize,
++        "dialog_children": child_texts(dialog),
++    });
++    let _ = write_session_evidence(&session, "p0-7-prompt", &prompt_evidence)?;
+     let mut buttons = child_texts(dialog);
+     buttons.iter_mut().for_each(|b| *b = b.replace('&', "").to_lowercase());
+     let joined = buttons.join(" | ");
+@@ -1386,7 +1793,7 @@ fn journey_p4_1(env: &Env) -> Result<(), String> {
+     let hwnd = session.wait_window(Duration::from_secs(20))?;
+     session.settle();
+     let clean = shot(&session, hwnd, "p4-1-clean")?;
+-    type_text_until_dirty(&session, hwnd, "x", Duration::from_secs(10))?;
++    type_text_until_observed_change(&session, hwnd, "x", Duration::from_secs(10))?;
+     session.settle();
+     let dirty = shot(&session, hwnd, "p4-1-dirty")?;
+     // Tab strip band changed when the dirty marker appeared. The marker is a
+@@ -1442,20 +1849,53 @@ fn journey_p4_4(env: &Env) -> Result<(), String> {
+         (before.height / 3).max(120),
+     );
+     let before_sat = before.max_saturation(region);
+-    // Type at most a few times: input can be dropped while the window settles,
+-    // and a single missing keystroke made the pixel check flaky in sequences.
+-    let deadline = Instant::now() + Duration::from_secs(10);
+-    let mut after_sat = before_sat;
+-    while after_sat <= before_sat && Instant::now() < deadline {
+-        type_text(hwnd, "🎉🎊🌈");
+-        session.settle();
+-        let after = capture(hwnd)?;
+-        after_sat = after.max_saturation(region);
++    let before_evidence = serde_json::json!({
++        "checkpoint": "before emoji input",
++        "window": window_evidence(&session, hwnd),
++        "sample_region": [region.0, region.1, region.2, region.3],
++        "max_saturation": before_sat,
++        "screenshot": session.home.join("shots/p4-4-before.bmp"),
++    });
++    let _ = write_session_evidence(&session, "p4-4-before", &before_evidence)?;
++    let typing = type_text_until_observed_change(&session, hwnd, "🎉🎊🌈", Duration::from_secs(10))?;
++    let frame = wait_until_stable(hwnd, Duration::from_secs(8));
++    let after = shot(&session, hwnd, "p4-4-emoji")?;
++    let after_sat = after.max_saturation(region);
++    let window = window_evidence(&session, hwnd);
++    let after_evidence = serde_json::json!({
++        "checkpoint": "emoji input prerequisites and frame receipt",
++        "window": window,
++        "typing_receipt": typing,
++        "frame_receipt": frame,
++        "sample_region": [region.0, region.1, region.2, region.3],
++        "saturation_before": before_sat,
++        "saturation_after": after_sat,
++        "screenshot_before": session.home.join("shots/p4-4-before.bmp"),
++        "screenshot_after": session.home.join("shots/p4-4-emoji.bmp"),
++    });
++    let evidence = write_session_evidence(&session, "p4-4-after", &after_evidence)?;
++    if frame["stable"].as_bool() != Some(true) {
++        return Err(format!(
++            "timeout waiting for a stable frame after emoji input; evidence={}",
++            evidence.display()
++        ));
++    }
++    let Some(provider_text) = observed_uia_text(&window) else {
++        return Err(format!(
++            "UIA prerequisite unavailable after emoji input; evidence={}",
++            evidence.display()
++        ));
++    };
++    if !provider_text.contains("🎉🎊🌈") {
++        return Err(format!(
++            "UIA prerequisite did not observe the intended emoji text; evidence={}",
++            evidence.display()
++        ));
+     }
+-    let _ = shot(&session, hwnd, "p4-4-emoji");
+     if after_sat < 60 || after_sat <= before_sat {
+         return Err(format!(
+-            "no colourful emoji glyph detected (saturation before {before_sat}, after {after_sat})"
++            "no colourful emoji glyph detected (saturation before {before_sat}, after {after_sat}); evidence={}",
++            evidence.display()
+         ));
+     }
+     Ok(())
+@@ -1498,3 +1938,43 @@ fn click_button(dialog: HWND, candidates: &[&str]) -> Result<(), String> {
+     }
+     Err(format!("no button matched {candidates:?}"))
+ }
++
++#[cfg(test)]
++mod evidence_tests {
++    use super::*;
++
++    #[test]
++    fn failure_classification_keeps_timeout_harness_and_product_results_distinct() {
++        assert_eq!(classify_failure("timed out waiting for prompt"), "timeout");
++        assert_eq!(classify_failure("spawn failed: denied"), "harness_setup");
++        assert_eq!(
++            classify_failure("no colourful emoji glyph detected"),
++            "product_assertion"
++        );
++        assert_eq!(
++            classify_failure("blocked environment: no desktop"),
++            "blocked_environment"
++        );
++    }
++
++    #[test]
++    fn evidence_counts_only_explicit_top_level_results() {
++        let path = std::env::temp_dir().join(format!(
++            "bareline-journey-evidence-{}-{}.json",
++            std::process::id(),
++            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
++        ));
++        let identity = serde_json::json!({"run_id": "fixture"});
++        let results = vec![
++            serde_json::json!({"name": "p0-7", "status": "passed", "child_fixture_lines": 12}),
++            serde_json::json!({"name": "p4-4", "status": "failed", "child_fixture_lines": 9}),
++        ];
++        persist_run_evidence(&path, &identity, 2, &results).unwrap();
++        let evidence: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
++        assert_eq!(evidence["top_level_total"], 2);
++        assert_eq!(evidence["top_level_completed"], 2);
++        assert_eq!(evidence["top_level_passed"], 1);
++        assert_eq!(evidence["top_level_failed"], 1);
++        std::fs::remove_file(path).unwrap();
++    }
++}

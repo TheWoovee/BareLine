@@ -1,0 +1,18 @@
+diff --git a/crates/app/src/workspace.rs b/crates/app/src/workspace.rs
+index 69da74a..78980e8 100644
+--- a/crates/app/src/workspace.rs
++++ b/crates/app/src/workspace.rs
+@@ -3118,10 +3118,12 @@ mod tests {
+             .unwrap()
+             .approve(true)
+             .unwrap();
++            let prepared_path = prepared.path.clone();
++            assert_eq!(prepared_path, std::fs::canonicalize(&target).unwrap());
+             workspace.save_prepared(0, prepared);
+             settle(&mut workspace);
+             assert_eq!(std::fs::read_to_string(&target).unwrap(), "Xabcdef");
+-            assert_eq!(workspace.path(0), Some(target.as_path()));
++            assert_eq!(workspace.path(0), Some(prepared_path.as_path()));
+             assert!(!workspace.editors[0].dirty());
+         }
+         std::fs::remove_dir_all(root).unwrap();

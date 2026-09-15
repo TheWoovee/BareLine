@@ -47,7 +47,51 @@ impl KeyChord {
             }
             Key::Physical(code.into())
         } else {
-            Key::Logical(key.to_uppercase())
+            let normalized = key.to_uppercase();
+            let normalized = match normalized.as_str() {
+                "ARROWLEFT" => "LEFT".into(),
+                "ARROWRIGHT" => "RIGHT".into(),
+                "ARROWUP" => "UP".into(),
+                "ARROWDOWN" => "DOWN".into(),
+                _ => normalized,
+            };
+            let character = key.chars().count() == 1 && !key.chars().any(char::is_control);
+            let named = matches!(
+                normalized.as_str(),
+                "BACKSPACE"
+                    | "TAB"
+                    | "ENTER"
+                    | "ESCAPE"
+                    | "SPACE"
+                    | "DELETE"
+                    | "INSERT"
+                    | "HOME"
+                    | "END"
+                    | "PAGEUP"
+                    | "PAGEDOWN"
+                    | "LEFT"
+                    | "RIGHT"
+                    | "UP"
+                    | "DOWN"
+                    | "ARROWLEFT"
+                    | "ARROWRIGHT"
+                    | "ARROWUP"
+                    | "ARROWDOWN"
+                    | "CONTEXTMENU"
+                    | "PRINTSCREEN"
+                    | "SCROLLLOCK"
+                    | "PAUSE"
+                    | "CAPSLOCK"
+                    | "NUMLOCK"
+            );
+            let function = normalized
+                .strip_prefix('F')
+                .and_then(|number| number.parse::<u8>().ok())
+                .is_some_and(|number| (1..=35).contains(&number));
+            if !character && !named && !function {
+                return Err(format!("Unknown key: {key}"));
+            }
+            Key::Logical(normalized)
         };
         Ok(chord)
     }
@@ -72,6 +116,59 @@ impl KeyChord {
         }
         value
     }
+}
+/// Windows-convention display of a chord, used everywhere a shortcut is shown
+/// to a person (menus, palette, tooltips, the shortcut mapper). Storage still
+/// goes through `KeyChord::label`, so exported keymaps keep round-tripping.
+pub fn display_chord(chord: &KeyChord) -> String {
+    let mut value = String::new();
+    for (enabled, text) in [
+        (chord.ctrl, "Ctrl+"),
+        (chord.alt, "Alt+"),
+        (chord.shift, "Shift+"),
+        (chord.meta, "Win+"),
+    ] {
+        if enabled {
+            value.push_str(text);
+        }
+    }
+    match &chord.key {
+        Key::Physical(code) => {
+            // Physical bindings keep their explicit form so they remain
+            // unambiguous (and round-trip through the shortcut mapper).
+            value.push_str("Physical:");
+            value.push_str(code);
+        }
+        Key::Logical(key) => value.push_str(&friendly_key(key)),
+    }
+    value
+}
+fn friendly_key(key: &str) -> String {
+    match key {
+        "UP" => "Up",
+        "DOWN" => "Down",
+        "LEFT" => "Left",
+        "RIGHT" => "Right",
+        "TAB" => "Tab",
+        "ESCAPE" => "Esc",
+        "SPACE" => "Space",
+        "ENTER" | "RETURN" => "Enter",
+        "BACKSPACE" => "Backspace",
+        "DELETE" => "Del",
+        "INSERT" => "Ins",
+        "HOME" => "Home",
+        "END" => "End",
+        "PAGEUP" => "PgUp",
+        "PAGEDOWN" => "PgDn",
+        "CONTEXTMENU" => "Menu",
+        "PRINTSCREEN" => "PrtSc",
+        "SCROLLLOCK" => "ScrLk",
+        "PAUSE" => "Pause",
+        "CAPSLOCK" => "Caps",
+        "NUMLOCK" => "NumLk",
+        other => return other.to_string(),
+    }
+    .to_string()
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KeyBinding {
@@ -126,9 +223,7 @@ impl Keymap {
         let mut conflicts = Vec::new();
         for (index, first) in bindings.iter().enumerate() {
             for second in &bindings[index + 1..] {
-                if first.sequence.starts_with(&second.sequence)
-                    || second.sequence.starts_with(&first.sequence)
-                {
+                if first.sequence.starts_with(&second.sequence) || second.sequence.starts_with(&first.sequence) {
                     conflicts.push(KeyConflict {
                         first: first.command,
                         second: second.command,
@@ -145,11 +240,7 @@ impl Keymap {
         conflicts
     }
     /// Replaces atomically: invalid targets, empty chords and conflicts preserve the old map.
-    pub fn replace(
-        &mut self,
-        bindings: Vec<KeyBinding>,
-        registry: &CommandRegistry,
-    ) -> Result<(), String> {
+    pub fn replace(&mut self, bindings: Vec<KeyBinding>, registry: &CommandRegistry) -> Result<(), String> {
         for binding in &bindings {
             if registry.dispatch(binding.command).is_none() {
                 return Err(format!("Unknown command: {}", binding.command.0));
@@ -169,13 +260,7 @@ impl Keymap {
         self.bindings
             .iter()
             .filter(|b| b.command == command)
-            .map(|b| {
-                b.sequence
-                    .iter()
-                    .map(KeyChord::label)
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            })
+            .map(|b| b.sequence.iter().map(display_chord).collect::<Vec<_>>().join(" "))
             .collect::<Vec<_>>()
             .join(", ")
     }
@@ -191,11 +276,7 @@ impl Keymap {
                 return KeyResolution::Command(binding.command);
             }
         }
-        if self
-            .bindings
-            .iter()
-            .any(|b| b.sequence.starts_with(sequence))
-        {
+        if self.bindings.iter().any(|b| b.sequence.starts_with(sequence)) {
             KeyResolution::Pending
         } else {
             KeyResolution::NoMatch
@@ -238,10 +319,7 @@ impl Keymap {
         if doc.get("version").and_then(|v| v.as_integer()) != Some(1) {
             return Err("Unsupported keymap version".into());
         }
-        if doc
-            .iter()
-            .any(|(key, _)| key != "version" && key != "bindings")
-        {
+        if doc.iter().any(|(key, _)| key != "version" && key != "bindings") {
             return Err("Unknown keymap field".into());
         }
         let mut bindings = Vec::new();
@@ -250,10 +328,7 @@ impl Keymap {
                 .as_array_of_tables()
                 .ok_or("bindings must be an array of tables")?;
             for table in tables {
-                if table
-                    .iter()
-                    .any(|(key, _)| key != "command" && key != "keys")
-                {
+                if table.iter().any(|(key, _)| key != "command" && key != "keys") {
                     return Err("Unknown binding field".into());
                 }
                 let command = table
@@ -304,11 +379,7 @@ mod tests {
             Keymap::conflicts(&[first.clone(), second.clone()])[0].kind,
             ConflictKind::Prefix
         );
-        assert!(
-            keymap
-                .replace(vec![first, second.clone()], &registry)
-                .is_err()
-        );
+        assert!(keymap.replace(vec![first, second.clone()], &registry).is_err());
         assert_eq!(keymap.export_toml(), original);
         keymap.replace(vec![second.clone()], &registry).unwrap();
         assert_eq!(
@@ -337,11 +408,39 @@ mod tests {
             assert!(keymap.import_toml(bad, &registry).is_err());
             assert_eq!(keymap.export_toml(), text);
         }
-        keymap.import_toml("# user keymap\nversion=1\n[[bindings]]\ncommand='file.new'\nkeys=['Ctrl+Physical:KeyN']", &registry).unwrap();
-        assert_eq!(
-            keymap.shortcut_label(CommandId("file.new")),
-            "Ctrl+Physical:KeyN"
-        );
+        keymap
+            .import_toml(
+                "# user keymap\nversion=1\n[[bindings]]\ncommand='file.new'\nkeys=['Ctrl+Physical:KeyN']",
+                &registry,
+            )
+            .unwrap();
+        assert_eq!(keymap.shortcut_label(CommandId("file.new")), "Ctrl+Physical:KeyN");
+    }
+    #[test]
+    fn display_labels_follow_windows_conventions() {
+        for (chord, expected) in [
+            ("Alt+Up", "Alt+Up"),
+            ("Ctrl+Alt+Down", "Ctrl+Alt+Down"),
+            ("Tab", "Tab"),
+            ("Escape", "Esc"),
+            ("Ctrl+Space", "Ctrl+Space"),
+            ("Delete", "Del"),
+            ("PageUp", "PgUp"),
+            ("Ctrl+PageDown", "Ctrl+PgDn"),
+            ("Shift+Enter", "Shift+Enter"),
+            ("Ctrl+Shift+Left", "Ctrl+Shift+Left"),
+            ("Ctrl+S", "Ctrl+S"),
+            ("F5", "F5"),
+        ] {
+            assert_eq!(
+                display_chord(&KeyChord::parse(chord).unwrap()),
+                expected,
+                "display of {chord}"
+            );
+        }
+        // The storage form keeps the uppercase key names so exports still parse.
+        assert_eq!(KeyChord::parse("Alt+Up").unwrap().label(), "Alt+UP");
+        assert_eq!(KeyChord::parse("Escape").unwrap().label(), "ESCAPE");
     }
     #[test]
     fn altgr_ime_and_dead_keys_always_reach_text_input() {

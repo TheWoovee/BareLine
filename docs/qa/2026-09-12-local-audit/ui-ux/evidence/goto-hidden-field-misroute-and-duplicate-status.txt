@@ -1,0 +1,45 @@
+Window: "Bareline", App: bareline-audit.exe.
+	0 region Bareline Secondary Actions: Raise
+		1 title bar
+			2 menu bar System ID: MenuBar
+				35 menu item System
+			4 button Minimize
+			5 button Maximize
+			6 button Close
+		7 menu bar Application ID: MenuBar
+			36 menu item File
+			37 menu item Edit
+			38 menu item Search
+			39 menu item View
+			40 menu item Encoding
+			41 menu item Language
+			42 menu item Settings
+			43 menu item Macro
+			44 menu item Run
+			45 menu item Tools
+			46 menu item Window
+			47 menu item Help
+		20 edit Editor
+		21 button Previous editor viewport
+		22 button Next editor viewport
+		23 group Document tabs
+			24 tab item (selectable) resident.txt, pane 1
+				25 button Close resident.txt
+			26 tab item (selectable) replace.txt •, pane 1, modified
+				27 button Close replace.txt •
+			139 tab item (selectable) resident.txt, pane 1
+				140 button Close resident.txt
+		28 group Status bar
+			29 status Language: Plain text
+			30 status Document size: 17 bytes, 1 lines
+			31 status Caret position: Line 1, column 2
+			32 status Line endings: LF
+			33 status Encoding: UTF-8
+			34 status Editing mode: Insert
+		203 alert Recovery snapshot preparing; editing remains available.
+
+Document text: ```
+Qalpha alpha beta
+```
+Focused: 20 edit Editor
+Document after sky.type_text(Q): Qalpha alpha beta

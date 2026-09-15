@@ -1,16 +1,30 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Existing Paged actors spill resident edit/history leaves on the I/O worker.
 use super::*;
-#[derive(Default)]
-pub(super) struct SpillState {
-    pending: bool,
-    config: Option<(
-        PathBuf,
-        Arc<dyn LocalFileSystem>,
-        bareline_file_io::source::SourceOptions,
-    )>,
-    attempted: Option<(u64, ContentStateId)>,
-    error: Option<String>,
+struct SpillCompletion {
+    actor: PagedSession,
+    wake: JobWake,
+    finished: bool,
+}
+impl SpillCompletion {
+    fn new(actor: PagedSession, notify: Arc<dyn Fn() + Send + Sync>) -> Self {
+        Self {
+            actor,
+            wake: JobWake::new(notify),
+            finished: false,
+        }
+    }
+    fn finish(mut self) {
+        self.finished = true;
+        self.wake.fire();
+    }
+}
+impl Drop for SpillCompletion {
+    fn drop(&mut self) {
+        if !self.finished {
+            self.actor.finish_spill(Some("Paged spill worker failed".into()));
+        }
+    }
 }
 impl PagedEditorSurface {
     pub fn configure_owned_spill(
@@ -19,104 +33,87 @@ impl PagedEditorSurface {
         platform: Arc<dyn LocalFileSystem>,
         options: bareline_file_io::source::SourceOptions,
     ) {
-        if let Ok(mut state) = self.owned_spill.lock() {
-            state.config = Some((cache, platform, options));
-            state.attempted = None;
-        }
+        self.actor.configure_spill(cache, platform, options);
     }
     pub(super) fn pump_owned_spill(&mut self) {
-        if let Ok(mut state) = self.owned_spill.try_lock() {
-            if let Some(error) = state.error.take() {
-                self.error = Some(error);
-            }
+        if let Some(error) = self.actor.take_spill_error() {
+            self.error = Some(error);
         }
-        if self.captured.is_some()
-            || self.busy()
-            || self.budget.used() <= self.budget.limit().saturating_mul(3) / 4
-        {
+        if self.captured.is_some() || self.busy() || self.budget.used() <= self.budget.limit().saturating_mul(3) / 4 {
             return;
         }
-        let stamp = (
-            self.snapshot.identity_token().0,
-            self.snapshot.content_state,
-        );
-        let Ok(mut state) = self.owned_spill.try_lock() else {
+        let stamp = (self.snapshot.identity_token().0, self.snapshot.content_state);
+        let Some(reservation) = self.actor.reserve_spill(stamp) else {
             return;
         };
-        if state.pending || state.attempted == Some(stamp) {
-            return;
-        }
-        let Some((cache, platform, options)) = state.config.clone() else {
-            return;
-        };
-        state.pending = true;
-        state.attempted = Some(stamp);
-        drop(state);
+        let bareline_file_io::paged_service::PagedSpillReservation {
+            cache,
+            platform,
+            options,
+        } = reservation;
         let actor = self.actor.clone();
         let peer = self.peer.clone();
-        let state = self.owned_spill.clone();
         let budget = self.budget.clone();
         let quota = self.streaming_quota;
         let cancel = self.cancellation.clone();
         let notify = self.notify.clone();
-        let submitted = worker().try_send(Box::new(move || {
-            let result = (|| -> Result<(), String> {
-                cancel
-                    .check()
-                    .map_err(|error| format!("Paged spill cancelled: {error:?}"))?;
-                let plan = {
-                    let opened = actor.lock().map_err(|_| "Paged actor stopped")?;
-                    let snapshot = opened.transcoded.document.snapshot();
-                    if (snapshot.identity_token().0, snapshot.content_state) != stamp {
+        let submitted = worker().submit(
+            WorkKind::Maintenance,
+            Box::new(move || {
+                let completion = SpillCompletion::new(actor.clone(), notify);
+                let result = (|| -> Result<(), String> {
+                    cancel
+                        .check()
+                        .map_err(|error| format!("Paged spill cancelled: {error:?}"))?;
+                    let requested = actor.state().map_err(|error| error.to_string())?.stamp;
+                    let plan = {
+                        let opened = actor.lock_document().map_err(|error| error.to_string())?;
+                        let snapshot = opened.document().snapshot();
+                        if (snapshot.identity_token().0, snapshot.content_state) != stamp {
+                            return Ok(());
+                        }
+                        opened
+                            .document()
+                            .capture_spill()
+                            .map_err(|error| format!("Paged spill capture: {error:?}"))?
+                    };
+                    // Source-backed leaves are already spill-owned. Copy only deduplicated
+                    // Resident allocations, including retained undo/redo inverse leaves.
+                    let owned_bytes = plan
+                        .segments()
+                        .try_fold(0usize, |sum, segment| sum.checked_add(segment.text.len()))
+                        .ok_or("Paged spill size overflow")?;
+                    if owned_bytes == 0 {
                         return Ok(());
                     }
-                    opened
-                        .transcoded
-                        .document
-                        .capture_spill()
-                        .map_err(|error| format!("Paged spill capture: {error:?}"))?
-                };
-                // Source-backed leaves are already spill-owned. Copy only deduplicated
-                // Resident allocations, including retained undo/redo inverse leaves.
-                let owned_bytes = plan
-                    .segments()
-                    .try_fold(0usize, |sum, segment| sum.checked_add(segment.text.len()))
-                    .ok_or("Paged spill size overflow")?;
-                if owned_bytes == 0 {
-                    return Ok(());
-                }
-                let prepared = bareline_file_io::owned_store::prepare_segments(
-                    plan, None, &cache, quota, platform, options, budget, &cancel,
-                )
-                .map_err(|error| format!("Paged spill unavailable: {error:?}"))?;
-                cancel
-                    .check()
-                    .map_err(|error| format!("Paged spill cancelled: {error:?}"))?;
-                let mut opened = actor.lock().map_err(|_| "Paged actor stopped")?;
-                // Core validates document/revision/content/saved state and both history
-                // depths. Any concurrent change discards preparation without publication.
-                opened
-                    .transcoded
-                    .document
-                    .attach_spill(prepared)
-                    .map_err(|error| format!("Paged spill stale or unavailable: {error:?}"))?;
-                let mut peer = peer.lock().map_err(|_| "Paged peer state stopped")?;
-                peer.epoch = peer.epoch.wrapping_add(1);
-                Ok(())
-            })();
-            if let Ok(mut state) = state.lock() {
-                state.pending = false;
-                if let Err(error) = result {
-                    state.error = Some(error);
-                }
-            }
-            notify();
-        }));
+                    let prepared = bareline_file_io::owned_store::prepare_segments(
+                        plan, None, &cache, quota, platform, options, budget, &cancel,
+                    )
+                    .map_err(|error| format!("Paged spill unavailable: {error:?}"))?;
+                    cancel
+                        .check()
+                        .map_err(|error| format!("Paged spill cancelled: {error:?}"))?;
+                    let receipt = actor.execute(
+                        bareline_file_io::paged_service::PagedLifecycleCommand::Spill { requested, prepared },
+                        &cancel,
+                    );
+                    if !actor.receipt_applies(&receipt) {
+                        return Ok(());
+                    }
+                    match receipt.terminal.map_err(|error| error.to_string())? {
+                        bareline_file_io::paged_service::PagedTerminalOutcome::Spilled => {}
+                        _ => return Err("Unexpected spill receipt".into()),
+                    }
+                    let mut peer = peer.lock().map_err(|_| "Paged peer state stopped")?;
+                    peer.epoch = peer.epoch.wrapping_add(1);
+                    Ok(())
+                })();
+                actor.finish_spill(result.err());
+                completion.finish();
+            }),
+        );
         if submitted.is_err() {
-            if let Ok(mut state) = self.owned_spill.lock() {
-                state.pending = false;
-                state.attempted = None;
-            }
+            self.actor.cancel_spill_reservation();
         }
     }
 }
@@ -154,11 +151,7 @@ mod tests {
                 volume: 1,
                 file: 1,
                 length: m.len(),
-                modified: m
-                    .modified()?
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_nanos() as u64,
+                modified: m.modified()?.duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos() as u64,
             })
         }
         fn commit(&self, stage: &Path, target: &Path, _: bool) -> std::io::Result<()> {
@@ -201,17 +194,16 @@ mod tests {
             panic!("fixture open")
         };
         let snapshot = opened.transcoded.document.snapshot();
-        let window = read_window(
-            &mut opened,
-            &mut None,
-            &snapshot,
-            0,
-            1,
-            &budget,
-            &Cancellation::default(),
-            &std::sync::atomic::AtomicBool::new(false),
-        )
-        .unwrap();
+        let mut request = snapshot.begin_viewport(TextOffset(0), 1, &budget).unwrap();
+        let window = loop {
+            match request.poll() {
+                bareline_document::paged::WindowPoll::Ready(window) => break window,
+                bareline_document::paged::WindowPoll::Pending(ticket) => {
+                    opened.transcoded.source.read_page(ticket).unwrap();
+                }
+                _ => panic!("fixture window unavailable"),
+            }
+        };
         opened
             .transcoded
             .document
@@ -242,19 +234,15 @@ mod tests {
         loop {
             view.pump();
             assert!(Instant::now() < deadline);
-            let done = {
-                let state = view.owned_spill.lock().unwrap();
-                assert!(state.error.is_none(), "{:?}", state.error);
-                state.attempted.is_some() && !state.pending
-            };
+            let done = view.actor.spill_finished().unwrap();
             if done {
                 break;
             }
             std::thread::yield_now();
         }
         {
-            let opened = view.actor.lock().unwrap();
-            let doc = &opened.transcoded.document;
+            let opened = view.actor.lock_document().unwrap();
+            let doc = opened.document();
             assert_eq!(doc.snapshot().identity_token(), identity);
             assert_eq!(doc.snapshot().content_state, content);
             assert_eq!(doc.history_stats().undo_changes, 1);
@@ -270,12 +258,44 @@ mod tests {
         assert!(view.error.is_none(), "{:?}", view.error);
         assert_eq!(view.snapshot().identity_token(), identity);
         {
-            let mut opened = view.actor.lock().unwrap();
-            opened.transcoded.document.undo().unwrap();
-            assert_eq!(opened.transcoded.document.snapshot().len(), 1);
+            let mut opened = view.actor.lock_document().unwrap();
+            opened.document_mut().undo().unwrap();
+            assert_eq!(opened.document().snapshot().len(), 1);
         }
+        // Keep destruction on this thread: viewport prefetch also retains the
+        // actor, but runs independently of the shared paged I/O worker.
+        let mut actor = view.actor.clone();
         drop(view);
         drop(snapshot);
+        // A result can arrive before its worker closure releases the actor.
+        // Drain preceding jobs before removing Windows-backed fixture files.
+        let (released, complete) = std::sync::mpsc::channel();
+        worker()
+            .submit(
+                WorkKind::Maintenance,
+                Box::new(move || {
+                    let _ = released.send(());
+                }),
+            )
+            .unwrap();
+        complete.recv_timeout(Duration::from_secs(15)).unwrap();
+        let release_deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            match actor.try_unwrap() {
+                Ok(actor) => {
+                    drop(actor);
+                    break;
+                }
+                Err(retained) => {
+                    actor = retained;
+                    assert!(
+                        Instant::now() < release_deadline,
+                        "Paged fixture actor still retained by background work"
+                    );
+                    std::thread::yield_now();
+                }
+            }
+        }
         fs::remove_dir_all(root).unwrap();
     }
 }

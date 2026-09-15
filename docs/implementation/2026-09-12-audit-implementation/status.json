@@ -1,0 +1,616 @@
+{
+  "started_utc": "2026-09-12T05:38:24.4355041Z",
+  "policy": "Contained checks per PR; full build/suites after integration; fresh Sol medium audit",
+  "prs": [
+    {
+      "pr": "T01",
+      "state": "integrated-accepted",
+      "agent": "sol_launch_impl",
+      "base": "6fdaf57ed55f99c2146d8d647fa41d8721efe608",
+      "commit": "46f9f791a55cef05950bbdb59eaa4598b8b21c67",
+      "review": "reviews/T01-R3.md",
+      "patches": [
+        {
+          "base": "6fdaf57ed55f99c2146d8d647fa41d8721efe608",
+          "commit": "8750def0820b41f9d21b88b64b32dc47c7c87758"
+        },
+        {
+          "base": "642e6dae4df9f2a804f895bdd2e6ff9ef1e612d7",
+          "commit": "0dcf899e295485c5cadbdce749b036345ae3f652"
+        },
+        {
+          "base": "0dcf899e295485c5cadbdce749b036345ae3f652",
+          "commit": "46f9f791a55cef05950bbdb59eaa4598b8b21c67"
+        }
+      ]
+    },
+    {
+      "pr": "T02",
+      "state": "integrated-accepted",
+      "agent": "sol_launch_impl",
+      "base": "4c746299a9cf066236a08713fd88b415695b6257",
+      "commit": "e80b03cb14fffcdb954f6a9de813d91923615993",
+      "review": "reviews/T02-R2.md",
+      "patches": [
+        {
+          "base": "4c746299a9cf066236a08713fd88b415695b6257",
+          "commit": "edf8a8e253a9b8ef9d76fd5bb535741725b566ea"
+        },
+        {
+          "base": "89d5463f3087b733fe461b4a0e3a6e589fa29db0",
+          "commit": "e80b03cb14fffcdb954f6a9de813d91923615993"
+        }
+      ]
+    },
+    {
+      "pr": "T03",
+      "state": "integrated-accepted",
+      "agent": "sol_save_impl",
+      "base": "3c7f4a1681d676b38b49192b594578b914222212",
+      "commit": "eb013e69dfa0cbbc453e01f117e63f6725f0cc76",
+      "review": "reviews/T03-R3.md"
+    },
+    {
+      "pr": "T04",
+      "state": "integrated-accepted",
+      "agent": "sol_save_impl",
+      "base": "ec0d5f488bce0f523850889969b51a9f07e2dd79",
+      "commit": "5a626fe52305718f0fd2f47419654877f370ae8a",
+      "review": "reviews/T04-R6.md",
+      "patches": [
+        {
+          "base": "ec0d5f488bce0f523850889969b51a9f07e2dd79",
+          "commit": "acf6448c7e568f4358db78177d05201ab47cc4b6"
+        },
+        {
+          "base": "01ccd8b67fb2df1f02826f0c7c82327d6edd13e4",
+          "commit": "5a626fe52305718f0fd2f47419654877f370ae8a"
+        }
+      ]
+    },
+    {
+      "pr": "T05",
+      "state": "integrated-accepted",
+      "agent": "sol_workers_impl",
+      "base": "67fbae06c16e51dffa95ad3b08ef69f0ff91a725",
+      "commit": "e8611ba557ce46d4b856fdc851b7d85650eec47f",
+      "review": "reviews/R8-known-fixes.md",
+      "patches": [
+        {
+          "base": "67fbae06c16e51dffa95ad3b08ef69f0ff91a725",
+          "commit": "e9735cc78c4d689f09348a594f60229e9f008316"
+        },
+        {
+          "base": "861522334c777282bbce79cb8aa66048a3ce980c",
+          "commit": "c4a541c27a024c449ac46f986e84489fd7315fd4"
+        },
+        {
+          "base": "c4a541c27a024c449ac46f986e84489fd7315fd4",
+          "commit": "3fd4e23745e28e195c69aff6b85ab57fe0df473c"
+        },
+        {
+          "base": "3fd4e23745e28e195c69aff6b85ab57fe0df473c",
+          "commit": "29d5c0340441b5d4d32f2c01f88660fed7490d4c"
+        },
+        {
+          "base": "0751cfa082217ecc16d4d11bb18f43a066593398",
+          "commit": "ea0d7743525addd79862755d2c15508d9be9b7ca"
+        },
+        {
+          "base": "8eca399e663156d9ff2b74be86a57f46ee13f39a",
+          "commit": "785808bf171c10cfdafde619eb8426671aa96095"
+        },
+        {
+          "base": "785808bf171c10cfdafde619eb8426671aa96095",
+          "commit": "23b121d8d28930ccb22c7144a11b4aef6cdba508"
+        },
+        {
+          "base": "23b121d8d28930ccb22c7144a11b4aef6cdba508",
+          "commit": "c0129d61345595d66d0aecc7029d0a73a29efc65"
+        },
+        {
+          "base": "c0129d61345595d66d0aecc7029d0a73a29efc65",
+          "commit": "e8611ba557ce46d4b856fdc851b7d85650eec47f"
+        }
+      ]
+    },
+    {
+      "pr": "T06",
+      "state": "integrated-accepted",
+      "agent": "sol_workers_impl",
+      "base": "3c7f4a1681d676b38b49192b594578b914222212",
+      "commit": "2d35f04a14ec9565d3038360b488f713c6fcbae4",
+      "review": "reviews/T06-R2.md"
+    },
+    {
+      "pr": "T07",
+      "state": "integrated-accepted",
+      "agent": "sol_workers_impl",
+      "base": "1708befe0a119506cab01d854467cc8fc4130335",
+      "commit": "003ccfd2928e1902939492505f48013b6e05d12e",
+      "review": "reviews/T07-R2.md",
+      "patches": [
+        {
+          "base": "1708befe0a119506cab01d854467cc8fc4130335",
+          "commit": "78dfec102cc416d4d6e940557aa43fff67359f61"
+        },
+        {
+          "base": "78dfec102cc416d4d6e940557aa43fff67359f61",
+          "commit": "d2e380b935012d510ed9a8fded1f5f31cdda8e9d"
+        },
+        {
+          "base": "1e54c028dda757408084c1aad1cee601a8142394",
+          "commit": "003ccfd2928e1902939492505f48013b6e05d12e"
+        }
+      ],
+      "provenance_note": "Use ordered patches for exact T07 delta; final helper commit is based on an integrated snapshot containing other accepted PRs."
+    },
+    {
+      "pr": "T08",
+      "state": "integrated-accepted",
+      "agent": "sol_workers_impl",
+      "base": "003ccfd2928e1902939492505f48013b6e05d12e",
+      "commit": "93efcca78113e3363ca4ee711329fbadbf437fdb",
+      "review": "reviews/T08-R2.md"
+    },
+    {
+      "pr": "T09",
+      "state": "integrated-accepted",
+      "agent": "sol_launch_impl",
+      "base": "7c1d60ec7a48b68f831cdfe413825fb56535baf0",
+      "commit": "6aa6f03a95bfe6ff07c6ba799cc08d5d7127c4e4",
+      "review": "reviews/T09-R8.md",
+      "patches": [
+        {
+          "base": "7c1d60ec7a48b68f831cdfe413825fb56535baf0",
+          "commit": "66e6badc40bbb6449be7cf24f75918c442f6be5a"
+        },
+        {
+          "base": "f556f5d10acfe8757d7e71bb46ed19858e8a981c",
+          "commit": "7e091599056b81736f101f330c41a0c4473e3193"
+        },
+        {
+          "base": "861522334c777282bbce79cb8aa66048a3ce980c",
+          "commit": "55bc4c9f99c51e3104771c8e38ae3e3fdcfb8c29"
+        },
+        {
+          "base": "55bc4c9f99c51e3104771c8e38ae3e3fdcfb8c29",
+          "commit": "f39898965310730d3b207270f7537b7f39018c2e"
+        },
+        {
+          "base": "f39898965310730d3b207270f7537b7f39018c2e",
+          "commit": "74a05e65d907f74cb91c304ac080560de19122e3"
+        },
+        {
+          "base": "74a05e65d907f74cb91c304ac080560de19122e3",
+          "commit": "aa2a6b2e7fd857fc84da4f8109744ceb8b8a28c1"
+        },
+        {
+          "base": "aa2a6b2e7fd857fc84da4f8109744ceb8b8a28c1",
+          "commit": "db2b1735bd7648cfe980315f51d384e100528a26"
+        },
+        {
+          "base": "db2b1735bd7648cfe980315f51d384e100528a26",
+          "commit": "6aa6f03a95bfe6ff07c6ba799cc08d5d7127c4e4"
+        }
+      ]
+    },
+    {
+      "pr": "T10",
+      "state": "integrated-accepted",
+      "agent": "sol_runtime_qualification",
+      "base": "64ab47fc89a5369d3fbb587da35699d35f6d8b88",
+      "commit": "7aaaecdc1db68673c1a4e5241916e5bc29e4cd8c",
+      "review": "reviews/T10-R2.md"
+    },
+    {
+      "pr": "T11",
+      "state": "integrated-accepted",
+      "agent": "sol_release_config",
+      "base": "67ee505ba9fc5e9754b237c6b18ea5fd1916d90a",
+      "commit": "a47369a108295d487600da7efe6fca0ad430a8e8",
+      "review": "reviews/T11-R4.md",
+      "provenance_note": "Ordered T11-only ranges; intervening T10 merge excluded because already integrated.",
+      "patches": [
+        {
+          "base": "67ee505ba9fc5e9754b237c6b18ea5fd1916d90a",
+          "commit": "0e3de9325aa74f22937540574f960ff0bcaa40dd"
+        },
+        {
+          "base": "346f93b8e892344be0b7deeada7ce54b09e35d74",
+          "commit": "d417850592f27ab6331b151584b19b2599841b1b"
+        },
+        {
+          "base": "d417850592f27ab6331b151584b19b2599841b1b",
+          "commit": "54871e5564809af00ddd0e71aee75fdaf3059a78"
+        },
+        {
+          "base": "54871e5564809af00ddd0e71aee75fdaf3059a78",
+          "commit": "9dde738f3a298cb79a84374255b89f842ed477c8"
+        },
+        {
+          "base": "56e5934f81764ec2a2bf11c9cc06938144106e32",
+          "commit": "a47369a108295d487600da7efe6fca0ad430a8e8"
+        }
+      ]
+    },
+    {
+      "pr": "T12",
+      "state": "integrated-accepted",
+      "agent": "sol_workers_impl",
+      "base": "c3c13f19e377729809451739a4c5026302b3e16c",
+      "commit": "0027895ce60c95c4027ae6b9cbca18950ed52954",
+      "review": "reviews/T12-R2.md"
+    },
+    {
+      "pr": "T13",
+      "state": "integrated-accepted",
+      "agent": "sol_launch_impl",
+      "base": "ec0d5f488bce0f523850889969b51a9f07e2dd79",
+      "commit": "5c19a918045cf4a2fb91e305819dc00641dfb8cb",
+      "review": "reviews/T13-R1.md"
+    },
+    {
+      "pr": "T14",
+      "state": "integrated-accepted",
+      "base": "e7648af1715ecf5a0214377db2f802f7e330a9e4",
+      "commit": "498ee297cf5e88662289b306b964d338baa00544",
+      "review": "reviews/T14-R2.md",
+      "agent": "sol_capability_ledger",
+      "provenance_note": "Full reviewed patch except IMPLEMENTATION_STATUS.md; explicit additive merge preserves T16 ownership note and inserts T14 capability authority. Original index verified unchanged; evidence/T14-merged-status.diff retained.",
+      "patches": [
+        {
+          "base": "e7648af1715ecf5a0214377db2f802f7e330a9e4",
+          "commit": "6cca60b0df3835fea3042788978c92a02bdd07ea"
+        },
+        {
+          "base": "89d5463f3087b733fe461b4a0e3a6e589fa29db0",
+          "commit": "8eb6e7c6b8dad17bbf5dd804826f3f53f3dba4f0"
+        },
+        {
+          "base": "8eb6e7c6b8dad17bbf5dd804826f3f53f3dba4f0",
+          "commit": "498ee297cf5e88662289b306b964d338baa00544"
+        }
+      ]
+    },
+    {
+      "pr": "T15",
+      "state": "integrated-accepted",
+      "agent": "sol_perf_qualification",
+      "base": "e7648af1715ecf5a0214377db2f802f7e330a9e4",
+      "commit": "d95c8c1cb4252381d26acb2e851d6d88d6ca0b52",
+      "review": "reviews/T15-R2.md"
+    },
+    {
+      "pr": "T16",
+      "state": "integrated-accepted",
+      "agent": "sol_paged_lifecycle",
+      "base": "67ee505ba9fc5e9754b237c6b18ea5fd1916d90a",
+      "commit": "fdbdbbfef1432586f46d592bc0037c53874d4a6e",
+      "review": "reviews/R8-known-fixes.md",
+      "provenance_note": "Ordered T16-only commits; imported U13 commits excluded because already integrated.",
+      "patches": [
+        {
+          "base": "67ee505ba9fc5e9754b237c6b18ea5fd1916d90a",
+          "commit": "4b9793a0d34b967e77f0830b64352d78ad278edb"
+        },
+        {
+          "base": "876cb7efb6ef588ff51599705156b72ae22d14a6",
+          "commit": "18fc210afd78d600228d52fb446f56ce1fe58898"
+        },
+        {
+          "base": "18fc210afd78d600228d52fb446f56ce1fe58898",
+          "commit": "1759d4b979a55f4f97e0a55648fd0d1eee810663"
+        },
+        {
+          "base": "1759d4b979a55f4f97e0a55648fd0d1eee810663",
+          "commit": "867ebf22ce773c865d0f161d377dad47fca79dce"
+        },
+        {
+          "base": "867ebf22ce773c865d0f161d377dad47fca79dce",
+          "commit": "38526aaa196528e13c530606fffc1cfeac41ea6d"
+        },
+        {
+          "base": "38526aaa196528e13c530606fffc1cfeac41ea6d",
+          "commit": "a3d74cb3f1e87399e6967c7eb4b1cff957079413"
+        },
+        {
+          "base": "a3d74cb3f1e87399e6967c7eb4b1cff957079413",
+          "commit": "2a1344f778f2bef2bb3c3aed2a32f2ec4e126600"
+        },
+        {
+          "base": "2a1344f778f2bef2bb3c3aed2a32f2ec4e126600",
+          "commit": "35facf479571cacc86113108c9234540ab71a83d"
+        },
+        {
+          "base": "35facf479571cacc86113108c9234540ab71a83d",
+          "commit": "bcfa3feb5640648c623aef5ce6d05384dd8da309"
+        },
+        {
+          "base": "bcfa3feb5640648c623aef5ce6d05384dd8da309",
+          "commit": "83bbc4a0be8d7155c386a42c331547e51a3949b5"
+        },
+        {
+          "base": "ab3e4ce1adb7c93d31810c1bc07a2f07c6549d65",
+          "commit": "fdbdbbfef1432586f46d592bc0037c53874d4a6e"
+        }
+      ]
+    },
+    {
+      "pr": "T17",
+      "state": "integrated-accepted",
+      "agent": "sol_launch_impl",
+      "base": "3c7f4a1681d676b38b49192b594578b914222212",
+      "commit": "8b4eec7b2f634eb364889d2f55d44dc4f042b8a6",
+      "review": "reviews/T17-R2.md"
+    },
+    {
+      "pr": "T18",
+      "state": "integrated-accepted",
+      "agent": "sol_workers_impl",
+      "base": "fd428fd7fe056d5cfb3eff1d9d62a6a60d535329",
+      "commit": "cac86cad0c6dd95b3dc7e4b008506e9785503cc8",
+      "review": "reviews/T18-R1.md"
+    },
+    {
+      "pr": "U01",
+      "state": "integrated-accepted",
+      "agent": "sol_modal_impl",
+      "base": "7b178da5c4b9d01fcce24653f45c0c4a73352d3d",
+      "commit": "f6875934a72b8f5960415a1aa40181dbf5084f19",
+      "review": "reviews/U01-R2.md"
+    },
+    {
+      "pr": "U02",
+      "state": "integrated-accepted",
+      "agent": "sol_notifications_impl",
+      "base": "6e8a4e92776c94c650e250d2dac099c17602d08e",
+      "commit": "3a2fc582b11ec300306c5f35d1779c04dccc227b",
+      "review": "reviews/U02-R4.md"
+    },
+    {
+      "pr": "U03",
+      "state": "integrated-accepted",
+      "agent": "sol_menus_impl",
+      "base": "8d8a17afa739b235a0bc634e8aa461a8212f87e8",
+      "commit": "dae79ee41020ec762240c0b809a047aea9430495",
+      "review": "reviews/U03-R1.md"
+    },
+    {
+      "pr": "U04",
+      "state": "integrated-accepted",
+      "agent": "sol_menus_impl",
+      "base": "dae79ee41020ec762240c0b809a047aea9430495",
+      "commit": "d13b1e77c92261121617eba62f6353dbf3930bd6",
+      "review": "reviews/R8-known-fixes.md",
+      "provenance_note": "Full patch applied except windows_app.rs; explicit three-way merge preserves both U11 dock annotation and U04 Search annotation. Evidence/U04-merged-windows-app.diff retained; original index unchanged.",
+      "patches": [
+        {
+          "base": "dae79ee41020ec762240c0b809a047aea9430495",
+          "commit": "5225e095f7d5b469db4824f7abcc1de860803523"
+        },
+        {
+          "base": "e7648af1715ecf5a0214377db2f802f7e330a9e4",
+          "commit": "bded6c75b7f92d7c890447cf963754e469232f05"
+        },
+        {
+          "base": "bded6c75b7f92d7c890447cf963754e469232f05",
+          "commit": "50302871ece43ab5fafb2d33735d1c44065c2a3c"
+        },
+        {
+          "base": "ab3e4ce1adb7c93d31810c1bc07a2f07c6549d65",
+          "commit": "d13b1e77c92261121617eba62f6353dbf3930bd6"
+        }
+      ]
+    },
+    {
+      "pr": "U05",
+      "state": "integrated-accepted",
+      "agent": "sol_notifications_impl",
+      "base": "3a2fc582b11ec300306c5f35d1779c04dccc227b",
+      "commit": "7e56d85d61680df8a9f1b5802a6b3e0ed3332d81",
+      "review": "reviews/R8-known-fixes.md",
+      "patches": [
+        {
+          "base": "3a2fc582b11ec300306c5f35d1779c04dccc227b",
+          "commit": "4662816447e4741722d1e941a576a8b5e5dd13dc"
+        },
+        {
+          "base": "8eca399e663156d9ff2b74be86a57f46ee13f39a",
+          "commit": "7e56d85d61680df8a9f1b5802a6b3e0ed3332d81"
+        }
+      ]
+    },
+    {
+      "pr": "U06",
+      "state": "integrated-accepted",
+      "agent": "sol_save_impl",
+      "base": "96f3566661cb1f397a89106f7aef00927793c0c0",
+      "commit": "7569a99d48cb9a7f8fbf308accd01605cfdc99df",
+      "review": "reviews/U06-R1.md",
+      "patches": [
+        {
+          "base": "96f3566661cb1f397a89106f7aef00927793c0c0",
+          "commit": "f79473f6b51d5d75d9f18f7f9c485bb3310a84ba"
+        },
+        {
+          "base": "89d5463f3087b733fe461b4a0e3a6e589fa29db0",
+          "commit": "7569a99d48cb9a7f8fbf308accd01605cfdc99df"
+        }
+      ]
+    },
+    {
+      "pr": "U07",
+      "state": "integrated-accepted",
+      "agent": "sol_modal_impl",
+      "base": "97fcf41ce355874358129453cf2a2f77d2ee0095",
+      "commit": "51b5a084ae4c1329efa3408db5ca4a7e8ab86a29",
+      "review": "reviews/U07-R3.md",
+      "patches": [
+        {
+          "base": "97fcf41ce355874358129453cf2a2f77d2ee0095",
+          "commit": "74d69402ec25c56a248d626482e1c37c0f5bcfff"
+        },
+        {
+          "base": "54c56d7d2a8ee470b6a777ba5a1152f8971385bc",
+          "commit": "51b5a084ae4c1329efa3408db5ca4a7e8ab86a29"
+        }
+      ],
+      "provenance_note": "Use ordered patches for exact U07 delta; correction is based on the integrated snapshot."
+    },
+    {
+      "pr": "U08",
+      "state": "integrated-accepted",
+      "agent": "sol_modal_impl",
+      "base": "4c746299a9cf066236a08713fd88b415695b6257",
+      "commit": "b6d98a18218a75a7629c39e8ffc20b8152227d65",
+      "review": "reviews/R8-known-fixes.md",
+      "patches": [
+        {
+          "base": "4c746299a9cf066236a08713fd88b415695b6257",
+          "commit": "ba572832716547fc0df7493003e6c7b9ab9f7e58"
+        },
+        {
+          "base": "bc5baab471751681f88486a1a6e97a08c031cf02",
+          "commit": "d87bfae39b788b3549cc22b5afd443ff8dfedfbe"
+        },
+        {
+          "base": "64e27f10300a798616dbf388b5a05e0eac1ff209",
+          "commit": "224843706cd2abe08f6ce053cb4be3e7ff143d9b"
+        },
+        {
+          "base": "224843706cd2abe08f6ce053cb4be3e7ff143d9b",
+          "commit": "a4dbae0fb3041e060e9f29ed9ec5fc2188b3e395"
+        },
+        {
+          "base": "a4dbae0fb3041e060e9f29ed9ec5fc2188b3e395",
+          "commit": "e821f78cdcd164f1354b62dbce4de048290be4a8"
+        },
+        {
+          "base": "f5cd57666fdeadf7da59ff35c86934f1b78bfd05",
+          "commit": "b6d98a18218a75a7629c39e8ffc20b8152227d65"
+        }
+      ]
+    },
+    {
+      "pr": "U09",
+      "state": "integrated-accepted",
+      "agent": "sol_modal_impl",
+      "base": "ba572832716547fc0df7493003e6c7b9ab9f7e58",
+      "commit": "04e4bb28fbd416ebf9aad3ef67183ed3aec48707",
+      "review": "reviews/U09-R1.md"
+    },
+    {
+      "pr": "U10",
+      "state": "integrated-accepted",
+      "agent": "sol_save_impl",
+      "base": "91cc150ceb2e72c61208bbc7c155e5f231ee246c",
+      "commit": "0ad039227e768b616357f107b9f5a413e87aa200",
+      "review": "reviews/U10-R7.md",
+      "patches": [
+        {
+          "base": "91cc150ceb2e72c61208bbc7c155e5f231ee246c",
+          "commit": "8d36f0253b96d2178ae33053f17f6591f7053c35"
+        },
+        {
+          "base": "bc5baab471751681f88486a1a6e97a08c031cf02",
+          "commit": "5d9c73f5e0ef5cf251b51ee58d14c5c1f997f709"
+        },
+        {
+          "base": "5d9c73f5e0ef5cf251b51ee58d14c5c1f997f709",
+          "commit": "01ccd8b67fb2df1f02826f0c7c82327d6edd13e4"
+        },
+        {
+          "base": "64e27f10300a798616dbf388b5a05e0eac1ff209",
+          "commit": "b062df8e7c3ec561f4ba971ff6229fd913c5acda"
+        },
+        {
+          "base": "b062df8e7c3ec561f4ba971ff6229fd913c5acda",
+          "commit": "0ad039227e768b616357f107b9f5a413e87aa200"
+        }
+      ]
+    },
+    {
+      "pr": "U11",
+      "state": "integrated-accepted",
+      "agent": "sol_modal_impl",
+      "base": "4f46208bbafffd5a3195a4a4f48eb6f2813f2ee1",
+      "commit": "2bf4a5832419c46a0b7ccb66689cd082e05b09e1",
+      "review": "reviews/U11-R3.md",
+      "provenance_note": "Full reviewed patch applied except macros.rs, which was explicitly three-way merged against U11 base to preserve integrated T02 profile read ownership; merge diff retained in evidence/U11-merged-macros.diff.",
+      "patches": [
+        {
+          "commit": "3d1d010648f10881419569cd87e4aeb9ca36d721",
+          "base": "4f46208bbafffd5a3195a4a4f48eb6f2813f2ee1"
+        },
+        {
+          "commit": "65340cea389d5b218494ced46b096229547ce313",
+          "base": "6e8a4e92776c94c650e250d2dac099c17602d08e"
+        },
+        {
+          "commit": "d74aa1754b1fb144aba0abfe2688815be26c9844",
+          "base": "65340cea389d5b218494ced46b096229547ce313"
+        },
+        {
+          "base": "d74aa1754b1fb144aba0abfe2688815be26c9844",
+          "commit": "0ee6b35f1ea343777076e9c15fcd85783a4672c9"
+        },
+        {
+          "base": "16e763043b000d09e1b0650bd857785c4b5cfa13",
+          "commit": "2bf4a5832419c46a0b7ccb66689cd082e05b09e1"
+        }
+      ]
+    },
+    {
+      "pr": "U12",
+      "state": "integrated-accepted",
+      "agent": "sol_modal_impl",
+      "base": "04e4bb28fbd416ebf9aad3ef67183ed3aec48707",
+      "commit": "4f46208bbafffd5a3195a4a4f48eb6f2813f2ee1",
+      "review": "reviews/U12-R1.md"
+    },
+    {
+      "pr": "U13",
+      "state": "integrated-accepted",
+      "agent": "sol_workers_impl",
+      "base": "d5d35cee8fa0668bc288b3383a797b626d43e76e",
+      "commit": "642e6dae4df9f2a804f895bdd2e6ff9ef1e612d7",
+      "review": "reviews/U13-R2.md",
+      "patches": [
+        {
+          "base": "d5d35cee8fa0668bc288b3383a797b626d43e76e",
+          "commit": "35334b64cc0ea6ce7e37af5592b22e2db1a066a1"
+        },
+        {
+          "base": "bc5baab471751681f88486a1a6e97a08c031cf02",
+          "commit": "642e6dae4df9f2a804f895bdd2e6ff9ef1e612d7"
+        }
+      ]
+    }
+  ],
+  "resource_policy": "At most four implementation agents; all Cargo verification centralized in the integration checkout; fresh final audit agents after integration",
+  "cargo_lease": {
+    "owner": "root",
+    "scope": "All future Cargo runs centralized in original integration checkout; workers submit contained commands"
+  },
+  "final_verification": {
+    "status": "native-blocked-desktop-locked",
+    "implementation_packages": 31,
+    "full_workspace_tests": "passed",
+    "full_workspace_build": "passed",
+    "full_clippy_ratchet": "passed-with-reviewed-debt",
+    "nonshipping_release_fixture": "qualified",
+    "installed_fast": "3 passed, 0 failed",
+    "installed_large": "2 passed, 0 failed",
+    "native_initial_aggregate": "5 passed, 8 failed; environment-confounded, retained",
+    "native_manual_acceptance": "not executed; requires unlocked desktop",
+    "rust_app_snapshot": "56e5934f81764ec2a2bf11c9cc06938144106e32",
+    "status_document": "FINAL_STATUS.md",
+    "resume_document": "../../UNLOCK_CHECKLIST.md"
+  },
+  "completed_utc": "2026-09-12T19:49:37.3573509Z",
+  "implementation_status": "31 packages integrated and reviewed; accepted",
+  "qualification_status": "Scoped passes with explicit remaining gaps; see FINAL_ACCEPTANCE.md",
+  "final_code_snapshot": "800beef05b6fcb7850573e1e3ddc439abdc9af47",
+  "final_record": "FINAL_ACCEPTANCE.md"
+}

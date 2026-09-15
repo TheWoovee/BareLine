@@ -19,18 +19,17 @@ fn run_fixture(component: &str) -> bool {
             .as_nanos()
     ));
     std::fs::create_dir(&root).unwrap();
-    let file = root.join("fixture.wat");
-    std::fs::write(&file, component).unwrap();
+    // The production host accepts binary components only (SEC-08), so text fixtures
+    // are assembled by the test rather than by the host.
+    let file = root.join("fixture.wasm");
+    let bytes = wat::parse_str(component).unwrap_or_else(|_| component.as_bytes().to_vec());
+    std::fs::write(&file, &bytes).unwrap();
     let server = PipeServer::create().unwrap();
     let mut command = Command::new(env!("CARGO_BIN_EXE_bareline-extension-host"));
     command
-        .args([
-            server.name(),
-            &server.nonce_hex(),
-            &std::process::id().to_string(),
-        ])
+        .args([server.name(), &std::process::id().to_string()])
         .arg(&file)
-        .arg(format!("{:x}", Sha256::digest(component.as_bytes())))
+        .arg(format!("{:x}", Sha256::digest(&bytes)))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());

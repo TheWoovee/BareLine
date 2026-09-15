@@ -1,0 +1,39 @@
+diff --git a/apps/bareline/src/windows_app/views.rs b/apps/bareline/src/windows_app/views.rs
+index e5ef533..2324a8f 100644
+--- a/apps/bareline/src/windows_app/views.rs
++++ b/apps/bareline/src/windows_app/views.rs
+@@ -111,7 +111,12 @@ pub(super) fn accessibility_test_setup(shell: &mut Shell, scenario: &str) {
+ 
+ #[cfg(test)]
+ pub(super) fn accessibility_test_close_split(shell: &mut Shell) -> bool {
+-    shell.tabs_dispatch("view.close_split")
++    let Some(workspace) = shell.workspace.as_mut() else {
++        return false;
++    };
++    shell.views.pump(workspace);
++    shell.views.close_split(workspace);
++    !shell.views.open()
+ }
+ 
+ #[cfg(test)]
+@@ -2163,6 +2168,11 @@ impl ViewsRuntime {
+     pub(super) fn open(&self) -> bool {
+         self.secondary.is_some() && self.controller.as_ref().is_some_and(|c| c.split)
+     }
++    fn close_split(&mut self, workspace: &mut Workspace) {
++        if !self.busy(workspace) {
++            self.collapse(workspace, self.pane() == 1);
++        }
++    }
+     pub(super) fn active_syntax_result<'a>(
+         &'a self,
+         workspace: &'a Workspace,
+@@ -3656,7 +3666,7 @@ impl Shell {
+             "view.clone_other" => self.views.clone_active(workspace, &mut self.app),
+             "view.move_other" => self.views.move_active(workspace, &mut self.app),
+             "view.split_horizontal" => self.views.split(workspace, self.app.active, Orientation::Horizontal),
+-            "view.close_split" if !self.views.busy(workspace) => self.views.collapse(workspace, self.views.pane() == 1),
++            "view.close_split" => self.views.close_split(workspace),
+             "view.focus_other" if self.views.open() => {
+                 let pane = 1 - self.views.pane();
+                 self.views.activate(workspace, &mut self.app, pane);

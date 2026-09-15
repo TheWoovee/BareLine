@@ -1,0 +1,45 @@
+diff --git a/crates/platform-windows/src/files.rs b/crates/platform-windows/src/files.rs
+index 266d143..c472ad5 100644
+--- a/crates/platform-windows/src/files.rs
++++ b/crates/platform-windows/src/files.rs
+@@ -594,6 +594,17 @@ impl LocalFileSystem for WindowsFileSystem {
+             manifest,
+             proposed: proposed_guard,
+         } = *guards;
++        let transaction_directory = journal_path
++            .as_ref()
++            .and_then(|journal| journal.parent())
++            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "commit journal has no directory"))?
++            .to_path_buf();
++        let transaction_identity = ordinary_directory_identity(&directory)?;
++        // ReplaceFileW must create the displaced entry below this directory. Transfer
++        // the candidate lease across that operation while the parent remains pinned,
++        // then prove that the pathname still names the prepared directory.
++        drop(transaction_guard);
++        drop(directory);
+         let stage = wide(&staged);
+         let target_name = wide(&target);
+         #[cfg(test)]
+@@ -642,6 +653,13 @@ impl LocalFileSystem for WindowsFileSystem {
+             }
+             return Err(error);
+         }
++        let directory = cleanup_handle(&transaction_directory, false, true)?;
++        if ordinary_directory_identity(&directory)? != transaction_identity {
++            return Err(io::Error::new(
++                io::ErrorKind::PermissionDenied,
++                "save transaction directory identity changed during commit",
++            ));
++        }
+         let target_guard = cleanup_handle(&target, false, false)?;
+         let target_identity = self.identity(&target_guard)?;
+         let journal_path =
+@@ -680,7 +698,7 @@ impl LocalFileSystem for WindowsFileSystem {
+                 held: vec![target_guard],
+                 journal: journal_path.clone(),
+                 directory,
+-                guards: vec![parent_guard, transaction_guard],
++                guards: vec![parent_guard],
+             })),
+         };
+         self.mark_commit_state(

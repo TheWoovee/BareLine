@@ -1,0 +1,31 @@
+diff --git a/apps/bareline/src/windows_app/lifecycle.rs b/apps/bareline/src/windows_app/lifecycle.rs
+index b772b8b..d12a572 100644
+--- a/apps/bareline/src/windows_app/lifecycle.rs
++++ b/apps/bareline/src/windows_app/lifecycle.rs
+@@ -996,7 +996,7 @@ mod tests {
+             SaveConflict {
+                 target: Some(other.clone()),
+                 editor_version: editor,
+-                other_version: Some(other),
++                other_version: Some(other.clone()),
+                 transaction: root.join("state"),
+                 state: bareline_platform::CommitState::Conflict,
+                 verified: true,
+@@ -1029,7 +1029,7 @@ mod tests {
+             SaveConflict {
+                 target: Some(other.clone()),
+                 editor_version: editor,
+-                other_version: Some(other),
++                other_version: Some(other.clone()),
+                 transaction: root.join("state"),
+                 state: bareline_platform::CommitState::Conflict,
+                 verified: true,
+@@ -1104,7 +1104,7 @@ mod tests {
+             SaveConflict {
+                 target: Some(target.clone()),
+                 editor_version: editor,
+-                other_version: Some(target),
++                other_version: Some(target.clone()),
+                 transaction: root.join("state"),
+                 state: bareline_platform::CommitState::Conflict,
+                 verified: true,

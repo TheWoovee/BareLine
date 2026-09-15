@@ -1,0 +1,165 @@
+[
+  {
+    "brief": "PR-T01-owned-cache-cleanup",
+    "issues": [
+      "TECH-001"
+    ],
+    "words": 431,
+    "contract_link": true,
+    "acceptance_section": true
+  },
+  {
+    "brief": "PR-T02-resumable-data-migration",
+    "issues": [
+      "TECH-002"
+    ],
+    "words": 408,
+    "contract_link": true,
+    "acceptance_section": true
+  },
+  {
+    "brief": "PR-T03-save-destination-consent",
+    "issues": [
+      "TECH-003",
+      "TECH-004"
+    ],
+    "words": 429,
+    "contract_link": true,
+    "acceptance_section": true
+  },
+  {
+    "brief": "PR-T04-preserve-concurrent-writes",
+    "issues": [
+      "TECH-004"
+    ],
+    "words": 483,
+    "contract_link": true,
+    "acceptance_section": true
+  },
+  {
+    "brief": "PR-T05-async-recovery-retirement",
+    "issues": [
+      "TECH-005/006"
+    ],
+    "words": 478,
+    "contract_link": true,
+    "acceptance_section": true
+  },
+  {
+    "brief": "PR-T06-task-terminal-states",
+    "issues": [
+      "TECH-007/008"
+    ],
+    "words": 417,
+    "contract_link": true,
+    "acceptance_section": true
+  },
+  {
+    "brief": "PR-T07-shared-worker-scheduling",
+    "issues": [
+      "TECH-009"
+    ],
+    "words": 433,
+    "contract_link": true,
+    "acceptance_section": true
+  },
+  {
+    "brief": "PR-T08-fallible-extension-workers",
+    "issues": [
+      "TECH-010"
+    ],
+    "words": 352,
+    "contract_link": true,
+    "acceptance_section": true
+  },
+  {
+    "brief": "PR-T09-reliable-test-evidence",
+    "issues": [
+      "TECH-011/012"
+    ],
+    "words": 402,
+    "contract_link": true,
+    "acceptance_section": true
+  },
+  {
+    "brief": "PR-T10-first-party-runtime-qualification",
+    "issues": [
+      "TECH-013"
+    ],
+    "words": 530,
+    "contract_link": true,
+    "acceptance_section": true
+  },
+  {
+    "brief": "PR-T11-release-feature-configuration",
+    "issues": [
+      "TECH-014"
+    ],
+    "words": 407,
+    "contract_link": true,
+    "acceptance_section": true
+  },
+  {
+    "brief": "PR-T12-toolchain-contract",
+    "issues": [
+      "TECH-015"
+    ],
+    "words": 313,
+    "contract_link": true,
+    "acceptance_section": true
+  },
+  {
+    "brief": "PR-T13-lint-debt-ratchet",
+    "issues": [
+      "TECH-016"
+    ],
+    "words": 346,
+    "contract_link": true,
+    "acceptance_section": true
+  },
+  {
+    "brief": "PR-T14-current-capability-ledger",
+    "issues": [
+      "TECH-017"
+    ],
+    "words": 399,
+    "contract_link": true,
+    "acceptance_section": true
+  },
+  {
+    "brief": "PR-T15-performance-qualification",
+    "issues": [
+      "TECH-018"
+    ],
+    "words": 405,
+    "contract_link": true,
+    "acceptance_section": true
+  },
+  {
+    "brief": "PR-T16-paged-lifecycle-boundary",
+    "issues": [
+      "TECH-019"
+    ],
+    "words": 418,
+    "contract_link": true,
+    "acceptance_section": true
+  },
+  {
+    "brief": "PR-T17-side-effect-free-launch-parsing",
+    "issues": [
+      "TECH-020"
+    ],
+    "words": 375,
+    "contract_link": true,
+    "acceptance_section": true
+  },
+  {
+    "brief": "PR-T18-launch-request-lifecycle",
+    "issues": [
+      "TECH-021/022"
+    ],
+    "words": 472,
+    "contract_link": true,
+    "acceptance_section": true
+  }
+]

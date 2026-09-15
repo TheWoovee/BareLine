@@ -1,0 +1,17 @@
+{
+  "arguments": [
+    "test",
+    "--locked",
+    "-p",
+    "bareline-app",
+    "--lib",
+    "paged_recovery_restart_preserves_opaque_undo_and_recovers_stale_pointer",
+    "--",
+    "--nocapture"
+  ],
+  "completed_utc": "2026-09-12T13:33:01.2969370Z",
+  "integration_snapshot": "f30d4aa1fb84db4399d9f2cd49c3724f5cfd6b4e",
+  "exit_code": 0,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\U05-paged-restore-central-r2.log"
+}

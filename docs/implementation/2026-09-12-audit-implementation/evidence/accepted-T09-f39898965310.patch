@@ -1,0 +1,102 @@
+diff --git a/docs/implementation/2026-09-12-audit-implementation/PR-T09-R5.md b/docs/implementation/2026-09-12-audit-implementation/PR-T09-R5.md
+index a7723c0..7f96596 100644
+--- a/docs/implementation/2026-09-12-audit-implementation/PR-T09-R5.md
++++ b/docs/implementation/2026-09-12-audit-implementation/PR-T09-R5.md
+@@ -5,7 +5,8 @@
+ - Retained reproduction: run `14532-1789228400489603200` remains 10/13. P0-3 showed a dirty editor and recovery preparation without a prompt or consent; P0-7 queried the focused top-level Window rather than the editor provider; P4-4 retained an empty post-input screenshot while direct native input rendered the intended emoji.
+ - Product dependency: T05 separately owns retaining Close/Exit intent while recovery I/O is busy. This harness issues one command and observes its terminal result rather than reinjecting it.
+ - P0-3 records the one posted command, prompt tree and screenshot, explicit Don't Save click and successful process exit. It validates any physically retained journal with `recovery::inspect`: only `Discarded` is terminal, while inspection errors and every other status remain discoverable failures. The same isolated profile is restarted and checked again for zero production discovery candidates and no restored discarded text. Physical purge completion is reported separately because durable tombstone publication precedes garbage collection.
+-- UIA activation uses a bounded Control View tree walk and accepts only an enabled, focusable, in-process Edit provider whose stable `Pane <number>` identity exposes TextPattern and nonempty bounds. The receipt retains the provider name, identity, automation id, process, focus, bounds, traversal count and rejected Edit candidates; modal text fields cannot become the input target.
++- UIA activation uses a bounded Control View tree walk and accepts only an enabled, focusable, in-process Edit provider whose production identity is exactly the single-view `Editor` or split-view `Pane 1, <title>` / `Pane 2, <title>`, with TextPattern and nonempty bounds. The receipt retains the provider name, identity, automation id, process, focus, bounds, traversal count and rejected Edit candidates; modal text fields cannot become the input target.
+ - Input derives the exact replacement from the provider's single UIA selection/caret in UTF-16 units. It records posted units/errors, foreground/editor focus before and after, one provider focus correction, SendInput inserted count/error, and the exact expected TextPattern transition. Partial delivery is polled to the deadline and never retried; only text still unchanged after that deadline can receive one fallback attempt. Every prerequisite failure writes provider/target/attempt/screenshot evidence. P4-4 samples the first rows inside the observed provider bounds and retains its stable-frame and saturated-glyph requirements.
+ - Both P0-3 Exit and P0-7 Close are injected once; the harness waits for the product-owned deferred intent instead of masking it with repeated commands.
++- R6 retained failure: run `30764-1789232596214818600` stopped before input because the real single-view provider was the focused, enabled `Editor`, while the first R5 review incorrectly treated every production editor provider as a split `Pane <number>` name. The corrected predicate follows the source contract in `crates/app/src/accessibility.rs` and `windows_app/accessibility.rs` and keeps every other provider guard.
+ - Root verification: focused xtask helper tests followed by isolated P0-3, P0-7 and P4-4 against the integrated native binary.
+diff --git a/xtask/src/journey.rs b/xtask/src/journey.rs
+index c77ce6d..a855b9f 100644
+--- a/xtask/src/journey.rs
++++ b/xtask/src/journey.rs
+@@ -775,6 +775,15 @@ fn text_pattern_snapshot(pattern: &IUIAutomationTextPattern) -> windows::core::R
+     }))
+ }
+ 
++fn production_editor_identity(name: &str) -> Option<&str> {
++    if name == "Editor" {
++        return Some(name);
++    }
++    let (identity, title) = name.split_once(',')?;
++    let pane = identity.strip_prefix("Pane ")?;
++    (matches!(pane, "1" | "2") && !title.trim().is_empty()).then_some(identity)
++}
++
+ fn uia_provider_snapshot_once(hwnd: HWND, focus_editor: bool) -> serde_json::Value {
+     // SAFETY: this function balances a successful COM initialization before
+     // returning and holds every UIA interface only within that interval.
+@@ -842,7 +851,7 @@ fn uia_provider_snapshot_once(hwnd: HWND, focus_editor: bool) -> serde_json::Val
+             let keyboard_focusable = unsafe { element.CurrentIsKeyboardFocusable() }
+                 .map(|focusable| focusable.as_bool())
+                 .unwrap_or(false);
+-            let provider_identity = name.split(',').next().unwrap_or_default().trim().to_owned();
++            let provider_identity = production_editor_identity(&name).map(str::to_owned);
+             let Ok(bounds) = (unsafe { element.CurrentBoundingRectangle() }) else {
+                 continue;
+             };
+@@ -865,9 +874,7 @@ fn uia_provider_snapshot_once(hwnd: HWND, focus_editor: bool) -> serde_json::Val
+                 "text_pattern_available": text.is_ok(),
+                 "text_pattern_error": text_error,
+             }));
+-            if provider_identity
+-                .strip_prefix("Pane ")
+-                .is_some_and(|pane| !pane.is_empty() && pane.bytes().all(|byte| byte.is_ascii_digit()))
++            if let Some(provider_identity) = provider_identity
+                 && enabled
+                 && keyboard_focusable
+                 && let Ok(text_pattern) = text
+@@ -931,11 +938,11 @@ fn uia_provider_snapshot_once(hwnd: HWND, focus_editor: bool) -> serde_json::Val
+             "editor": editor.unwrap_or_else(|| serde_json::json!({
+                 "available": false,
+                 "reason": if provider_walk_limit_reached {
+-                    "bounded UIA walk reached its limit before an enabled Pane editor exposed TextPattern"
++                    "bounded UIA walk reached its limit before a production editor exposed TextPattern"
+                 } else if editor_candidate_count > 1 && !focused_editor_found {
+-                    "multiple Pane editors exposed TextPattern but none owned keyboard focus"
++                    "multiple production editors exposed TextPattern but none owned keyboard focus"
+                 } else {
+-                    "no enabled in-process Pane editor exposed TextPattern"
++                    "no enabled in-process production editor exposed TextPattern"
+                 },
+             })),
+             "dirty_state": {
+@@ -2657,6 +2664,32 @@ mod evidence_tests {
+         assert!(replace_utf16("😀", 1, 0, "x").is_none());
+     }
+ 
++    #[test]
++    fn provider_identity_matches_single_and_split_production_names_only() {
++        assert_eq!(production_editor_identity("Editor"), Some("Editor"));
++        assert_eq!(production_editor_identity("Pane 1, Untitled"), Some("Pane 1"));
++        assert_eq!(
++            production_editor_identity("Pane 2, notes.txt, C:\\notes.txt"),
++            Some("Pane 2")
++        );
++
++        for modal_or_malformed in [
++            "Find text",
++            "Replace text",
++            "Go to line",
++            "Editor name",
++            "Pane 1",
++            "Pane 1,",
++            "Pane 3, Untitled",
++        ] {
++            assert_eq!(
++                production_editor_identity(modal_or_malformed),
++                None,
++                "accepted non-production Edit provider {modal_or_malformed:?}"
++            );
++        }
++    }
++
+     #[test]
+     fn failure_classification_keeps_timeout_harness_and_product_results_distinct() {
+         assert_eq!(classify_failure("timed out waiting for prompt"), "timeout");

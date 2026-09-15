@@ -2,9 +2,7 @@
 //! A bounded syntax cache per view, reusing the resident and paged workers.
 mod paged;
 use bareline_document::{DocumentSnapshot, TextOffset};
-use bareline_syntax::{
-    Checkpoint, Language, MAX_REQUEST_BYTES, SyntaxResult, SyntaxTicket, SyntaxWorker,
-};
+use bareline_syntax::{Checkpoint, Language, MAX_REQUEST_BYTES, SyntaxResult, SyntaxTicket, SyntaxWorker};
 use std::{
     ops::Range,
     sync::{Arc, mpsc::TryRecvError},
@@ -46,16 +44,17 @@ impl Styling {
         notify: Arc<dyn Fn() + Send + Sync>,
     ) {
         use crate::workspace::WorkspaceEditor;
-        let definition = editor.udl.clone();
+        let definition = editor.viewport().udl.clone();
         let language = if definition.is_some() {
             Language::PlainText
         } else {
             editor
+                .viewport()
                 .language_override
-                .or(editor.detected_language)
+                .or(editor.viewport().detected_language)
                 .unwrap_or_else(|| path.map_or(Language::PlainText, Language::detect))
         };
-        editor.language = language;
+        editor.viewport_mut().language = language;
         self.view_label = definition
             .as_ref()
             .map_or(language.label(), |definition| definition.name.as_str())
@@ -70,17 +69,13 @@ impl Styling {
                     return;
                 }
                 let mut policy = bareline_settings::LanguagePolicy::default();
-                policy.lexer = match paged.surface.syntax_preference {
-                    bareline_syntax::LexerPreference::Lexilla => {
-                        bareline_settings::LexerPreference::Primary
-                    }
-                    bareline_syntax::LexerPreference::Native => {
-                        bareline_settings::LexerPreference::Native
-                    }
+                policy.lexer = match paged.viewport().syntax_preference {
+                    bareline_syntax::LexerPreference::Lexilla => bareline_settings::LexerPreference::Primary,
+                    bareline_syntax::LexerPreference::Native => bareline_settings::LexerPreference::Native,
                 };
                 self.refresh_paged_mapped(
                     paged.read_handle(),
-                    paged.surface.snapshot(),
+                    paged.viewport().snapshot(),
                     paged.viewport_start(),
                     paged.source_segments().to_vec(),
                     language,
@@ -88,29 +83,21 @@ impl Styling {
                     notify,
                 );
                 if self.paged.as_ref().is_some_and(|job| {
-                    job.identity == paged.snapshot().identity_token()
-                        && job.origin == paged.viewport_start()
+                    job.identity == paged.snapshot().identity_token() && job.origin == paged.viewport_start()
                 }) && self
                     .result
                     .as_ref()
-                    .is_some_and(|result| result.is_current(paged.surface.snapshot()))
+                    .is_some_and(|result| result.is_current(paged.viewport().snapshot()))
                     && let Some((folds, first_line, partial)) = self.paged_folds.take()
                 {
-                    if let Err(error) =
-                        paged.set_known_anchored_folds(folds, 0, partial, first_line)
-                    {
-                        paged.surface.error = Some(error);
+                    if let Err(error) = paged.set_known_anchored_folds(folds, 0, partial, first_line) {
+                        paged.viewport_mut().error = Some(error);
                     }
                 }
             }
             WorkspaceEditor::Resident(resident) => {
                 if let Some(definition) = definition {
-                    self.refresh_udl(
-                        resident.snapshot(),
-                        definition,
-                        resident.visible_text.clone(),
-                        notify,
-                    );
+                    self.refresh_udl(resident.snapshot(), definition, resident.visible_text.clone(), notify);
                 } else {
                     self.refresh_preferred(
                         resident.snapshot(),
@@ -130,7 +117,7 @@ impl Styling {
         editor: &crate::workspace::WorkspaceEditor,
     ) -> bareline_editor_surface::SyntaxView<'a> {
         let same_definition =
-            |cached: &Option<Arc<bareline_syntax::udl::Definition>>| match (cached, &editor.udl) {
+            |cached: &Option<Arc<bareline_syntax::udl::Definition>>| match (cached, &editor.viewport().udl) {
                 (None, None) => true,
                 (Some(a), Some(b)) => Arc::ptr_eq(a, b),
                 _ => false,
@@ -142,29 +129,26 @@ impl Styling {
                         job.identity == paged.snapshot().identity_token()
                             && job.origin == paged.viewport_start()
                             && job.segments == paged.source_segments()
-                            && job.local.same_document(paged.surface.snapshot())
-                            && job.local.revision == paged.surface.snapshot().revision
-                            && job.language == editor.language
-                            && job.preference == editor.syntax_preference
+                            && job.local.same_document(paged.viewport().snapshot())
+                            && job.local.revision == paged.viewport().snapshot().revision
+                            && job.language == editor.viewport().language
+                            && job.preference == editor.viewport().syntax_preference
                             && same_definition(&job.definition)
                     })
             }
             crate::workspace::WorkspaceEditor::Resident(resident) => {
                 self.paged.is_none()
                     && self.source.as_ref().is_some_and(|source| {
-                        source.same_document(resident.snapshot())
-                            && source.revision == resident.snapshot().revision
+                        source.same_document(resident.snapshot()) && source.revision == resident.snapshot().revision
                     })
-                    && self.language == Some(editor.language)
-                    && (editor.udl.is_some() || self.preference == editor.syntax_preference)
+                    && self.language == Some(editor.viewport().language)
+                    && (editor.viewport().udl.is_some() || self.preference == editor.viewport().syntax_preference)
                     && same_definition(&self.definition)
             }
         };
         bareline_editor_surface::SyntaxView {
             result: self.result.as_ref().filter(|result| {
-                current
-                    && result.is_current(editor.snapshot())
-                    && result.language == editor.language
+                current && result.is_current(editor.snapshot()) && result.language == editor.viewport().language
             }),
             language: &self.view_label,
             unavailable: self.unavailable && current,
@@ -175,19 +159,13 @@ impl Styling {
             return Some(StylingReceipt {
                 identity: job.identity,
                 language: job.language,
-                range: job
-                    .segments
-                    .first()
-                    .map_or(job.origin, |segment| segment.source.start)
+                range: job.segments.first().map_or(job.origin, |segment| segment.source.start)
                     ..job
                         .segments
                         .last()
-                        .map_or(TextOffset(job.origin.0 + job.local.len()), |segment| {
-                            segment.source.end
-                        }),
+                        .map_or(TextOffset(job.origin.0 + job.local.len()), |segment| segment.source.end),
                 ready: self.result.as_ref().is_some_and(|result| {
-                    result.is_current(&job.local)
-                        && result.status == bareline_syntax::Status::Complete
+                    result.is_current(&job.local) && result.status == bareline_syntax::Status::Complete
                 }),
                 unavailable: self.unavailable,
             });
@@ -200,9 +178,10 @@ impl Styling {
             ready: self.result.as_ref().is_some_and(|result| {
                 result.is_current(source)
                     && result.status == bareline_syntax::Status::Complete
-                    && self.requested.as_ref().is_some_and(|range| {
-                        result.range.start <= range.start && range.end <= result.range.end
-                    })
+                    && self
+                        .requested
+                        .as_ref()
+                        .is_some_and(|range| result.range.start <= range.start && range.end <= result.range.end)
             }),
             unavailable: self.unavailable,
         })
@@ -296,8 +275,7 @@ impl Styling {
         match received {
             Ok(Ok(result)) => {
                 for checkpoint in result.checkpoints.iter().chain(result.checkpoint.iter()) {
-                    self.checkpoints
-                        .retain(|c| c.offset() != checkpoint.offset());
+                    self.checkpoints.retain(|c| c.offset() != checkpoint.offset());
                     self.checkpoints.push(checkpoint.clone());
                 }
                 self.checkpoints.sort_by_key(|c| c.offset());
@@ -348,13 +326,7 @@ impl Styling {
         notify: Arc<dyn Fn() + Send + Sync>,
     ) {
         self.paged = None;
-        self.refresh_configured(
-            source,
-            Language::PlainText,
-            visible,
-            notify,
-            Some(definition),
-        );
+        self.refresh_configured(source, Language::PlainText, visible, notify, Some(definition));
     }
     fn refresh_configured(
         &mut self,
@@ -384,10 +356,7 @@ impl Styling {
             self.result = None;
             self.unavailable = false;
         }
-        if (language == Language::PlainText && definition.is_none())
-            || visible.is_empty()
-            || self.unavailable
-        {
+        if (language == Language::PlainText && definition.is_none()) || visible.is_empty() || self.unavailable {
             return;
         }
         if self
@@ -433,14 +402,7 @@ impl Styling {
                     .ok()
             } else {
                 worker
-                    .submit_preferred(
-                        source.clone(),
-                        language,
-                        range,
-                        checkpoint,
-                        notify,
-                        self.preference,
-                    )
+                    .submit_preferred(source.clone(), language, range, checkpoint, notify, self.preference)
                     .ok()
             }
         });
@@ -459,13 +421,9 @@ mod tests {
         let rust = Document::from_utf8("fn main() {}", Budget::new(1 << 20), Budget::new(1 << 20))
             .unwrap()
             .snapshot();
-        let json = Document::from_utf8(
-            "{\"value\":true}",
-            Budget::new(1 << 20),
-            Budget::new(1 << 20),
-        )
-        .unwrap()
-        .snapshot();
+        let json = Document::from_utf8("{\"value\":true}", Budget::new(1 << 20), Budget::new(1 << 20))
+            .unwrap()
+            .snapshot();
         let (tx0, rx0) = std::sync::mpsc::channel();
         let (tx1, rx1) = std::sync::mpsc::channel();
         let notify0: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
@@ -474,23 +432,13 @@ mod tests {
         let notify1: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
             let _ = tx1.send(());
         });
-        let mut first =
-            WorkspaceEditor::Resident(EditorSurface::loading(rust.clone(), notify0.clone()));
-        let mut second =
-            WorkspaceEditor::Resident(EditorSurface::loading(json.clone(), notify1.clone()));
-        first.visible_text = TextOffset(0)..TextOffset(rust.len());
-        second.visible_text = TextOffset(0)..TextOffset(json.len());
+        let mut first = WorkspaceEditor::Resident(EditorSurface::loading(rust.clone(), notify0.clone()));
+        let mut second = WorkspaceEditor::Resident(EditorSurface::loading(json.clone(), notify1.clone()));
+        first.viewport_mut().visible_text = TextOffset(0)..TextOffset(rust.len());
+        second.viewport_mut().visible_text = TextOffset(0)..TextOffset(json.len());
         let mut caches = [Styling::default(), Styling::default()];
-        caches[0].prepare_view(
-            &mut first,
-            Some(std::path::Path::new("first.rs")),
-            notify0.clone(),
-        );
-        caches[1].prepare_view(
-            &mut second,
-            Some(std::path::Path::new("second.json")),
-            notify1.clone(),
-        );
+        caches[0].prepare_view(&mut first, Some(std::path::Path::new("first.rs")), notify0.clone());
+        caches[1].prepare_view(&mut second, Some(std::path::Path::new("second.json")), notify1.clone());
         rx0.recv_timeout(std::time::Duration::from_secs(3)).unwrap();
         rx1.recv_timeout(std::time::Duration::from_secs(3)).unwrap();
         assert!(caches[0].pump());
@@ -499,14 +447,14 @@ mod tests {
         assert!(caches[1].syntax_view(&second).result.is_some());
         assert!(caches[0].syntax_view(&second).result.is_none());
         assert!(caches[1].syntax_view(&first).result.is_none());
-        first.syntax_preference = bareline_syntax::LexerPreference::Native;
+        first.viewport_mut().syntax_preference = bareline_syntax::LexerPreference::Native;
         assert!(caches[0].syntax_view(&first).result.is_none());
         caches[0].prepare_view(&mut first, Some(std::path::Path::new("first.rs")), notify0);
         assert!(caches[0].syntax_view(&first).result.is_none());
         assert!(caches[1].syntax_view(&second).result.is_some());
         // Both panes can reference one document while retaining independent jobs.
         second = WorkspaceEditor::Resident(EditorSurface::loading(rust.clone(), notify1.clone()));
-        second.visible_text = TextOffset(0)..TextOffset(rust.len());
+        second.viewport_mut().visible_text = TextOffset(0)..TextOffset(rust.len());
         caches[1].prepare_view(&mut second, Some(std::path::Path::new("clone.rs")), notify1);
         rx0.recv_timeout(std::time::Duration::from_secs(3)).unwrap();
         rx1.recv_timeout(std::time::Duration::from_secs(3)).unwrap();
@@ -518,8 +466,7 @@ mod tests {
     #[test]
     fn bounded_checkpoint_progress_and_revision_invalidation() {
         let text = format!("/*\n{}*/\nlet crab = \"🦀\";\n", "comment\n".repeat(40_000));
-        let mut document =
-            Document::from_utf8(&text, Budget::new(4 << 20), Budget::new(4 << 20)).unwrap();
+        let mut document = Document::from_utf8(&text, Budget::new(4 << 20), Budget::new(4 << 20)).unwrap();
         let source = document.snapshot();
         let start = source.line_range(source.line_count() - 2).unwrap().start;
         let visible = start..TextOffset(source.len());
@@ -530,9 +477,7 @@ mod tests {
         let mut styling = Styling::default();
         for _ in 0..3 {
             styling.refresh(&source, Language::Rust, visible.clone(), notify.clone());
-            received
-                .recv_timeout(std::time::Duration::from_secs(3))
-                .unwrap();
+            received.recv_timeout(std::time::Duration::from_secs(3)).unwrap();
             assert!(styling.pump());
             let result = styling.result.as_ref().unwrap();
             assert!(result.range.end.0 - result.range.start.0 <= MAX_REQUEST_BYTES);

@@ -1,0 +1,145 @@
+diff --git a/apps/bareline/src/windows_app/extensions.rs b/apps/bareline/src/windows_app/extensions.rs
+index 75e5113..6cc8f00 100644
+--- a/apps/bareline/src/windows_app/extensions.rs
++++ b/apps/bareline/src/windows_app/extensions.rs
+@@ -1700,7 +1700,20 @@ mod manager_tests {
+         ));
+         std::fs::create_dir(&root).unwrap();
+         let mut runtime = ExtensionsRuntime::default();
+-        runtime.root = Some(root.clone());
++        runtime.configure(Some(root.clone()), true);
++        runtime.set_profile_root_before_restore(Some(root.clone()), true);
++        let (send, receive) = mpsc::sync_channel(1);
++        send.send(Ok(ManagerResult::Restored(
++            root.clone(),
++            ManagerIndex::default(),
++            vec![],
++            None,
++            vec![],
++        )))
++        .unwrap();
++        runtime.manager_pending = Some(receive);
++        assert!(runtime.pump_manager());
++        assert!(runtime.inventory_mutable);
+         let index = ManagerIndex {
+             generation: 8,
+             entries: vec![InstalledState {
+diff --git a/apps/bareline/src/windows_app/settings.rs b/apps/bareline/src/windows_app/settings.rs
+index 5fcec61..d5afc7c 100644
+--- a/apps/bareline/src/windows_app/settings.rs
++++ b/apps/bareline/src/windows_app/settings.rs
+@@ -112,7 +112,7 @@ impl SettingsRuntime {
+         let lease = platform
+             .migration_entry_guard(path)
+             .map_err(|error| error.to_string())?;
+-        let mut file = platform
++        let file = platform
+             .open_migration_read(&lease)
+             .map_err(|error| error.to_string())?;
+         let metadata = file.metadata().map_err(|error| error.to_string())?;
+diff --git a/crates/file-io/src/profile_migration.rs b/crates/file-io/src/profile_migration.rs
+index b173243..9b0b97b 100644
+--- a/crates/file-io/src/profile_migration.rs
++++ b/crates/file-io/src/profile_migration.rs
+@@ -1,6 +1,6 @@
+ // SPDX-License-Identifier: MPL-2.0
+ //! Resumable, per-item roaming-to-local profile migration.
+-use bareline_platform::{CacheDirectoryIdentity, LocalFileSystem};
++use bareline_platform::LocalFileSystem;
+ use serde::{Deserialize, Serialize};
+ use sha2::{Digest, Sha256};
+ use std::{
+@@ -202,13 +202,15 @@ pub fn migrate(
+                 &mut budget,
+             );
+             if let Err(error) = result {
+-                let state = if journal.items[index].state == ItemState::Published {
++                let state = if error.kind() == io::ErrorKind::AlreadyExists {
++                    // A verified divergence remains a conflict even when the
++                    // local publication is already authoritative.
++                    ItemState::Conflict
++                } else if journal.items[index].state == ItemState::Published {
+                     // Publication remains authoritative when only source retirement
+                     // failed. Preserve that durable fact so readers never fall back
+                     // to an older roaming copy and the next run can retry retirement.
+                     ItemState::Published
+-                } else if error.kind() == io::ErrorKind::AlreadyExists {
+-                    ItemState::Conflict
+                 } else {
+                     ItemState::FailedRetryable
+                 };
+@@ -296,7 +298,7 @@ fn migrate_item(
+             copy_entry(source, &stage, platform, budget, 0)?;
+         }
+         let lease = platform.migration_entry_guard(&stage)?;
+-        let (staged_fingerprint, _staged_children) = fingerprint_held(&stage, &lease, platform, budget)?;
++        let (staged_fingerprint, staged_children) = fingerprint_held(&stage, &lease, platform, budget)?;
+         let source_after_copy = fingerprint(source, platform, budget)?;
+         if staged_fingerprint != source_after_copy || source_after_copy != source_fingerprint {
+             return Err(io::Error::new(
+@@ -307,6 +309,10 @@ fn migrate_item(
+         journal.items[index].source = Some(source_fingerprint.clone());
+         transition(local, journal, index, ItemState::CopiedVerified, None, platform)?;
+         platform.publish_migration_entry(destination, lease)?;
++        // Child leases pin the verified staged generation through the atomic
++        // parent rename. Release them only after publication so destination
++        // verification can reacquire the same entries by their new paths.
++        drop(staged_children);
+         if fingerprint(destination, platform, budget)? != source_fingerprint {
+             return Err(io::Error::new(
+                 io::ErrorKind::InvalidData,
+@@ -401,7 +407,7 @@ fn copy_entry(
+         let source_lease = platform.migration_entry_guard(source)?;
+         let mut input = platform.open_migration_read(&source_lease)?;
+         let mut output = fs::OpenOptions::new().write(true).create_new(true).open(target)?;
+-        let mut buffer = [0u8; 64 * 1024];
++        let mut buffer = vec![0u8; 64 * 1024];
+         loop {
+             budget.check()?;
+             let count = input.read(&mut buffer)?;
+@@ -532,7 +538,7 @@ fn fingerprint_into(
+         }
+         let mut content_hash = Sha256::new();
+         let mut bytes = 0u64;
+-        let mut buffer = [0u8; 64 * 1024];
++        let mut buffer = vec![0u8; 64 * 1024];
+         loop {
+             budget.check()?;
+             let count = file.read(&mut buffer)?;
+@@ -622,7 +628,7 @@ fn validate_journal(journal: &Journal) -> io::Result<()> {
+ fn load_journal(local: &Path, platform: &dyn LocalFileSystem) -> io::Result<Journal> {
+     let path = local.join(JOURNAL);
+     let lease = platform.migration_entry_guard(&path)?;
+-    let mut file = platform.open_migration_read(&lease)?;
++    let file = platform.open_migration_read(&lease)?;
+     let metadata = file.metadata()?;
+     if !metadata.is_file() || metadata.len() > 64 * 1024 {
+         return Err(io::Error::new(io::ErrorKind::InvalidData, "invalid migration journal"));
+@@ -754,7 +760,7 @@ fn limit() -> io::Error {
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+-    use bareline_platform::{CacheDirectoryLease, FileIdentity};
++    use bareline_platform::{CacheDirectoryIdentity, CacheDirectoryLease, FileIdentity};
+     use std::sync::{
+         Arc,
+         atomic::{AtomicUsize, Ordering},
+diff --git a/crates/platform-windows/src/files.rs b/crates/platform-windows/src/files.rs
+index 3578082..65be013 100644
+--- a/crates/platform-windows/src/files.rs
++++ b/crates/platform-windows/src/files.rs
+@@ -471,7 +471,13 @@ mod tests {
+         };
+ 
+         let first = migrate(request(false), &WindowsFileSystem, &|| false).unwrap();
+-        assert_eq!(first.state("recovery"), Some(ItemState::Published));
++        let first_recovery = first.items.iter().find(|item| item.name == "recovery").unwrap();
++        assert_eq!(
++            first_recovery.state,
++            ItemState::Published,
++            "recovery migration detail: {:?}",
++            first_recovery.detail
++        );
+ 
+         let lease = WindowsFileSystem.migration_entry_guard(&source).unwrap();
+         let late_child = source.join("late-child.bin");

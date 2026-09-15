@@ -20,8 +20,7 @@ struct Request {
     job: SearchJob,
     notify: Notify,
 }
-type PageResolver =
-    Box<dyn FnMut(bareline_document::source::PageTicket) -> Result<bool, String> + Send>;
+type PageResolver = Box<dyn FnMut(bareline_document::source::PageTicket) -> Result<bool, String> + Send>;
 enum Work {
     Operation {
         run: Box<dyn FnOnce(&SearchJob) + Send>,
@@ -157,15 +156,9 @@ impl Request {
                 query,
                 reply,
             } => {
-                let _ = reply.try_send(Ok(scan_mixed_open_documents(
-                    snapshots, paged, &query, &self.job,
-                )));
+                let _ = reply.try_send(Ok(scan_mixed_open_documents(snapshots, paged, &query, &self.job)));
             }
-            Work::Search {
-                snapshot,
-                query,
-                reply,
-            } => {
+            Work::Search { snapshot, query, reply } => {
                 let _ = reply.try_send(Ok(scan(&snapshot, &query, &self.job, |_| {})));
             }
             Work::Replace {
@@ -220,9 +213,7 @@ pub struct FolderSearchTicket {
     receiver: Receiver<Result<super::folders::FolderResults, SearchError>>,
 }
 impl FolderSearchTicket {
-    pub fn try_recv(
-        &self,
-    ) -> Result<Result<super::folders::FolderResults, SearchError>, TryRecvError> {
+    pub fn try_recv(&self) -> Result<Result<super::folders::FolderResults, SearchError>, TryRecvError> {
         self.receiver.try_recv()
     }
 }
@@ -250,9 +241,7 @@ pub struct PagedSearchTicket {
     receiver: Receiver<Result<super::paged::PagedResults, SearchError>>,
 }
 impl PagedSearchTicket {
-    pub fn try_recv(
-        &self,
-    ) -> Result<Result<super::paged::PagedResults, SearchError>, TryRecvError> {
+    pub fn try_recv(&self) -> Result<Result<super::paged::PagedResults, SearchError>, TryRecvError> {
         self.receiver.try_recv()
     }
 }
@@ -358,9 +347,7 @@ impl SearchWorker {
         snapshot: bareline_document::paged::PagedSnapshot,
         replacement: String,
         scope: ReplaceScope,
-        resolve: impl FnMut(bareline_document::source::PageTicket) -> Result<bool, String>
-        + Send
-        + 'static,
+        resolve: impl FnMut(bareline_document::source::PageTicket) -> Result<bool, String> + Send + 'static,
         notify: Notify,
     ) -> PagedReplaceTicket {
         let job = SearchJob::default();
@@ -384,9 +371,7 @@ impl SearchWorker {
         &self,
         snapshot: bareline_document::paged::PagedSnapshot,
         query: SearchQuery,
-        resolve: impl FnMut(bareline_document::source::PageTicket) -> Result<bool, String>
-        + Send
-        + 'static,
+        resolve: impl FnMut(bareline_document::source::PageTicket) -> Result<bool, String> + Send + 'static,
         notify: Notify,
     ) -> PagedSearchTicket {
         let job = SearchJob::default();
@@ -443,44 +428,37 @@ impl SearchWorker {
             ready: Condvar::new(),
         });
         let worker = shared.clone();
-        std::thread::Builder::new()
-            .name("search".into())
-            .spawn(move || {
-                loop {
-                    let request = {
-                        let mut state = worker.state.lock().unwrap();
-                        while state.pending.is_none() && !state.stop {
-                            state = worker.ready.wait(state).unwrap();
-                        }
-                        if state.stop {
-                            break;
-                        }
-                        let request = state.pending.take().unwrap();
-                        state.running = Some(request.job.clone());
-                        request
-                    };
-                    request.execute();
-                    worker.state.lock().unwrap().running = None;
-                }
-            })?;
+        std::thread::Builder::new().name("search".into()).spawn(move || {
+            loop {
+                let request = {
+                    let mut state = worker.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                    while state.pending.is_none() && !state.stop {
+                        state = worker.ready.wait(state).unwrap();
+                    }
+                    if state.stop {
+                        break;
+                    }
+                    let request = state.pending.take().unwrap();
+                    state.running = Some(request.job.clone());
+                    request
+                };
+                request.execute();
+                worker
+                    .state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .running = None;
+            }
+        })?;
         Ok(Self { shared })
     }
     /// Replaces obsolete queued work and cancels the active scan. UI callers never wait
     /// for a scan; the short mailbox lock is the only synchronous coordination.
-    pub fn submit(
-        &self,
-        snapshot: DocumentSnapshot,
-        query: SearchQuery,
-        notify: Notify,
-    ) -> SearchTicket {
+    pub fn submit(&self, snapshot: DocumentSnapshot, query: SearchQuery, notify: Notify) -> SearchTicket {
         let job = SearchJob::default();
         let (reply, receiver) = mpsc::sync_channel(1);
         let request = Request {
-            work: Work::Search {
-                snapshot,
-                query,
-                reply,
-            },
+            work: Work::Search { snapshot, query, reply },
             job: job.clone(),
             notify,
         };
@@ -513,7 +491,11 @@ impl SearchWorker {
     }
     fn enqueue(&self, request: Request) {
         let previous = {
-            let mut state = self.shared.state.lock().unwrap();
+            let mut state = self
+                .shared
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if let Some(running) = &state.running {
                 running.cancel();
             }
@@ -528,7 +510,11 @@ impl SearchWorker {
 impl Drop for SearchWorker {
     fn drop(&mut self) {
         let pending = {
-            let mut state = self.shared.state.lock().unwrap();
+            let mut state = self
+                .shared
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             state.stop = true;
             if let Some(running) = &state.running {
                 running.cancel();
@@ -563,9 +549,7 @@ mod tests {
                 let _ = sender.send(());
             }),
         );
-        receiver
-            .recv_timeout(std::time::Duration::from_secs(5))
-            .unwrap();
+        receiver.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
         let result = ticket.try_recv().unwrap().unwrap();
         assert_eq!(result.completeness(), super::super::Completeness::Complete);
         assert_eq!(result.count(), 3);
@@ -573,13 +557,9 @@ mod tests {
     }
     #[test]
     fn rapid_queries_coalesce_and_latest_completion_notifies_without_polling() {
-        let snapshot = Document::from_utf8(
-            &"abc".repeat(100_000),
-            Budget::new(1 << 20),
-            Budget::new(1 << 20),
-        )
-        .unwrap()
-        .snapshot();
+        let snapshot = Document::from_utf8(&"abc".repeat(100_000), Budget::new(1 << 20), Budget::new(1 << 20))
+            .unwrap()
+            .snapshot();
         let worker = SearchWorker::new().unwrap();
         let (notify, notified) = mpsc::channel();
         let notify: Notify = Arc::new(move || {
@@ -587,11 +567,7 @@ mod tests {
         });
         let mut tickets = Vec::new();
         for _ in 0..12 {
-            tickets.push(worker.submit(
-                snapshot.clone(),
-                SearchQuery::literal("abc"),
-                notify.clone(),
-            ));
+            tickets.push(worker.submit(snapshot.clone(), SearchQuery::literal("abc"), notify.clone()));
         }
         let latest = worker.submit(snapshot, SearchQuery::literal("xyz"), notify);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);

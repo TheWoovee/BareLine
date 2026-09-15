@@ -1,12 +1,23 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Global logical navigation over a captured paged root. All Pending page
 //! resolution occurs on one bounded worker; the UI only submits and polls.
-use crate::paged_view::PagedReadHandle;
-use bareline_document::{Budget, TextOffset, line_lookup::{LineLookupPoll, LineTarget}, paged::{PagedSnapshot, SparseLineIndex}};
-use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}, mpsc::{self, Receiver, TryRecvError}};
+use bareline_document::{
+    Budget, TextOffset,
+    line_lookup::{LineLookupPoll, LineTarget},
+    paged::{PagedSnapshot, SparseLineIndex},
+};
+use bareline_file_io::paged_service::PagedReadHandle;
+use std::sync::{
+    Arc, Mutex, RwLock,
+    atomic::{AtomicBool, Ordering},
+    mpsc::{self, Receiver, TryRecvError},
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum NavigationTarget { Line(u64), Byte(TextOffset) }
+pub enum NavigationTarget {
+    Line(u64),
+    Byte(TextOffset),
+}
 /// One speculative window. Superseding a seek cancels this work; it never installs
 /// a viewport or changes selection, and all retained pages use the document budget.
 #[derive(Default)]
@@ -16,46 +27,104 @@ pub struct ViewportPrefetch {
 }
 impl ViewportPrefetch {
     pub fn cancel(&mut self) {
-        if let Some((cancel, _)) = &self.active { cancel.store(true, Ordering::Relaxed); }
+        if let Some((cancel, _)) = &self.active {
+            cancel.store(true, Ordering::Relaxed);
+        }
         self.last = None;
     }
     pub fn poll(&mut self) {
-        if self.active.as_ref().is_some_and(|(_, receiver)| !matches!(receiver.try_recv(), Err(TryRecvError::Empty))) { self.active = None; }
+        if self
+            .active
+            .as_ref()
+            .is_some_and(|(_, receiver)| !matches!(receiver.try_recv(), Err(TryRecvError::Empty)))
+        {
+            self.active = None;
+        }
     }
-    pub fn request(&mut self, handle: PagedReadHandle, offset: TextOffset, budget: Budget, notify: Arc<dyn Fn() + Send + Sync>) {
+    pub fn request(
+        &mut self,
+        handle: PagedReadHandle,
+        offset: TextOffset,
+        budget: Budget,
+        notify: Arc<dyn Fn() + Send + Sync>,
+    ) {
         self.poll();
         let key = (handle.snapshot().identity_token(), offset.0);
-        if self.active.is_some() || self.last == Some(key) || offset.0 >= handle.snapshot().len() { return; }
-        let cancel = Arc::new(AtomicBool::new(false)); let worker_cancel = cancel.clone();
+        if self.active.is_some() || self.last == Some(key) || offset.0 >= handle.snapshot().len() {
+            return;
+        }
+        let cancel = Arc::new(AtomicBool::new(false));
+        let worker_cancel = cancel.clone();
         let (sender, receiver) = mpsc::sync_channel(1);
-        if std::thread::Builder::new().name("bareline-viewport-prefetch".into()).spawn(move || {
-            if let Ok(mut request) = handle.snapshot().begin_viewport(offset, 64 * 1024, &budget) {
-                while !worker_cancel.load(Ordering::Relaxed) {
-                    match request.poll() {
-                        bareline_document::paged::WindowPoll::Pending(ticket) => match handle.resolve_captured_page(ticket) { Ok(true) => {}, Ok(false) => std::thread::yield_now(), Err(_) => break },
-                        _ => break,
+        if std::thread::Builder::new()
+            .name("bareline-viewport-prefetch".into())
+            .spawn(move || {
+                if let Ok(mut request) = handle.snapshot().begin_viewport(offset, 64 * 1024, &budget) {
+                    while !worker_cancel.load(Ordering::Relaxed) {
+                        match request.poll() {
+                            bareline_document::paged::WindowPoll::Pending(ticket) => {
+                                match handle.resolve_captured_page(ticket) {
+                                    Ok(true) => {}
+                                    Ok(false) => std::thread::yield_now(),
+                                    Err(_) => break,
+                                }
+                            }
+                            _ => break,
+                        }
                     }
                 }
-            }
-            let _ = sender.try_send(()); notify();
-        }).is_ok() { self.active = Some((cancel, receiver)); self.last = Some(key); }
+                let _ = sender.try_send(());
+                notify();
+            })
+            .is_ok()
+        {
+            self.active = Some((cancel, receiver));
+            self.last = Some(key);
+        }
     }
 }
-impl Drop for ViewportPrefetch { fn drop(&mut self) { self.cancel(); } }
+impl Drop for ViewportPrefetch {
+    fn drop(&mut self) {
+        self.cancel();
+    }
+}
 /// Snap a shaped hit against the complete captured UTF-8 sequence, including a
 /// grapheme whose combining context extends beyond the displayed window.
-pub(crate) fn snap_grapheme(handle: &PagedReadHandle, offset: usize, budget: &Budget, cancellation: &bareline_file_io::cancellation::Cancellation) -> Result<usize, String> {
+pub(crate) fn snap_grapheme(
+    handle: &PagedReadHandle,
+    offset: usize,
+    budget: &Budget,
+    cancellation: &bareline_file_io::cancellation::Cancellation,
+) -> Result<usize, String> {
     use unicode_segmentation::{GraphemeCursor, GraphemeIncomplete};
     let _context_budget = budget.claim(8192).map_err(|e| format!("Grapheme context: {e:?}"))?;
-    fn chunk(handle: &PagedReadHandle, at: usize, backwards: bool, budget: &Budget, cancellation: &bareline_file_io::cancellation::Cancellation) -> Result<(usize, String), String> {
+    fn chunk(
+        handle: &PagedReadHandle,
+        at: usize,
+        backwards: bool,
+        budget: &Budget,
+        cancellation: &bareline_file_io::cancellation::Cancellation,
+    ) -> Result<(usize, String), String> {
         let start = if backwards { at.saturating_sub(4096) } else { at };
         let size = if backwards { at - start } else { 4096 };
-        let mut request = handle.snapshot().begin_viewport(TextOffset(start), size, budget).map_err(|e| format!("Grapheme window: {e:?}"))?;
+        let mut request = handle
+            .snapshot()
+            .begin_viewport(TextOffset(start), size, budget)
+            .map_err(|e| format!("Grapheme window: {e:?}"))?;
         loop {
             cancellation.check().map_err(|e| format!("Grapheme hit: {e:?}"))?;
             match request.poll() {
-                bareline_document::paged::WindowPoll::Ready(window) => return Ok((window.range().start.0, window.text().to_owned())),
-                bareline_document::paged::WindowPoll::Pending(ticket) => { if !handle.resolve_captured_page(ticket)? { std::thread::yield_now(); } },
+                bareline_document::paged::WindowPoll::Ready(window) => {
+                    return Ok((window.range().start.0, window.text().to_owned()));
+                }
+                bareline_document::paged::WindowPoll::Pending(ticket) => {
+                    if !handle
+                        .resolve_captured_page(ticket)
+                        .map_err(|error| error.to_string())?
+                    {
+                        std::thread::yield_now();
+                    }
+                }
                 _ => return Err("Grapheme source unavailable".into()),
             }
         }
@@ -65,14 +134,27 @@ pub(crate) fn snap_grapheme(handle: &PagedReadHandle, offset: usize, budget: &Bu
     let mut previous = false;
     loop {
         cancellation.check().map_err(|e| format!("Grapheme hit: {e:?}"))?;
-        let result = if previous { cursor.prev_boundary(&text, start) } else { cursor.is_boundary(&text, start).map(|boundary| boundary.then_some(offset)) };
+        let result = if previous {
+            cursor.prev_boundary(&text, start)
+        } else {
+            cursor
+                .is_boundary(&text, start)
+                .map(|boundary| boundary.then_some(offset))
+        };
         match result {
             Ok(Some(boundary)) => return Ok(boundary),
             Ok(None) if !previous => previous = true,
             Ok(None) => return Ok(0),
-            Err(GraphemeIncomplete::PreContext(end)) => { let (from, context) = chunk(handle, end, true, budget, cancellation)?; cursor.provide_context(&context, from); },
-            Err(GraphemeIncomplete::PrevChunk) => { (start, text) = chunk(handle, start, true, budget, cancellation)?; },
-            Err(GraphemeIncomplete::NextChunk) => { (start, text) = chunk(handle, start + text.len(), false, budget, cancellation)?; },
+            Err(GraphemeIncomplete::PreContext(end)) => {
+                let (from, context) = chunk(handle, end, true, budget, cancellation)?;
+                cursor.provide_context(&context, from);
+            }
+            Err(GraphemeIncomplete::PrevChunk) => {
+                (start, text) = chunk(handle, start, true, budget, cancellation)?;
+            }
+            Err(GraphemeIncomplete::NextChunk) => {
+                (start, text) = chunk(handle, start + text.len(), false, budget, cancellation)?;
+            }
             Err(GraphemeIncomplete::InvalidOffset) => return Err("Invalid shaped hit boundary".into()),
         }
     }
@@ -97,30 +179,116 @@ struct Active {
     cancel: Arc<AtomicBool>,
     result: Receiver<Result<NavigationResult, String>>,
 }
+#[derive(Clone)]
+struct IndexReceipt {
+    snapshot: PagedSnapshot,
+    scanned: usize,
+    lines: Option<usize>,
+}
+
+#[cfg(test)]
+struct ScanHook {
+    entered: std::sync::mpsc::SyncSender<()>,
+    release: Receiver<()>,
+}
+
 #[derive(Default)]
-pub struct GlobalNavigation { active: Option<Active>, queued: Option<Job>, index: Arc<Mutex<Option<(PagedSnapshot, SparseLineIndex)>>> }
+pub struct GlobalNavigation {
+    active: Option<Active>,
+    queued: Option<Job>,
+    index: Arc<Mutex<Option<(PagedSnapshot, SparseLineIndex)>>>,
+    receipt: Arc<RwLock<Option<IndexReceipt>>>,
+    observed_receipt: std::cell::RefCell<Option<IndexReceipt>>,
+    #[cfg(test)]
+    scan_hook: Option<ScanHook>,
+}
 impl GlobalNavigation {
-    pub fn new() -> Self { Self::default() }
-    pub fn is_pending(&self) -> bool { self.active.is_some() || self.queued.is_some() }
+    pub fn new() -> Self {
+        Self::default()
+    }
+    pub fn is_pending(&self) -> bool {
+        self.active.is_some() || self.queued.is_some()
+    }
+    /// Fraction of the document the retained sparse line index has scanned, for
+    /// the status strip's determinate progress while line numbers are resolving.
+    pub fn index_progress(&self, expected: &PagedSnapshot) -> Option<f32> {
+        let receipt = self.observed_index_receipt(expected)?;
+        let total = receipt.snapshot.len();
+        if total == 0 {
+            return Some(1.0);
+        }
+        Some((receipt.scanned.min(total) as f32 / total as f32).clamp(0.0, 1.0))
+    }
+    pub fn indexed_line_count(&self, expected: &PagedSnapshot) -> Option<usize> {
+        self.observed_index_receipt(expected)?.lines
+    }
+    fn observed_index_receipt(&self, expected: &PagedSnapshot) -> Option<IndexReceipt> {
+        if let Ok(receipt) = self.receipt.try_read() {
+            *self.observed_receipt.borrow_mut() = receipt.clone();
+        }
+        self.observed_receipt.borrow().clone().filter(|receipt| {
+            receipt.snapshot.same_document(expected) && receipt.snapshot.content_state == expected.content_state
+        })
+    }
+    #[cfg(test)]
+    pub(crate) fn hold_next_scan(&mut self, entered: std::sync::mpsc::SyncSender<()>, release: Receiver<()>) {
+        self.scan_hook = Some(ScanHook { entered, release });
+    }
+    #[cfg(test)]
+    pub(crate) fn hold_receipt_write(
+        &self,
+        entered: std::sync::mpsc::SyncSender<()>,
+        release: Receiver<()>,
+    ) -> std::thread::JoinHandle<()> {
+        let receipt = self.receipt.clone();
+        std::thread::spawn(move || {
+            let _receipt = receipt.write().unwrap_or_else(|error| error.into_inner());
+            let _ = entered.send(());
+            let _ = release.recv_timeout(std::time::Duration::from_secs(5));
+        })
+    }
     pub fn cancel(&mut self) {
         self.queued = None;
-        if let Some(active) = &self.active { active.cancel.store(true, Ordering::Relaxed); }
+        if let Some(active) = &self.active {
+            active.cancel.store(true, Ordering::Relaxed);
+        }
     }
-    pub fn request(&mut self, handle: PagedReadHandle, target: NavigationTarget, budget: Budget, notify: Arc<dyn Fn() + Send + Sync>) -> Result<(), String> {
+    pub fn request(
+        &mut self,
+        handle: PagedReadHandle,
+        target: NavigationTarget,
+        budget: Budget,
+        notify: Arc<dyn Fn() + Send + Sync>,
+    ) -> Result<(), String> {
         if matches!(target, NavigationTarget::Byte(offset) if offset.0 > handle.snapshot().len()) {
             return Err("Navigation offset is outside the captured document".into());
         }
-        if let NavigationTarget::Line(line) = target { usize::try_from(line).map_err(|_| "Logical line exceeds this platform's range")?; }
+        if let NavigationTarget::Line(line) = target {
+            usize::try_from(line).map_err(|_| "Logical line exceeds this platform's range")?;
+        }
         if let Some(active) = &self.active {
-            if !active.cancel.load(Ordering::Relaxed) && active.target == target
-                && active.snapshot.same_document(handle.snapshot()) && active.snapshot.content_state == handle.snapshot().content_state {
+            if !active.cancel.load(Ordering::Relaxed)
+                && active.target == target
+                && active.snapshot.same_document(handle.snapshot())
+                && active.snapshot.content_state == handle.snapshot().content_state
+            {
                 return Ok(());
             }
             active.cancel.store(true, Ordering::Relaxed);
-            self.queued = Some(Job { handle, target, budget, notify });
+            self.queued = Some(Job {
+                handle,
+                target,
+                budget,
+                notify,
+            });
             return Ok(());
         }
-        self.start(Job { handle, target, budget, notify })
+        self.start(Job {
+            handle,
+            target,
+            budget,
+            notify,
+        })
     }
     fn start(&mut self, job: Job) -> Result<(), String> {
         let cancel = Arc::new(AtomicBool::new(false));
@@ -128,20 +296,50 @@ impl GlobalNavigation {
         let snapshot = job.handle.snapshot().clone();
         let target = job.target;
         let retained = self.index.clone();
+        let receipt = self.receipt.clone();
+        #[cfg(test)]
+        let scan_hook = self.scan_hook.take();
         let (tx, result) = mpsc::sync_channel(1);
-        std::thread::Builder::new().name("bareline-global-line".into()).spawn(move || {
-            let outcome = (|| {
-                let mut retained = retained.lock().map_err(|_| "Global line index lock failed".to_owned())?;
-                if !retained.as_ref().is_some_and(|(snapshot, _)| snapshot.same_document(job.handle.snapshot()) && snapshot.content_state == job.handle.snapshot().content_state) {
-                    let index = SparseLineIndex::new(job.handle.snapshot().clone(), 256, 64 * 1024, &job.budget).map_err(|e| format!("Global line index: {e:?}"))?;
-                    *retained = Some((job.handle.snapshot().clone(), index));
-                }
-                resolve(&job.handle, &mut retained.as_mut().unwrap().1, job.target, job.budget, &worker_cancel)
-            })();
-            let _ = tx.send(outcome);
-            (job.notify)();
-        }).map_err(|e| format!("Cannot start global navigation: {e}"))?;
-        self.active = Some(Active { snapshot, target, cancel, result });
+        std::thread::Builder::new()
+            .name("bareline-global-line".into())
+            .spawn(move || {
+                let outcome = (|| {
+                    let mut retained = retained
+                        .lock()
+                        .map_err(|_| "Global line index lock failed".to_owned())?;
+                    if !retained.as_ref().is_some_and(|(snapshot, _)| {
+                        snapshot.same_document(job.handle.snapshot())
+                            && snapshot.content_state == job.handle.snapshot().content_state
+                    }) {
+                        let index = SparseLineIndex::new(job.handle.snapshot().clone(), 256, 64 * 1024, &job.budget)
+                            .map_err(|e| format!("Global line index: {e:?}"))?;
+                        *retained = Some((job.handle.snapshot().clone(), index));
+                    }
+                    publish_index_receipt(&receipt, &retained.as_ref().unwrap().0, &retained.as_ref().unwrap().1);
+                    #[cfg(test)]
+                    if let Some(scan_hook) = scan_hook {
+                        let _ = scan_hook.entered.send(());
+                        let _ = scan_hook.release.recv_timeout(std::time::Duration::from_secs(5));
+                    }
+                    resolve(
+                        &job.handle,
+                        &mut retained.as_mut().unwrap().1,
+                        job.target,
+                        job.budget,
+                        &worker_cancel,
+                        &receipt,
+                    )
+                })();
+                let _ = tx.send(outcome);
+                (job.notify)();
+            })
+            .map_err(|e| format!("Cannot start global navigation: {e}"))?;
+        self.active = Some(Active {
+            snapshot,
+            target,
+            cancel,
+            result,
+        });
         Ok(())
     }
     pub fn poll(&mut self) -> Option<Result<NavigationResult, String>> {
@@ -159,41 +357,108 @@ impl GlobalNavigation {
         if cancelled { None } else { Some(result) }
     }
 }
-impl Drop for GlobalNavigation { fn drop(&mut self) { self.cancel(); } }
 
-fn lookup(handle: &PagedReadHandle, index: &mut SparseLineIndex, target: LineTarget, budget: Budget, cancelled: &AtomicBool) -> Result<LineLookupPoll, String> {
-    let mut lookup = index.lookup(target, budget).map_err(|e| format!("Global line lookup: {e:?}"))?;
+fn publish_index_receipt(receipt: &RwLock<Option<IndexReceipt>>, snapshot: &PagedSnapshot, index: &SparseLineIndex) {
+    let lines = match index.line_count() {
+        bareline_document::paged::LineCount::Known(count) => Some(count),
+        bareline_document::paged::LineCount::Unknown => None,
+    };
+    if let Ok(mut receipt) = receipt.write() {
+        *receipt = Some(IndexReceipt {
+            snapshot: snapshot.clone(),
+            scanned: index.scanned_to().0,
+            lines,
+        });
+    }
+}
+impl Drop for GlobalNavigation {
+    fn drop(&mut self) {
+        self.cancel();
+    }
+}
+
+fn lookup(
+    handle: &PagedReadHandle,
+    index: &mut SparseLineIndex,
+    target: LineTarget,
+    budget: Budget,
+    cancelled: &AtomicBool,
+    receipt: &RwLock<Option<IndexReceipt>>,
+) -> Result<LineLookupPoll, String> {
+    let mut lookup = index
+        .lookup(target, budget)
+        .map_err(|e| format!("Global line lookup: {e:?}"))?;
     loop {
-        if cancelled.load(Ordering::Relaxed) { lookup.cancel(); return Err("Global navigation cancelled".into()); }
+        if cancelled.load(Ordering::Relaxed) {
+            lookup.cancel();
+            return Err("Global navigation cancelled".into());
+        }
         let result = lookup.poll();
-        index.retain_lookup_progress(&lookup).map_err(|e| format!("Global line checkpoint: {e:?}"))?;
+        index
+            .retain_lookup_progress(&lookup)
+            .map_err(|e| format!("Global line checkpoint: {e:?}"))?;
+        publish_index_receipt(receipt, handle.snapshot(), index);
         match result {
             result @ (LineLookupPoll::Line(_) | LineLookupPoll::Range(_)) => return Ok(result),
             LineLookupPoll::Pending(ticket) => {
                 // The handle is immutable; historical view roots remain usable.
                 // The applying view separately checks source identity/content state.
-                if !handle.resolve_captured_page(ticket)? { std::thread::sleep(std::time::Duration::from_millis(1)); }
+                if !handle
+                    .resolve_captured_page(ticket)
+                    .map_err(|error| error.to_string())?
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
             }
             LineLookupPoll::Progress(_) => std::thread::yield_now(),
-            LineLookupPoll::Unavailable(reason) => return Err(format!("Global navigation source unavailable: {reason:?}")),
+            LineLookupPoll::Unavailable(reason) => {
+                return Err(format!("Global navigation source unavailable: {reason:?}"));
+            }
             LineLookupPoll::Failed(error) => return Err(format!("Global navigation failed: {error:?}")),
             LineLookupPoll::Cancelled => return Err("Global navigation cancelled".into()),
             LineLookupPoll::Finished => return Err("Global navigation ended without a line".into()),
         }
     }
 }
-fn resolve(handle: &PagedReadHandle, index: &mut SparseLineIndex, target: NavigationTarget, budget: Budget, cancelled: &AtomicBool) -> Result<NavigationResult, String> {
+fn resolve(
+    handle: &PagedReadHandle,
+    index: &mut SparseLineIndex,
+    target: NavigationTarget,
+    budget: Budget,
+    cancelled: &AtomicBool,
+    receipt: &RwLock<Option<IndexReceipt>>,
+) -> Result<NavigationResult, String> {
     let snapshot = handle.snapshot().clone();
     let line = match target {
-        NavigationTarget::Line(line) => usize::try_from(line).map_err(|_| "Logical line exceeds this platform's range")?,
-        NavigationTarget::Byte(offset) => match lookup(handle, index, LineTarget::Byte(offset), budget.clone(), cancelled)? {
-            LineLookupPoll::Line(line) => line,
-            _ => return Err("Global byte lookup returned no line".into()),
-        },
+        NavigationTarget::Line(line) => {
+            usize::try_from(line).map_err(|_| "Logical line exceeds this platform's range")?
+        }
+        NavigationTarget::Byte(offset) => {
+            match lookup(
+                handle,
+                index,
+                LineTarget::Byte(offset),
+                budget.clone(),
+                cancelled,
+                receipt,
+            )? {
+                LineLookupPoll::Line(line) => line,
+                _ => return Err("Global byte lookup returned no line".into()),
+            }
+        }
     };
-    let LineLookupPoll::Range(range) = lookup(handle, index, LineTarget::Line(line), budget, cancelled)? else {
+    let LineLookupPoll::Range(range) = lookup(handle, index, LineTarget::Line(line), budget, cancelled, receipt)?
+    else {
         return Err("Global line lookup returned no range".into());
     };
-    let offset = match target { NavigationTarget::Line(_) => range.start, NavigationTarget::Byte(offset) => offset };
-    Ok(NavigationResult { snapshot, offset, line_start: range.start, first_global_line: line as u64 })
+    let offset = match target {
+        NavigationTarget::Line(_) => range.start,
+        NavigationTarget::Byte(offset) => offset,
+    };
+    Ok(NavigationResult {
+        snapshot,
+        offset,
+        line_start: range.start,
+        first_global_line: line as u64,
+    })
 }

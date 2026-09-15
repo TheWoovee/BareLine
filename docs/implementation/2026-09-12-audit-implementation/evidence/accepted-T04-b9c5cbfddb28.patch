@@ -1,0 +1,42 @@
+diff --git a/crates/platform-windows/src/files.rs b/crates/platform-windows/src/files.rs
+index de9f0e8..24662c0 100644
+--- a/crates/platform-windows/src/files.rs
++++ b/crates/platform-windows/src/files.rs
+@@ -651,7 +651,7 @@ impl LocalFileSystem for WindowsFileSystem {
+             journal_path.ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "commit journal missing"))?;
+         let mut artifacts = Vec::new();
+         let displaced = displaced_path
+-            .map(|path| {
++            .map(|path| -> io::Result<PreservedFile> {
+                 let file = cleanup_handle(&path, false, false)?;
+                 let identity = self.identity(&file)?;
+                 artifacts.push(file);
+@@ -659,7 +659,7 @@ impl LocalFileSystem for WindowsFileSystem {
+             })
+             .transpose()?;
+         let proposed = proposed_path
+-            .map(|path| {
++            .map(|path| -> io::Result<PreservedFile> {
+                 let identity = self.identity(&proposed_guard)?;
+                 artifacts.push(proposed_guard);
+                 Ok(PreservedFile { path, identity })
+diff --git a/crates/platform/src/lib.rs b/crates/platform/src/lib.rs
+index 37ab7ba..995a763 100644
+--- a/crates/platform/src/lib.rs
++++ b/crates/platform/src/lib.rs
+@@ -535,13 +535,13 @@ pub fn simulate_commit_transaction(
+     file_system.commit(&staged, &target, false)?;
+     let target_identity = file_system.identity(&std::fs::File::open(&target)?)?;
+     let displaced = displaced
+-        .map(|path| {
++        .map(|path| -> std::io::Result<PreservedFile> {
+             let identity = file_system.identity(&std::fs::File::open(&path)?)?;
+             Ok(PreservedFile { path, identity })
+         })
+         .transpose()?;
+     let proposed = proposed_path
+-        .map(|path| {
++        .map(|path| -> std::io::Result<PreservedFile> {
+             let identity = file_system.identity(&std::fs::File::open(&path)?)?;
+             Ok(PreservedFile { path, identity })
+         })

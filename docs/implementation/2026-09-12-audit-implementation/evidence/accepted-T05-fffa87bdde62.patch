@@ -1,0 +1,3029 @@
+diff --git a/apps/bareline/src/windows_app.rs b/apps/bareline/src/windows_app.rs
+index 638c836..6a97662 100644
+--- a/apps/bareline/src/windows_app.rs
++++ b/apps/bareline/src/windows_app.rs
+@@ -62,6 +62,10 @@ struct CloseTarget {
+     tab: Option<u64>,
+     /// Set once the user answered Save: the prompt must not appear twice.
+     saving: bool,
++    /// Set once the user answered Don't Save while durable discard is pending.
++    discarding: bool,
++    /// User read-only state restored if the discarded tab is reopened.
++    was_read_only: bool,
+ }
+ impl CloseTarget {
+     fn matches(self, index: usize, identity: (u64, u64), tab: Option<u64>) -> bool {
+@@ -71,10 +75,17 @@ impl CloseTarget {
+ enum PendingClose {
+     Document(CloseTarget),
+     Application,
++    ApplicationDiscarding(Vec<DiscardConsent>),
+     /// The user already chose Save on the exit prompt; we are only waiting for
+     /// those saves to land before leaving.
+     ApplicationAfterSaves,
+ }
++#[derive(Clone, Copy)]
++struct DiscardConsent {
++    owner: u64,
++    revision: u64,
++    was_read_only: bool,
++}
+ struct Shell {
+     // Drop renderer/platform before destroying the window.
+     renderer: Option<WindowsRenderer>,
+@@ -1493,6 +1504,11 @@ impl Shell {
+     fn drain_pending_close(&mut self, el: &ActiveEventLoop) {
+         match self.pending_close.take() {
+             Some(PendingClose::Application) => self.request_close_now(el, false),
++            Some(PendingClose::ApplicationDiscarding(identities)) => {
++                if self.discard_for_exit_identities(&identities) {
++                    self.request_close_now(el, true);
++                }
++            }
+             Some(PendingClose::ApplicationAfterSaves) => {
+                 if self.workspace.as_ref().is_some_and(|w| w.io_busy()) || self.lifecycle.busy() {
+                     self.pending_close = Some(PendingClose::ApplicationAfterSaves);
+@@ -1518,7 +1534,7 @@ impl Shell {
+     }
+     /// Runs the Save / Don't Save / Cancel prompt for one document. Returns
+     /// `true` when the caller may close it right away.
+-    fn confirm_close_document(&mut self, index: usize, target: CloseTarget) -> bool {
++    fn confirm_close_document(&mut self, index: usize, target: &mut CloseTarget) -> bool {
+         let Some(platform) = &self.platform else { return false };
+         if self.workspace.as_ref().is_some_and(|w| w.document_busy(index)) {
+             platform.pending_operation_notice();
+@@ -1538,12 +1554,27 @@ impl Shell {
+         let choice = platform.confirm_save_document(&name);
+         match choice {
+             SaveChoice::Cancel => false,
+-            SaveChoice::DontSave => true,
++            SaveChoice::DontSave => {
++                if let Some(editor) = self
++                    .workspace
++                    .as_mut()
++                    .and_then(|workspace| workspace.editors.get_mut(index))
++                {
++                    target.was_read_only = editor.read_only();
++                    editor.set_read_only(true);
++                    target.identity = editor.document_identity();
++                }
++                target.discarding = true;
++                true
++            }
+             SaveChoice::Save => {
+                 if !self.save_index(index) {
+                     return false;
+                 }
+-                self.pending_close = Some(PendingClose::Document(CloseTarget { saving: true, ..target }));
++                self.pending_close = Some(PendingClose::Document(CloseTarget {
++                    saving: true,
++                    ..*target
++                }));
+                 (self.notify)();
+                 false
+             }
+@@ -1555,14 +1586,43 @@ impl Shell {
+         self.request_document_save(index, bareline_file_io::lifecycle::SaveOperation::Save)
+     }
+     fn close_document_now(&mut self, target: CloseTarget) {
+-        let tab = self.active_close_tab();
+-        let Some(editor) = self.workspace.as_ref().and_then(|w| w.editors.get(self.app.active)) else {
++        let Some(mut renderer) = self.renderer.take() else {
+             return;
+         };
+-        if !target.matches(self.app.active, editor.document_identity(), tab) {
++        self.close_document_with_renderer(target, &mut renderer);
++        self.renderer = Some(renderer);
++    }
++    fn close_document_with_renderer(
++        &mut self,
++        mut target: CloseTarget,
++        renderer: &mut impl bareline_renderer::TextBackend,
++    ) {
++        let Some(index) = self
++            .workspace
++            .as_ref()
++            .and_then(|workspace| Self::close_target_index(workspace, target.identity.0))
++        else {
++            return;
++        };
++        let editor = &self.workspace.as_ref().unwrap().editors[index];
++        if editor.document_identity() != target.identity {
++            if target.discarding
++                && let Some(workspace) = &mut self.workspace
++            {
++                let editor = &mut workspace.editors[index];
++                editor.set_read_only(target.was_read_only);
++                editor.resume_recovery_after_discard();
++                workspace.message = Some("Close cancelled because the document changed; recovery resumed.".into());
++            }
++            return;
++        }
++        target.index = index;
++        if !target.discarding
++            && !target.saving
++            && !target.matches(self.app.active, editor.document_identity(), self.active_close_tab())
++        {
+             return;
+         }
+-        let index = target.index;
+         if target.saving {
+             // Waiting on the save the user already asked for.
+             if self.workspace.as_ref().is_some_and(|w| w.document_busy(index))
+@@ -1576,31 +1636,52 @@ impl Shell {
+             if self.workspace.as_ref().is_some_and(|w| w.editors[index].dirty()) {
+                 return;
+             }
+-        } else if !self.confirm_close_document(index, target) {
++        } else if !target.discarding && !self.confirm_close_document(index, &mut target) {
+             return;
+         }
+         let mut closed = false;
+-        if let (Some(workspace), Some(renderer), Some(_platform)) =
+-            (&mut self.workspace, &mut self.renderer, &self.platform)
+-        {
+-            let dirty = workspace.editors[index].dirty();
++        if let Some(workspace) = &mut self.workspace {
+             let document_identity = workspace.editors[index].document_identity();
+             let toast_identity = workspace.editors[index].snapshot().identity_token();
+-            if workspace.close(index, dirty, renderer).is_ok() {
+-                self.launch.cancel_document(document_identity);
+-                self.lifecycle.cancel_preflight(document_identity);
+-                // A closed document leaves none of its notices behind (UX-60).
+-                self.toasts.clear_document(toast_identity);
+-                // Never leave a blank editor with dashes: closing the last tab
+-                // opens a fresh Untitled and the status reads "Ready" (UX-31).
+-                if workspace.editors.is_empty() {
+-                    let _ = workspace.new_document();
+-                    self.toasts.clear_all();
+-                    workspace.message = Some("Ready".into());
++            match workspace.close(index, target.discarding, renderer) {
++                Ok(()) => {
++                    let prior_active = self.app.active;
++                    self.launch.cancel_document(document_identity);
++                    workspace.set_last_closed_read_only(target.was_read_only);
++                    self.lifecycle.cancel_preflight(document_identity);
++                    // A closed document leaves none of its notices behind (UX-60).
++                    self.toasts.clear_document(toast_identity);
++                    // Never leave a blank editor with dashes: closing the last tab
++                    // opens a fresh Untitled and the status reads "Ready" (UX-31).
++                    if workspace.editors.is_empty() {
++                        let _ = workspace.new_document();
++                        self.toasts.clear_all();
++                        workspace.message = Some("Ready".into());
++                    }
++                    self.app.tabs = workspace.titles();
++                    self.app.active = if prior_active > index {
++                        prior_active - 1
++                    } else if prior_active == index {
++                        index.min(self.app.tabs.len().saturating_sub(1))
++                    } else {
++                        prior_active
++                    };
++                    closed = true;
++                }
++                Err(bareline_app::workspace::CloseError::RecoveryPending) => {
++                    workspace.message = Some("Discard requested; waiting for durable recovery cleanup.".into());
++                    self.pending_close = Some(PendingClose::Document(target));
+                 }
+-                self.app.tabs = workspace.titles();
+-                self.app.active = index.min(self.app.tabs.len().saturating_sub(1));
+-                closed = true;
++                Err(bareline_app::workspace::CloseError::RecoveryFailed(error)) => {
++                    if target.discarding
++                        && let Some(editor) = workspace.editors.get_mut(index)
++                    {
++                        editor.set_read_only(target.was_read_only);
++                        editor.resume_recovery_after_discard();
++                    }
++                    workspace.message = Some(format!("Discard remains pending: {error}. Close again to retry."));
++                }
++                Err(_) => {}
+             }
+             if let Some(window) = &self.window {
+                 window.request_redraw();
+@@ -1612,6 +1693,12 @@ impl Shell {
+             launch::log_handle_counters(self.log_directory.as_deref());
+         }
+     }
++    fn close_target_index(workspace: &Workspace, owner: u64) -> Option<usize> {
++        workspace
++            .editors
++            .iter()
++            .position(|editor| editor.document_identity().0 == owner)
++    }
+     fn request_close_now(&mut self, el: &ActiveEventLoop, confirmed: bool) {
+         if self.settings.keymap_busy() || self.settings.controller.saving() {
+             if let Some(platform) = &self.platform {
+@@ -1662,16 +1749,8 @@ impl Shell {
+         match choice {
+             SaveChoice::Cancel => false,
+             SaveChoice::DontSave => {
+-                // Discarding on exit must delete each unsaved journal so recovery
+-                // has nothing to offer on the next launch.
+-                if let Some(workspace) = &mut self.workspace {
+-                    for (index, _) in &unsaved {
+-                        if let Some(editor) = workspace.editors.get_mut(*index) {
+-                            editor.discard_recovery();
+-                        }
+-                    }
+-                }
+-                true
++                let indexes: Vec<_> = unsaved.iter().map(|(index, _)| *index).collect();
++                self.discard_for_exit_indexes(&indexes)
+             }
+             SaveChoice::Save => {
+                 self.start_save_all();
+@@ -1681,6 +1760,105 @@ impl Shell {
+             }
+         }
+     }
++    fn discard_for_exit_indexes(&mut self, indexes: &[usize]) -> bool {
++        let consents: Vec<_> = self
++            .workspace
++            .as_mut()
++            .map(|workspace| {
++                indexes
++                    .iter()
++                    .filter_map(|index| {
++                        workspace.editors.get_mut(*index).map(|editor| {
++                            let (owner, revision) = editor.document_identity();
++                            let was_read_only = editor.read_only();
++                            editor.set_read_only(true);
++                            DiscardConsent {
++                                owner,
++                                revision,
++                                was_read_only,
++                            }
++                        })
++                    })
++                    .collect()
++            })
++            .unwrap_or_default();
++        self.discard_for_exit_identities(&consents)
++    }
++    fn discard_for_exit_identities(&mut self, consents: &[DiscardConsent]) -> bool {
++        let Some(workspace) = &mut self.workspace else {
++            return true;
++        };
++        let mut indexes = Vec::with_capacity(consents.len());
++        for consent in consents {
++            let Some((index, revision)) = workspace.editors.iter().enumerate().find_map(|(index, editor)| {
++                let (owner, revision) = editor.document_identity();
++                (owner == consent.owner).then_some((index, revision))
++            }) else {
++                Self::cancel_exit_discard(workspace, consents);
++                return false;
++            };
++            if revision != consent.revision {
++                Self::cancel_exit_discard(workspace, consents);
++                return false;
++            }
++            indexes.push(index);
++        }
++        match workspace.discard_recoveries(&indexes) {
++            bareline_file_io::recovery_retirement::DiscardPoll::Durable => {
++                if Self::exit_discard_still_current(workspace, consents) {
++                    true
++                } else {
++                    Self::cancel_exit_discard(workspace, consents);
++                    false
++                }
++            }
++            bareline_file_io::recovery_retirement::DiscardPoll::CleanupPending(error) => {
++                if Self::exit_discard_still_current(workspace, consents) {
++                    workspace.message = Some(format!("Documents discarded; recovery cleanup pending: {error}"));
++                    true
++                } else {
++                    Self::cancel_exit_discard(workspace, consents);
++                    false
++                }
++            }
++            bareline_file_io::recovery_retirement::DiscardPoll::Pending => {
++                workspace.message = Some("Discard requested; waiting for durable recovery tombstones.".into());
++                self.pending_close = Some(PendingClose::ApplicationDiscarding(consents.to_vec()));
++                false
++            }
++            bareline_file_io::recovery_retirement::DiscardPoll::TombstoneFailed(error) => {
++                Self::cancel_exit_discard(workspace, consents);
++                workspace.message = Some(format!(
++                    "Exit paused: discard tombstone failed: {error}. Quit again to retry."
++                ));
++                false
++            }
++        }
++    }
++    fn exit_discard_still_current(workspace: &Workspace, consents: &[DiscardConsent]) -> bool {
++        workspace.editors.iter().all(|editor| {
++            if !editor.dirty() && !editor.busy() {
++                return true;
++            }
++            let (owner, revision) = editor.document_identity();
++            consents
++                .iter()
++                .any(|consent| consent.owner == owner && consent.revision == revision)
++        })
++    }
++    fn cancel_exit_discard(workspace: &mut Workspace, consents: &[DiscardConsent]) {
++        for consent in consents {
++            if let Some(editor) = workspace
++                .editors
++                .iter_mut()
++                .find(|editor| editor.document_identity().0 == consent.owner)
++            {
++                editor.set_read_only(consent.was_read_only);
++                editor.resume_recovery_after_discard();
++            }
++        }
++        workspace.message = Some("Exit cancelled because the document set changed; recovery resumed.".into());
++    }
+     /// Handle a contributed command ID: the inline pre-chain handlers
+     /// (encoding, search, migration, shell integration, theme cycle, dynamic
+     /// invoke, transcode, update, Settings-tab close), then the table-driven
+@@ -2179,6 +2357,8 @@ impl Shell {
+                         identity: editor.document_identity(),
+                         tab: self.active_close_tab(),
+                         saving: false,
++                        discarding: false,
++                        was_read_only: editor.read_only(),
+                     }));
+                     (self.notify)();
+                 }
+@@ -4088,9 +4268,79 @@ impl Shell {
+ 
+ #[cfg(test)]
+ mod deferred_close_tests {
+-    use super::{CloseTarget, lifecycle::Identity};
+-    use bareline_app::workspace::Workspace;
+-    use std::sync::Arc;
++    use super::{CloseTarget, PendingClose, Shell, accessibility::tests::headless_shell, lifecycle::Identity};
++    use bareline_app::workspace::{Input, Workspace};
++    use bareline_platform::LocalFileSystem;
++    use std::{
++        path::Path,
++        sync::{
++            Arc, Condvar, Mutex,
++            atomic::{AtomicBool, Ordering},
++        },
++        time::{Duration, Instant},
++    };
++
++    #[derive(Default)]
++    struct TombstoneGate {
++        armed: AtomicBool,
++        released: AtomicBool,
++        entered: Mutex<bool>,
++        wake: Condvar,
++    }
++    impl TombstoneGate {
++        fn arm(&self) {
++            self.armed.store(true, Ordering::SeqCst);
++        }
++        fn wait_entered(&self) {
++            let deadline = Instant::now() + Duration::from_secs(10);
++            let mut entered = self.entered.lock().unwrap();
++            while !*entered {
++                let remaining = deadline.saturating_duration_since(Instant::now());
++                assert!(!remaining.is_zero(), "discard never reached tombstone publication");
++                let (next, timeout) = self.wake.wait_timeout(entered, remaining).unwrap();
++                entered = next;
++                assert!(!timeout.timed_out() || *entered);
++            }
++        }
++        fn release(&self) {
++            self.released.store(true, Ordering::SeqCst);
++            self.wake.notify_all();
++        }
++    }
++    impl LocalFileSystem for TombstoneGate {
++        fn guard_directory(&self, path: &Path) -> std::io::Result<Arc<dyn Send + Sync>> {
++            LocalFileSystem::guard_directory(&bareline_platform_windows::WindowsFileSystem, path)
++        }
++        fn identity(&self, file: &std::fs::File) -> std::io::Result<bareline_platform::FileIdentity> {
++            LocalFileSystem::identity(&bareline_platform_windows::WindowsFileSystem, file)
++        }
++        fn validate_target(&self, path: &Path) -> std::io::Result<()> {
++            LocalFileSystem::validate_target(&bareline_platform_windows::WindowsFileSystem, path)
++        }
++        fn commit(&self, staged: &Path, target: &Path, existed: bool) -> std::io::Result<()> {
++            if self.armed.load(Ordering::SeqCst) && target.file_name().is_some_and(|name| name == "retired.json") {
++                let mut entered = self.entered.lock().unwrap();
++                *entered = true;
++                self.wake.notify_all();
++                while !self.released.load(Ordering::SeqCst) {
++                    entered = self.wake.wait(entered).unwrap();
++                }
++            }
++            LocalFileSystem::commit(&bareline_platform_windows::WindowsFileSystem, staged, target, existed)
++        }
++    }
++
++    fn settle(workspace: &mut Workspace) {
++        let deadline = Instant::now() + Duration::from_secs(10);
++        loop {
++            workspace.pump();
++            if !workspace.io_busy() && !workspace.editors.iter().any(|editor| editor.busy()) {
++                break;
++            }
++            assert!(Instant::now() < deadline, "{:?}", workspace.message);
++            std::thread::yield_now();
++        }
++    }
+ 
+     #[test]
+     fn deferred_close_rejects_changed_tab_document_or_index() {
+@@ -4099,6 +4349,8 @@ mod deferred_close_tests {
+             identity: (41, 7),
+             tab: Some(9),
+             saving: false,
++            discarding: false,
++            was_read_only: false,
+         };
+         assert!(target.matches(2, (41, 7), Some(9)));
+         assert!(!target.matches(1, (41, 7), Some(9)));
+@@ -4108,6 +4360,171 @@ mod deferred_close_tests {
+         assert!(!target.matches(2, (41, 7), None));
+     }
+ 
++    #[test]
++    fn pending_exit_discard_revalidates_new_dirty_documents_before_exit() {
++        let root = std::env::temp_dir().join(format!(
++            "bareline-exit-discard-{}-{}",
++            std::process::id(),
++            std::time::SystemTime::now()
++                .duration_since(std::time::UNIX_EPOCH)
++                .unwrap()
++                .as_nanos()
++        ));
++        let gate = Arc::new(TombstoneGate::default());
++        let mut workspace = Workspace::new(Arc::new(|| {}), gate.clone()).unwrap();
++        workspace.recovery_root = Some(root.join("recovery"));
++        workspace.new_document().unwrap();
++        workspace.editors[0].enqueue(Input::Insert("first draft".into()));
++        settle(&mut workspace);
++        let deadline = Instant::now() + Duration::from_secs(10);
++        while !workspace.editors[0].recovery_status().complete {
++            workspace.pump();
++            assert!(Instant::now() < deadline, "{:?}", workspace.message);
++            std::thread::yield_now();
++        }
++        let mut shell = headless_shell();
++        shell.workspace = Some(workspace);
++        gate.arm();
++        assert!(!shell.discard_for_exit_indexes(&[0]));
++        gate.wait_entered();
++        let workspace = shell.workspace.as_mut().unwrap();
++        workspace.new_document().unwrap();
++        workspace.editors[1].enqueue(Input::Insert("new draft".into()));
++        settle(workspace);
++        let consents = match shell.pending_close.take() {
++            Some(PendingClose::ApplicationDiscarding(consents)) => consents,
++            _ => panic!("exit discard did not retain its consent owners"),
++        };
++        gate.release();
++        let deadline = Instant::now() + Duration::from_secs(10);
++        loop {
++            if !shell.discard_for_exit_identities(&consents) {
++                if !matches!(shell.pending_close, Some(PendingClose::ApplicationDiscarding(_))) {
++                    break;
++                }
++                shell.pending_close = None;
++            }
++            assert!(Instant::now() < deadline, "discard never reached a terminal outcome");
++            std::thread::yield_now();
++        }
++        let workspace = shell.workspace.as_ref().unwrap();
++        assert_eq!(workspace.editors.len(), 2);
++        assert!(workspace.editors.iter().all(|editor| editor.dirty()));
++        assert!(
++            !workspace.editors[0].read_only(),
++            "cancelled exit left the consent target frozen"
++        );
++        assert!(
++            workspace
++                .message
++                .as_deref()
++                .is_some_and(|message| message.contains("document set changed"))
++        );
++        drop(shell);
++        let _ = std::fs::remove_dir_all(root);
++    }
++
++    #[test]
++    fn discard_close_resolves_stable_owner_after_another_tab_moves() {
++        let root = std::env::temp_dir().join(format!(
++            "bareline-close-discard-{}-{}",
++            std::process::id(),
++            std::time::SystemTime::now()
++                .duration_since(std::time::UNIX_EPOCH)
++                .unwrap()
++                .as_nanos()
++        ));
++        let gate = Arc::new(TombstoneGate::default());
++        let mut workspace = Workspace::new(Arc::new(|| {}), gate.clone()).unwrap();
++        workspace.recovery_root = Some(root.join("recovery"));
++        workspace.new_document().unwrap();
++        workspace.new_document().unwrap();
++        workspace.editors[0].enqueue(Input::Insert("discard me".into()));
++        settle(&mut workspace);
++        let deadline = Instant::now() + Duration::from_secs(10);
++        while !workspace.editors[0].recovery_status().complete {
++            workspace.pump();
++            assert!(Instant::now() < deadline, "{:?}", workspace.message);
++            std::thread::yield_now();
++        }
++        let identity = workspace.editors[0].document_identity();
++        workspace.editors[0].set_read_only(true);
++        let target = CloseTarget {
++            index: 0,
++            identity,
++            tab: None,
++            saving: false,
++            discarding: true,
++            was_read_only: false,
++        };
++        let mut shell = headless_shell();
++        shell.workspace = Some(workspace);
++        let mut renderer = bareline_renderer_recording::RecordingBackend::default();
++        gate.arm();
++        shell.close_document_with_renderer(target, &mut renderer);
++        gate.wait_entered();
++        assert!(matches!(shell.pending_close, Some(PendingClose::Document(_))));
++        assert!(shell.workspace.as_mut().unwrap().reorder(&[1, 0]));
++        gate.release();
++        let deadline = Instant::now() + Duration::from_secs(10);
++        while let Some(PendingClose::Document(target)) = shell.pending_close.take() {
++            shell.close_document_with_renderer(target, &mut renderer);
++            assert!(Instant::now() < deadline, "deferred close never completed");
++            std::thread::yield_now();
++        }
++        let workspace = shell.workspace.as_mut().unwrap();
++        assert_eq!(workspace.editors.len(), 1);
++        assert_ne!(workspace.editors[0].document_identity().0, identity.0);
++        assert_eq!(workspace.restore_last_closed(), Some(1));
++        assert!(
++            !workspace.editors[1].read_only(),
++            "reopened discard target kept its temporary freeze"
++        );
++        drop(shell);
++        let _ = std::fs::remove_dir_all(root);
++    }
++
++    #[test]
++    fn clean_read_only_close_and_non_discard_mismatch_preserve_read_only_state() {
++        let mut workspace =
++            Workspace::new(Arc::new(|| {}), Arc::new(bareline_platform_windows::WindowsFileSystem)).unwrap();
++        workspace.new_document().unwrap();
++        workspace.editors[0].set_read_only(true);
++        let identity = workspace.editors[0].document_identity();
++        let mut shell = headless_shell();
++        shell.workspace = Some(workspace);
++        let mut renderer = bareline_renderer_recording::RecordingBackend::default();
++
++        shell.close_document_with_renderer(
++            CloseTarget {
++                index: 0,
++                identity: (identity.0, identity.1.wrapping_add(1)),
++                tab: None,
++                saving: false,
++                discarding: false,
++                was_read_only: false,
++            },
++            &mut renderer,
++        );
++        assert!(shell.workspace.as_ref().unwrap().editors[0].read_only());
++
++        shell.close_document_with_renderer(
++            CloseTarget {
++                index: 0,
++                identity,
++                tab: None,
++                saving: false,
++                discarding: false,
++                was_read_only: true,
++            },
++            &mut renderer,
++        );
++        let workspace = shell.workspace.as_mut().unwrap();
++        let restored = workspace.restore_last_closed().expect("closed read-only document");
++        assert_eq!(restored, 1, "closing the last tab creates a fresh Untitled first");
++        assert!(workspace.editors[restored].read_only());
++    }
++
+     #[test]
+     fn forced_paged_close_and_preflight_share_full_document_identity_after_viewport_move() {
+         let root = std::env::temp_dir().join(format!(
+@@ -4146,6 +4563,8 @@ mod deferred_close_tests {
+             identity: document,
+             tab: Some(1),
+             saving: true,
++            discarding: false,
++            was_read_only: false,
+         };
+         assert!(close.matches(0, document, Some(1)));
+         assert!(!close.matches(0, viewport, Some(1)));
+diff --git a/apps/bareline/src/windows_app/recovery.rs b/apps/bareline/src/windows_app/recovery.rs
+index d3fb0c8..f2c3cb4 100644
+--- a/apps/bareline/src/windows_app/recovery.rs
++++ b/apps/bareline/src/windows_app/recovery.rs
+@@ -398,11 +398,16 @@ impl Shell {
+                 }
+             }
+             "recovery.retry" => {
++                let cleanup_retries = bareline_file_io::recovery_retirement::retry_pending_cleanup();
+                 if let Some(workspace) = &mut self.workspace {
+-                    workspace.message = workspace
++                    let editor_error = workspace
+                         .editors
+                         .get_mut(self.app.active)
+                         .and_then(|editor| editor.retry_recovery().err());
++                    workspace.message = editor_error.or_else(|| {
++                        (cleanup_retries > 0)
++                            .then(|| format!("Retrying {cleanup_retries} pending recovery cleanup(s)…"))
++                    });
+                 }
+             }
+             "recovery.save_as" => self.dispatch(el, Action::SaveAs),
+diff --git a/crates/app/src/workspace.rs b/crates/app/src/workspace.rs
+index 0296cad..608cf62 100644
+--- a/crates/app/src/workspace.rs
++++ b/crates/app/src/workspace.rs
+@@ -240,13 +240,19 @@ impl WorkspaceEditor {
+             Self::Paged(editor) => editor.retry_recovery(),
+         }
+     }
+-    /// Delete the recovery journal now when the user discards unsaved changes on close/exit.
+-    pub fn discard_recovery(&mut self) {
++    /// Request durable recovery retirement when the user discards on close or exit.
++    pub fn discard_recovery(&mut self) -> bareline_file_io::recovery_retirement::DiscardPoll {
+         match self {
+             Self::Resident(editor) => editor.discard_recovery(),
+             Self::Paged(editor) => editor.discard_recovery(),
+         }
+     }
++    pub fn resume_recovery_after_discard(&mut self) {
++        match self {
++            Self::Resident(editor) => editor.resume_recovery_after_discard(),
++            Self::Paged(editor) => editor.resume_recovery_after_discard(),
++        }
++    }
+     /// Borrow the bounded viewport surface that both variants present and draw.
+     /// This is the currently displayed text window — for a paged editor it is
+     /// never the whole document, so use it only for presentation and per-view
+@@ -703,18 +709,30 @@ pub enum CloseError {
+     Busy,
+     Unsaved,
+     Missing,
++    RecoveryPending,
++    RecoveryFailed(String),
+ }
+ impl Workspace {
+     fn new_paged_editor(
+         &self,
+         opened: Box<bareline_file_io::lifecycle::PagedOpened>,
+     ) -> Result<PagedEditorSurface, String> {
++        let recovery_root = self.recovery_root.clone().or_else(|| {
++            opened
++                .recovery_origin
++                .as_deref()
++                .and_then(std::path::Path::parent)
++                .map(std::path::Path::to_path_buf)
++        });
+         let mut editor = PagedEditorSurface::new(opened, self.bytes.clone(), self.notify.clone())?;
+         editor.configure_owned_spill(
+             std::env::temp_dir().join("Bareline-owned-spill"),
+             self.file_system.clone(),
+             self.source_options(),
+         );
++        if let Some(root) = recovery_root {
++            editor.enable_recovery(root, self.file_system.clone());
++        }
+         Ok(editor)
+     }
+     pub fn source_options(&self) -> bareline_file_io::source::SourceOptions {
+@@ -977,6 +995,10 @@ impl Workspace {
+                 }
+             }
+         }
++        if let Some(warning) = bareline_file_io::recovery_retirement::take_cleanup_warning() {
++            self.message = Some(format!("{warning}. Use Retry Recovery to try cleanup again."));
++            changed = true;
++        }
+         changed |= self.search_panel.pump();
+         changed |= self.styling.pump();
+         for (index, editor) in self.editors.iter_mut().enumerate() {
+@@ -1479,6 +1501,7 @@ impl Workspace {
+                                         transcoded.document = document;
+                                         let opened = Box::new(bareline_file_io::lifecycle::PagedOpened {
+                                             recovery_origin: None,
++                                            recovered_resident: None,
+                                             path: self.files[index]
+                                                 .as_ref()
+                                                 .map_or_else(|| PathBuf::from("Untitled"), |file| file.path.clone()),
+@@ -2122,22 +2145,10 @@ impl Workspace {
+     /// its own name, with unsaved changes, instead of a read-only paged view that can
+     /// never finish loading. Returns false when the document is too large to adopt.
+     fn adopt_recovered_resident(&mut self, opened: &mut bareline_file_io::lifecycle::PagedOpened) -> bool {
+-        // Only a document that never had a file on disk can be re-created from its text
+-        // alone; anything opened from disk must keep its original bytes and encoding.
+-        let untitled = opened
+-            .recovery_origin
+-            .as_deref()
+-            .and_then(|directory| bareline_file_io::recovery::inspect(directory, &Default::default()).ok())
+-            .is_some_and(|inspection| inspection.metadata.original_path.is_none());
+-        if !untitled {
++        let Some(text) = opened.recovered_resident.take() else {
+             return false;
+-        }
+-        let limit = self.resident_max_bytes.min(16 << 20);
+-        let text = match bareline_file_io::paged_recovery::restore_text(opened, limit, &self.bytes, &Default::default())
+-        {
+-            Ok(Some(text)) => text,
+-            _ => return false,
+         };
++        let recovery_origin = opened.recovery_origin.clone();
+         let label = opened
+             .path
+             .file_name()
+@@ -2155,10 +2166,19 @@ impl Workspace {
+         self.files.push(None);
+         self.untitled_labels.push(label);
+         let index = self.editors.len() - 1;
+-        if let Some(root) = &self.recovery_root
++        let recovery_root = self.recovery_root.clone().or_else(|| {
++            recovery_origin
++                .as_deref()
++                .and_then(std::path::Path::parent)
++                .map(std::path::Path::to_path_buf)
++        });
++        if let Some(root) = recovery_root
+             && let WorkspaceEditor::Resident(surface) = &mut self.editors[index]
+         {
+-            surface.enable_recovery(root.clone(), self.file_system.clone(), None, None, self.bytes.clone());
++            surface.enable_recovery(root, self.file_system.clone(), None, None, self.bytes.clone());
++            if let Some(origin) = recovery_origin {
++                surface.adopt_recovery_origin(origin);
++            }
+         }
+         self.message = None;
+         true
+@@ -2169,6 +2189,7 @@ impl Workspace {
+                 directory: directory.clone(),
+                 bytes: self.bytes.clone(),
+                 history: self.history.clone(),
++                resident_max_bytes: self.resident_max_bytes.min(16 << 20),
+             },
+             directory,
+             None,
+@@ -2340,6 +2361,29 @@ impl Workspace {
+                 .iter()
+                 .any(|pending| pending.save.as_ref().is_some_and(|(target, _, _)| *target == index))
+     }
++    pub fn discard_recoveries(&mut self, indexes: &[usize]) -> bareline_file_io::recovery_retirement::DiscardPoll {
++        let mut outcome = bareline_file_io::recovery_retirement::DiscardPoll::Durable;
++        for &index in indexes {
++            let Some(editor) = self.editors.get_mut(index) else {
++                continue;
++            };
++            match editor.discard_recovery() {
++                bareline_file_io::recovery_retirement::DiscardPoll::TombstoneFailed(error) => {
++                    return bareline_file_io::recovery_retirement::DiscardPoll::TombstoneFailed(error);
++                }
++                bareline_file_io::recovery_retirement::DiscardPoll::Pending => {
++                    outcome = bareline_file_io::recovery_retirement::DiscardPoll::Pending;
++                }
++                bareline_file_io::recovery_retirement::DiscardPoll::CleanupPending(error)
++                    if !matches!(outcome, bareline_file_io::recovery_retirement::DiscardPoll::Pending) =>
++                {
++                    outcome = bareline_file_io::recovery_retirement::DiscardPoll::CleanupPending(error);
++                }
++                _ => {}
++            }
++        }
++        outcome
++    }
+     pub fn close(&mut self, index: usize, discard: bool, renderer: &mut impl TextBackend) -> Result<(), CloseError> {
+         let editor = self.editors.get(index).ok_or(CloseError::Missing)?;
+         if self.document_busy(index) {
+@@ -2348,8 +2392,23 @@ impl Workspace {
+         if editor.dirty() && !discard {
+             return Err(CloseError::Unsaved);
+         }
+-        if editor.read_only() {
+-            let source = editor.snapshot().clone();
++        let preview_source = editor.read_only().then(|| editor.snapshot().clone());
++        if discard {
++            match self.editors[index].discard_recovery() {
++                bareline_file_io::recovery_retirement::DiscardPoll::Pending => {
++                    return Err(CloseError::RecoveryPending);
++                }
++                bareline_file_io::recovery_retirement::DiscardPoll::TombstoneFailed(error) => {
++                    self.message = Some(format!("Discard not yet durable: {error}. Retrying recovery cleanup."));
++                    return Err(CloseError::RecoveryFailed(error));
++                }
++                bareline_file_io::recovery_retirement::DiscardPoll::CleanupPending(error) => {
++                    self.message = Some(format!("Document discarded; recovery cleanup pending: {error}"));
++                }
++                bareline_file_io::recovery_retirement::DiscardPoll::Durable => {}
++            }
++        }
++        if let Some(source) = preview_source {
+             self.pending_io.retain(|pending| {
+                 !pending
+                     .preview
+@@ -2358,11 +2417,6 @@ impl Workspace {
+             });
+         }
+         let mut closed = self.editors.remove(index);
+-        // A discard is a deliberate throw-away: delete the recovery journal so a
+-        // dirty document leaves nothing behind even when the tab is retained.
+-        if discard {
+-            closed.discard_recovery();
+-        }
+         closed.release_layouts(renderer);
+         let file = self.files.remove(index);
+         let label = self.untitled_labels.remove(index);
+@@ -2424,19 +2478,25 @@ impl Workspace {
+     pub fn can_restore_closed(&self) -> bool {
+         !self.closed.is_empty()
+     }
++    pub fn set_last_closed_read_only(&mut self, read_only: bool) {
++        if let Some(ClosedDocument::Retained(editor, _, _)) = self.closed.last_mut() {
++            editor.set_read_only(read_only);
++        }
++    }
+     /// Documents closed since the last call, so panels can drop cached views of them.
+     pub fn take_closed_documents(&self) -> Vec<(u64, u64)> {
+         std::mem::take(&mut self.closed_documents.borrow_mut())
+     }
+     /// Reattach the retained model, history and selection without reopening its path.
+     pub fn restore_last_closed(&mut self) -> Option<usize> {
+-        let (editor, file, label) = match self.closed.pop()? {
++        let (mut editor, file, label) = match self.closed.pop()? {
+             ClosedDocument::Retained(editor, file, label) => (*editor, file, label),
+             ClosedDocument::Reopen(path) => {
+                 self.open(path);
+                 return None;
+             }
+         };
++        editor.resume_recovery_after_discard();
+         if !matches!(&editor,WorkspaceEditor::Paged(paged) if paged.save_as_required)
+             && let Some(file) = &file
+         {
+@@ -3248,6 +3308,57 @@ mod tests {
+     use super::*;
+     struct PagedFileSystem;
+     impl LocalFileSystem for PagedFileSystem {
++        fn cache_directory_guard(
++            &self,
++            path: &std::path::Path,
++        ) -> std::io::Result<Option<bareline_platform::CacheDirectoryLease>> {
++            let metadata = match std::fs::symlink_metadata(path) {
++                Ok(metadata) => metadata,
++                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
++                Err(error) => return Err(error),
++            };
++            if !metadata.is_dir() || metadata.file_type().is_symlink() {
++                return Ok(None);
++            }
++            use std::hash::{Hash, Hasher};
++            let mut hash = std::collections::hash_map::DefaultHasher::new();
++            path.hash(&mut hash);
++            Ok(Some(bareline_platform::CacheDirectoryLease {
++                identity: bareline_platform::CacheDirectoryIdentity {
++                    volume: 1,
++                    file: hash.finish(),
++                },
++                guard: Arc::new(()),
++            }))
++        }
++        fn remove_owned_cache_directory(
++            &self,
++            root: &std::path::Path,
++            candidate: &std::path::Path,
++            _: bareline_platform::CacheDirectoryIdentity,
++            _: bareline_platform::CacheDirectoryIdentity,
++            proof_name: &str,
++            proof_bytes: &[u8],
++            _: usize,
++            _: std::time::Duration,
++            _: &dyn Fn() -> bool,
++        ) -> bareline_platform::CacheRemovalOutcome {
++            let result = (|| {
++                if candidate.parent() != Some(root) || std::fs::read(candidate.join(proof_name))? != proof_bytes {
++                    return Err(std::io::Error::new(
++                        std::io::ErrorKind::PermissionDenied,
++                        "test cleanup proof changed",
++                    ));
++                }
++                std::fs::remove_dir_all(candidate)?;
++                Ok(1)
++            })();
++            bareline_platform::CacheRemovalOutcome {
++                visited: 1,
++                retry_authority_retained: true,
++                result,
++            }
++        }
+         fn guard_directory(&self, _: &std::path::Path) -> std::io::Result<std::sync::Arc<dyn Send + Sync>> {
+             Ok(std::sync::Arc::new(()))
+         }
+@@ -4227,9 +4338,6 @@ mod tests {
+         assert_eq!(restored.editors.len(), 1, "{:?}", restored.message);
+         assert!(restored.editors[0].dirty());
+         assert!(restored.path(0).is_none());
+-        let mut renderer = bareline_renderer_recording::RecordingBackend::default();
+-        restored.close(0, true, &mut renderer).unwrap();
+-        assert_eq!(restored.restore_last_closed(), Some(0));
+         assert!(restored.recent_paths().is_empty(), "recovery pseudo-path entered MRU");
+         restored.save(0, saved.clone());
+         settle(&mut restored);
+@@ -4250,10 +4358,47 @@ mod tests {
+         drop(prefix);
+         std::fs::write(directory.join("journal.bin"), journal).unwrap();
+         std::fs::write(directory.join("paged-root.json"), earlier_root).unwrap();
++        let retired_directory = directory.clone();
+         let mut stale = Workspace::new(Arc::new(|| {}), Arc::new(PagedFileSystem)).unwrap();
+         stale.restore_paged_recovery(directory);
+         settle(&mut stale);
+         assert_eq!(stale.editors.len(), 1, "{:?}", stale.message);
++        let mut renderer = bareline_renderer_recording::RecordingBackend::default();
++        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
++        loop {
++            match stale.close(0, true, &mut renderer) {
++                Ok(()) => break,
++                Err(CloseError::RecoveryPending) => stale.pump(),
++                Err(error) => panic!("recovered close failed: {error:?}"),
++            }
++            assert!(std::time::Instant::now() < deadline, "{:?}", stale.message);
++            std::thread::sleep(std::time::Duration::from_millis(2));
++        }
++        assert_eq!(stale.restore_last_closed(), Some(0));
++        assert!(stale.recent_paths().is_empty(), "recovery pseudo-path entered MRU");
++        stale.editors[0].enqueue(Input::Insert("Q".into()));
++        settle(&mut stale);
++        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
++        loop {
++            let status = stale.editors[0].recovery_status();
++            assert!(status.error.is_none(), "{:?}", status.error);
++            if status.complete
++                && status
++                    .directory
++                    .as_ref()
++                    .is_some_and(|directory| directory != &retired_directory)
++            {
++                break;
++            }
++            stale.pump();
++            assert!(
++                std::time::Instant::now() < deadline,
++                "reopened document did not establish recovery ownership"
++            );
++            std::thread::sleep(std::time::Duration::from_millis(2));
++        }
++        stale.editors[0].enqueue(Input::Undo);
++        settle(&mut stale);
+         let latest = root.join("latest-from-stale-pointer.txt");
+         stale.save(0, latest.clone());
+         settle(&mut stale);
+@@ -4346,6 +4491,91 @@ mod tests {
+         }
+         std::fs::remove_dir_all(root).unwrap();
+     }
++    #[derive(Default)]
++    struct PurgeGateFileSystem {
++        armed: std::sync::atomic::AtomicBool,
++        released: std::sync::atomic::AtomicBool,
++        entered: std::sync::Mutex<bool>,
++        wake: std::sync::Condvar,
++    }
++    impl PurgeGateFileSystem {
++        fn arm(&self) {
++            self.armed.store(true, std::sync::atomic::Ordering::SeqCst);
++        }
++        fn wait_entered(&self) {
++            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
++            let mut entered = self.entered.lock().unwrap();
++            while !*entered {
++                let remaining = deadline.saturating_duration_since(std::time::Instant::now());
++                assert!(!remaining.is_zero(), "old recovery purge never reached the gate");
++                let (next, timeout) = self.wake.wait_timeout(entered, remaining).unwrap();
++                entered = next;
++                assert!(!timeout.timed_out() || *entered);
++            }
++        }
++        fn release(&self) {
++            self.released.store(true, std::sync::atomic::Ordering::SeqCst);
++            self.wake.notify_all();
++        }
++    }
++    impl LocalFileSystem for PurgeGateFileSystem {
++        fn cache_directory_guard(
++            &self,
++            path: &std::path::Path,
++        ) -> std::io::Result<Option<bareline_platform::CacheDirectoryLease>> {
++            PagedFileSystem.cache_directory_guard(path)
++        }
++        fn remove_owned_cache_directory(
++            &self,
++            root: &std::path::Path,
++            candidate: &std::path::Path,
++            root_identity: bareline_platform::CacheDirectoryIdentity,
++            candidate_identity: bareline_platform::CacheDirectoryIdentity,
++            proof_name: &str,
++            proof_bytes: &[u8],
++            max_entries: usize,
++            max_time: std::time::Duration,
++            cancelled: &dyn Fn() -> bool,
++        ) -> bareline_platform::CacheRemovalOutcome {
++            if self.armed.load(std::sync::atomic::Ordering::SeqCst) {
++                let mut entered = self.entered.lock().unwrap();
++                *entered = true;
++                self.wake.notify_all();
++                while !self.released.load(std::sync::atomic::Ordering::SeqCst) {
++                    entered = self.wake.wait(entered).unwrap();
++                }
++            }
++            PagedFileSystem.remove_owned_cache_directory(
++                root,
++                candidate,
++                root_identity,
++                candidate_identity,
++                proof_name,
++                proof_bytes,
++                max_entries,
++                max_time,
++                cancelled,
++            )
++        }
++        fn available_space(&self, path: &std::path::Path) -> std::io::Result<u64> {
++            PagedFileSystem.available_space(path)
++        }
++        fn guard_directory(&self, path: &std::path::Path) -> std::io::Result<Arc<dyn Send + Sync>> {
++            PagedFileSystem.guard_directory(path)
++        }
++        fn open_sealed_read(&self, path: &std::path::Path) -> std::io::Result<std::fs::File> {
++            PagedFileSystem.open_sealed_read(path)
++        }
++        fn identity(&self, file: &std::fs::File) -> std::io::Result<bareline_platform::FileIdentity> {
++            PagedFileSystem.identity(file)
++        }
++        fn validate_target(&self, path: &std::path::Path) -> std::io::Result<()> {
++            PagedFileSystem.validate_target(path)
++        }
++        fn commit(&self, staged: &std::path::Path, target: &std::path::Path, existed: bool) -> std::io::Result<()> {
++            PagedFileSystem.commit(staged, target, existed)
++        }
++    }
+     #[test]
+     fn small_recovery_restores_an_editable_untitled_document() {
+         let root = std::env::temp_dir().join(format!(
+@@ -4377,7 +4607,9 @@ mod tests {
+             std::thread::sleep(std::time::Duration::from_millis(2));
+         };
+         std::mem::forget(workspace);
+-        let mut restored = Workspace::new(Arc::new(|| {}), Arc::new(PagedFileSystem)).unwrap();
++        let old_directory = directory.clone();
++        let gate = Arc::new(PurgeGateFileSystem::default());
++        let mut restored = Workspace::new(Arc::new(|| {}), gate.clone()).unwrap();
+         restored.restore_paged_recovery(directory);
+         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+         loop {
+@@ -4399,6 +4631,53 @@ mod tests {
+         assert!(!restored.editors[0].read_only());
+         assert_eq!(restored.titles()[0], "Untitled 1 \u{2022}");
+         assert!(restored.path(0).is_none(), "restored document must ask where to save");
++        gate.arm();
++        let mut renderer = bareline_renderer_recording::RecordingBackend::default();
++        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
++        loop {
++            match restored.close(0, true, &mut renderer) {
++                Ok(()) => break,
++                Err(CloseError::RecoveryPending) => restored.pump(),
++                Err(error) => panic!("recovered close failed: {error:?}"),
++            }
++            assert!(std::time::Instant::now() < deadline, "{:?}", restored.message);
++            std::thread::yield_now();
++        }
++        gate.wait_entered();
++        assert_eq!(restored.restore_last_closed(), Some(0));
++        assert!(!restored.editors[0].read_only());
++        restored.editors[0].enqueue(Input::Insert(" again".into()));
++        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
++        let replacement = loop {
++            restored.pump();
++            let status = restored.editors[0].recovery_status();
++            assert!(status.error.is_none(), "{:?}", status.error);
++            if status.complete
++                && let Some(directory) = status.directory
++                && directory != old_directory
++            {
++                break directory;
++            }
++            assert!(
++                std::time::Instant::now() < deadline,
++                "reopened resident document did not establish fresh recovery ownership"
++            );
++            std::thread::yield_now();
++        };
++        assert!(replacement.exists());
++        gate.release();
++        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
++        while old_directory.exists() {
++            assert!(
++                std::time::Instant::now() < deadline,
++                "old recovery cleanup remained blocked"
++            );
++            std::thread::yield_now();
++        }
++        assert!(
++            replacement.exists(),
++            "old cleanup deleted the reopened document checkpoint"
++        );
+         drop(restored);
+         let _ = std::fs::remove_dir_all(root);
+     }
+@@ -4451,6 +4730,36 @@ mod tests {
+     }
+     struct RetirementFileSystem(std::sync::Arc<std::sync::atomic::AtomicBool>);
+     impl LocalFileSystem for RetirementFileSystem {
++        fn cache_directory_guard(
++            &self,
++            path: &std::path::Path,
++        ) -> std::io::Result<Option<bareline_platform::CacheDirectoryLease>> {
++            PagedFileSystem.cache_directory_guard(path)
++        }
++        fn remove_owned_cache_directory(
++            &self,
++            root: &std::path::Path,
++            candidate: &std::path::Path,
++            root_identity: bareline_platform::CacheDirectoryIdentity,
++            candidate_identity: bareline_platform::CacheDirectoryIdentity,
++            proof_name: &str,
++            proof_bytes: &[u8],
++            max_entries: usize,
++            max_time: std::time::Duration,
++            cancelled: &dyn Fn() -> bool,
++        ) -> bareline_platform::CacheRemovalOutcome {
++            PagedFileSystem.remove_owned_cache_directory(
++                root,
++                candidate,
++                root_identity,
++                candidate_identity,
++                proof_name,
++                proof_bytes,
++                max_entries,
++                max_time,
++                cancelled,
++            )
++        }
+         fn available_space(&self, path: &std::path::Path) -> std::io::Result<u64> {
+             PagedFileSystem.available_space(path)
+         }
+diff --git a/crates/editor-surface/src/lib.rs b/crates/editor-surface/src/lib.rs
+index db8d85e..c68873b 100644
+--- a/crates/editor-surface/src/lib.rs
++++ b/crates/editor-surface/src/lib.rs
+@@ -851,11 +851,22 @@ impl EditorSurface {
+             recovery.retry();
+         }
+     }
+-    /// Delete this document's recovery journal now. Called when the user closes or
+-    /// exits after choosing to discard unsaved changes, so nothing is left behind.
+-    pub fn discard_recovery(&mut self) {
++    pub fn adopt_recovery_origin(&mut self, path: std::path::PathBuf) {
+         if let Some(recovery) = &mut self.recovery {
+-            recovery.discard_now();
++            recovery.adopt_path(path);
++        }
++    }
++    pub fn resume_recovery_after_discard(&mut self) {
++        if let Some(recovery) = &mut self.recovery {
++            recovery.resume_after_discard();
++        }
++    }
++    /// Request durable recovery retirement without blocking the caller on storage.
++    pub fn discard_recovery(&mut self) -> bareline_file_io::recovery_retirement::DiscardPoll {
++        if let Some(recovery) = &mut self.recovery {
++            recovery.discard()
++        } else {
++            bareline_file_io::recovery_retirement::DiscardPoll::Durable
+         }
+     }
+     pub fn read_only(&self) -> bool {
+diff --git a/crates/editor-surface/src/paged_view.rs b/crates/editor-surface/src/paged_view.rs
+index b3f3cd0..1562e19 100644
+--- a/crates/editor-surface/src/paged_view.rs
++++ b/crates/editor-surface/src/paged_view.rs
+@@ -458,6 +458,7 @@ pub struct PagedEditorSurface {
+     snapshot: PagedSnapshot,
+     saved_state: Option<ContentStateId>,
+     recovery_config: Option<(PathBuf, Arc<dyn LocalFileSystem>)>,
++    recovery_platform: Arc<dyn LocalFileSystem>,
+     streaming_quota: u64,
+     configured_history_limit: Option<usize>,
+     tracked_acknowledged: std::collections::VecDeque<u64>,
+@@ -465,6 +466,7 @@ pub struct PagedEditorSurface {
+     can_undo: bool,
+     can_redo: bool,
+     recovery: Arc<Mutex<Option<bareline_file_io::paged_recovery::PagedRecovery>>>,
++    recovery_discard: Arc<Mutex<Option<bareline_file_io::recovery_retirement::DiscardTicket>>>,
+     recovery_status: Arc<Mutex<bareline_file_io::paged_recovery::PagedRecoveryStatus>>,
+     failed_retirements: Arc<Mutex<Vec<PathBuf>>>,
+     budget: Budget,
+@@ -649,10 +651,12 @@ impl PagedEditorSurface {
+             can_undo: opened.transcoded.document.can_undo(),
+             can_redo: opened.transcoded.document.can_redo(),
+             recovery_config: None,
++            recovery_platform: opened.transcoded.store.platform(),
+             streaming_quota: 20 * 1024 * 1024 * 1024,
+             configured_history_limit: None,
+             tracked_acknowledged: Default::default(),
+             recovery: Arc::new(Mutex::new(None)),
++            recovery_discard: Arc::new(Mutex::new(None)),
+             recovery_status: Arc::new(Mutex::new(Default::default())),
+             failed_retirements: Arc::new(Mutex::new(Vec::new())),
+             snapshot,
+@@ -788,10 +792,12 @@ impl PagedEditorSurface {
+             configured_history_limit: self.configured_history_limit,
+             tracked_acknowledged: self.tracked_acknowledged.clone(),
+             recovery_config: self.recovery_config.clone(),
++            recovery_platform: self.recovery_platform.clone(),
+             save_as_required: self.save_as_required,
+             can_undo: self.can_undo,
+             can_redo: self.can_redo,
+             recovery: self.recovery.clone(),
++            recovery_discard: self.recovery_discard.clone(),
+             recovery_status: self.recovery_status.clone(),
+             failed_retirements: self.failed_retirements.clone(),
+             budget: self.budget.clone(),
+@@ -838,12 +844,60 @@ impl PagedEditorSurface {
+     pub fn retry_recovery(&mut self) -> Result<(), String> {
+         self.submit(Action::RetryRecovery)
+     }
+-    /// Delete this document's recovery journal now, on an explicit discard.
+-    pub fn discard_recovery(&mut self) {
+-        if let Ok(mut guard) = self.recovery.lock() {
+-            if let Some(recovery) = guard.take() {
+-                let _ = recovery.purge();
++    /// Begin durable discard off the UI thread and report when the tombstone permits close.
++    pub fn discard_recovery(&mut self) -> bareline_file_io::recovery_retirement::DiscardPoll {
++        let mut discard = match self.recovery_discard.lock() {
++            Ok(discard) => discard,
++            Err(_) => {
++                return bareline_file_io::recovery_retirement::DiscardPoll::TombstoneFailed(
++                    "Recovery discard state stopped".into(),
++                );
+             }
++        };
++        if discard.is_none() {
++            let recovery = match self.recovery.try_lock() {
++                Ok(mut recovery) => recovery.take(),
++                Err(std::sync::TryLockError::WouldBlock) => {
++                    return bareline_file_io::recovery_retirement::DiscardPoll::Pending;
++                }
++                Err(std::sync::TryLockError::Poisoned(_)) => {
++                    return bareline_file_io::recovery_retirement::DiscardPoll::TombstoneFailed(
++                        "Recovery actor stopped".into(),
++                    );
++                }
++            };
++            let origin = self.recovery_origin.take();
++            if recovery.is_none() && origin.is_none() {
++                return bareline_file_io::recovery_retirement::DiscardPoll::Durable;
++            }
++            let platform = recovery
++                .as_ref()
++                .map_or_else(|| self.recovery_platform.clone(), |recovery| recovery.platform());
++            let notify = self.notify.clone();
++            *discard = Some(bareline_file_io::recovery_retirement::DiscardTicket::request(
++                bareline_file_io::recovery_retirement::RecoveryOwnership {
++                    recoveries: recovery.into_iter().collect(),
++                    paths: origin.into_iter().collect(),
++                    platform,
++                },
++                notify,
++            ));
++        }
++        let outcome = discard.as_ref().unwrap().poll();
++        if matches!(
++            outcome,
++            bareline_file_io::recovery_retirement::DiscardPoll::TombstoneFailed(_)
++        ) {
++            discard.as_ref().unwrap().retry();
++        }
++        outcome
++    }
++    pub fn resume_recovery_after_discard(&mut self) {
++        if let Ok(mut discard) = self.recovery_discard.lock() {
++            *discard = None;
++        }
++        if let Ok(mut status) = self.recovery_status.lock() {
++            *status = Default::default();
+         }
+     }
+     pub fn recovery_status(&self) -> bareline_file_io::paged_recovery::PagedRecoveryStatus {
+diff --git a/crates/file-io/src/codecs/disk.rs b/crates/file-io/src/codecs/disk.rs
+index ff21350..0ad01c0 100644
+--- a/crates/file-io/src/codecs/disk.rs
++++ b/crates/file-io/src/codecs/disk.rs
+@@ -498,6 +498,9 @@ struct RetainedStore {
+     sealed_hashes: [[u8; 32]; 3],
+ }
+ impl DiskDecoded {
++    pub fn platform(&self) -> Arc<dyn LocalFileSystem> {
++        self.platform.clone()
++    }
+     /// Keep foreign original byte capabilities alive for lossless document transfers.
+     /// Entries are flattened so transferring back cannot form ownership cycles.
+     pub fn retain_foreign(
+diff --git a/crates/file-io/src/lib.rs b/crates/file-io/src/lib.rs
+index 844ba08..36c0739 100644
+--- a/crates/file-io/src/lib.rs
++++ b/crates/file-io/src/lib.rs
+@@ -10,6 +10,7 @@ pub mod paged_recovery;
+ pub mod paged_service;
+ pub mod profile_migration;
+ pub mod recovery;
++pub mod recovery_retirement;
+ pub mod resident_recovery;
+ pub mod session;
+ pub mod source;
+diff --git a/crates/file-io/src/lifecycle.rs b/crates/file-io/src/lifecycle.rs
+index bd8f295..45abf7e 100644
+--- a/crates/file-io/src/lifecycle.rs
++++ b/crates/file-io/src/lifecycle.rs
+@@ -400,6 +400,9 @@ pub struct PagedOpenRequest {
+ }
+ pub struct PagedOpened {
+     pub recovery_origin: Option<PathBuf>,
++    /// Fully materialized recovered text, produced by the I/O worker when the
++    /// untitled recovery fits the resident adoption limit.
++    pub recovered_resident: Option<String>,
+     pub transcoded: PagedTranscoded,
+     pub path: PathBuf,
+     pub fingerprint: Fingerprint,
+@@ -508,6 +511,7 @@ fn run_transcode(
+             Err(e) => TranscodeOutcome::Failed(FileError::Transcode(e)),
+             Ok(transcoded) => TranscodeOutcome::Complete(Box::new(PagedOpened {
+                 recovery_origin: None,
++                recovered_resident: None,
+                 path: paused.path,
+                 fingerprint: store.fingerprint.clone(),
+                 transcoded,
+@@ -1409,6 +1413,7 @@ pub enum IoRequest {
+         directory: PathBuf,
+         bytes: Budget,
+         history: Budget,
++        resident_max_bytes: u64,
+     },
+     OpenPagedEncoded(PagedOpenRequest),
+     ResumeTranscode {
+@@ -1654,15 +1659,31 @@ impl IoService {
+                         directory,
+                         bytes,
+                         history,
++                        resident_max_bytes,
+                     } => IoCompletion::Transcode(
+                         match crate::paged_recovery::restore(
+                             &directory,
+                             platform.clone(),
+-                            bytes,
++                            bytes.clone(),
+                             history,
+                             &job.cancellation,
+                         ) {
+-                            Ok(opened) => TranscodeOutcome::Complete(Box::new(opened)),
++                            Ok(mut opened) => match (|| -> Result<(), FileError> {
++                                let inspection = crate::recovery::inspect(&directory, &job.cancellation)?;
++                                if inspection.metadata.original_path.is_none() {
++                                    opened.recovered_resident = crate::paged_recovery::restore_text(
++                                        &mut opened,
++                                        resident_max_bytes,
++                                        &bytes,
++                                        &job.cancellation,
++                                    )
++                                    .map_err(|error| FileError::Io(io::Error::other(error)))?;
++                                }
++                                Ok(())
++                            })() {
++                                Ok(()) => TranscodeOutcome::Complete(Box::new(opened)),
++                                Err(error) => TranscodeOutcome::Failed(error),
++                            },
+                             Err(error) => TranscodeOutcome::Failed(FileError::Io(io::Error::other(error))),
+                         },
+                     ),
+@@ -1703,6 +1724,7 @@ impl IoService {
+                         IoCompletion::Transcode(match result {
+                             Ok(transcoded) => TranscodeOutcome::Complete(Box::new(PagedOpened {
+                                 recovery_origin: None,
++                                recovered_resident: None,
+                                 transcoded,
+                                 path: request.path,
+                                 fingerprint: request.fingerprint,
+diff --git a/crates/file-io/src/paged_recovery.rs b/crates/file-io/src/paged_recovery.rs
+index 2ec63f2..8c56e0b 100644
+--- a/crates/file-io/src/paged_recovery.rs
++++ b/crates/file-io/src/paged_recovery.rs
+@@ -10,6 +10,7 @@ use crate::{
+ };
+ use bareline_platform::LocalFileSystem;
+ use std::{
++    io::Read,
+     path::{Path, PathBuf},
+     sync::{
+         Arc, Mutex, OnceLock,
+@@ -128,12 +129,20 @@ impl PagedRecovery {
+     pub fn directory(&self) -> &Path {
+         &self.directory
+     }
++    pub fn platform(&self) -> Arc<dyn LocalFileSystem> {
++        self.platform.clone()
++    }
+     pub fn retire(self) -> Result<PathBuf, String> {
+         self.cancellation.cancel();
+         let _writer = self.writer.lock().map_err(|_| "Recovery writer stopped")?;
+         crate::recovery::discard(&self.directory, self.platform.as_ref()).map_err(|e| e.to_string())?;
+         Ok(self.directory.clone())
+     }
++    pub fn tombstone(&mut self) -> Result<(), String> {
++        self.cancellation.cancel();
++        let _writer = self.writer.lock().map_err(|_| "Recovery writer stopped")?;
++        tombstone_directory(&self.directory, self.platform.as_ref())
++    }
+     /// Retire and then remove the journal directory outright. Used when the document
+     /// is closed cleanly or its changes are discarded, so nothing is left on disk.
+     pub fn purge(self) -> Result<PathBuf, String> {
+@@ -253,19 +262,151 @@ impl Drop for PagedRecovery {
+     }
+ }
+ 
+-/// Publish the durable tombstone (when the journal is still readable) and delete the
+-/// directory. Deleting is what actually reclaims the inodes; the tombstone is written
+-/// first so a crash mid-delete still leaves an unmistakably retired checkpoint.
++pub(crate) const CLEANUP_PROOF_NAME: &str = ".bareline-cache-cleanup-retained.json";
++const CLEANUP_PROOF: &[u8] = br#"{"version":1,"kind":"recovery-retirement"}"#;
++const CLEANUP_MAX_ENTRIES: usize = 4096;
++const CLEANUP_MAX_TIME: std::time::Duration = std::time::Duration::from_millis(250);
++const CLEANUP_PROOF_MAX_BYTES: u64 = 4096;
++
++#[derive(Clone)]
++pub(crate) struct CleanupReceipt {
++    root: PathBuf,
++    candidate: PathBuf,
++    root_identity: bareline_platform::CacheDirectoryIdentity,
++    candidate_identity: bareline_platform::CacheDirectoryIdentity,
++    proof: Vec<u8>,
++}
++impl CleanupReceipt {
++    pub(crate) fn candidate(&self) -> &Path {
++        &self.candidate
++    }
++    pub(crate) fn same_owner(&self, other: &Self) -> bool {
++        self.root == other.root
++            && self.candidate == other.candidate
++            && self.root_identity == other.root_identity
++            && self.candidate_identity == other.candidate_identity
++            && self.proof == other.proof
++    }
++}
++
++fn cleanup_receipt(directory: &Path, platform: &dyn LocalFileSystem) -> Result<Option<CleanupReceipt>, String> {
++    let root = directory.parent().ok_or("Recovery cleanup directory has no root")?;
++    let root_lease = platform
++        .cache_directory_guard(root)
++        .map_err(|error| error.to_string())?
++        .ok_or("Recovery cleanup root is not a stable plain directory")?;
++    let candidate_lease = match platform.cache_directory_guard(directory) {
++        Ok(Some(lease)) => lease,
++        Ok(None) => return Ok(None),
++        Err(error) => return Err(error.to_string()),
++    };
++    capture_cleanup_receipt(root, directory, root_lease, candidate_lease, platform)
++}
++
++fn capture_cleanup_receipt(
++    root: &Path,
++    directory: &Path,
++    root_lease: bareline_platform::CacheDirectoryLease,
++    candidate_lease: bareline_platform::CacheDirectoryLease,
++    platform: &dyn LocalFileSystem,
++) -> Result<Option<CleanupReceipt>, String> {
++    let proof_path = directory.join(CLEANUP_PROOF_NAME);
++    let proof_file = match platform.open_sealed_read(&proof_path) {
++        Ok(file) => file,
++        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
++        Err(error) => return Err(error.to_string()),
++    };
++    if proof_file.metadata().map_err(|error| error.to_string())?.len() > CLEANUP_PROOF_MAX_BYTES {
++        return Err("Recovery cleanup proof exceeds its bounded size".into());
++    }
++    let mut proof = Vec::new();
++    let mut bounded_proof = proof_file.take(CLEANUP_PROOF_MAX_BYTES + 1);
++    bounded_proof
++        .read_to_end(&mut proof)
++        .map_err(|error| error.to_string())?;
++    if proof != CLEANUP_PROOF {
++        return Err("Recovery cleanup proof changed".into());
++    }
++    Ok(Some(CleanupReceipt {
++        root: root.to_path_buf(),
++        candidate: directory.to_path_buf(),
++        root_identity: root_lease.identity,
++        candidate_identity: candidate_lease.identity,
++        proof,
++    }))
++}
++
++pub(crate) fn purge_receipt(receipt: &CleanupReceipt, platform: &dyn LocalFileSystem) -> Result<(), String> {
++    let outcome = platform.remove_owned_cache_directory(
++        &receipt.root,
++        &receipt.candidate,
++        receipt.root_identity,
++        receipt.candidate_identity,
++        CLEANUP_PROOF_NAME,
++        &receipt.proof,
++        CLEANUP_MAX_ENTRIES,
++        CLEANUP_MAX_TIME,
++        &|| false,
++    );
++    if !outcome.retry_authority_retained {
++        return Err("Recovery cleanup proof could not be retained".into());
++    }
++    outcome.result.map(|_| ()).map_err(|error| error.to_string())
++}
++
++pub(crate) fn publish_cleanup_receipt(
++    directory: &Path,
++    platform: &dyn LocalFileSystem,
++) -> Result<Option<CleanupReceipt>, String> {
++    let root = directory.parent().ok_or("Recovery cleanup directory has no root")?;
++    let root_lease = platform
++        .cache_directory_guard(root)
++        .map_err(|error| error.to_string())?
++        .ok_or("Recovery cleanup root is not a stable plain directory")?;
++    let candidate_lease = match platform.cache_directory_guard(directory) {
++        Ok(Some(lease)) => lease,
++        Ok(None) => return Ok(None),
++        Err(error) => return Err(error.to_string()),
++    };
++    tombstone_directory(directory, platform)?;
++    capture_cleanup_receipt(root, directory, root_lease, candidate_lease, platform)?
++        .ok_or_else(|| "Recovery cleanup proof was not retained after tombstone publication".into())
++        .map(Some)
++}
++
++/// Delete a tombstoned journal through the platform's identity-bound, proof-preserving
++/// owned-directory primitive. The platform retains the proof whenever final deletion
++/// is uncertain, and unsupported platforms fail closed.
+ pub fn purge_directory(directory: &Path, platform: &dyn LocalFileSystem) -> Result<(), String> {
+-    if !directory.exists() {
+-        return Ok(());
++    let receipt = match cleanup_receipt(directory, platform)? {
++        Some(receipt) => Some(receipt),
++        None => publish_cleanup_receipt(directory, platform)?,
++    };
++    match receipt {
++        Some(receipt) => purge_receipt(&receipt, platform),
++        None => Ok(()),
+     }
+-    let _ = crate::recovery::discard(directory, platform);
+-    match std::fs::remove_dir_all(directory) {
+-        Ok(()) => Ok(()),
+-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+-        Err(error) => Err(error.to_string()),
++}
++
++/// Publish only the content-free durable retirement marker. The guarded path is
++/// retained for later cleanup and is never traversed recursively.
++pub fn tombstone_directory(directory: &Path, platform: &dyn LocalFileSystem) -> Result<(), String> {
++    let _guard = match platform.guard_directory(directory) {
++        Ok(guard) => guard,
++        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
++        Err(error) => return Err(error.to_string()),
++    };
++    let metadata = match std::fs::symlink_metadata(directory) {
++        Ok(metadata) => metadata,
++        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
++        Err(error) => return Err(error.to_string()),
++    };
++    if metadata.file_type().is_symlink() || !metadata.is_dir() {
++        return Err("Recovery tombstone target is not a guarded directory".into());
+     }
++    crate::recovery::discard(directory, platform).map_err(|error| error.to_string())?;
++    crate::session::publish_json(&directory.join(CLEANUP_PROOF_NAME), CLEANUP_PROOF, platform)
++        .map_err(|error| error.to_string())
+ }
+ 
+ /// Process id encoded in a `paged-<pid>-…` journal directory name.
+@@ -289,6 +430,7 @@ pub fn sweep(
+         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+         Err(error) => return Err(error),
+     };
++    let mut removed = Vec::new();
+     for entry in entries {
+         let entry = entry?;
+         if !entry.file_type()?.is_dir() {
+@@ -303,6 +445,14 @@ pub fn sweep(
+         if alive(owner) || referenced.contains(&directory) {
+             continue;
+         }
++        if crate::recovery::inspect(&directory, &Cancellation::default())
++            .is_ok_and(|inspection| inspection.status == crate::recovery::RecoveryStatus::Discarded)
++        {
++            if purge_directory(&directory, platform).is_ok() {
++                removed.push(directory);
++            }
++            continue;
++        }
+         let modified = entry
+             .metadata()
+             .and_then(|metadata| metadata.modified())
+@@ -310,7 +460,6 @@ pub fn sweep(
+         abandoned.push((modified, directory));
+     }
+     abandoned.sort_by(|left, right| right.0.cmp(&left.0));
+-    let mut removed = Vec::new();
+     for (_, directory) in abandoned.into_iter().skip(keep_newest) {
+         if purge_directory(&directory, platform).is_ok() {
+             removed.push(directory);
+@@ -916,6 +1065,7 @@ pub fn restore(
+         .unwrap_or_else(|| "Untitled 1".to_owned());
+     Ok(crate::lifecycle::PagedOpened {
+         recovery_origin: Some(directory.into()),
++        recovered_resident: None,
+         fingerprint: store.fingerprint.clone(),
+         path: directory.join(title),
+         transcoded,
+@@ -1317,6 +1467,9 @@ mod quota_tests {
+     use std::{fs, io};
+     struct Platform;
+     impl LocalFileSystem for Platform {
++        fn guard_directory(&self, _: &Path) -> io::Result<Arc<dyn Send + Sync>> {
++            Ok(Arc::new(()))
++        }
+         fn identity(&self, _: &fs::File) -> io::Result<bareline_platform::FileIdentity> {
+             Err(io::Error::other("unused"))
+         }
+@@ -1375,6 +1528,57 @@ mod sweep_tests {
+     use std::{fs, io};
+     struct Platform;
+     impl LocalFileSystem for Platform {
++        fn guard_directory(&self, _: &Path) -> io::Result<Arc<dyn Send + Sync>> {
++            Ok(Arc::new(()))
++        }
++        fn cache_directory_guard(&self, path: &Path) -> io::Result<Option<bareline_platform::CacheDirectoryLease>> {
++            let metadata = match fs::symlink_metadata(path) {
++                Ok(metadata) => metadata,
++                Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
++                Err(error) => return Err(error),
++            };
++            if !metadata.is_dir() || metadata.file_type().is_symlink() {
++                return Ok(None);
++            }
++            use std::hash::{Hash, Hasher};
++            let mut hash = std::collections::hash_map::DefaultHasher::new();
++            path.hash(&mut hash);
++            Ok(Some(bareline_platform::CacheDirectoryLease {
++                identity: bareline_platform::CacheDirectoryIdentity {
++                    volume: 1,
++                    file: hash.finish(),
++                },
++                guard: Arc::new(()),
++            }))
++        }
++        fn remove_owned_cache_directory(
++            &self,
++            root: &Path,
++            candidate: &Path,
++            _: bareline_platform::CacheDirectoryIdentity,
++            _: bareline_platform::CacheDirectoryIdentity,
++            proof_name: &str,
++            proof_bytes: &[u8],
++            _: usize,
++            _: std::time::Duration,
++            _: &dyn Fn() -> bool,
++        ) -> bareline_platform::CacheRemovalOutcome {
++            let result = (|| {
++                if candidate.parent() != Some(root) || fs::read(candidate.join(proof_name))? != proof_bytes {
++                    return Err(io::Error::new(
++                        io::ErrorKind::PermissionDenied,
++                        "test cleanup proof changed",
++                    ));
++                }
++                fs::remove_dir_all(candidate)?;
++                Ok(1)
++            })();
++            bareline_platform::CacheRemovalOutcome {
++                visited: 1,
++                retry_authority_retained: true,
++                result,
++            }
++        }
+         fn identity(&self, _: &fs::File) -> io::Result<bareline_platform::FileIdentity> {
+             Err(io::Error::other("unused"))
+         }
+@@ -1406,17 +1610,42 @@ mod sweep_tests {
+         let referenced = root.join("paged-424243-1-1");
+         let live = root.join(format!("paged-{}-1-1", std::process::id()));
+         let other = root.join("not-a-journal");
+-        for directory in [&dead, &referenced, &live, &other] {
+-            fs::create_dir_all(directory).unwrap();
+-            fs::write(directory.join("manifest.json"), b"{}").unwrap();
++        for directory in [&dead, &referenced, &live] {
++            drop(
++                crate::recovery::RecoveryWriter::create(
++                    directory,
++                    crate::recovery::RecoveryMetadata {
++                        original_path: None,
++                        source_generation: "test".into(),
++                        codec_catalog_version: "test".into(),
++                        original_len: 0,
++                    },
++                    &Platform,
++                )
++                .unwrap(),
++            );
+         }
++        fs::create_dir_all(&other).unwrap();
++        fs::write(other.join("manifest.json"), b"{}").unwrap();
+         let references: std::collections::HashSet<PathBuf> = [referenced.clone()].into_iter().collect();
+         let removed = sweep(&root, &references, &|id| id == std::process::id(), 0, &Platform).unwrap();
+         assert_eq!(removed, vec![dead.clone()]);
+         assert!(!dead.exists());
+         assert!(referenced.exists() && live.exists() && other.exists());
+         // The newest abandoned journals are retained as a safety net.
+-        fs::create_dir_all(&dead).unwrap();
++        drop(
++            crate::recovery::RecoveryWriter::create(
++                &dead,
++                crate::recovery::RecoveryMetadata {
++                    original_path: None,
++                    source_generation: "test".into(),
++                    codec_catalog_version: "test".into(),
++                    original_len: 0,
++                },
++                &Platform,
++            )
++            .unwrap(),
++        );
+         assert!(
+             sweep(&root, &Default::default(), &|_| false, 20, &Platform)
+                 .unwrap()
+diff --git a/crates/file-io/src/recovery_retirement.rs b/crates/file-io/src/recovery_retirement.rs
+new file mode 100644
+index 0000000..195a645
+--- /dev/null
++++ b/crates/file-io/src/recovery_retirement.rs
+@@ -0,0 +1,844 @@
++// SPDX-License-Identifier: MPL-2.0
++//! Durable, content-free recovery discard and retained background cleanup.
++
++use crate::paged_recovery::PagedRecovery;
++use bareline_platform::{
++    LocalFileSystem,
++    executor::{BoundedExecutor, WorkKind},
++};
++use std::{
++    path::PathBuf,
++    sync::{Arc, Mutex, OnceLock},
++    time::Duration,
++};
++
++type Drain = Box<dyn FnOnce() -> RecoveryAddition + Send + 'static>;
++
++pub struct RecoveryOwnership {
++    pub recoveries: Vec<PagedRecovery>,
++    pub paths: Vec<PathBuf>,
++    pub platform: Arc<dyn LocalFileSystem>,
++}
++
++pub(crate) struct RecoveryAddition {
++    pub recoveries: Vec<PagedRecovery>,
++    pub paths: Vec<PathBuf>,
++    pub removed_paths: Vec<PathBuf>,
++}
++
++#[derive(Clone, Debug, PartialEq, Eq)]
++pub enum DiscardPoll {
++    Pending,
++    Durable,
++    CleanupPending(String),
++    TombstoneFailed(String),
++}
++
++enum Phase {
++    DiscardRequested,
++    WorkersDrained,
++    Purging,
++    Complete,
++    CleanupPending(String),
++    TombstoneFailed(String),
++}
++
++struct State {
++    phase: Phase,
++    drain: Option<Drain>,
++    ownership: Option<RecoveryOwnership>,
++    running: bool,
++}
++
++struct RunGuard<'a> {
++    state: &'a Arc<Mutex<State>>,
++    notify: &'a Arc<dyn Fn() + Send + Sync>,
++    ownership: Option<RecoveryOwnership>,
++    finished: bool,
++}
++impl Drop for RunGuard<'_> {
++    fn drop(&mut self) {
++        if self.finished {
++            return;
++        }
++        warn("Recovery discard tombstone pending: Recovery retirement worker unwound".into());
++        let mut current = self.state.lock().unwrap_or_else(|error| error.into_inner());
++        if let Some(ownership) = self.ownership.take() {
++            current.ownership = Some(ownership);
++        }
++        current.running = false;
++        current.phase = Phase::TombstoneFailed("Recovery retirement worker unwound".into());
++        drop(current);
++        (self.notify)();
++    }
++}
++
++struct RetainedCleanup {
++    receipts: Vec<crate::paged_recovery::CleanupReceipt>,
++    platform: Arc<dyn LocalFileSystem>,
++    notify: Arc<dyn Fn() + Send + Sync>,
++}
++
++struct RetainedDiscard {
++    state: Arc<Mutex<State>>,
++    notify: Arc<dyn Fn() + Send + Sync>,
++}
++
++fn retained() -> &'static Mutex<Vec<RetainedCleanup>> {
++    static RETAINED: OnceLock<Mutex<Vec<RetainedCleanup>>> = OnceLock::new();
++    RETAINED.get_or_init(|| Mutex::new(Vec::new()))
++}
++
++fn retained_discards() -> &'static Mutex<Vec<RetainedDiscard>> {
++    static RETAINED: OnceLock<Mutex<Vec<RetainedDiscard>>> = OnceLock::new();
++    RETAINED.get_or_init(|| Mutex::new(Vec::new()))
++}
++
++fn warnings() -> &'static Mutex<Vec<String>> {
++    static WARNINGS: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
++    WARNINGS.get_or_init(|| Mutex::new(Vec::new()))
++}
++
++fn retain_cleanup(mut cleanup: RetainedCleanup) {
++    cleanup
++        .receipts
++        .sort_by(|left, right| left.candidate().cmp(right.candidate()));
++    cleanup.receipts.dedup_by(|left, right| left.same_owner(right));
++    let mut retained = retained().lock().unwrap_or_else(|error| error.into_inner());
++    if let Some(existing) = retained.iter_mut().find(|existing| {
++        Arc::ptr_eq(&existing.platform, &cleanup.platform) && Arc::ptr_eq(&existing.notify, &cleanup.notify)
++    }) {
++        existing.receipts.extend(cleanup.receipts);
++        existing
++            .receipts
++            .sort_by(|left, right| left.candidate().cmp(right.candidate()));
++        existing.receipts.dedup_by(|left, right| left.same_owner(right));
++    } else {
++        retained.push(cleanup);
++    }
++}
++
++fn warn(message: String) {
++    const MAX_WARNINGS: usize = 32;
++    let mut warnings = warnings().lock().unwrap_or_else(|error| error.into_inner());
++    if warnings.last() == Some(&message) {
++        return;
++    }
++    if warnings.len() == MAX_WARNINGS {
++        warnings.remove(0);
++    }
++    warnings.push(message);
++}
++
++pub fn take_cleanup_warning() -> Option<String> {
++    warnings().lock().ok().and_then(|mut warnings| warnings.pop())
++}
++
++pub fn retry_pending_cleanup() -> usize {
++    let cleanups = std::mem::take(&mut *retained().lock().unwrap_or_else(|error| error.into_inner()));
++    let discards = std::mem::take(&mut *retained_discards().lock().unwrap_or_else(|error| error.into_inner()));
++    let mut count = cleanups.len();
++    for cleanup in cleanups {
++        schedule_cleanup(cleanup);
++    }
++    for discard in discards {
++        let retry = {
++            let mut state = discard.state.lock().unwrap_or_else(|error| error.into_inner());
++            if !state.running && matches!(state.phase, Phase::TombstoneFailed(_)) {
++                state.phase = Phase::DiscardRequested;
++                true
++            } else {
++                false
++            }
++        };
++        if retry {
++            count += 1;
++            submit(discard.state, discard.notify);
++        } else if discard
++            .state
++            .lock()
++            .is_ok_and(|state| !matches!(state.phase, Phase::Complete | Phase::CleanupPending(_)))
++        {
++            retain_discard(discard);
++        }
++    }
++    count
++}
++
++pub struct DiscardTicket {
++    state: Arc<Mutex<State>>,
++    notify: Arc<dyn Fn() + Send + Sync>,
++}
++
++fn executor() -> &'static BoundedExecutor {
++    static EXECUTOR: OnceLock<BoundedExecutor> = OnceLock::new();
++    EXECUTOR.get_or_init(|| BoundedExecutor::new(2, 32, "recovery-retirement"))
++}
++
++impl DiscardTicket {
++    pub fn request(ownership: RecoveryOwnership, notify: Arc<dyn Fn() + Send + Sync>) -> Self {
++        Self::request_inner(ownership, None, notify)
++    }
++
++    pub(crate) fn request_after_drain(
++        ownership: RecoveryOwnership,
++        drain: impl FnOnce() -> RecoveryAddition + Send + 'static,
++        notify: Arc<dyn Fn() + Send + Sync>,
++    ) -> Self {
++        Self::request_inner(ownership, Some(Box::new(drain)), notify)
++    }
++
++    fn request_inner(ownership: RecoveryOwnership, drain: Option<Drain>, notify: Arc<dyn Fn() + Send + Sync>) -> Self {
++        let ticket = Self {
++            state: Arc::new(Mutex::new(State {
++                phase: Phase::DiscardRequested,
++                drain,
++                ownership: Some(ownership),
++                running: false,
++            })),
++            notify,
++        };
++        ticket.submit();
++        ticket
++    }
++
++    pub fn poll(&self) -> DiscardPoll {
++        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
++        match &state.phase {
++            Phase::DiscardRequested | Phase::WorkersDrained => DiscardPoll::Pending,
++            Phase::Purging | Phase::Complete => DiscardPoll::Durable,
++            Phase::CleanupPending(error) => DiscardPoll::CleanupPending(error.clone()),
++            Phase::TombstoneFailed(error) => DiscardPoll::TombstoneFailed(error.clone()),
++        }
++    }
++
++    /// Retry only after the UI has surfaced the prior failure and invokes discard again.
++    pub fn retry(&self) {
++        {
++            let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
++            if state.running || !matches!(state.phase, Phase::TombstoneFailed(_)) {
++                return;
++            }
++            state.phase = Phase::DiscardRequested;
++        }
++        self.submit();
++    }
++
++    fn submit(&self) {
++        submit(self.state.clone(), self.notify.clone());
++    }
++}
++
++impl Drop for DiscardTicket {
++    fn drop(&mut self) {
++        if self.state.lock().is_ok_and(|state| {
++            matches!(
++                state.phase,
++                Phase::DiscardRequested | Phase::WorkersDrained | Phase::TombstoneFailed(_)
++            )
++        }) {
++            retain_discard(RetainedDiscard {
++                state: self.state.clone(),
++                notify: self.notify.clone(),
++            });
++        }
++    }
++}
++
++fn submit(state: Arc<Mutex<State>>, notify: Arc<dyn Fn() + Send + Sync>) {
++    retain_discard(RetainedDiscard {
++        state: state.clone(),
++        notify: notify.clone(),
++    });
++    {
++        let mut current = state.lock().unwrap_or_else(|error| error.into_inner());
++        if current.running {
++            return;
++        }
++        current.running = true;
++    }
++    let job_state = state.clone();
++    let job_notify = notify.clone();
++    let submitted = executor().submit(WorkKind::Maintenance, Box::new(move || run(job_state, job_notify)));
++    if let Err(error) = submitted {
++        warn(format!("Recovery discard admission pending: {error:?}"));
++        let mut current = state.lock().unwrap_or_else(|failure| failure.into_inner());
++        current.running = false;
++        current.phase = Phase::TombstoneFailed(format!("Recovery cleanup admission failed: {error:?}"));
++        drop(current);
++        notify();
++    }
++}
++
++fn retain_discard(discard: RetainedDiscard) {
++    let mut retained = retained_discards().lock().unwrap_or_else(|error| error.into_inner());
++    if !retained
++        .iter()
++        .any(|retained| Arc::ptr_eq(&retained.state, &discard.state))
++    {
++        retained.push(discard);
++    }
++}
++
++fn run(state: Arc<Mutex<State>>, notify: Arc<dyn Fn() + Send + Sync>) {
++    let drain = {
++        let mut state = state.lock().unwrap_or_else(|error| error.into_inner());
++        state.drain.take()
++    };
++    let addition = match drain.map(|drain| std::panic::catch_unwind(std::panic::AssertUnwindSafe(drain))) {
++        Some(Ok(addition)) => addition,
++        Some(Err(_)) => {
++            terminal_failure(&state, &notify, "Recovery ownership drain failed".into());
++            return;
++        }
++        None => RecoveryAddition {
++            recoveries: Vec::new(),
++            paths: Vec::new(),
++            removed_paths: Vec::new(),
++        },
++    };
++    let ownership = {
++        let mut current = state.lock().unwrap_or_else(|error| error.into_inner());
++        current.ownership.take().expect("discard ownership")
++    };
++    let mut guard = RunGuard {
++        state: &state,
++        notify: &notify,
++        ownership: Some(ownership),
++        finished: false,
++    };
++    let tombstone = {
++        let ownership = guard.ownership.as_mut().unwrap();
++        ownership.recoveries.extend(addition.recoveries);
++        ownership.paths.extend(addition.paths);
++        ownership.paths.retain(|path| !addition.removed_paths.contains(path));
++        {
++            let mut current = state.lock().unwrap_or_else(|error| error.into_inner());
++            current.phase = Phase::WorkersDrained;
++        }
++        ownership.paths.extend(
++            ownership
++                .recoveries
++                .iter()
++                .map(|recovery| recovery.directory().to_path_buf()),
++        );
++        ownership.paths.sort();
++        ownership.paths.dedup();
++        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
++            ownership
++                .recoveries
++                .iter_mut()
++                .try_for_each(PagedRecovery::tombstone)
++                .and_then(|_| {
++                    ownership
++                        .paths
++                        .iter()
++                        .map(|path| crate::paged_recovery::publish_cleanup_receipt(path, ownership.platform.as_ref()))
++                        .collect::<Result<Vec<_>, _>>()
++                        .map(|receipts| receipts.into_iter().flatten().collect::<Vec<_>>())
++                })
++        }))
++        .unwrap_or_else(|_| Err("Recovery tombstone worker failed".into()))
++    };
++    let receipts = match tombstone {
++        Ok(receipts) => receipts,
++        Err(error) => {
++            warn(format!("Recovery discard tombstone pending: {error}"));
++            let mut current = state.lock().unwrap_or_else(|failure| failure.into_inner());
++            current.ownership = guard.ownership.take();
++            current.running = false;
++            current.phase = Phase::TombstoneFailed(error);
++            drop(current);
++            guard.finished = true;
++            notify();
++            return;
++        }
++    };
++    {
++        let mut current = state.lock().unwrap_or_else(|error| error.into_inner());
++        current.phase = Phase::Purging;
++    }
++    notify();
++    let platform = {
++        let ownership = guard.ownership.as_mut().unwrap();
++        ownership.recoveries.clear();
++        ownership.platform.clone()
++    };
++    let mut failure = None;
++    let mut unresolved = Vec::new();
++    for receipt in receipts {
++        let mut removed = false;
++        let mut path_failure = None;
++        for attempt in 0..3 {
++            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
++                crate::paged_recovery::purge_receipt(&receipt, platform.as_ref())
++            }))
++            .unwrap_or_else(|_| Err("Recovery purge worker failed".into()));
++            match result {
++                Ok(()) => {
++                    removed = true;
++                    break;
++                }
++                Err(error) => {
++                    path_failure = Some(format!(
++                        "Recovery cleanup pending for {}: {error}",
++                        receipt.candidate().display()
++                    ));
++                    if attempt < 2 {
++                        std::thread::sleep(Duration::from_millis(25 * (attempt + 1)));
++                    }
++                }
++            }
++        }
++        if !removed {
++            if failure.is_none() {
++                failure = path_failure;
++            }
++            unresolved.push(receipt);
++        }
++    }
++    if let Some(error) = &failure {
++        warn(error.clone());
++        retain_cleanup(RetainedCleanup {
++            receipts: unresolved,
++            platform,
++            notify: notify.clone(),
++        });
++    }
++    let mut current = state.lock().unwrap_or_else(|error| error.into_inner());
++    current.running = false;
++    current.phase = failure.map_or(Phase::Complete, Phase::CleanupPending);
++    drop(current);
++    guard.finished = true;
++    prune_retained_discard(&state);
++    notify();
++}
++
++fn terminal_failure(state: &Arc<Mutex<State>>, notify: &Arc<dyn Fn() + Send + Sync>, error: String) {
++    warn(format!("Recovery discard tombstone pending: {error}"));
++    let mut current = state.lock().unwrap_or_else(|failure| failure.into_inner());
++    current.running = false;
++    current.phase = Phase::TombstoneFailed(error);
++    drop(current);
++    notify();
++}
++
++fn prune_retained_discard(state: &Arc<Mutex<State>>) {
++    retained_discards()
++        .lock()
++        .unwrap_or_else(|error| error.into_inner())
++        .retain(|retained| !Arc::ptr_eq(&retained.state, state));
++}
++
++fn schedule_cleanup(cleanup: RetainedCleanup) {
++    let retained_cleanup = Arc::new(Mutex::new(Some(cleanup)));
++    let job_cleanup = retained_cleanup.clone();
++    let submitted = executor().submit(
++        WorkKind::Maintenance,
++        Box::new(move || {
++            let mut cleanup = job_cleanup
++                .lock()
++                .unwrap_or_else(|error| error.into_inner())
++                .take()
++                .expect("retained cleanup");
++            let platform = cleanup.platform.clone();
++            let mut failure = None;
++            let mut unresolved = Vec::new();
++            for receipt in cleanup.receipts.drain(..) {
++                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
++                    crate::paged_recovery::purge_receipt(&receipt, platform.as_ref())
++                }))
++                .unwrap_or_else(|_| Err("Recovery cleanup worker failed".into()));
++                if let Err(error) = result {
++                    if failure.is_none() {
++                        failure = Some(error);
++                    }
++                    unresolved.push(receipt);
++                }
++            }
++            cleanup.receipts = unresolved;
++            let notify = cleanup.notify.clone();
++            if let Some(error) = failure {
++                warn(format!("Recovery cleanup retry pending: {error}"));
++                retain_cleanup(cleanup);
++            }
++            notify();
++        }),
++    );
++    if submitted.is_err()
++        && let Some(cleanup) = retained_cleanup
++            .lock()
++            .unwrap_or_else(|error| error.into_inner())
++            .take()
++    {
++        warn("Recovery cleanup retry admission pending".into());
++        retain_cleanup(cleanup);
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use crate::recovery::{RecoveryMetadata, RecoveryStatus, RecoveryWriter};
++    use bareline_platform::{CacheDirectoryIdentity, CacheDirectoryLease, CacheRemovalOutcome};
++    use std::{
++        collections::hash_map::DefaultHasher,
++        fs,
++        hash::{Hash, Hasher},
++        io,
++        path::Path,
++        sync::{
++            atomic::{AtomicBool, Ordering},
++            mpsc,
++        },
++        time::{Duration, Instant},
++    };
++
++    #[derive(Default)]
++    struct Platform {
++        deny_cleanup: AtomicBool,
++        panic_cleanup: AtomicBool,
++        partial_cleanup: AtomicBool,
++    }
++    fn directory_identity(path: &Path) -> io::Result<CacheDirectoryIdentity> {
++        let metadata = fs::symlink_metadata(path)?;
++        if !metadata.is_dir() || metadata.file_type().is_symlink() {
++            return Err(io::Error::new(io::ErrorKind::PermissionDenied, "not a plain directory"));
++        }
++        let mut hash = DefaultHasher::new();
++        path.hash(&mut hash);
++        Ok(CacheDirectoryIdentity {
++            volume: 1,
++            file: hash.finish(),
++        })
++    }
++    impl LocalFileSystem for Platform {
++        fn identity(&self, file: &fs::File) -> io::Result<bareline_platform::FileIdentity> {
++            let metadata = file.metadata()?;
++            Ok(bareline_platform::FileIdentity {
++                volume: 1,
++                file: 1,
++                length: metadata.len(),
++                modified: metadata
++                    .modified()?
++                    .duration_since(std::time::UNIX_EPOCH)
++                    .unwrap_or_default()
++                    .as_nanos() as u64,
++            })
++        }
++        fn guard_directory(&self, _: &Path) -> io::Result<Arc<dyn Send + Sync>> {
++            Ok(Arc::new(()))
++        }
++        fn cache_directory_guard(&self, path: &Path) -> io::Result<Option<CacheDirectoryLease>> {
++            match directory_identity(path) {
++                Ok(identity) => Ok(Some(CacheDirectoryLease {
++                    identity,
++                    guard: Arc::new(()),
++                })),
++                Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
++                Err(error) => Err(error),
++            }
++        }
++        fn remove_owned_cache_directory(
++            &self,
++            root: &Path,
++            candidate: &Path,
++            expected_root: CacheDirectoryIdentity,
++            expected_candidate: CacheDirectoryIdentity,
++            proof_name: &str,
++            proof_bytes: &[u8],
++            max_entries: usize,
++            _: Duration,
++            _: &dyn Fn() -> bool,
++        ) -> CacheRemovalOutcome {
++            if self.panic_cleanup.swap(false, Ordering::SeqCst) {
++                panic!("injected cleanup unwind");
++            }
++            let result = (|| {
++                if self.partial_cleanup.swap(false, Ordering::SeqCst) {
++                    fs::remove_file(candidate.join("manifest.json"))?;
++                    self.deny_cleanup.store(true, Ordering::SeqCst);
++                }
++                if self.deny_cleanup.load(Ordering::SeqCst) {
++                    return Err(io::Error::new(
++                        io::ErrorKind::PermissionDenied,
++                        "injected cleanup denial",
++                    ));
++                }
++                if candidate.parent() != Some(root)
++                    || directory_identity(root)? != expected_root
++                    || directory_identity(candidate)? != expected_candidate
++                    || fs::read(candidate.join(proof_name))? != proof_bytes
++                {
++                    return Err(io::Error::new(
++                        io::ErrorKind::PermissionDenied,
++                        "cleanup identity changed",
++                    ));
++                }
++                let mut entries: Vec<_> = fs::read_dir(candidate)?.collect::<Result<_, _>>()?;
++                if entries.len() > max_entries
++                    || entries
++                        .iter()
++                        .any(|entry| !entry.file_type().is_ok_and(|k| k.is_file()))
++                {
++                    return Err(io::Error::new(io::ErrorKind::InvalidData, "cleanup entry limit"));
++                }
++                entries.sort_by_key(|entry| entry.file_name() == proof_name);
++                for entry in entries {
++                    fs::remove_file(entry.path())?;
++                }
++                fs::remove_dir(candidate)?;
++                Ok(1)
++            })();
++            CacheRemovalOutcome {
++                visited: 1,
++                retry_authority_retained: true,
++                result,
++            }
++        }
++        fn validate_target(&self, _: &Path) -> io::Result<()> {
++            Ok(())
++        }
++        fn commit(&self, staged: &Path, target: &Path, _: bool) -> io::Result<()> {
++            fs::rename(staged, target)
++        }
++        fn available_space(&self, _: &Path) -> io::Result<u64> {
++            Ok(1 << 40)
++        }
++        fn open_sealed_read(&self, path: &Path) -> io::Result<fs::File> {
++            fs::File::open(path)
++        }
++    }
++
++    fn scratch(name: &str) -> PathBuf {
++        let path = std::env::temp_dir().join(format!(
++            "bareline-{name}-{}-{}",
++            std::process::id(),
++            std::time::SystemTime::now()
++                .duration_since(std::time::UNIX_EPOCH)
++                .unwrap()
++                .as_nanos()
++        ));
++        fs::create_dir_all(&path).unwrap();
++        path
++    }
++
++    fn journal(path: &Path, platform: &Platform) {
++        drop(
++            RecoveryWriter::create(
++                path,
++                RecoveryMetadata {
++                    original_path: None,
++                    source_generation: "test".into(),
++                    codec_catalog_version: "test".into(),
++                    original_len: 0,
++                },
++                platform,
++            )
++            .unwrap(),
++        );
++    }
++
++    fn wait_for(ticket: &DiscardTicket, predicate: impl Fn(&DiscardPoll) -> bool) -> DiscardPoll {
++        let deadline = Instant::now() + Duration::from_secs(5);
++        loop {
++            let outcome = ticket.poll();
++            if predicate(&outcome) {
++                return outcome;
++            }
++            assert!(Instant::now() < deadline, "discard stayed at {outcome:?}");
++            std::thread::yield_now();
++        }
++    }
++
++    #[test]
++    fn delayed_drain_failed_tombstone_and_retained_cleanup_are_truthful() {
++        retained().lock().unwrap().clear();
++        retained_discards().lock().unwrap().clear();
++        warnings().lock().unwrap().clear();
++        let platform = Arc::new(Platform::default());
++
++        // Reaching the gate proves request returned without running the drain inline.
++        let (started_tx, started_rx) = mpsc::sync_channel(1);
++        let (release_tx, release_rx) = mpsc::sync_channel(1);
++        let delayed = DiscardTicket::request_after_drain(
++            RecoveryOwnership {
++                recoveries: Vec::new(),
++                paths: Vec::new(),
++                platform: platform.clone(),
++            },
++            move || {
++                started_tx.send(()).unwrap();
++                release_rx.recv().unwrap();
++                RecoveryAddition {
++                    recoveries: Vec::new(),
++                    paths: Vec::new(),
++                    removed_paths: Vec::new(),
++                }
++            },
++            Arc::new(|| {}),
++        );
++        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
++        assert_eq!(delayed.poll(), DiscardPoll::Pending);
++        release_tx.send(()).unwrap();
++        assert_eq!(
++            wait_for(&delayed, |outcome| *outcome == DiscardPoll::Durable),
++            DiscardPoll::Durable
++        );
++
++        let unwind = scratch("discard-unwind").join("journal");
++        journal(&unwind, platform.as_ref());
++        let unwound = DiscardTicket::request_after_drain(
++            RecoveryOwnership {
++                recoveries: Vec::new(),
++                paths: vec![unwind.clone()],
++                platform: platform.clone(),
++            },
++            || -> RecoveryAddition { panic!("injected drain unwind") },
++            Arc::new(|| {}),
++        );
++        assert!(matches!(
++            wait_for(&unwound, |outcome| matches!(outcome, DiscardPoll::TombstoneFailed(_))),
++            DiscardPoll::TombstoneFailed(_)
++        ));
++        assert_ne!(
++            crate::recovery::inspect(&unwind, &Default::default()).unwrap().status,
++            RecoveryStatus::Discarded
++        );
++        drop(unwound);
++        assert_eq!(retry_pending_cleanup(), 1);
++        let deadline = Instant::now() + Duration::from_secs(5);
++        while unwind.exists() {
++            assert!(Instant::now() < deadline, "unwound discard lost retry ownership");
++            std::thread::yield_now();
++        }
++
++        // Failure retains ownership in the ticket; repairing the journal lets the
++        // same request retry and finish without resurrecting a separate owner.
++        let invalid = scratch("discard-invalid").join("journal");
++        fs::create_dir_all(&invalid).unwrap();
++        let failed = DiscardTicket::request(
++            RecoveryOwnership {
++                recoveries: Vec::new(),
++                paths: vec![invalid.clone()],
++                platform: platform.clone(),
++            },
++            Arc::new(|| {}),
++        );
++        assert!(matches!(
++            wait_for(&failed, |outcome| matches!(outcome, DiscardPoll::TombstoneFailed(_))),
++            DiscardPoll::TombstoneFailed(_)
++        ));
++        let failed_state = failed.state.clone();
++        drop(failed);
++        assert_eq!(retry_pending_cleanup(), 1);
++        let deadline = Instant::now() + Duration::from_secs(5);
++        loop {
++            let state = failed_state.lock().unwrap();
++            if !state.running && matches!(state.phase, Phase::TombstoneFailed(_)) {
++                break;
++            }
++            drop(state);
++            assert!(
++                Instant::now() < deadline,
++                "second tombstone failure did not become terminal"
++            );
++            std::thread::yield_now();
++        }
++        journal(&invalid, platform.as_ref());
++        assert_eq!(retry_pending_cleanup(), 1);
++        let deadline = Instant::now() + Duration::from_secs(5);
++        while invalid.exists() {
++            assert!(Instant::now() < deadline, "retained discard did not remove journal");
++            std::thread::yield_now();
++        }
++
++        // A T01 removal can fail after deleting journal content. Retry must use
++        // the retained identity/proof receipt instead of trying to reread manifest.json.
++        let partial = scratch("discard-partial").join("journal");
++        journal(&partial, platform.as_ref());
++        platform.partial_cleanup.store(true, Ordering::SeqCst);
++        let partial_ticket = DiscardTicket::request(
++            RecoveryOwnership {
++                recoveries: Vec::new(),
++                paths: vec![partial.clone()],
++                platform: platform.clone(),
++            },
++            Arc::new(|| {}),
++        );
++        assert!(matches!(
++            wait_for(&partial_ticket, |outcome| matches!(
++                outcome,
++                DiscardPoll::CleanupPending(_)
++            )),
++            DiscardPoll::CleanupPending(_)
++        ));
++        assert!(!partial.join("manifest.json").exists());
++        assert!(partial.join(crate::paged_recovery::CLEANUP_PROOF_NAME).exists());
++        platform.deny_cleanup.store(false, Ordering::SeqCst);
++        assert_eq!(retry_pending_cleanup(), 1);
++        let deadline = Instant::now() + Duration::from_secs(5);
++        while partial.exists() {
++            assert!(
++                Instant::now() < deadline,
++                "proof-only retry did not remove partial journal"
++            );
++            std::thread::yield_now();
++        }
++
++        // An unexpected entry deterministically blocks purge after the tombstone.
++        // Restart discovery sees Discarded until the retained cleanup actually wins.
++        let root = scratch("discard-retained");
++        let path = root.join("journal");
++        journal(&path, platform.as_ref());
++        platform.deny_cleanup.store(true, Ordering::SeqCst);
++        let pending = DiscardTicket::request(
++            RecoveryOwnership {
++                recoveries: Vec::new(),
++                paths: vec![path.clone()],
++                platform: platform.clone(),
++            },
++            Arc::new(|| {}),
++        );
++        assert!(matches!(
++            wait_for(&pending, |outcome| matches!(outcome, DiscardPoll::CleanupPending(_))),
++            DiscardPoll::CleanupPending(_)
++        ));
++        assert_eq!(
++            crate::recovery::inspect(&path, &Default::default()).unwrap().status,
++            RecoveryStatus::Discarded
++        );
++        assert!(take_cleanup_warning().is_some());
++        platform.deny_cleanup.store(false, Ordering::SeqCst);
++        platform.panic_cleanup.store(true, Ordering::SeqCst);
++        assert_eq!(retry_pending_cleanup(), 1);
++        let deadline = Instant::now() + Duration::from_secs(5);
++        loop {
++            if take_cleanup_warning().is_some_and(|warning| warning.contains("worker failed")) {
++                break;
++            }
++            assert!(
++                Instant::now() < deadline,
++                "cleanup unwind did not reach terminal warning"
++            );
++            std::thread::yield_now();
++        }
++        assert!(path.exists(), "cleanup unwind lost retained ownership");
++        assert_eq!(retry_pending_cleanup(), 1);
++        let deadline = Instant::now() + Duration::from_secs(5);
++        while path.exists() {
++            assert!(Instant::now() < deadline, "retained cleanup did not remove journal");
++            std::thread::yield_now();
++        }
++
++        let restart = root.join(format!("paged-{}-restart", std::process::id()));
++        journal(&restart, platform.as_ref());
++        crate::paged_recovery::tombstone_directory(&restart, platform.as_ref()).unwrap();
++        let removed =
++            crate::paged_recovery::sweep(&root, &Default::default(), &|_| false, usize::MAX, platform.as_ref())
++                .unwrap();
++        assert_eq!(removed, vec![restart.clone()]);
++        assert!(!restart.exists(), "restart janitor retained a discarded draft");
++        fs::remove_dir_all(root).unwrap();
++    }
++}
+diff --git a/crates/file-io/src/resident_recovery.rs b/crates/file-io/src/resident_recovery.rs
+index 11a98b2..644340b 100644
+--- a/crates/file-io/src/resident_recovery.rs
++++ b/crates/file-io/src/resident_recovery.rs
+@@ -19,7 +19,6 @@ use std::{
+         Arc, Mutex, OnceLock,
+         mpsc::{self, Receiver, SyncSender, TryRecvError},
+     },
+-    time::Duration,
+ };
+ type Job = Box<dyn FnOnce() + Send>;
+ fn worker() -> &'static SyncSender<Job> {
+@@ -40,6 +39,18 @@ fn worker() -> &'static SyncSender<Job> {
+         tx
+     })
+ }
++fn next_slot() -> String {
++    static SLOT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
++    format!(
++        "paged-{}-{}-{}",
++        std::process::id(),
++        std::time::SystemTime::now()
++            .duration_since(std::time::UNIX_EPOCH)
++            .unwrap_or_default()
++            .as_nanos(),
++        SLOT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
++    )
++}
+ pub struct ResidentRecovery {
+     root: PathBuf,
+     /// Stable directory stem for this document. Checkpoints alternate between two
+@@ -53,6 +64,7 @@ pub struct ResidentRecovery {
+     bytes: Budget,
+     notify: Arc<dyn Fn() + Send + Sync>,
+     previous: Vec<PagedRecovery>,
++    adopted_paths: Vec<PathBuf>,
+     retire_paths: Vec<PathBuf>,
+     retry_retirement: bool,
+     retirement: Option<Receiver<Result<Vec<PathBuf>, String>>>,
+@@ -61,6 +73,7 @@ pub struct ResidentRecovery {
+     status: Arc<Mutex<PagedRecoveryStatus>>,
+     captured: Option<bareline_document::ContentStateId>,
+     cancellation: Cancellation,
++    discard: Option<crate::recovery_retirement::DiscardTicket>,
+ }
+ impl ResidentRecovery {
+     pub fn new(
+@@ -71,19 +84,9 @@ impl ResidentRecovery {
+         bytes: Budget,
+         notify: Arc<dyn Fn() + Send + Sync>,
+     ) -> Self {
+-        static SLOT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+-        let slot = format!(
+-            "paged-{}-{}-{}",
+-            std::process::id(),
+-            std::time::SystemTime::now()
+-                .duration_since(std::time::UNIX_EPOCH)
+-                .unwrap_or_default()
+-                .as_nanos(),
+-            SLOT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+-        );
+         Self {
+             root,
+-            slot,
++            slot: next_slot(),
+             generation: 0,
+             clean: true,
+             platform,
+@@ -92,6 +95,7 @@ impl ResidentRecovery {
+             bytes,
+             notify,
+             previous: Vec::new(),
++            adopted_paths: Vec::new(),
+             retire_paths: Vec::new(),
+             retry_retirement: true,
+             retirement: None,
+@@ -100,6 +104,7 @@ impl ResidentRecovery {
+             status: Arc::new(Mutex::new(Default::default())),
+             captured: None,
+             cancellation: Cancellation::default(),
++            discard: None,
+         }
+     }
+     pub fn status(&self) -> PagedRecoveryStatus {
+@@ -112,8 +117,33 @@ impl ResidentRecovery {
+         self.captured = None;
+         self.retry_retirement = true;
+     }
++    /// Keep an adopted journal until a replacement checkpoint is durable or the
++    /// document is explicitly discarded.
++    pub fn adopt_path(&mut self, path: PathBuf) {
++        if !self.adopted_paths.contains(&path) {
++            self.adopted_paths.push(path);
++        }
++    }
++    pub fn resume_after_discard(&mut self) {
++        self.discard = None;
++        self.slot = next_slot();
++        self.generation = 0;
++        self.previous.clear();
++        self.adopted_paths.clear();
++        self.retire_paths.clear();
++        self.retirement = None;
++        self.pending = None;
++        self.current = None;
++        self.cancellation = Cancellation::default();
++        self.captured = None;
++        self.clean = false;
++        self.status = Arc::new(Mutex::new(Default::default()));
++    }
+     pub fn observe(&mut self, snapshot: DocumentSnapshot, dirty: bool) -> bool {
+         self.clean = !dirty;
++        if self.discard.is_some() {
++            return false;
++        }
+         let mut changed = false;
+         if let Some(receiver) = &self.pending {
+             match receiver.try_recv() {
+@@ -176,6 +206,7 @@ impl ResidentRecovery {
+                 status.durable.is_some() && status.error.is_none()
+             })
+         {
++            self.retire_paths.append(&mut self.adopted_paths);
+             let mut obsolete = std::mem::take(&mut self.previous);
+             if !dirty && self.captured == Some(snapshot.content_state) {
+                 if let Some(current) = self.current.take() {
+@@ -347,55 +378,74 @@ impl ResidentRecovery {
+     }
+ }
+ impl ResidentRecovery {
+-    /// Delete every journal directory this document owns. Called when the document is
+-    /// closed cleanly or its changes are discarded: there is nothing left to recover.
+-    pub fn discard_now(&mut self) {
++    /// Request a durable discard without waiting for checkpoint or storage workers.
++    pub fn discard(&mut self) -> crate::recovery_retirement::DiscardPoll {
+         self.cancellation.cancel();
+-        // Let in-flight checkpoint/retirement workers finish and release their
+-        // file handles first: deleting a directory whose files are still open
+-        // fails on Windows, which previously left a retired generation behind.
+-        if let Some(receiver) = self.pending.take() {
+-            let _ = receiver.recv_timeout(Duration::from_secs(2));
+-        }
+-        if let Some(receiver) = self.retirement.take() {
+-            let _ = receiver.recv_timeout(Duration::from_secs(2));
+-        }
+-        let mut paths = std::mem::take(&mut self.retire_paths);
+-        for recovery in std::mem::take(&mut self.previous)
+-            .into_iter()
+-            .chain(self.current.take())
+-        {
+-            paths.push(recovery.directory().to_path_buf());
+-        }
+-        for generation in 0..2 {
+-            let path = self.root.join(format!("{}-g{}", self.slot, generation));
+-            if !paths.contains(&path) && path.exists() {
+-                paths.push(path);
+-            }
+-        }
+-        for path in paths {
+-            // A worker may still be closing its last handle; retry briefly rather
+-            // than silently abandoning plaintext recovery data.
+-            for attempt in 0..=20 {
+-                if crate::paged_recovery::purge_directory(&path, self.platform.as_ref()).is_ok() {
+-                    break;
+-                }
+-                if attempt < 20 {
+-                    std::thread::sleep(Duration::from_millis(25));
++        if self.discard.is_none() {
++            let pending = self.pending.take();
++            let retirement = self.retirement.take();
++            let mut recoveries = std::mem::take(&mut self.previous);
++            recoveries.extend(self.current.take());
++            let mut paths = std::mem::take(&mut self.retire_paths);
++            paths.append(&mut self.adopted_paths);
++            let root = self.root.clone();
++            let slot = self.slot.clone();
++            let platform = self.platform.clone();
++            let notify = self.notify.clone();
++            for generation in 0..2 {
++                let path = root.join(format!("{slot}-g{generation}"));
++                if !paths.contains(&path) {
++                    paths.push(path);
+                 }
+             }
++            self.discard = Some(crate::recovery_retirement::DiscardTicket::request_after_drain(
++                crate::recovery_retirement::RecoveryOwnership {
++                    recoveries,
++                    paths,
++                    platform,
++                },
++                move || {
++                    let mut additional = Vec::new();
++                    if let Some(receiver) = pending
++                        && let Ok(Ok(recovery)) = receiver.recv()
++                    {
++                        additional.push(recovery);
++                    }
++                    let removed_paths = retirement
++                        .and_then(|receiver| receiver.recv().ok())
++                        .and_then(Result::ok)
++                        .unwrap_or_default();
++                    crate::recovery_retirement::RecoveryAddition {
++                        recoveries: additional,
++                        paths: Vec::new(),
++                        removed_paths,
++                    }
++                },
++                notify,
++            ));
++        }
++        let outcome = self.discard.as_ref().unwrap().poll();
++        if matches!(outcome, crate::recovery_retirement::DiscardPoll::TombstoneFailed(_)) {
++            self.discard.as_ref().unwrap().retry();
+         }
+         if let Ok(mut status) = self.status.lock() {
+-            *status = Default::default();
++            match &outcome {
++                crate::recovery_retirement::DiscardPoll::Pending => {
++                    status.error = Some("Discard requested; waiting for durable recovery tombstone.".into())
++                }
++                crate::recovery_retirement::DiscardPoll::CleanupPending(error)
++                | crate::recovery_retirement::DiscardPoll::TombstoneFailed(error) => status.error = Some(error.clone()),
++                crate::recovery_retirement::DiscardPoll::Durable => *status = Default::default(),
++            }
+         }
++        outcome
+     }
+ }
+ impl Drop for ResidentRecovery {
+     fn drop(&mut self) {
+         self.cancellation.cancel();
+-        // A clean document has nothing worth recovering; never leave its journal behind.
+         if self.clean {
+-            self.discard_now();
++            let _ = self.discard();
+         }
+     }
+ }
+@@ -411,6 +461,54 @@ mod journal_tests {
+     };
+     struct Platform;
+     impl LocalFileSystem for Platform {
++        fn cache_directory_guard(&self, path: &Path) -> io::Result<Option<bareline_platform::CacheDirectoryLease>> {
++            let metadata = match fs::symlink_metadata(path) {
++                Ok(metadata) => metadata,
++                Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
++                Err(error) => return Err(error),
++            };
++            if !metadata.is_dir() || metadata.file_type().is_symlink() {
++                return Ok(None);
++            }
++            use std::hash::{Hash, Hasher};
++            let mut hash = std::collections::hash_map::DefaultHasher::new();
++            path.hash(&mut hash);
++            Ok(Some(bareline_platform::CacheDirectoryLease {
++                identity: bareline_platform::CacheDirectoryIdentity {
++                    volume: 1,
++                    file: hash.finish(),
++                },
++                guard: Arc::new(()),
++            }))
++        }
++        fn remove_owned_cache_directory(
++            &self,
++            root: &Path,
++            candidate: &Path,
++            _: bareline_platform::CacheDirectoryIdentity,
++            _: bareline_platform::CacheDirectoryIdentity,
++            proof_name: &str,
++            proof_bytes: &[u8],
++            _: usize,
++            _: Duration,
++            _: &dyn Fn() -> bool,
++        ) -> bareline_platform::CacheRemovalOutcome {
++            let result = (|| {
++                if candidate.parent() != Some(root) || fs::read(candidate.join(proof_name))? != proof_bytes {
++                    return Err(io::Error::new(
++                        io::ErrorKind::PermissionDenied,
++                        "test cleanup proof changed",
++                    ));
++                }
++                fs::remove_dir_all(candidate)?;
++                Ok(1)
++            })();
++            bareline_platform::CacheRemovalOutcome {
++                visited: 1,
++                retry_authority_retained: true,
++                result,
++            }
++        }
+         fn identity(&self, file: &fs::File) -> io::Result<bareline_platform::FileIdentity> {
+             let metadata = file.metadata()?;
+             Ok(bareline_platform::FileIdentity {
+@@ -515,7 +613,7 @@ mod journal_tests {
+         let _ = fs::remove_dir_all(root);
+     }
+     #[test]
+-    fn discard_now_removes_every_generation_even_mid_rotation() {
++    fn discard_removes_every_generation_even_mid_rotation() {
+         let root = scratch("resident-discard");
+         let recovery_root = root.join("recovery");
+         let mut recovery = ResidentRecovery::new(
+@@ -529,10 +627,24 @@ mod journal_tests {
+         checkpoint(&mut recovery, "first draft");
+         checkpoint(&mut recovery, "second draft");
+         // Discard before the asynchronous retirement has run: both generations
+-        // must still be deleted synchronously.
+-        recovery.discard_now();
+-        let left = journals(&recovery_root);
+-        assert!(left.is_empty(), "discard left journal directories: {left:?}");
++        // remain owned until the worker publishes its durable tombstones.
++        assert_eq!(recovery.discard(), crate::recovery_retirement::DiscardPoll::Pending);
++        let deadline = Instant::now() + Duration::from_secs(10);
++        while matches!(recovery.discard(), crate::recovery_retirement::DiscardPoll::Pending) {
++            assert!(Instant::now() < deadline);
++            std::thread::yield_now();
++        }
++        loop {
++            let left = journals(&recovery_root);
++            if left.is_empty() {
++                break;
++            }
++            assert!(
++                Instant::now() < deadline,
++                "discard cleanup left journal directories: {left:?}"
++            );
++            std::thread::yield_now();
++        }
+         std::mem::forget(recovery);
+         let _ = fs::remove_dir_all(root);
+     }
+diff --git a/crates/platform-windows/src/owned_cache.rs b/crates/platform-windows/src/owned_cache.rs
+index 7399f4b..5359ec2 100644
+--- a/crates/platform-windows/src/owned_cache.rs
++++ b/crates/platform-windows/src/owned_cache.rs
+@@ -531,6 +531,34 @@ mod tests {
+         assert!(!candidate.exists());
+     }
+ 
++    #[test]
++    fn retained_cleanup_receipt_removes_candidate_after_manifest_is_gone() {
++        let fixture = Fixture::new();
++        let (root, candidate) = fixture.tree();
++        fs::remove_file(candidate.join(RECORD)).unwrap();
++        fs::write(candidate.join(RETAINED_RECORD), b"retained-proof").unwrap();
++        let manifest = candidate.join("manifest.json");
++        fs::write(&manifest, b"discarded recovery metadata").unwrap();
++        let (root_id, candidate_id) = Fixture::ids(&root, &candidate);
++
++        fs::remove_file(manifest).unwrap();
++        let outcome = remove(
++            &root,
++            &candidate,
++            root_id,
++            candidate_id,
++            RETAINED_RECORD,
++            b"retained-proof",
++            16,
++            Duration::from_secs(1),
++            &|| false,
++        );
++
++        assert!(outcome.retry_authority_retained);
++        assert!(outcome.result.is_ok());
++        assert!(!candidate.exists());
++    }
++
+     #[test]
+     fn finalization_replacement_is_rejected_before_proof_removal() {
+         let fixture = Fixture::new();
+diff --git a/docs/implementation/2026-09-12-audit-implementation/PR-T05.md b/docs/implementation/2026-09-12-audit-implementation/PR-T05.md
+new file mode 100644
+index 0000000..de92704
+--- /dev/null
++++ b/docs/implementation/2026-09-12-audit-implementation/PR-T05.md
+@@ -0,0 +1,31 @@
++# PR-T05: Asynchronous recovery retirement
++
++- **Baseline:** `67fbae06c16e51dffa95ad3b08ef69f0ff91a725`
++- **Scope:** Persist content-free discard intent off the UI thread, retain cleanup ownership across tab lifetime, and report/retry incomplete recovery cleanup truthfully.
++- **Coordination:** Keep save transaction behavior and unrelated workspace close/lifecycle changes unchanged.
++
++## Evidence
++
++- `recovery_retirement` uses the process-wide bounded maintenance executor (2 running, 32 queued). Known recovery handles and paths remain in the state before fallible receiver draining begins. Terminal guards publish and wake on draining, tombstone, purge, and retained-cleanup unwind; the regressions prove failed work remains retryable after its UI ticket is dropped. Completed retained owners are pruned, cleanup paths are deduplicated, warning history is bounded, and a successful retry clears the prior cleanup failure.
++- Resident discard transfers both generation handles, pending checkpoint/retirement receivers, known generation paths, and adopted-recovery paths to the worker. Paged discard shares one ticket across views and uses `try_lock` when taking a journal, so an actor-held recovery lock cannot block the UI.
++- `Workspace::close` and the shell retain stable document-owner and consent-revision identity while discard is pending. Only the discard target is temporarily read-only. Tab reordering cannot redirect the close, and a changed target resumes recovery rather than disappearing. Application exit revalidates every current dirty or busy document after tombstone publication; a new or changed document cancels exit, restores the prior read-only state, and starts fresh recovery ownership.
++- `retired.json` and a content-free cleanup proof are published before close is allowed. Cleanup captures the guarded root/candidate identities and a bounded no-follow proof read in a retained receipt, so a retry does not depend on `manifest.json` surviving a partial purge. Cleanup delegates to T01's proof-preserving Windows removal primitive with 4,096-entry and 250 ms limits. Unsupported or uncertain deletion fails closed and retains the exact receipt for retry; no recursive path fallback remains. A focused Windows boundary regression removes `manifest.json` before invoking the retained-proof cleanup.
++- `IoRequest::RestorePagedRecovery` now performs recovery inspection and bounded full-text materialization on the existing I/O worker. Cancellation and inspection/materialization failures reach a failed terminal outcome; only the legitimate size-limit `Ok(None)` keeps the paged fallback. `Workspace::adopt_recovered_resident` only consumes prepared text.
++- Undo Close Tab clears the completed discard ticket and creates a fresh resident slot, status, cancellation generation, and recovery root ownership. The restart regression gates the old purge, restores and edits the closed buffer, requires a different durable recovery directory, then proves the old cleanup cannot delete the new checkpoint. The shell regression exercises the deferred close entrypoint across a tab reorder and verifies the original read-only state is restored.
++- Static evidence run in the private worktree: direct `rustfmt --edition 2024` on all changed Rust files and `git diff --check`. Cargo and native checks remain central by policy.
++
++## Proposed contained integration commands
++
++Run centrally with the shared target, `--offline --locked`, stopping on the first failure:
++
++1. `cargo test -p bareline-file-io recovery_retirement::tests::delayed_drain_failed_tombstone_and_retained_cleanup_are_truthful --offline --locked`
++2. `cargo test -p bareline-file-io resident_recovery::journal_tests::discard_removes_every_generation_even_mid_rotation --offline --locked`
++3. `cargo test -p bareline-app workspace::tests::small_recovery_restores_an_editable_untitled_document --offline --locked`
++4. `cargo test -p bareline-app workspace::tests::resident_and_untitled_automatic_recovery_restore_current_text --offline --locked`
++5. `cargo test -p bareline-app workspace::tests::paged_recovery_restart_preserves_opaque_undo_and_recovers_stale_pointer --offline --locked`
++6. `cargo test -p bareline deferred_close_tests --offline --locked`
++7. `cargo test -p bareline-platform-windows owned_cache::tests::retained_cleanup_receipt_removes_candidate_after_manifest_is_gone --offline --locked`
++
++## Deferred qualification
++
++- The proposed Cargo tests, native type/discard/continue-editing responsiveness scenario, and final integrated compile remain owned by integration.

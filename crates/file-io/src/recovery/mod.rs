@@ -13,10 +13,10 @@ use std::{
 };
 
 mod streaming;
-pub use streaming::{replay_source_transactions, open_retained_owned};
 pub(crate) use streaming::admit_disk;
 #[cfg(test)]
 pub(crate) use streaming::disk_usage;
+pub use streaming::{open_retained_owned, replay_source_transactions};
 const VERSION: u32 = 2;
 const MAX_RECORD: usize = 1024 * 1024;
 const MAX_TRANSACTION: usize = 16 * 1024 * 1024;
@@ -162,10 +162,7 @@ impl BaselinePreparation {
         cancel: &Cancellation,
     ) -> io::Result<PreparedBaseline> {
         let path = self.directory.join("baseline.bin");
-        let mut file = OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&path)?;
+        let mut file = OpenOptions::new().create_new(true).write(true).open(&path)?;
         let result = (|| {
             let mut hash = Sha256::new();
             let mut len = 0u64;
@@ -221,11 +218,7 @@ pub struct RecoveryWriter {
     current_len: u64,
 }
 impl RecoveryWriter {
-    pub fn create(
-        directory: &Path,
-        metadata: RecoveryMetadata,
-        platform: &dyn LocalFileSystem,
-    ) -> io::Result<Self> {
+    pub fn create(directory: &Path, metadata: RecoveryMetadata, platform: &dyn LocalFileSystem) -> io::Result<Self> {
         if metadata.source_generation.len() > 4096 || metadata.codec_catalog_version.len() > 4096 {
             return Err(invalid("recovery metadata limit"));
         }
@@ -258,7 +251,9 @@ impl RecoveryWriter {
     }
     /// A group root is committed but this ordinary journal did not continue.
     /// Further writes require a fresh writer based on that authoritative root.
-    pub(crate) fn break_continuity(&mut self) { self.poisoned=true; }
+    pub(crate) fn break_continuity(&mut self) {
+        self.poisoned = true;
+    }
     pub fn last_durable(&self) -> Option<DurableReceipt> {
         self.manifest.durable
     }
@@ -310,9 +305,7 @@ impl RecoveryWriter {
         cancel: &Cancellation,
         platform: &dyn LocalFileSystem,
     ) -> io::Result<()> {
-        let prepared = self
-            .prepare_baseline()?
-            .copy(source, verify_source, cancel)?;
+        let prepared = self.prepare_baseline()?.copy(source, verify_source, cancel)?;
         self.attach_baseline(prepared, platform)
     }
     pub fn append(&mut self, revision: u64, edits: &[RecoveryEdit]) -> io::Result<DurableReceipt> {
@@ -345,19 +338,14 @@ impl RecoveryWriter {
         if (edits.is_empty() && metadata.is_none())
             || edits.len() > 4096
             || self.records >= MAX_RECORDS
-            || self
-                .manifest
-                .durable
-                .is_some_and(|r| revision <= r.revision)
+            || self.manifest.durable.is_some_and(|r| revision <= r.revision)
         {
             return Err(invalid("invalid recovery transaction"));
         }
         let size = edits
             .iter()
             .try_fold(0usize, |total, e| {
-                total
-                    .checked_add(e.removed.len())?
-                    .checked_add(e.inserted.len())
+                total.checked_add(e.removed.len())?.checked_add(e.inserted.len())
             })
             .filter(|n| *n <= MAX_TRANSACTION)
             .ok_or_else(|| invalid("recovery transaction limit"))?;
@@ -402,13 +390,10 @@ impl RecoveryWriter {
                 edits: refs,
             };
             let bytes = serde_json::to_vec(&record).map_err(io::Error::other)?;
-            if bytes.len() > MAX_RECORD
-                || self.journal.metadata()?.len() + bytes.len() as u64 + 8 > MAX_JOURNAL
-            {
+            if bytes.len() > MAX_RECORD || self.journal.metadata()?.len() + bytes.len() as u64 + 8 > MAX_JOURNAL {
                 return Err(invalid("recovery journal quota"));
             }
-            self.journal
-                .write_all(&(bytes.len() as u32).to_le_bytes())?;
+            self.journal.write_all(&(bytes.len() as u32).to_le_bytes())?;
             self.journal.write_all(&crc32c(&bytes).to_le_bytes())?;
             self.journal.write_all(&bytes)?;
             faults.boundary(Boundary::JournalWritten)?;
@@ -436,10 +421,7 @@ impl RecoveryWriter {
         publish(&self.directory, &self.manifest, platform, faults)
     }
     fn ensure_writable(&self) -> io::Result<()> {
-        if self.poisoned
-            || self.manifest.retired
-            || self.directory.join("retired.json").try_exists()?
-        {
+        if self.poisoned || self.manifest.retired || self.directory.join("retired.json").try_exists()? {
             Err(io::Error::other(
                 "recovery unavailable; keep last durable receipt and create a new writer",
             ))
@@ -482,10 +464,7 @@ fn publish_file(
     let staged = PathBuf::from(staged_name);
     platform.validate_target(path)?;
     let bytes = serde_json::to_vec(manifest).map_err(io::Error::other)?;
-    let mut file = OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(&staged)?;
+    let mut file = OpenOptions::new().create_new(true).write(true).open(&staged)?;
     let result = (|| {
         file.write_all(&bytes)?;
         file.sync_all()?;
@@ -512,16 +491,12 @@ fn crc32c(bytes: &[u8]) -> u32 {
 fn read_manifest(directory: &Path) -> io::Result<Manifest> {
     match read_manifest_file(&directory.join("manifest.json")) {
         Ok(manifest) => Ok(manifest),
-        Err(primary) => {
-            read_manifest_file(&directory.join("manifest.previous.json")).map_err(|_| primary)
-        }
+        Err(primary) => read_manifest_file(&directory.join("manifest.previous.json")).map_err(|_| primary),
     }
 }
 fn read_manifest_file(path: &Path) -> io::Result<Manifest> {
     let mut bytes = Vec::new();
-    File::open(path)?
-        .take(32 * 1024 + 1)
-        .read_to_end(&mut bytes)?;
+    File::open(path)?.take(32 * 1024 + 1).read_to_end(&mut bytes)?;
     if bytes.len() > 32 * 1024 {
         return Err(invalid("recovery manifest limit"));
     }
@@ -532,9 +507,11 @@ fn read_manifest_file(path: &Path) -> io::Result<Manifest> {
     {
         return Err(invalid("unsupported recovery manifest"));
     }
-    if manifest.baseline.as_ref().is_some_and(|blob| {
-        blob.name != "baseline.bin" || blob.len != manifest.metadata.original_len
-    }) {
+    if manifest
+        .baseline
+        .as_ref()
+        .is_some_and(|blob| blob.name != "baseline.bin" || blob.len != manifest.metadata.original_len)
+    {
         return Err(invalid("invalid baseline identity"));
     }
     Ok(manifest)
@@ -625,15 +602,17 @@ fn scan(directory: &Path, cancel: &Cancellation) -> io::Result<Scan> {
             corrupt = true;
             break;
         };
-        let sum = record.edits.iter().try_fold(0u64, |n, e| {
-            n.checked_add(e.removed)?.checked_add(e.inserted)
-        });
+        let sum = record
+            .edits
+            .iter()
+            .try_fold(0u64, |n, e| n.checked_add(e.removed)?.checked_add(e.inserted));
         if !matches!(record.version, 1 | VERSION | 3)
             || (record.version == 1 && record.metadata.is_some())
             || (record.edits.is_empty() && record.metadata.is_none())
-            || record.metadata.as_ref().is_some_and(|metadata| {
-                bareline_document::DocumentMetadata::new(metadata.clone()).is_err()
-            })
+            || record
+                .metadata
+                .as_ref()
+                .is_some_and(|metadata| bareline_document::DocumentMetadata::new(metadata.clone()).is_err())
             || record.edits.len() > 4096
             || (record.version != 3 && record.segment.len > MAX_TRANSACTION as u64)
             || sum != Some(record.segment.len)
@@ -718,11 +697,7 @@ impl Scan {
             checkpoint_durable: self.manifest.durable,
             validated_records: self.records.len(),
             complete_baseline: self.baseline_valid,
-            document_metadata: self
-                .records
-                .iter()
-                .rev()
-                .find_map(|record| record.metadata.clone()),
+            document_metadata: self.records.iter().rev().find_map(|record| record.metadata.clone()),
         }
     }
 }
@@ -743,7 +718,9 @@ pub fn replay_transactions(
     for record in &scanned.records {
         cancelled(cancel)?;
         let mut segment = File::open(directory.join(&record.segment.name))?;
-        if record.segment.len > MAX_TRANSACTION as u64 { return Err(invalid("streaming transaction requires source-range replay")); }
+        if record.segment.len > MAX_TRANSACTION as u64 {
+            return Err(invalid("streaming transaction requires source-range replay"));
+        }
         let mut bytes = vec![0; record.segment.len as usize];
         segment.read_exact(&mut bytes)?;
         if <[u8; 32]>::from(Sha256::digest(&bytes)) != record.segment.sha256 {
@@ -767,11 +744,7 @@ pub fn replay_transactions(
     Ok(scanned.inspection())
 }
 
-fn validate_inverse_prefix(
-    directory: &Path,
-    records: &[Record],
-    cancel: &Cancellation,
-) -> io::Result<usize> {
+fn validate_inverse_prefix(directory: &Path, records: &[Record], cancel: &Cancellation) -> io::Result<usize> {
     use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT: AtomicU64 = AtomicU64::new(0);
     if records.is_empty() {
@@ -793,10 +766,7 @@ fn validate_inverse_prefix(
                 .write(true)
                 .open(scratch.join(if index % 2 == 0 { "a" } else { "b" }))?;
             if let Err(error) = apply_record(directory, record, &mut current, &mut next, cancel) {
-                if matches!(
-                    error.kind(),
-                    io::ErrorKind::InvalidData | io::ErrorKind::UnexpectedEof
-                ) {
+                if matches!(error.kind(), io::ErrorKind::InvalidData | io::ErrorKind::UnexpectedEof) {
                     return Ok(index);
                 }
                 return Err(error);
@@ -814,21 +784,14 @@ fn validate_inverse_prefix(
 
 /// Reconstruct into a new path only. Existing destinations (including the original)
 /// are refused. Corrupt tails expose only the validated prefix with its warning status.
-pub fn recover_to(
-    directory: &Path,
-    destination: &Path,
-    cancel: &Cancellation,
-) -> io::Result<RecoveryInspection> {
+pub fn recover_to(directory: &Path, destination: &Path, cancel: &Cancellation) -> io::Result<RecoveryInspection> {
     use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT: AtomicU64 = AtomicU64::new(0);
     let scanned = scan(directory, cancel)?;
     if !scanned.baseline_valid || scanned.manifest.retired {
         return Err(invalid("complete recovery baseline unavailable"));
     }
-    let mut output = OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(destination)?;
+    let mut output = OpenOptions::new().create_new(true).write(true).open(destination)?;
     let scratch = directory.join(format!(
         "replay-{}-{}",
         std::process::id(),
@@ -869,11 +832,7 @@ pub fn recover_to(
     }
     result
 }
-fn copy_all(
-    source: &mut impl Read,
-    target: &mut impl Write,
-    cancel: &Cancellation,
-) -> io::Result<()> {
+fn copy_all(source: &mut impl Read, target: &mut impl Write, cancel: &Cancellation) -> io::Result<()> {
     let mut buffer = [0u8; CHUNK];
     loop {
         cancelled(cancel)?;
@@ -912,12 +871,7 @@ fn apply_record(
     let mut segment = File::open(directory.join(&record.segment.name))?;
     let mut cursor = 0u64;
     for edit in &record.edits {
-        if edit.offset < cursor
-            || edit
-                .offset
-                .checked_add(edit.removed)
-                .is_none_or(|end| end > source_len)
-        {
+        if edit.offset < cursor || edit.offset.checked_add(edit.removed).is_none_or(|end| end > source_len) {
             return Err(invalid("recovery edit outside source"));
         }
         copy_exact(source, target, edit.offset - cursor, cancel)?;
@@ -951,11 +905,7 @@ struct GapReport<'a> {
 }
 /// Export owned transaction segments plus offsets and an explicit original-content gap.
 /// The export is a directory, never a file masquerading as a complete reconstruction.
-pub fn export_edits(
-    directory: &Path,
-    destination: &Path,
-    cancel: &Cancellation,
-) -> io::Result<RecoveryInspection> {
+pub fn export_edits(directory: &Path, destination: &Path, cancel: &Cancellation) -> io::Result<RecoveryInspection> {
     let scanned = scan(directory, cancel)?;
     if scanned.manifest.retired {
         return Err(invalid("recovery discarded"));
@@ -992,12 +942,7 @@ pub fn export_edits(
 pub fn discard(directory: &Path, platform: &dyn LocalFileSystem) -> io::Result<()> {
     let mut manifest = read_manifest(directory)?;
     manifest.retired = true;
-    publish_file(
-        &directory.join("retired.json"),
-        &manifest,
-        platform,
-        &mut NoFault,
-    )
+    publish_file(&directory.join("retired.json"), &manifest, platform, &mut NoFault)
 }
 
 /// Trace result supplied by the owner of every live undo/checkpoint reference.
@@ -1010,9 +955,7 @@ pub struct LiveReferences {
 /// manifest and journal as retirement evidence. Never follows a symlink or recurses.
 pub fn collect_retired(directory: &Path, references: &LiveReferences) -> io::Result<usize> {
     if !references.complete || !directory.join("retired.json").try_exists()? {
-        return Err(invalid(
-            "complete live-reference trace and durable retirement required",
-        ));
+        return Err(invalid("complete live-reference trace and durable retirement required"));
     }
     // Validate the tombstone before deleting anything; mere marker existence is insufficient.
     if !read_manifest_file(&directory.join("retired.json"))?.retired {
@@ -1028,9 +971,7 @@ pub fn collect_retired(directory: &Path, references: &LiveReferences) -> io::Res
         let segment = name
             .strip_prefix("segment-")
             .and_then(|n| n.strip_suffix(".bin"))
-            .is_some_and(|n| {
-                !n.is_empty() && n.bytes().all(|c| c.is_ascii_digit()) && n.parse::<u64>().is_ok()
-            });
+            .is_some_and(|n| !n.is_empty() && n.bytes().all(|c| c.is_ascii_digit()) && n.parse::<u64>().is_ok());
         if (name == "baseline.bin" || segment)
             && !references.segment_names.contains(name)
             && entry.file_type()?.is_file()
@@ -1052,12 +993,7 @@ pub struct RecoverySchedule {
     pub unavailable: Option<String>,
 }
 impl RecoverySchedule {
-    pub fn edited(
-        &mut self,
-        revision: u64,
-        bytes: usize,
-        now: std::time::Instant,
-    ) -> io::Result<()> {
+    pub fn edited(&mut self, revision: u64, bytes: usize, now: std::time::Instant) -> io::Result<()> {
         if self.pending.len() >= 4096
             || self
                 .pending
@@ -1088,10 +1024,7 @@ impl RecoverySchedule {
                     >= 256 * 1024)
     }
     pub fn protected(&mut self, receipt: DurableReceipt) {
-        if self
-            .last_durable
-            .is_some_and(|last| receipt.revision < last.revision)
-        {
+        if self.last_durable.is_some_and(|last| receipt.revision < last.revision) {
             return;
         }
         self.last_durable = Some(receipt);
@@ -1172,12 +1105,7 @@ mod tests {
         .unwrap();
         if baseline {
             writer
-                .seal_baseline(
-                    &mut &b"hello"[..],
-                    || Ok(true),
-                    &Cancellation::default(),
-                    &FakeFs,
-                )
+                .seal_baseline(&mut &b"hello"[..], || Ok(true), &Cancellation::default(), &FakeFs)
                 .unwrap();
         }
         writer
@@ -1201,14 +1129,10 @@ mod tests {
         owner.attach_baseline(prepared, &FakeFs).unwrap();
         assert_eq!(owner.last_durable(), Some(receipt));
         let mut seen = Vec::new();
-        let inspection = replay_transactions(
-            &temp.0.join("item"),
-            &Cancellation::default(),
-            |r, edits| {
-                seen.push((r, edits[0].inserted.clone()));
-                Ok(())
-            },
-        )
+        let inspection = replay_transactions(&temp.0.join("item"), &Cancellation::default(), |r, edits| {
+            seen.push((r, edits[0].inserted.clone()));
+            Ok(())
+        })
         .unwrap();
         assert_eq!(inspection.status, RecoveryStatus::Complete);
         assert_eq!(seen, vec![(receipt, b"ipp".to_vec())]);
@@ -1241,8 +1165,7 @@ mod tests {
         let receipt = writer.append(1, &[edit()]).unwrap();
         writer.checkpoint(&FakeFs).unwrap();
         let destination = temp.0.join("copy");
-        let inspection =
-            recover_to(&temp.0.join("item"), &destination, &Cancellation::default()).unwrap();
+        let inspection = recover_to(&temp.0.join("item"), &destination, &Cancellation::default()).unwrap();
         assert_eq!(inspection.status, RecoveryStatus::Complete);
         assert_eq!(inspection.last_durable, Some(receipt));
         assert_eq!(fs::read(&destination).unwrap(), b"hippo");
@@ -1259,19 +1182,12 @@ mod tests {
         ] {
             let temp = Temp::new();
             let mut writer = writer(&temp, true);
-            assert!(
-                writer
-                    .append_with_faults(1, &[edit()], &mut FailAt(boundary))
-                    .is_err()
-            );
+            assert!(writer.append_with_faults(1, &[edit()], &mut FailAt(boundary)).is_err());
             assert_eq!(writer.last_durable(), None);
             assert!(writer.append(2, &[edit()]).is_err());
             drop(writer);
             let recovered = inspect(&temp.0.join("item"), &Cancellation::default()).unwrap();
-            let expected = usize::from(matches!(
-                boundary,
-                Boundary::JournalWritten | Boundary::JournalFlushed
-            ));
+            let expected = usize::from(matches!(boundary, Boundary::JournalWritten | Boundary::JournalFlushed));
             // Written-but-unacknowledged bytes may survive a process death; they are only replayed after CRC/hash verification.
             assert_eq!(recovered.validated_records, expected);
         }
@@ -1282,11 +1198,7 @@ mod tests {
             let temp = Temp::new();
             let mut writer = writer(&temp, true);
             writer.append(1, &[edit()]).unwrap();
-            assert!(
-                writer
-                    .checkpoint_with_faults(&FakeFs, &mut FailAt(boundary))
-                    .is_err()
-            );
+            assert!(writer.checkpoint_with_faults(&FakeFs, &mut FailAt(boundary)).is_err());
             assert_eq!(
                 inspect(&temp.0.join("item"), &Cancellation::default())
                     .unwrap()
@@ -1313,12 +1225,7 @@ mod tests {
             .unwrap();
         journal.write_all(&[1, 2, 3]).unwrap();
         drop(journal);
-        let result = recover_to(
-            &temp.0.join("item"),
-            &temp.0.join("copy"),
-            &Cancellation::default(),
-        )
-        .unwrap();
+        let result = recover_to(&temp.0.join("item"), &temp.0.join("copy"), &Cancellation::default()).unwrap();
         assert_eq!(result.status, RecoveryStatus::CorruptTail);
         assert_eq!(fs::read(temp.0.join("copy")).unwrap(), b"hippo");
         fs::remove_file(temp.0.join("item/segment-1.bin")).unwrap();
@@ -1332,35 +1239,16 @@ mod tests {
         let mut writer = writer(&temp, false);
         assert!(
             writer
-                .seal_baseline(
-                    &mut &b"hello"[..],
-                    || Ok(false),
-                    &Cancellation::default(),
-                    &FakeFs
-                )
+                .seal_baseline(&mut &b"hello"[..], || Ok(false), &Cancellation::default(), &FakeFs)
                 .is_err()
         );
         writer.append(1, &[edit()]).unwrap();
         assert_eq!(
-            inspect(&temp.0.join("item"), &Cancellation::default())
-                .unwrap()
-                .status,
+            inspect(&temp.0.join("item"), &Cancellation::default()).unwrap().status,
             RecoveryStatus::EditsOnly
         );
-        assert!(
-            recover_to(
-                &temp.0.join("item"),
-                &temp.0.join("copy"),
-                &Cancellation::default()
-            )
-            .is_err()
-        );
-        export_edits(
-            &temp.0.join("item"),
-            &temp.0.join("export"),
-            &Cancellation::default(),
-        )
-        .unwrap();
+        assert!(recover_to(&temp.0.join("item"), &temp.0.join("copy"), &Cancellation::default()).is_err());
+        export_edits(&temp.0.join("item"), &temp.0.join("export"), &Cancellation::default()).unwrap();
         let report: serde_json::Value =
             serde_json::from_slice(&fs::read(temp.0.join("export/gaps.json")).unwrap()).unwrap();
         assert_eq!(report["complete"], false);
@@ -1377,9 +1265,7 @@ mod tests {
         discard(&temp.0.join("item"), &FakeFs).unwrap();
         assert!(writer.append(2, &[edit()]).is_err());
         assert_eq!(
-            inspect(&temp.0.join("item"), &Cancellation::default())
-                .unwrap()
-                .status,
+            inspect(&temp.0.join("item"), &Cancellation::default()).unwrap().status,
             RecoveryStatus::Discarded
         );
         assert!(temp.0.join("item/segment-1.bin").exists());
@@ -1399,16 +1285,13 @@ mod tests {
             )
             .unwrap();
         let destination = temp.0.join("copy");
-        let inspection =
-            recover_to(&temp.0.join("item"), &destination, &Cancellation::default()).unwrap();
+        let inspection = recover_to(&temp.0.join("item"), &destination, &Cancellation::default()).unwrap();
         assert_eq!(inspection.status, RecoveryStatus::CorruptTail);
         assert_eq!(inspection.validated_records, 0);
         assert_eq!(fs::read(&destination).unwrap(), b"hello");
         fs::write(temp.0.join("item/baseline.bin"), b"wrong").unwrap();
         assert_eq!(
-            inspect(&temp.0.join("item"), &Cancellation::default())
-                .unwrap()
-                .status,
+            inspect(&temp.0.join("item"), &Cancellation::default()).unwrap().status,
             RecoveryStatus::SourceUnavailable
         );
     }
@@ -1446,14 +1329,7 @@ mod tests {
     fn duplicate_writer_and_invalid_offsets_are_refused() {
         let temp = Temp::new();
         let mut writer = writer(&temp, true);
-        assert!(
-            RecoveryWriter::create(
-                &temp.0.join("item"),
-                writer.manifest.metadata.clone(),
-                &FakeFs
-            )
-            .is_err()
-        );
+        assert!(RecoveryWriter::create(&temp.0.join("item"), writer.manifest.metadata.clone(), &FakeFs).is_err());
         assert!(
             writer
                 .append(
@@ -1524,16 +1400,10 @@ mod tests {
         let temp = Temp::new();
         let writer = writer(&temp, true);
         drop(writer);
-        fs::write(
-            temp.0.join("item/retired.pending"),
-            b"interrupted prior process",
-        )
-        .unwrap();
+        fs::write(temp.0.join("item/retired.pending"), b"interrupted prior process").unwrap();
         discard(&temp.0.join("item"), &FakeFs).unwrap();
         assert_eq!(
-            inspect(&temp.0.join("item"), &Cancellation::default())
-                .unwrap()
-                .status,
+            inspect(&temp.0.join("item"), &Cancellation::default()).unwrap().status,
             RecoveryStatus::Discarded
         );
     }
@@ -1542,10 +1412,7 @@ mod tests {
         struct Broken;
         impl Read for Broken {
             fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
-                Err(io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    "source unavailable",
-                ))
+                Err(io::Error::new(io::ErrorKind::PermissionDenied, "source unavailable"))
             }
         }
         let temp = Temp::new();
@@ -1560,9 +1427,7 @@ mod tests {
         assert_eq!(writer.last_durable(), receipt);
         assert!(!temp.0.join("item/baseline.bin").exists());
         assert_eq!(
-            inspect(&temp.0.join("item"), &Cancellation::default())
-                .unwrap()
-                .status,
+            inspect(&temp.0.join("item"), &Cancellation::default()).unwrap().status,
             RecoveryStatus::EditsOnly
         );
     }

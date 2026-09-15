@@ -1,0 +1,31 @@
+diff --git a/crates/platform-windows/src/menu_bar.rs b/crates/platform-windows/src/menu_bar.rs
+index 6afdf00..f2abcb3 100644
+--- a/crates/platform-windows/src/menu_bar.rs
++++ b/crates/platform-windows/src/menu_bar.rs
+@@ -757,14 +757,14 @@ mod tests {
+             assert_eq!(root_file >> 16, MNC_EXECUTE as usize);
+             assert_eq!(root_file & 0xffff, 0);
+ 
+-            EnableMenuItem(second, 1, MF_BYPOSITION | MF_DISABLED);
++            let _ = EnableMenuItem(second, 1, MF_BYPOSITION | MF_DISABLED);
+             let unique = menu_char_result(&state, second, 'a').unwrap().0 as usize;
+             assert_eq!(unique >> 16, MNC_EXECUTE as usize);
+             assert_eq!(unique & 0xffff, 0);
+             let escaped = menu_char_result(&state, second, 'r').unwrap().0 as usize;
+             assert_eq!(escaped >> 16, MNC_IGNORE as usize);
+ 
+-            EnableMenuItem(second, 1, MF_BYPOSITION | MF_ENABLED);
++            let _ = EnableMenuItem(second, 1, MF_BYPOSITION | MF_ENABLED);
+             let duplicate = menu_char_result(&state, second, 'a').unwrap().0 as usize;
+             assert_eq!(duplicate >> 16, MNC_SELECT as usize);
+             assert_eq!(duplicate & 0xffff, 0);
+diff --git a/docs/implementation/2026-09-12-audit-implementation/PR-U03.md b/docs/implementation/2026-09-12-audit-implementation/PR-U03.md
+index 040b969..44c28b6 100644
+--- a/docs/implementation/2026-09-12-audit-implementation/PR-U03.md
++++ b/docs/implementation/2026-09-12-audit-implementation/PR-U03.md
+@@ -32,4 +32,4 @@ Root-owned proposed checks after review/integration:
+ 
+ Pending: all Cargo/build/Clippy and native desktop/DPI/accessibility checks above.
+ 
+-Root-owned compile evidence: the first contained platform-module compile stopped before tests because the pinned Windows bindings require the subclass APIs from `UI::Shell`, and Rust inferred signed literals in the muted-color blend. Both source issues were corrected; rerun remains pending. Evidence: `evidence/U03-native-menu-contract-central.log` in the original checkout.
++Root-owned compile evidence: the first contained platform-module compile stopped before tests because the pinned Windows bindings require the subclass APIs from `UI::Shell`, and Rust inferred signed literals in the muted-color blend. Both source issues were corrected. The rerun passed all three actual-HMENU module/fallback tests and the contained shell `cargo check`; test-only `EnableMenuItem` return-value warnings were then acknowledged without changing behavior. Evidence: `evidence/U03-native-menu-contract-central.log` in the original checkout.

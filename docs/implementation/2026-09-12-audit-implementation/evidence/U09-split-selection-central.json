@@ -1,0 +1,15 @@
+{
+  "arguments": [
+    "test",
+    "-p",
+    "bareline",
+    "--bin",
+    "bareline",
+    "find_selection_scope_uses_the_active_split_view"
+  ],
+  "completed_utc": "2026-09-12T08:58:10.2738743Z",
+  "integration_snapshot": "91cc150ceb2e72c61208bbc7c155e5f231ee246c",
+  "exit_code": 0,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\U09-split-selection-central.log"
+}

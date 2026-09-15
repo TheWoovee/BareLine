@@ -66,19 +66,14 @@ pub fn parse(input: impl Read) -> Result<Document, Error> {
         if offset > MAX_INPUT {
             return Err(err(offset, "XML input limit (16 MiB)"));
         }
-        if !matches!(
-            event,
-            Event::Text(_) | Event::CData(_) | Event::GeneralRef(_)
-        ) {
+        if !matches!(event, Event::Text(_) | Event::CData(_) | Event::GeneralRef(_)) {
             if let Some(&index) = stack.last() {
                 nodes[index].text_open = false;
             }
         }
         match event {
             Event::Decl(ref declaration) => {
-                if !was_first
-                    || declaration.version().map_err(|e| err(offset, e))?.as_ref() != b"1.0"
-                {
+                if !was_first || declaration.version().map_err(|e| err(offset, e))?.as_ref() != b"1.0" {
                     return Err(err(offset, "XML declaration must be first and version 1.0"));
                 }
                 if let Some(encoding) = declaration.encoding() {
@@ -87,9 +82,9 @@ pub fn parse(input: impl Read) -> Result<Document, Error> {
                     // view. The declaration describes its original encoding and
                     // must be preserved, not used to transcode the snapshot again.
                     if !encoding.first().is_some_and(u8::is_ascii_alphabetic)
-                        || !encoding.iter().all(|byte| {
-                            byte.is_ascii_alphanumeric() || matches!(*byte, b'.' | b'_' | b'-')
-                        })
+                        || !encoding
+                            .iter()
+                            .all(|byte| byte.is_ascii_alphanumeric() || matches!(*byte, b'.' | b'_' | b'-'))
                     {
                         return Err(err(offset, "invalid XML encoding declaration"));
                     }
@@ -137,10 +132,7 @@ pub fn parse(input: impl Read) -> Result<Document, Error> {
                             .to_owned(),
                     );
                     let value = attribute
-                        .decoded_and_normalized_value(
-                            quick_xml::XmlVersion::Implicit1_0,
-                            reader.decoder(),
-                        )
+                        .decoded_and_normalized_value(quick_xml::XmlVersion::Implicit1_0, reader.decoder())
                         .map_err(|e| err(offset, e))?
                         .into_owned();
                     if !xml_chars(&value) || attributes.insert(key, value).is_some() {
@@ -172,9 +164,7 @@ pub fn parse(input: impl Read) -> Result<Document, Error> {
                 }
             }
             Event::End(_) => {
-                stack
-                    .pop()
-                    .ok_or_else(|| err(offset, "unexpected closing element"))?;
+                stack.pop().ok_or_else(|| err(offset, "unexpected closing element"))?;
             }
             Event::Text(ref text) => {
                 let decoded = text
@@ -202,20 +192,11 @@ pub fn parse(input: impl Read) -> Result<Document, Error> {
         buf.clear();
     }
     if roots != 1 || !stack.is_empty() {
-        return Err(err(
-            reader.buffer_position(),
-            "missing or unclosed XML root",
-        ));
+        return Err(err(reader.buffer_position(), "missing or unclosed XML root"));
     }
     Ok(Document { nodes })
 }
-fn append_text(
-    nodes: &mut [Node],
-    stack: &[usize],
-    text: &str,
-    total: &mut usize,
-    offset: u64,
-) -> Result<(), Error> {
+fn append_text(nodes: &mut [Node], stack: &[usize], text: &str, total: &mut usize, offset: u64) -> Result<(), Error> {
     if !xml_chars(text) {
         return Err(err(offset, "invalid XML character"));
     }
@@ -242,10 +223,7 @@ pub fn format(input: &[u8], out: impl Write) -> Result<(), Error> {
     let mixed = document.nodes.iter().any(|n| {
         !n.text.is_empty()
             || n.attributes
-                .get(&(
-                    "http://www.w3.org/XML/1998/namespace".into(),
-                    "space".into(),
-                ))
+                .get(&("http://www.w3.org/XML/1998/namespace".into(), "space".into()))
                 .is_some_and(|v| v == "preserve")
     });
     let mut reader = quick_xml::Reader::from_reader(input);
@@ -258,9 +236,7 @@ pub fn format(input: &[u8], out: impl Write) -> Result<(), Error> {
         reader.config_mut().trim_text(true);
     }
     loop {
-        let event = reader
-            .read_event()
-            .map_err(|e| err(reader.error_position(), e))?;
+        let event = reader.read_event().map_err(|e| err(reader.error_position(), e))?;
         if matches!(event, Event::Eof) {
             break;
         }
@@ -304,10 +280,7 @@ pub fn query(
     expression: &str,
     namespaces: &BTreeMap<String, String>,
 ) -> Result<Vec<String>, Error> {
-    if expression.len() > 4096
-        || !expression.starts_with('/')
-        || expression.contains("::")
-        || expression.contains('|')
+    if expression.len() > 4096 || !expression.starts_with('/') || expression.contains("::") || expression.contains('|')
     {
         return Err(err(0, "unsupported XPath syntax"));
     }
@@ -448,9 +421,7 @@ pub fn query(
                 let keep = match &step.predicate {
                     None => true,
                     Some(Predicate::Position(p)) => *position == *p,
-                    Some(Predicate::Text(value)) => {
-                        node.text_nodes.iter().any(|text| text == value)
-                    }
+                    Some(Predicate::Text(value)) => node.text_nodes.iter().any(|text| text == value),
                     Some(Predicate::Attribute(name, value)) => {
                         node.attributes.get(&expanded(name, namespaces)?) == Some(value)
                     }
@@ -532,10 +503,7 @@ mod tests {
     }
     #[test]
     fn xpath_namespace_predicates() {
-        let doc = parse(
-            b"<r xmlns:a='urn:x'><a:n k='one'>alpha</a:n><a:n k='two'>beta</a:n></r>".as_slice(),
-        )
-        .unwrap();
+        let doc = parse(b"<r xmlns:a='urn:x'><a:n k='one'>alpha</a:n><a:n k='two'>beta</a:n></r>".as_slice()).unwrap();
         let ns = BTreeMap::from([("a".into(), "urn:x".into())]);
         assert_eq!(query(&doc, "/r/a:n[2]/text()", &ns).unwrap(), ["beta"]);
         assert_eq!(query(&doc, "//a:n[@k='one']/@k", &ns).unwrap(), ["one"]);
@@ -576,12 +544,10 @@ pub fn run<T: bareline_first_party_common::Transport>(
     }
     match invocation.command.as_str() {
         "ext.xml.validate" => {
-            parse(Snapshot::new(client.clone()))
-                .map_err(|e| format!("TextOffset {}: {}", e.offset, e.message))?;
-            client.borrow_mut().panel(
-                "ext.xml.xpath",
-                "Valid XML; external resolution disabled".into(),
-            )
+            parse(Snapshot::new(client.clone())).map_err(|e| format!("TextOffset {}: {}", e.offset, e.message))?;
+            client
+                .borrow_mut()
+                .panel("ext.xml.xpath", "Valid XML; external resolution disabled".into())
         }
         "ext.xml.format" => {
             let mut input = Vec::new();
@@ -595,13 +561,11 @@ pub fn run<T: bareline_first_party_common::Transport>(
             stage.finish()
         }
         "ext.xml.xpath" => {
-            let doc = parse(Snapshot::new(client.clone()))
-                .map_err(|e| format!("TextOffset {}: {}", e.offset, e.message))?; // First line is XPath; later lines bind prefix=namespace URI.
+            let doc =
+                parse(Snapshot::new(client.clone())).map_err(|e| format!("TextOffset {}: {}", e.offset, e.message))?; // First line is XPath; later lines bind prefix=namespace URI.
             let (expression, namespaces) = parse_arguments(&invocation.arguments)?;
             let values = query(&doc, &expression, &namespaces).map_err(|e| e.message)?;
-            client
-                .borrow_mut()
-                .panel("ext.xml.xpath", values.join("\n"))
+            client.borrow_mut().panel("ext.xml.xpath", values.join("\n"))
         }
         _ => Err("unsupported XML command".into()),
     }
@@ -634,7 +598,13 @@ fn qname(bytes: &[u8]) -> bool {
     for part in &mut parts {
         count += 1;
         let mut chars = part.chars();
-        if !chars.next().is_some_and(name_start)||!chars.all(|c|name_start(c)||matches!(c,'0'..='9'|'-'|'.'|'\u{b7}'|'\u{300}'..='\u{36f}'|'\u{203f}'..='\u{2040}')){return false;}
+        if !chars.next().is_some_and(name_start)
+            || !chars.all(|c| {
+                name_start(c) || matches!(c,'0'..='9'|'-'|'.'|'\u{b7}'|'\u{300}'..='\u{36f}'|'\u{203f}'..='\u{2040}')
+            })
+        {
+            return false;
+        }
     }
     count <= 2
 }
@@ -649,9 +619,7 @@ pub fn parse_arguments(arguments: &str) -> Result<(String, BTreeMap<String, Stri
     let expression = if first.is_empty() { "/*" } else { first }.to_owned();
     let mut namespaces = BTreeMap::new();
     for line in lines.filter(|line| !line.trim().is_empty()) {
-        let (prefix, uri) = line
-            .split_once('=')
-            .ok_or("namespace bindings use prefix=URI")?;
+        let (prefix, uri) = line.split_once('=').ok_or("namespace bindings use prefix=URI")?;
         let prefix = prefix.trim();
         let uri = uri.trim();
         if prefix.contains(':')
@@ -678,12 +646,8 @@ mod argument_tests {
     fn arguments_and_descendant_positions() {
         assert!(parse_arguments("//a:x\na=urn:x\na=urn:y").is_err());
         assert!(parse_arguments("/x\nbad:prefix=urn:x").is_err());
-        let doc =
-            parse(b"<r><g><n>a</n><n>b</n></g><g><n>c</n><n>d</n></g></r>".as_slice()).unwrap();
-        assert_eq!(
-            query(&doc, "//n[2]/text()", &BTreeMap::new()).unwrap(),
-            ["b", "d"]
-        );
+        let doc = parse(b"<r><g><n>a</n><n>b</n></g><g><n>c</n><n>d</n></g></r>".as_slice()).unwrap();
+        assert_eq!(query(&doc, "//n[2]/text()", &BTreeMap::new()).unwrap(), ["b", "d"]);
         assert!(query(&doc, "/r/@x[1]", &BTreeMap::new()).is_err());
     }
     #[test]

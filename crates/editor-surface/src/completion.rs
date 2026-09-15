@@ -82,11 +82,7 @@ impl WordIndex {
         let mut bytes = 0;
         for word in text
             .split(|c: char| c != '_' && !c.is_alphanumeric())
-            .filter(|w| {
-                w.chars()
-                    .next()
-                    .is_some_and(|c| c == '_' || c.is_alphabetic())
-            })
+            .filter(|w| w.chars().next().is_some_and(|c| c == '_' || c.is_alphabetic()))
         {
             if cancel.is_cancelled() {
                 return Err(Error::IncompleteSource);
@@ -107,8 +103,7 @@ impl WordIndex {
         self.range = Some(range.clone());
         self.words = words;
         self.bytes = bytes;
-        self.partial =
-            range.start.0 != 0 || range.end.0 < snapshot.len() || !snapshot.is_complete();
+        self.partial = range.start.0 != 0 || range.end.0 < snapshot.len() || !snapshot.is_complete();
         self.source = Some(snapshot.clone());
         Ok(())
     }
@@ -235,10 +230,7 @@ pub fn extend_result(
         .map(|item| item.text.len() + item.detail.as_ref().map_or(0, String::len))
         .sum::<usize>();
     for (text, kind, detail) in candidates {
-        if !text.starts_with(&prefix)
-            || text == prefix
-            || result.items.iter().any(|item| item.text == text)
-        {
+        if !text.starts_with(&prefix) || text == prefix || result.items.iter().any(|item| item.text == text) {
             continue;
         }
         let size = text.len() + detail.as_ref().map_or(0, String::len);
@@ -299,13 +291,7 @@ pub fn toggle_comment(
     block: bool,
     limits: Limits,
 ) -> Result<PowerEdit, Error> {
-    toggle_comment_with_provider(
-        snapshot,
-        selections,
-        &LanguageComments(language),
-        block,
-        limits,
-    )
+    toggle_comment_with_provider(snapshot, selections, &LanguageComments(language), block, limits)
 }
 pub struct DefinitionComments<'a>(pub &'a bareline_syntax::udl::Definition);
 impl CommentProvider for DefinitionComments<'_> {
@@ -332,10 +318,7 @@ pub fn toggle_comment_with_provider(
         for s in set.selections {
             let range = TextOffset(s.anchor)..TextOffset(s.caret);
             let text = snapshot.read(range.clone(), limits.max_bytes)?;
-            let insert = if let Some(inner) = text
-                .strip_prefix(&open)
-                .and_then(|s| s.strip_suffix(&close))
-            {
+            let insert = if let Some(inner) = text.strip_prefix(&open).and_then(|s| s.strip_suffix(&close)) {
                 inner.into()
             } else {
                 format!("{open}{text}{close}")
@@ -454,9 +437,7 @@ pub fn smart_pair_configured(
     for s in &set.selections {
         let suppressed = syntax
             .filter(|syntax| syntax.is_current(snapshot))
-            .is_some_and(|syntax| {
-                !semantic_completion_supported(snapshot, TextOffset(s.caret), Some(syntax))
-            });
+            .is_some_and(|syntax| !semantic_completion_supported(snapshot, TextOffset(s.caret), Some(syntax)));
         let range = TextOffset(s.anchor)..TextOffset(s.caret);
         let original = snapshot.read(range.clone(), limits.max_bytes)?;
         edits.push(Edit {
@@ -470,13 +451,7 @@ pub fn smart_pair_configured(
         paired.push(!suppressed);
     }
     let mut edit = power::finish(snapshot, edits, limits)?;
-    for ((s, before), paired) in edit
-        .selections
-        .selections
-        .iter_mut()
-        .zip(set.selections)
-        .zip(paired)
-    {
+    for ((s, before), paired) in edit.selections.selections.iter_mut().zip(set.selections).zip(paired) {
         if paired && s.caret > 0 && before.anchor == before.caret {
             s.caret -= close.len_utf8();
             s.anchor = s.caret;
@@ -490,11 +465,7 @@ pub struct Signature {
     pub display: String,
 }
 /// Data-only tab-separated name/signature loader; callers own bounded file reads.
-pub fn load_signatures(
-    text: &str,
-    max_bytes: usize,
-    max_items: usize,
-) -> Result<Vec<Signature>, Error> {
+pub fn load_signatures(text: &str, max_bytes: usize, max_items: usize) -> Result<Vec<Signature>, Error> {
     if text.len() > max_bytes {
         return Err(Error::BudgetExceeded);
     }
@@ -580,10 +551,7 @@ pub fn smart_newline(
     for s in set.selections {
         let line = snapshot.line_range(snapshot.line_at(TextOffset(s.anchor))?)?;
         let prefix = snapshot.read(line.start..TextOffset(s.anchor), limits.max_bytes)?;
-        let indent: String = prefix
-            .chars()
-            .take_while(|c| *c == ' ' || *c == '\t')
-            .collect();
+        let indent: String = prefix.chars().take_while(|c| *c == ' ' || *c == '\t').collect();
         let extra = prefix
             .trim_end()
             .chars()
@@ -602,19 +570,90 @@ pub fn smart_newline(
     }
     power::finish(snapshot, edits, limits)
 }
-pub fn pair_backspace(
+/// Typing a closing bracket on a line that holds only whitespace re-indents that
+/// line to the matching opener's indentation, then inserts the bracket. Returns
+/// `Ok(None)` (caller falls back to normal insertion) when the character is not a
+/// closing bracket, there is not a single collapsed caret, the caret is not on a
+/// whitespace-only prefix, or no matching opener is found within the byte budget.
+pub fn auto_dedent(
     snapshot: &DocumentSnapshot,
     set: &SelectionSet,
+    typed: char,
     limits: Limits,
-) -> Result<PowerEdit, Error> {
+) -> Result<Option<PowerEdit>, Error> {
+    let opener = match typed {
+        '}' => '{',
+        ')' => '(',
+        ']' => '[',
+        _ => return Ok(None),
+    };
+    let set = power::normalize(snapshot, set, limits)?;
+    if set.selections.len() != 1 {
+        return Ok(None);
+    }
+    let caret = set.selections[0];
+    if caret.anchor != caret.caret {
+        return Ok(None);
+    }
+    let caret_offset = caret.caret;
+    let line = snapshot.line_at(TextOffset(caret_offset))?;
+    let line_range = snapshot.line_range(line)?;
+    // Only re-indent when everything from the line start to the caret is blank.
+    let prefix = snapshot.read(line_range.start..TextOffset(caret_offset), limits.max_bytes)?;
+    if !prefix.chars().all(|c| c == ' ' || c == '\t') {
+        return Ok(None);
+    }
+    // Walk backwards, line by line, counting nested pairs of this bracket type
+    // until the matching opener is found. `pending` starts at one for the closer
+    // about to be typed. Bounded by the scan budget so large files stay cheap.
+    let mut pending = 1usize;
+    let mut opener_indent = None;
+    let mut scanned = 0usize;
+    let mut current = line;
+    'outer: loop {
+        let range = snapshot.line_range(current)?;
+        let text = snapshot.read(range.clone(), limits.max_bytes)?;
+        let end = if current == line {
+            caret_offset - range.start.0
+        } else {
+            text.len()
+        };
+        scanned += end;
+        if scanned > limits.max_bytes {
+            return Ok(None);
+        }
+        for c in text[..end].chars().rev() {
+            if c == typed {
+                pending += 1;
+            } else if c == opener {
+                pending -= 1;
+                if pending == 0 {
+                    opener_indent = Some(text.chars().take_while(|c| *c == ' ' || *c == '\t').collect::<String>());
+                    break 'outer;
+                }
+            }
+        }
+        if current == 0 {
+            break;
+        }
+        current -= 1;
+    }
+    let Some(indent) = opener_indent else {
+        return Ok(None);
+    };
+    let edit = Edit {
+        range: line_range.start..TextOffset(caret_offset),
+        insert: format!("{indent}{typed}"),
+    };
+    power::finish(snapshot, vec![edit], limits).map(Some)
+}
+pub fn pair_backspace(snapshot: &DocumentSnapshot, set: &SelectionSet, limits: Limits) -> Result<PowerEdit, Error> {
     let mut normalized = power::normalize(snapshot, set, limits)?;
     for s in &mut normalized.selections {
         if s.anchor != s.caret || s.caret == 0 || s.caret >= snapshot.len() {
             continue;
         }
-        if !snapshot.is_boundary(TextOffset(s.caret - 1))
-            || !snapshot.is_boundary(TextOffset(s.caret + 1))
-        {
+        if !snapshot.is_boundary(TextOffset(s.caret - 1)) || !snapshot.is_boundary(TextOffset(s.caret + 1)) {
             continue;
         }
         let around = snapshot.read(TextOffset(s.caret - 1)..TextOffset(s.caret + 1), 2)?;
@@ -676,14 +715,9 @@ mod tests {
         );
         assert_eq!(index.len(), original);
         d.apply(
-            power::replace(
-                &snapshot,
-                &Selection::default().into(),
-                "x",
-                Limits::default(),
-            )
-            .unwrap()
-            .transaction,
+            power::replace(&snapshot, &Selection::default().into(), "x", Limits::default())
+                .unwrap()
+                .transaction,
         )
         .unwrap();
         assert!(matches!(
@@ -709,41 +743,17 @@ mod tests {
             caret: d.snapshot().len(),
         }
         .into();
-        let e = toggle_comment(
-            &d.snapshot(),
-            &set,
-            Language::Rust,
-            false,
-            Limits::default(),
-        )
-        .unwrap();
+        let e = toggle_comment(&d.snapshot(), &set, Language::Rust, false, Limits::default()).unwrap();
         d.apply(e.transaction).unwrap();
         assert_eq!(text(&d), "  // let a=1;\n  // // let b=2;\n");
         d.undo().unwrap();
         assert_eq!(text(&d), "  let a=1;\n  // let b=2;\n");
         let mut d = doc("a\nb");
         let set = SelectionSet {
-            selections: vec![
-                Selection {
-                    anchor: 1,
-                    caret: 1,
-                },
-                Selection {
-                    anchor: 3,
-                    caret: 3,
-                },
-            ],
+            selections: vec![Selection { anchor: 1, caret: 1 }, Selection { anchor: 3, caret: 3 }],
             primary: 0,
         };
-        let e = smart_pair(
-            &d.snapshot(),
-            &set,
-            '(',
-            Language::Rust,
-            None,
-            Limits::default(),
-        )
-        .unwrap();
+        let e = smart_pair(&d.snapshot(), &set, '(', Language::Rust, None, Limits::default()).unwrap();
         d.apply(e.transaction).unwrap();
         assert_eq!(text(&d), "a()\nb()");
         let e = pair_backspace(&d.snapshot(), &e.selections, Limits::default()).unwrap();
@@ -753,6 +763,72 @@ mod tests {
         d.undo().unwrap();
         assert_eq!(text(&d), "a\nb");
         assert_eq!(d.undo(), Err(Error::EmptyHistory));
+    }
+    #[test]
+    fn closing_bracket_dedents_blank_line_to_opener_indent() {
+        // Caret sits on a blank, over-indented line; typing `}` snaps it to the
+        // matching `{` on the first (column-zero) line.
+        let mut d = doc("fn f() {\n    x;\n    ");
+        let caret = d.snapshot().len();
+        let set = Selection { anchor: caret, caret }.into();
+        let edit = auto_dedent(&d.snapshot(), &set, '}', Limits::default())
+            .unwrap()
+            .unwrap();
+        d.apply(edit.transaction).unwrap();
+        assert_eq!(text(&d), "fn f() {\n    x;\n}");
+        // A matching opener that is itself indented is honoured.
+        let mut d = doc("    {\n        z;\n        ");
+        let caret = d.snapshot().len();
+        let set = Selection { anchor: caret, caret }.into();
+        let edit = auto_dedent(&d.snapshot(), &set, '}', Limits::default())
+            .unwrap()
+            .unwrap();
+        d.apply(edit.transaction).unwrap();
+        assert_eq!(text(&d), "    {\n        z;\n    }");
+        // Parentheses and brackets follow the same rule.
+        let mut d = doc("call(\n    ");
+        let caret = d.snapshot().len();
+        let set = Selection { anchor: caret, caret }.into();
+        let edit = auto_dedent(&d.snapshot(), &set, ')', Limits::default())
+            .unwrap()
+            .unwrap();
+        d.apply(edit.transaction).unwrap();
+        assert_eq!(text(&d), "call(\n)");
+    }
+    #[test]
+    fn auto_dedent_declines_when_line_is_not_blank_or_has_no_opener() {
+        // A non-blank prefix falls back to normal insertion.
+        let d = doc("abc");
+        let set = Selection { anchor: 3, caret: 3 }.into();
+        assert!(
+            auto_dedent(&d.snapshot(), &set, ')', Limits::default())
+                .unwrap()
+                .is_none()
+        );
+        // No opener at all: decline.
+        let d = doc("    ");
+        let set = Selection { anchor: 4, caret: 4 }.into();
+        assert!(
+            auto_dedent(&d.snapshot(), &set, '}', Limits::default())
+                .unwrap()
+                .is_none()
+        );
+        // A non-closing character is never handled here.
+        let d = doc("    ");
+        let set = Selection { anchor: 4, caret: 4 }.into();
+        assert!(
+            auto_dedent(&d.snapshot(), &set, 'a', Limits::default())
+                .unwrap()
+                .is_none()
+        );
+    }
+    #[test]
+    fn enter_after_closing_brace_at_column_zero_does_not_reindent() {
+        let mut d = doc("}");
+        let set = Selection { anchor: 1, caret: 1 }.into();
+        let e = smart_newline(&d.snapshot(), &set, Language::Rust, Limits::default()).unwrap();
+        d.apply(e.transaction).unwrap();
+        assert_eq!(text(&d), "}\n");
     }
     #[test]
     fn literal_end_does_not_enable_semantic_keywords() {
@@ -821,8 +897,7 @@ pub fn parameter_hint<'a>(
     syntax: Option<&SyntaxResult>,
     signatures: &'a [Signature],
 ) -> Result<Option<(&'a Signature, usize)>, Error> {
-    let Some(syntax) =
-        syntax.filter(|s| s.is_current(snapshot) && s.status == bareline_syntax::Status::Complete)
+    let Some(syntax) = syntax.filter(|s| s.is_current(snapshot) && s.status == bareline_syntax::Status::Complete)
     else {
         return Ok(None);
     };
@@ -867,10 +942,7 @@ pub fn parameter_hint<'a>(
         .rsplit(|c: char| c != '_' && !c.is_alphanumeric())
         .next()
         .unwrap_or("");
-    Ok(signatures
-        .iter()
-        .find(|s| s.name == name)
-        .map(|s| (s, *argument)))
+    Ok(signatures.iter().find(|s| s.name == name).map(|s| (s, *argument)))
 }
 pub fn overtype_closer(
     snapshot: &DocumentSnapshot,

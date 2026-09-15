@@ -1,23 +1,25 @@
 // SPDX-License-Identifier: MPL-2.0
+pub mod compare;
 pub mod find;
 pub mod language;
-pub mod palette;
-pub mod toolbar;
-pub mod search_panel;
-pub mod session_ui;
-pub mod session_service;
-pub mod workspace_panel;
-pub mod views;
-pub mod settings;
 pub mod macros;
-pub mod compare;
-pub mod utilities;
-pub mod text_prototype;
-pub mod workspace;
+pub mod menus;
+pub mod palette;
+pub mod search_panel;
+pub mod session_service;
+pub mod session_ui;
+pub mod settings;
 mod styling;
-pub use styling::Styling as ViewStyling;
+pub mod task;
+pub mod text_prototype;
+pub mod toolbar;
+pub mod utilities;
+pub mod views;
+pub mod workspace;
+pub mod workspace_panel;
 use bareline_commands::{Action, CommandRegistry, shell_commands};
 use bareline_renderer::DrawOp;
+pub use styling::Styling as ViewStyling;
 pub struct App {
     pub commands: CommandRegistry,
     pub tabs: Vec<String>,

@@ -1,0 +1,22 @@
+diff --git a/crates/platform-windows/src/files.rs b/crates/platform-windows/src/files.rs
+index c472ad5..892f58f 100644
+--- a/crates/platform-windows/src/files.rs
++++ b/crates/platform-windows/src/files.rs
+@@ -750,6 +750,17 @@ impl LocalFileSystem for WindowsFileSystem {
+             };
+             let kind = entry.file_type()?;
+             if !kind.is_dir() {
++                // A transaction-shaped reparse point or non-directory is itself an
++                // orphan requiring inspection. Record only its owned parent/name;
++                // never follow it to manufacture artifact or manifest evidence.
++                recoveries.push(CommitRecovery {
++                    target: None,
++                    proposed: entry.path().join("editor-version"),
++                    displaced: None,
++                    journal: entry.path().join("state"),
++                    state: CommitState::Unverified,
++                    verified: false,
++                });
+                 continue;
+             }
+             let directory = entry.path();

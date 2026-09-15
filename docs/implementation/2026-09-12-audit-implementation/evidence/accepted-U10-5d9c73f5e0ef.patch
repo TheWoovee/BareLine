@@ -1,0 +1,54 @@
+diff --git a/apps/bareline/src/windows_app/lifecycle.rs b/apps/bareline/src/windows_app/lifecycle.rs
+index 5d7cd70..aebac5d 100644
+--- a/apps/bareline/src/windows_app/lifecycle.rs
++++ b/apps/bareline/src/windows_app/lifecycle.rs
+@@ -1250,14 +1250,31 @@ mod tests {
+             });
+         shell.lifecycle_pump_inner();
+         assert!(shell.lifecycle.conflict_action.is_none());
++        assert!(shell.lifecycle.conflict_open_outcomes.is_empty());
++        shell.toasts.draw(
++            &mut bareline_renderer_recording::RecordingBackend::default(),
++            800.0,
++            600.0,
++            Default::default(),
++            &mut Vec::new(),
++        );
++        let notices = shell.toasts.accessibility();
++        let failure = notices
++            .iter()
++            .find(|notice| {
++                notice
++                    .details
++                    .as_deref()
++                    .is_some_and(|details| details.contains("injected peer failure"))
++            })
++            .expect("the consumed peer failure must remain available as a typed notification");
++        assert_eq!(failure.level, bareline_ui::theme::ToastLevel::Error);
++        assert_eq!(failure.kind, toast::NotificationKind::Outcome);
+         assert!(
+-            shell
+-                .workspace
+-                .as_ref()
+-                .unwrap()
+-                .message
++            failure
++                .details
+                 .as_deref()
+-                .is_some_and(|message| message.contains("injected peer failure"))
++                .is_some_and(|details| details.contains("recovery files remain retained"))
+         );
+         drop(shell);
+         std::fs::remove_dir_all(root).unwrap();
+diff --git a/docs/implementation/2026-09-12-audit-implementation/PR-U10.md b/docs/implementation/2026-09-12-audit-implementation/PR-U10.md
+index 5a765a7..e34b57c 100644
+--- a/docs/implementation/2026-09-12-audit-implementation/PR-U10.md
++++ b/docs/implementation/2026-09-12-audit-implementation/PR-U10.md
+@@ -22,3 +22,7 @@ Preserve the current Settings tab, visible User/Workspace scope, category list,
+ ## Evidence plan
+ 
+ Focused deterministic tests will cover autosave then Revert across UI/runtime/disk, Reset Section then Revert, delayed/failing generations, independent scope switching, close/reopen, and external-edit conflict handling. Root owns contained Cargo and native qualification.
++
++## Final integration correction
++
++- The split-pump compare failure regression now verifies the authoritative persistent typed notification, including the exact peer error and retained-recovery consequence, after both tracked request outcomes are drained. It no longer expects the retired workspace message channel to duplicate that notification.

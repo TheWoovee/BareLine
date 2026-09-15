@@ -33,9 +33,8 @@ fn main() {
         }
         merged.push((start, end));
     }
-    let mut output = String::from(
-        "// Generated Unicode 17.0.0 categories; Unicode-3.0.\nstatic WORD: &[(u32,u32)] = &[\n",
-    );
+    let mut output =
+        String::from("// Generated Unicode 17.0.0 categories; Unicode-3.0.\nstatic WORD: &[(u32,u32)] = &[\n");
     for (start, end) in merged {
         output.push_str(&format!("({start},{end}),\n"));
     }

@@ -1,0 +1,19 @@
+{
+  "arguments": [
+    "test",
+    "-p",
+    "bareline",
+    "--bin",
+    "bareline",
+    "windows_app::accessibility::tests::bottom_dock_exposes_one_selected_surface_and_retires_background_search_owner",
+    "--offline",
+    "--locked",
+    "--",
+    "--exact"
+  ],
+  "completed_utc": "2026-09-12T11:41:51.1989994Z",
+  "integration_snapshot": "e7648af1715ecf5a0214377db2f802f7e330a9e4",
+  "exit_code": 0,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\U11-output-focus-r3-central.log"
+}

@@ -1,18 +1,146 @@
 // SPDX-License-Identifier: MPL-2.0
 use super::Shell;
-use bareline_platform::accessibility::{
-    AccessibilityNode, AccessibilityRole, AccessibilitySnapshot,
-};
-fn semantic_group(nodes: &mut Vec<AccessibilityNode>, id: u64, name: &str, mut children: Vec<AccessibilityNode>) {
-    if children.is_empty() { return; }
+use bareline_platform::accessibility::{AccessibilityNode, AccessibilityRole, AccessibilitySnapshot};
+
+const MODAL_TEXT_NAMESPACE: u64 = u64::MAX;
+const SEARCH_TEXT_NAMESPACE: u64 = u64::MAX - 1;
+const EDITOR_VIEW_NAMESPACE: u64 = 0x4000_0000_0000_0000;
+const EDITOR_VIEW_STRIDE: u64 = 1 << 18;
+
+pub(super) fn editor_provider_id(tab: u64) -> u64 {
+    assert!(tab <= bareline_app::views::MAX_VIEW_TAB_ID);
+    EDITOR_VIEW_NAMESPACE + tab * EDITOR_VIEW_STRIDE
+}
+
+fn editor_run_id(tab: u64) -> u64 {
+    editor_provider_id(tab) + EDITOR_VIEW_STRIDE - 1
+}
+
+fn is_editor_provider_id(id: u64) -> bool {
+    (EDITOR_VIEW_NAMESPACE..0x8000_0000_0000_0000).contains(&id)
+        && (id - EDITOR_VIEW_NAMESPACE) % EDITOR_VIEW_STRIDE == 0
+}
+
+pub(super) fn editor_provider_name(
+    workspace: &bareline_app::workspace::Workspace,
+    pane: usize,
+    index: usize,
+) -> String {
+    let title = workspace
+        .titles()
+        .get(index)
+        .cloned()
+        .unwrap_or_else(|| "Untitled".into());
+    workspace.path(index).map_or_else(
+        || format!("Pane {}, {title}", pane + 1),
+        |path| format!("Pane {}, {title}, {}", pane + 1, path.display()),
+    )
+}
+
+struct EditorViewTextSource {
+    identity: (u64, u64),
+    inner: std::sync::Arc<dyn bareline_platform::accessibility::AccessibilityTextSource>,
+}
+impl bareline_platform::accessibility::AccessibilityTextSource for EditorViewTextSource {
+    fn identity(&self) -> (u64, u64) {
+        self.identity
+    }
+    fn len(&self) -> usize {
+        self.inner.len()
+    }
+    fn read(&self, start: usize, limit: usize) -> bareline_platform::accessibility::AccessibleRead {
+        self.inner.read(start, limit)
+    }
+}
+
+struct ModalTextSource {
+    identity: (u64, u64),
+    value: String,
+}
+impl bareline_platform::accessibility::AccessibilityTextSource for ModalTextSource {
+    fn identity(&self) -> (u64, u64) {
+        self.identity
+    }
+    fn len(&self) -> usize {
+        self.value.len()
+    }
+    fn read(&self, mut start: usize, limit: usize) -> bareline_platform::accessibility::AccessibleRead {
+        use bareline_platform::accessibility::AccessibleRead;
+        if start > self.value.len() || limit > 64 * 1024 {
+            return AccessibleRead::Unavailable;
+        }
+        while start < self.value.len() && !self.value.is_char_boundary(start) {
+            start += 1;
+        }
+        let mut end = start.saturating_add(limit).min(self.value.len());
+        while end > start && !self.value.is_char_boundary(end) {
+            end -= 1;
+        }
+        AccessibleRead::Ready {
+            start,
+            text: self.value[start..end].to_owned(),
+        }
+    }
+}
+
+fn modal_text_selection_matches(modal: super::modal::ModalDescriptor, source_identity: (u64, u64)) -> bool {
+    source_identity == modal_text_identity(modal)
+}
+
+fn modal_text_identity(modal: super::modal::ModalDescriptor) -> (u64, u64) {
+    // Document identities occupy their own source domain. The modal namespace
+    // is also rejected explicitly before applying queued editor selections.
+    // Revision is a shell-wide, non-recycling token allocated on every modal
+    // open and text revision, so different instances cannot share a provider.
+    (MODAL_TEXT_NAMESPACE, modal.revision)
+}
+
+fn editor_text_selection_matches(current: (u64, u64), queued: (u64, u64)) -> bool {
+    !matches!(queued.0, MODAL_TEXT_NAMESPACE | SEARCH_TEXT_NAMESPACE) && current == queued
+}
+
+fn search_text_identity(owner: u64, revision: u64) -> (u64, u64) {
+    assert!(owner < 1 << 17, "search accessibility owner exceeds namespace");
+    assert!(revision < 1 << 47, "search accessibility revision exhausted");
+    (SEARCH_TEXT_NAMESPACE, owner << 47 | revision)
+}
+fn semantic_container(
+    nodes: &mut Vec<AccessibilityNode>,
+    id: u64,
+    role: AccessibilityRole,
+    name: &str,
+    mut children: Vec<AccessibilityNode>,
+) {
+    if children.is_empty() {
+        return;
+    }
     let x = children.iter().map(|n| n.bounds[0]).fold(f64::INFINITY, f64::min);
     let y = children.iter().map(|n| n.bounds[1]).fold(f64::INFINITY, f64::min);
-    let right = children.iter().map(|n| n.bounds[0]+n.bounds[2]).fold(x, f64::max);
-    let bottom = children.iter().map(|n| n.bounds[1]+n.bounds[3]).fold(y, f64::max);
-    for node in &mut children { if node.parent == 1 { node.parent = id; } }
-    nodes.push(AccessibilityNode { id, parent: 1, role: AccessibilityRole::Group, name: name.into(), value: None,
-        bounds: [x,y,right-x,bottom-y], disabled: false, selected: false, expanded: None, focusable: false, invokable: false });
+    let right = children.iter().map(|n| n.bounds[0] + n.bounds[2]).fold(x, f64::max);
+    let bottom = children.iter().map(|n| n.bounds[1] + n.bounds[3]).fold(y, f64::max);
+    for node in &mut children {
+        if node.parent == 1 {
+            node.parent = id;
+        }
+    }
+    nodes.push(AccessibilityNode {
+        id,
+        parent: 1,
+        role,
+        name: name.into(),
+        value: None,
+        bounds: [x, y, right - x, bottom - y],
+        disabled: false,
+        selected: false,
+        expanded: None,
+        focusable: false,
+        invokable: false,
+    });
     nodes.extend(children);
+}
+
+fn semantic_group(nodes: &mut Vec<AccessibilityNode>, id: u64, name: &str, children: Vec<AccessibilityNode>) {
+    semantic_container(nodes, id, AccessibilityRole::Group, name, children);
 }
 fn compose_snapshot(
     title: &str,
@@ -27,39 +155,357 @@ fn compose_snapshot(
     apply_modal_layer(&mut snapshot, active_layer);
     snapshot
 }
+
+fn split_text_view(
+    editor: &bareline_app::workspace::WorkspaceEditor,
+    renderer: Option<&bareline_platform_windows::WindowsRenderer>,
+    bounds: bareline_renderer::Rect,
+    scale: f64,
+    tab: u64,
+    identity: (u64, u64),
+) -> bareline_platform::accessibility::AccessibilityTextView {
+    let provider = editor_provider_id(tab);
+    let mut base = bareline_app::accessibility::snapshot(
+        "Bareline split view",
+        bounds.width as f64,
+        bounds.height as f64,
+        Some(editor.viewport()),
+        Vec::new(),
+        bareline_app::accessibility::EDITOR_ID,
+    );
+    let mut text = base.text.take();
+    if let Some(text) = &mut text {
+        text.editor_id = provider;
+        text.run_id = editor_run_id(tab);
+    }
+    let mut context = base.text_context.take().expect("editor text context");
+    context.source_identity = identity;
+    let mut geometry = renderer.map_or_else(Vec::new, |renderer| {
+        editor
+            .accessibility_geometry(renderer, bounds.width, bounds.height + 24.0)
+            .into_iter()
+            .filter_map(|(range, rect)| {
+                let x = rect.x.max(0.0);
+                let y = rect.y.max(0.0);
+                let right = (rect.x + rect.width).min(bounds.width);
+                let bottom = (rect.y + rect.height).min(bounds.height);
+                (right > x && bottom > y).then_some(bareline_platform::accessibility::AccessibilityTextBox {
+                    start: range.start,
+                    end: range.end,
+                    bounds: [
+                        (x as f64 + bounds.x as f64) * scale,
+                        (y as f64 + bounds.y as f64) * scale,
+                        (right - x) as f64 * scale,
+                        (bottom - y) as f64 * scale,
+                    ],
+                })
+            })
+            .collect()
+    });
+    if let bareline_app::workspace::WorkspaceEditor::Paged(paged) = editor {
+        use bareline_document::TextOffset;
+        use bareline_editor_surface::paged_view::SourceAffinity;
+        text = text.and_then(|text| {
+            let local_start = text.start_byte;
+            let local_end = local_start.checked_add(text.value.len())?;
+            let piece = paged
+                .source_segments()
+                .iter()
+                .find(|piece| piece.local.end.0 > local_start && piece.local.start.0 < local_end);
+            let (start, end) = piece.map_or((local_start, local_end), |piece| {
+                (local_start.max(piece.local.start.0), local_end.min(piece.local.end.0))
+            });
+            let source = paged.source_offset(TextOffset(start), SourceAffinity::After)?;
+            let value = text.value.get(start - local_start..end - local_start)?.to_owned();
+            let (anchor, caret) = paged.global_selection();
+            let mut text = bareline_app::accessibility::bounded_text(value, source.0, anchor.0, caret.0)?;
+            text.editor_id = provider;
+            text.run_id = editor_run_id(tab);
+            Some(text)
+        });
+        map_paged_geometry(paged, &mut geometry);
+        let (anchor, caret) = paged.global_selection();
+        context.selection = (anchor.0, caret.0);
+        context.selections = paged
+            .global_selection_set()
+            .selections
+            .iter()
+            .take(1024)
+            .map(|selection| (selection.anchor, selection.caret))
+            .collect();
+    }
+    bareline_platform::accessibility::AccessibilityTextView {
+        editor_id: provider,
+        text,
+        context,
+        geometry,
+    }
+}
 // Shared by native publication and complete headless semantic fixtures.
 fn apply_modal_layer(snapshot: &mut AccessibilitySnapshot, active_layer: Option<u64>) {
-        if let Some(layer) = active_layer {
-            let parents: std::collections::BTreeMap<_,_> = snapshot.nodes.iter().map(|n|(n.id,n.parent)).collect();
-            let belongs = |mut id| {
-                for _ in 0..parents.len() {
-                    if id == layer { return true; }
-                    let Some(parent) = parents.get(&id) else { break; };
-                    id = *parent;
-                    if id == 1 { break; }
+    if let Some(layer) = active_layer {
+        let parents: std::collections::BTreeMap<_, _> = snapshot.nodes.iter().map(|n| (n.id, n.parent)).collect();
+        let belongs = |mut id| {
+            for _ in 0..parents.len() {
+                if id == layer {
+                    return true;
                 }
-                false
-            };
-            for node in &mut snapshot.nodes {
-                if node.id != 1 && !belongs(node.id) {
-                    node.disabled = true; node.focusable = false; node.invokable = false;
+                let Some(parent) = parents.get(&id) else {
+                    break;
+                };
+                id = *parent;
+                if id == 1 {
+                    break;
                 }
             }
-            if !belongs(snapshot.focus) {
-                snapshot.focus = snapshot.nodes.iter().find(|n| belongs(n.id) && n.focusable && !n.disabled).map_or(layer, |n|n.id);
+            false
+        };
+        for node in &mut snapshot.nodes {
+            if node.id != 1 && !belongs(node.id) {
+                node.disabled = true;
+                node.focusable = false;
+                node.invokable = false;
             }
         }
+        if !belongs(snapshot.focus) {
+            snapshot.focus = snapshot
+                .nodes
+                .iter()
+                .find(|n| belongs(n.id) && n.focusable && !n.disabled)
+                .map_or(layer, |n| n.id);
+        }
+    }
 }
 impl Shell {
-    pub(super) fn accessibility_text_source(&self) -> Option<std::sync::Arc<dyn bareline_platform::accessibility::AccessibilityTextSource>> {
-        self.workspace.as_ref().and_then(|w| w.editors.get(self.app.active)).map(|editor| bareline_app::accessibility::text_source(editor, self.notify.clone()))
+    fn modal_text_field(&self) -> Option<(u64, (u64, u64), &bareline_ui::text_field::TextField)> {
+        let modal = self.modal?;
+        let owner = modal.active_text_owner?;
+        let field = match modal.surface {
+            super::modal::ModalSurface::Run if self.run_prompt.open && owner == super::modal::RUN_FIELD_ID => {
+                &self.run_prompt.field
+            }
+            super::modal::ModalSurface::Goto if self.goto.open && owner == super::modal::GOTO_FIELD_ID => {
+                &self.goto.field
+            }
+            super::modal::ModalSurface::CompareOptions
+                if self.compare.options_open && self.compare.active_color.is_some() && owner == 59_999 =>
+            {
+                &self.compare.color_field
+            }
+            _ => return None,
+        };
+        Some((owner, modal_text_identity(modal), field))
     }
-    pub(super) fn accessibility_snapshot(
+
+    fn search_text_field(&self) -> Option<(u64, (u64, u64), &bareline_ui::text_field::TextField)> {
+        let (owner, generation, field) = self
+            .search_folder_accessibility_text_field()
+            .or_else(|| {
+                self.workspace
+                    .as_ref()
+                    .and_then(|workspace| workspace.find.accessibility_text_field())
+            })
+            .or_else(|| {
+                self.workspace.as_ref().and_then(|workspace| {
+                    (self.dock.active() == Some(super::dock::DockTab::Search) && workspace.search_focus)
+                        .then(|| workspace.search_panel.accessibility_text_field())
+                        .flatten()
+                })
+            })?;
+        Some((owner, search_text_identity(owner, generation), field))
+    }
+
+    fn search_accessibility_active(&self) -> bool {
+        self.search_folder_open()
+            || self.workspace.as_ref().is_some_and(|workspace| {
+                workspace.find.has_focus()
+                    || (self.dock.active() == Some(super::dock::DockTab::Search)
+                        && workspace.search_focus
+                        && workspace.search_panel.open)
+            })
+    }
+
+    fn active_accessibility_layer(&self) -> Option<u64> {
+        if let Some(modal) = self.modal.filter(|modal| modal.inert_background) {
+            Some(modal.semantics.group)
+        } else if self.palette.open {
+            Some(90_000_002)
+        } else if self.search_folder_open() {
+            Some(90_000_030)
+        } else if self.shortcuts.open {
+            Some(90_000_004)
+        } else if self.power.open {
+            Some(90_000_006)
+        } else if self.settings.controller.open {
+            Some(90_000_012)
+        } else if self.extensions.open {
+            Some(60_000)
+        } else if self.utilities.has_input_focus() {
+            Some(90_000_026)
+        } else if self.macros.controller.manager.open {
+            Some(90_000_014)
+        } else {
+            None
+        }
+    }
+
+    fn owned_accessibility_text_field(&self) -> Option<(u64, (u64, u64), &bareline_ui::text_field::TextField)> {
+        if let Some(field) = self.modal_text_field() {
+            return Some(field);
+        }
+        if self.modal.is_some() {
+            return None;
+        }
+        match self.active_accessibility_layer() {
+            None => self.search_text_field(),
+            Some(90_000_030) => self
+                .search_folder_accessibility_text_field()
+                .map(|(owner, generation, field)| (owner, search_text_identity(owner, generation), field)),
+            Some(_) => None,
+        }
+    }
+
+    fn search_text_selection_action(&mut self, source_identity: (u64, u64), anchor: usize, caret: usize) -> bool {
+        if source_identity.0 != SEARCH_TEXT_NAMESPACE {
+            return false;
+        }
+        let Some((owner, current, _)) = self.owned_accessibility_text_field() else {
+            return true;
+        };
+        if source_identity != current {
+            return true;
+        }
+        if (77_000..77_003).contains(&owner) {
+            if let Some(field) = self.search_folder_field() {
+                field.set_selection(anchor, caret);
+            }
+        } else if let Some(workspace) = &mut self.workspace {
+            match owner {
+                6000 | 6001 => {
+                    workspace.find.accessibility_action(owner, true);
+                    workspace.find.active_field().set_selection(anchor, caret);
+                }
+                7000 if workspace.search_panel.open
+                    && workspace.search_focus
+                    && self.dock.active() == Some(super::dock::DockTab::Search) =>
+                {
+                    workspace.search_panel.field.set_selection(anchor, caret);
+                }
+                _ => {}
+            }
+        }
+        true
+    }
+
+    fn set_search_accessibility_value(&mut self, id: u64, value: &str) -> bool {
+        let Some(workspace) = &mut self.workspace else {
+            return false;
+        };
+        if (id == 6000 || id == 6001) && workspace.find.open {
+            workspace.find.accessibility_action(id, true);
+            let field = workspace.find.active_field();
+            field.select_all();
+            return field.insert(value);
+        }
+        if id == 7000 && workspace.search_panel.open && self.dock.active() == Some(super::dock::DockTab::Search) {
+            self.dock.blur_focus();
+            workspace.search_focus = true;
+            workspace.search_panel.accessibility_focus(id);
+            workspace.search_panel.field.select_all();
+            return workspace.search_panel.field.insert(value);
+        }
+        false
+    }
+
+    fn accessibility_editor_mut(
+        &mut self,
+        source_identity: (u64, u64),
+    ) -> Option<&mut bareline_app::workspace::WorkspaceEditor> {
+        if self.views.open() && is_editor_provider_id(source_identity.0) {
+            let pane = (0..2).find(|pane| {
+                self.views
+                    .pane_token(*pane)
+                    .is_some_and(|tab| editor_provider_id(tab) == source_identity.0)
+            })?;
+            let tab = self.views.pane_token(pane)?;
+            let current = {
+                let workspace = self.workspace.as_ref()?;
+                let editor = self.views.pane_workspace_editor(workspace, self.app.active, pane)?;
+                self.views.accessibility_source_identity(pane, editor)?
+            };
+            if current != source_identity {
+                return None;
+            }
+            let workspace = self.workspace.as_mut()?;
+            let editor = self.views.pane_workspace_editor_mut(workspace, self.app.active, pane)?;
+            debug_assert_eq!(editor_provider_id(tab), source_identity.0);
+            return Some(editor);
+        }
+        let editor = self
+            .workspace
+            .as_mut()
+            .and_then(|workspace| self.views.active_workspace_editor_mut(workspace, self.app.active))?;
+        editor_text_selection_matches(bareline_app::accessibility::source_identity(editor), source_identity)
+            .then_some(editor)
+    }
+
+    pub(super) fn accessibility_text_source(
         &self,
-        width: f64,
-        height: f64,
-        scale: f64,
-    ) -> AccessibilitySnapshot {
+    ) -> Option<std::sync::Arc<dyn bareline_platform::accessibility::AccessibilityTextSource>> {
+        if let Some((_owner, identity, field)) = self.owned_accessibility_text_field() {
+            return Some(std::sync::Arc::new(ModalTextSource {
+                identity,
+                value: field.value().to_owned(),
+            }));
+        }
+        if self.modal.is_some() {
+            return None;
+        }
+        if self.search_accessibility_active() {
+            return None;
+        }
+        self.workspace
+            .as_ref()
+            .and_then(|w| self.views.active_workspace_editor(w, self.app.active))
+            .map(|editor| bareline_app::accessibility::text_source(editor, self.notify.clone()))
+    }
+
+    pub(super) fn accessibility_text_sources(
+        &self,
+    ) -> Vec<(
+        u64,
+        std::sync::Arc<dyn bareline_platform::accessibility::AccessibilityTextSource>,
+    )> {
+        if self.views.open()
+            && self.modal.is_none()
+            && !self.search_accessibility_active()
+            && self.active_accessibility_layer().is_none()
+        {
+            let Some(workspace) = &self.workspace else {
+                return Vec::new();
+            };
+            return (0..2)
+                .filter_map(|pane| {
+                    let tab = self.views.pane_token(pane)?;
+                    let editor = self.views.pane_workspace_editor(workspace, self.app.active, pane)?;
+                    let identity = self.views.accessibility_source_identity(pane, editor)?;
+                    let inner = bareline_app::accessibility::text_source(editor, self.notify.clone());
+                    Some((
+                        editor_provider_id(tab),
+                        std::sync::Arc::new(EditorViewTextSource { identity, inner })
+                            as std::sync::Arc<dyn bareline_platform::accessibility::AccessibilityTextSource>,
+                    ))
+                })
+                .collect();
+        }
+        let owner = self
+            .owned_accessibility_text_field()
+            .map_or(bareline_app::accessibility::EDITOR_ID, |field| field.0);
+        self.accessibility_text_source()
+            .map(|source| vec![(owner, source)])
+            .unwrap_or_default()
+    }
+    pub(super) fn accessibility_snapshot(&self, width: f64, height: f64, scale: f64) -> AccessibilitySnapshot {
         self.accessibility_snapshot_with_editor_bounds(width, height, scale, self.editor_bounds())
     }
 
@@ -72,20 +518,191 @@ impl Shell {
     ) -> AccessibilitySnapshot {
         let mut focus = 2;
         let mut chrome = Vec::new();
-        semantic_group(&mut chrome, 90_000_001, "Document tabs", self.views_accessibility_nodes());
-        semantic_group(&mut chrome, 90_000_002, "Command palette",
+        semantic_group(
+            &mut chrome,
+            90_000_001,
+            "Document tabs",
+            self.views_accessibility_nodes(),
+        );
+        if let Some(modal) = self.modal {
+            let node = |id, role, name: &str, value, bounds: bareline_renderer::Rect, focusable, invokable| {
+                AccessibilityNode {
+                    id,
+                    parent: 1,
+                    role,
+                    name: name.into(),
+                    value,
+                    bounds: [
+                        bounds.x as f64,
+                        bounds.y as f64,
+                        bounds.width as f64,
+                        bounds.height as f64,
+                    ],
+                    disabled: false,
+                    selected: false,
+                    expanded: None,
+                    focusable,
+                    invokable,
+                }
+            };
+            match modal.surface {
+                super::modal::ModalSurface::Run if self.run_prompt.open => {
+                    semantic_group(
+                        &mut chrome,
+                        modal.semantics.group,
+                        "Run command",
+                        vec![
+                            node(
+                                super::modal::RUN_FIELD_ID,
+                                AccessibilityRole::TextField,
+                                "Program and arguments",
+                                Some(self.run_prompt.field.semantic_value()),
+                                self.run_prompt.field_bounds,
+                                true,
+                                false,
+                            ),
+                            node(
+                                super::modal::RUN_STATUS_ID,
+                                AccessibilityRole::Status,
+                                if self.run_prompt.status.is_empty() {
+                                    "Run command help"
+                                } else {
+                                    "Run command status"
+                                },
+                                Some(if self.run_prompt.status.is_empty() {
+                                    "C:\\path\\program.exe arguments — runs directly, never through a shell".into()
+                                } else {
+                                    self.run_prompt.status.clone()
+                                }),
+                                self.run_prompt.bounds,
+                                false,
+                                false,
+                            ),
+                            node(
+                                super::modal::RUN_SUBMIT_ID,
+                                AccessibilityRole::Button,
+                                "Run",
+                                None,
+                                self.run_prompt.submit_bounds,
+                                true,
+                                true,
+                            ),
+                            node(
+                                super::modal::RUN_CANCEL_ID,
+                                AccessibilityRole::Button,
+                                "Cancel",
+                                None,
+                                self.run_prompt.cancel_bounds,
+                                true,
+                                true,
+                            ),
+                        ],
+                    );
+                    focus = super::modal::RUN_FIELD_ID;
+                }
+                super::modal::ModalSurface::Goto if self.goto.open => {
+                    semantic_group(
+                        &mut chrome,
+                        modal.semantics.group,
+                        "Go to line",
+                        vec![
+                            node(
+                                super::modal::GOTO_FIELD_ID,
+                                AccessibilityRole::TextField,
+                                "Line or position",
+                                Some(self.goto.field.semantic_value()),
+                                self.goto.field_bounds,
+                                true,
+                                false,
+                            ),
+                            node(
+                                super::modal::GOTO_STATUS_ID,
+                                AccessibilityRole::Status,
+                                if self.goto.status.is_empty() {
+                                    "Go to help"
+                                } else {
+                                    "Go to status"
+                                },
+                                Some(if self.goto.status.is_empty() {
+                                    "line, line:column, +/- lines or NN%".into()
+                                } else {
+                                    self.goto.status.clone()
+                                }),
+                                self.goto.bounds,
+                                false,
+                                false,
+                            ),
+                            node(
+                                super::modal::GOTO_SUBMIT_ID,
+                                AccessibilityRole::Button,
+                                "Go",
+                                None,
+                                self.goto.submit_bounds,
+                                true,
+                                true,
+                            ),
+                            node(
+                                super::modal::GOTO_CANCEL_ID,
+                                AccessibilityRole::Button,
+                                "Cancel",
+                                None,
+                                self.goto.cancel_bounds,
+                                true,
+                                true,
+                            ),
+                        ],
+                    );
+                    focus = super::modal::GOTO_FIELD_ID;
+                }
+                super::modal::ModalSurface::NotificationDetails => {
+                    if let Some((details, bounds, close_bounds)) = self.toasts.details_semantics() {
+                        semantic_group(
+                            &mut chrome,
+                            modal.semantics.group,
+                            "Notification details",
+                            vec![
+                                node(
+                                    super::toast::DETAILS_CONTENT_ID,
+                                    AccessibilityRole::Status,
+                                    "Complete notification details",
+                                    Some(details),
+                                    bounds,
+                                    false,
+                                    false,
+                                ),
+                                node(
+                                    super::toast::DETAILS_CLOSE_ID,
+                                    AccessibilityRole::Button,
+                                    "Close notification details",
+                                    None,
+                                    close_bounds,
+                                    true,
+                                    true,
+                                ),
+                            ],
+                        );
+                        focus = super::toast::DETAILS_CLOSE_ID;
+                    }
+                }
+                _ => {}
+            }
+        }
+        semantic_group(
+            &mut chrome,
+            90_000_002,
+            "Command palette",
             self.palette
                 .semantics()
                 .iter()
-                .map(|n| bareline_app::accessibility::semantic_node(n, 1)).collect(),
+                .map(|n| bareline_app::accessibility::semantic_node(n, 1))
+                .collect(),
         );
         let editor = self
             .workspace
             .as_ref()
-            .and_then(|w| w.editors.get(self.app.active));
+            .and_then(|w| self.views.active_workspace_editor(w, self.app.active));
         if let Some(editor) = editor {
-            let mut status = bareline_app::accessibility::status(editor, editor_bounds.width as f64, editor_bounds.height as f64);
-            for node in &mut status { node.bounds[0] += editor_bounds.x as f64; node.bounds[1] += editor_bounds.y as f64; }
+            let status = bareline_app::accessibility::status(editor, width, height);
             semantic_group(&mut chrome, 90_000_020, "Status bar", status);
         }
         let mut settings_nodes = Vec::new();
@@ -96,35 +713,57 @@ impl Shell {
             settings_nodes.push(bareline_app::accessibility::semantic_node(&semantic, 1));
         }
         semantic_group(&mut chrome, 90_000_012, "Settings", settings_nodes);
+        for semantic in self.dock.semantics() {
+            if semantic.focused && !self.settings.controller.open {
+                focus = semantic.id.0;
+            }
+            let mut node = bareline_app::accessibility::semantic_node(&semantic, 1);
+            if semantic.id.0 == super::dock::TAB_LIST_ID {
+                node.role = AccessibilityRole::TabList;
+            }
+            if semantic.role == bareline_ui::widgets::SemanticRole::Tab {
+                node.parent = super::dock::TAB_LIST_ID;
+            }
+            node.bounds[0] += editor_bounds.x as f64;
+            node.bounds[1] += editor_bounds.y as f64;
+            chrome.push(node);
+        }
         if let Some(workspace) = &self.workspace {
-            for semantic in workspace
-                .find
-                .semantics(editor_bounds.width)
-                .into_iter()
-                .chain(workspace.search_panel.semantics())
-            {
+            let mut search_tabs = Vec::new();
+            let mut search_semantics = workspace.find.semantics(editor_bounds.width);
+            if self.dock.active() == Some(super::dock::DockTab::Search) {
+                search_semantics.extend(workspace.search_panel.semantics());
+            }
+            for semantic in search_semantics {
                 if semantic.focused && !self.settings.controller.open {
                     focus = semantic.id.0;
                 }
                 let mut node = bareline_app::accessibility::semantic_node(&semantic, 1);
                 node.bounds[0] += editor_bounds.x as f64;
                 node.bounds[1] += editor_bounds.y as f64;
-                if node.role != AccessibilityRole::TextField
-                    && let Some(command) = self
-                        .app
-                        .commands
-                        .entries()
-                        .find(|c| c.id.0 == semantic.command_id)
+                if !matches!(node.role, AccessibilityRole::TextField | AccessibilityRole::Tab)
+                    && let Some(command) = self.app.commands.entries().find(|c| c.id.0 == semantic.command_id)
                 {
                     node.name = command.title.into();
                 }
-                chrome.push(node);
+                if node.role == AccessibilityRole::Tab {
+                    search_tabs.push(node);
+                } else {
+                    chrome.push(node);
+                }
             }
+            semantic_container(
+                &mut chrome,
+                90_000_031,
+                AccessibilityRole::TabList,
+                "Search modes",
+                search_tabs,
+            );
             if let Some(message) = &workspace.message {
                 chrome.push(AccessibilityNode {
                     id: 9000,
                     parent: 1,
-                    role: AccessibilityRole::Alert,
+                    role: AccessibilityRole::Status,
                     name: message.clone(),
                     value: None,
                     bounds: [0., 0., 0., 0.],
@@ -134,6 +773,89 @@ impl Shell {
                     focusable: false,
                     invokable: false,
                 });
+            }
+            if let Some(scoped) = workspace
+                .editors
+                .get(self.app.active)
+                .and_then(|editor| self.toasts.scoped_for(editor.document_identity()))
+            {
+                chrome.push(AccessibilityNode {
+                    id: 9002,
+                    parent: 1,
+                    role: AccessibilityRole::Status,
+                    name: scoped.text.clone(),
+                    value: scoped.details.clone(),
+                    bounds: [0., 0., 0., 0.],
+                    disabled: false,
+                    selected: false,
+                    expanded: None,
+                    focusable: false,
+                    invokable: false,
+                });
+            }
+            for notice in self.toasts.accessibility() {
+                let bounds = [
+                    notice.bounds.x as f64,
+                    notice.bounds.y as f64,
+                    notice.bounds.width as f64,
+                    notice.bounds.height as f64,
+                ];
+                chrome.push(AccessibilityNode {
+                    id: notice.id,
+                    parent: 1,
+                    role: if notice.kind == super::toast::NotificationKind::Progress
+                        || notice.level == bareline_ui::theme::ToastLevel::Info
+                    {
+                        AccessibilityRole::Status
+                    } else {
+                        AccessibilityRole::Alert
+                    },
+                    name: notice.text.clone(),
+                    value: notice.details.clone(),
+                    bounds,
+                    disabled: false,
+                    selected: false,
+                    expanded: notice.details.as_ref().map(|_| notice.expanded),
+                    focusable: true,
+                    invokable: notice.details.is_some(),
+                });
+                if notice.details.is_some() {
+                    chrome.push(AccessibilityNode {
+                        id: notice.id + 1,
+                        parent: notice.id,
+                        role: AccessibilityRole::Button,
+                        name: if notice.expanded {
+                            "Hide notification details".into()
+                        } else {
+                            "Show notification details".into()
+                        },
+                        value: notice.details.clone(),
+                        bounds,
+                        disabled: false,
+                        selected: false,
+                        expanded: Some(notice.expanded),
+                        focusable: true,
+                        invokable: true,
+                    });
+                }
+                if notice.dismissable {
+                    chrome.push(AccessibilityNode {
+                        id: notice.id + 2,
+                        parent: notice.id,
+                        role: AccessibilityRole::Button,
+                        name: "Dismiss notification".into(),
+                        value: None,
+                        bounds,
+                        disabled: false,
+                        selected: false,
+                        expanded: None,
+                        focusable: true,
+                        invokable: true,
+                    });
+                }
+            }
+            if let Some(notification_focus) = self.toasts.accessibility_focus() {
+                focus = notification_focus;
             }
             if workspace.find.open {
                 chrome.push(AccessibilityNode {
@@ -150,7 +872,7 @@ impl Shell {
                     invokable: false,
                 });
             }
-            if workspace.search_panel.open {
+            if workspace.search_panel.open && self.dock.active() == Some(super::dock::DockTab::Search) {
                 chrome.push(AccessibilityNode {
                     id: 9002,
                     parent: 1,
@@ -175,97 +897,347 @@ impl Shell {
         }
         semantic_group(&mut chrome, 90_000_003, "Toolbar", toolbar_nodes);
         chrome.extend(self.recovery_accessibility_nodes());
-        semantic_group(&mut chrome, 90_000_025, "Compare", self.compare_accessibility_nodes());
+        if self.dock.active() == Some(super::dock::DockTab::Compare) {
+            semantic_group(
+                &mut chrome,
+                super::modal::COMPARE_GROUP_ID,
+                "Compare",
+                self.compare_accessibility_nodes(),
+            );
+        }
         chrome.extend(self.panels_accessibility_nodes());
         chrome.extend(self.extensions_accessibility_nodes());
         chrome.extend(self.language_accessibility_nodes());
-        semantic_group(&mut chrome, 90_000_026, "Utilities and print options", self.utilities_accessibility_nodes());
+        semantic_group(
+            &mut chrome,
+            90_000_026,
+            "Utilities and print options",
+            self.utilities_accessibility_nodes(),
+        );
         if !self.settings.controller.open {
-            if let Some(id) = self.views_accessibility_focus() { focus = id; }
-            if let Some(id) = self.recovery_accessibility_focus() { focus = id; }
-            if let Some(id) = self.compare_accessibility_focus() { focus = id; }
-            if let Some(id) = self.panels_accessibility_focus() { focus = id; }
-            if let Some(id) = self.extensions_accessibility_focus() { focus = id; }
-            if let Some(id) = self.language_accessibility_focus() { focus = id; }
-            if let Some(id) = self.utilities_accessibility_focus() { focus = id; }
+            if let Some(id) = self.views_accessibility_focus() {
+                focus = id;
+            }
+            if let Some(id) = self.recovery_accessibility_focus() {
+                focus = id;
+            }
+            if self.dock.active() == Some(super::dock::DockTab::Compare)
+                && let Some(id) = self.compare_accessibility_focus()
+            {
+                focus = id;
+            }
+            if let Some(id) = self.panels_accessibility_focus() {
+                focus = id;
+            }
+            if let Some(id) = self.extensions_accessibility_focus() {
+                focus = id;
+            }
+            if let Some(id) = self.language_accessibility_focus() {
+                focus = id;
+            }
+            if let Some(id) = self.utilities_accessibility_focus() {
+                focus = id;
+            }
         }
         let mut manager = Vec::new();
         let mut output = Vec::new();
+        let mut output_row_focused = false;
         for semantic in self.macros.controller.semantics() {
-            if semantic.focused && !self.settings.controller.open { focus = semantic.id.0; }
-            let node = bareline_app::accessibility::semantic_node(&semantic, 1);
-            if semantic.id.0 >= 2_000_000 { output.push(node); } else { manager.push(node); }
+            let is_output = semantic.id.0 >= 2_000_000;
+            if semantic.focused
+                && !self.settings.controller.open
+                && (!is_output
+                    || (self.dock.active() == Some(super::dock::DockTab::Output) && self.macros.output_focused()))
+            {
+                focus = semantic.id.0;
+                output_row_focused = is_output;
+            }
+            let mut node = bareline_app::accessibility::semantic_node(&semantic, 1);
+            if is_output {
+                if self.dock.active() == Some(super::dock::DockTab::Output) {
+                    node.bounds[0] += editor_bounds.x as f64;
+                    node.bounds[1] += editor_bounds.y as f64;
+                    output.push(node);
+                }
+            } else {
+                manager.push(node);
+            }
+        }
+        if self.dock.active() == Some(super::dock::DockTab::Output)
+            && let Some(layout) = self.dock.current_layout()
+        {
+            let mut bounds = layout.body;
+            bounds.x += editor_bounds.x;
+            bounds.y += editor_bounds.y;
+            output.push(AccessibilityNode {
+                id: super::macros::OUTPUT_BODY_ID,
+                parent: 1,
+                role: AccessibilityRole::List,
+                name: "Command output".into(),
+                value: None,
+                bounds: [
+                    bounds.x as f64,
+                    bounds.y as f64,
+                    bounds.width as f64,
+                    bounds.height as f64,
+                ],
+                disabled: false,
+                selected: false,
+                expanded: None,
+                focusable: true,
+                invokable: false,
+            });
+            if self.macros.output_focused() && !output_row_focused {
+                focus = super::macros::OUTPUT_BODY_ID;
+            }
         }
         semantic_group(&mut chrome, 90_000_014, "Macro and Run manager", manager);
         semantic_group(&mut chrome, 90_000_015, "Command output", output);
         let power_nodes = self.power.accessibility_nodes();
-        if let Some(node) = power_nodes.iter().find(|n| n.selected && n.focusable) { focus = node.id; }
-        semantic_group(&mut chrome, 90_000_006, "Column editor and clipboard history", power_nodes);
-        if self.shortcuts.open {
-            semantic_group(&mut chrome, 90_000_004, "Keyboard shortcuts", self.shortcuts.accessibility_nodes(&self.app.commands));
-            focus = if self.shortcuts.binding_focus {
-                19001
-            } else {
-                19000
-            };
+        if let Some(node) = power_nodes.iter().find(|n| n.selected && n.focusable) {
+            focus = node.id;
         }
-        let folder_semantics=self.search_folder_semantics();
-        if let Some(node)=folder_semantics.iter().find(|node|node.focused) {focus=node.id.0;}
-        semantic_group(&mut chrome,90_000_030,"Folder search",folder_semantics.iter().map(|node|bareline_app::accessibility::semantic_node(node,1)).collect());
-        let active_layer = if self.palette.open { Some(90_000_002) }
-            else if self.search_folder_open() { Some(90_000_030) }
-            else if self.shortcuts.open { Some(90_000_004) }
-            else if self.power.open { Some(90_000_006) }
-            else if self.settings.controller.open { Some(90_000_012) }
-            else if self.extensions.open { Some(60_000) }
-            else if self.utilities.has_input_focus() { Some(90_000_026) }
-            else if self.macros.controller.manager.open { Some(90_000_014) }
-            else { None };
+        semantic_group(
+            &mut chrome,
+            90_000_006,
+            "Column editor and clipboard history",
+            power_nodes,
+        );
+        if self.shortcuts.open {
+            semantic_group(
+                &mut chrome,
+                90_000_004,
+                "Keyboard shortcuts",
+                self.shortcuts.accessibility_nodes(&self.app.commands),
+            );
+            focus = if self.shortcuts.binding_focus { 19001 } else { 19000 };
+        }
+        let folder_semantics = self.search_folder_semantics();
+        if let Some(node) = folder_semantics.iter().find(|node| node.focused) {
+            focus = node.id.0;
+        }
+        semantic_group(
+            &mut chrome,
+            90_000_030,
+            "Folder search",
+            folder_semantics
+                .iter()
+                .map(|node| bareline_app::accessibility::semantic_node(node, 1))
+                .collect(),
+        );
+        let split = self.views.open();
+        if split && let Some(workspace) = &self.workspace {
+            for pane in 0..2 {
+                let Some(tab) = self.views.pane_token(pane) else {
+                    continue;
+                };
+                let Some(editor) = self.views.pane_workspace_editor(workspace, self.app.active, pane) else {
+                    continue;
+                };
+                let pane_bounds = self.views.bounds[pane].unwrap_or(editor_bounds);
+                let document_index = self.views.pane_document_index(workspace, pane);
+                let name = document_index.map_or_else(
+                    || format!("Pane {}, Untitled", pane + 1),
+                    |index| editor_provider_name(workspace, pane, index),
+                );
+                chrome.push(AccessibilityNode {
+                    id: editor_provider_id(tab),
+                    parent: 1,
+                    role: AccessibilityRole::Editor,
+                    name,
+                    value: None,
+                    bounds: [
+                        (editor_bounds.x + pane_bounds.x) as f64,
+                        (editor_bounds.y + pane_bounds.y + editor.viewport().top_inset) as f64,
+                        pane_bounds.width as f64,
+                        (pane_bounds.height - editor.viewport().top_inset).max(0.0) as f64,
+                    ],
+                    disabled: false,
+                    selected: pane == self.views.pane() as usize,
+                    expanded: None,
+                    focusable: true,
+                    invokable: false,
+                });
+            }
+            if focus == bareline_app::accessibility::EDITOR_ID
+                && let Some(tab) = self.views.pane_token(self.views.pane() as usize)
+            {
+                focus = editor_provider_id(tab);
+            }
+        }
+        let active_layer = self.active_accessibility_layer();
+        if active_layer.is_none()
+            && !self.search_accessibility_active()
+            && let Some(id) = self.dock.accessibility_focus()
+        {
+            focus = id;
+        }
+
         let mut snapshot = compose_snapshot(
             "Bareline",
             width,
             height,
-            editor.map(|v| &**v),
+            (!split).then(|| editor.map(|v| v.viewport())).flatten(),
             chrome,
-            if self.palette.open { self.palette.semantics().iter().find(|n|n.focused).map_or(11000, |n|n.id.0) } else { focus },
+            if let Some(modal) = self.modal {
+                if modal.surface == super::modal::ModalSurface::Recovery {
+                    self.recovery_accessibility_focus().unwrap_or(modal.focused)
+                } else {
+                    modal.focused
+                }
+            } else if self.palette.open {
+                self.palette
+                    .semantics()
+                    .iter()
+                    .find(|n| n.focused)
+                    .map_or(11000, |n| n.id.0)
+            } else {
+                focus
+            },
             active_layer,
         );
-        if let (Some(editor), Some(renderer)) = (editor, self.renderer.as_ref()) {
-            snapshot.text_geometry = editor.accessibility_geometry(renderer, editor_bounds.width, editor_bounds.height).into_iter().map(|(range, rect)| bareline_platform::accessibility::AccessibilityTextBox {
-                start: range.start, end: range.end,
-                bounds: [(rect.x as f64+editor_bounds.x as f64)*scale, (rect.y as f64+editor_bounds.y as f64)*scale, rect.width as f64*scale, rect.height as f64*scale],
-            }).collect();
+        let owned_text = self.owned_accessibility_text_field();
+        if let Some((owner, identity, field)) = owned_text {
+            let (anchor, caret) = field.selection();
+            if let Some(mut text) =
+                bareline_app::accessibility::bounded_text(field.value().to_owned(), 0, anchor, caret)
+            {
+                text.editor_id = owner;
+                text.run_id = owner + 10_000;
+                snapshot.text = Some(text);
+                snapshot.text_context = Some(bareline_platform::accessibility::AccessibilityTextContext {
+                    source_identity: identity,
+                    selection: (anchor, caret),
+                    selections: Vec::new(),
+                    composition: field.composition_text().map(str::to_owned),
+                });
+                snapshot.text_geometry.clear();
+            }
+        } else if self.modal.is_some() || self.search_accessibility_active() {
+            snapshot.text = None;
+            snapshot.text_context = None;
+            snapshot.text_geometry.clear();
         }
-        if let Some(bareline_app::workspace::WorkspaceEditor::Paged(editor)) = editor {
+        if split
+            && self.modal.is_none()
+            && !self.search_accessibility_active()
+            && active_layer.is_none()
+            && let Some(workspace) = &self.workspace
+        {
+            snapshot.text = None;
+            snapshot.text_context = None;
+            snapshot.text_geometry.clear();
+            snapshot.text_views = (0..2)
+                .filter_map(|pane| {
+                    let tab = self.views.pane_token(pane)?;
+                    let editor = self.views.pane_workspace_editor(workspace, self.app.active, pane)?;
+                    let pane_bounds = self.views.bounds[pane].unwrap_or(editor_bounds);
+                    let bounds = bareline_ui::rect(
+                        editor_bounds.x + pane_bounds.x,
+                        editor_bounds.y + pane_bounds.y,
+                        pane_bounds.width,
+                        pane_bounds.height,
+                    );
+                    let identity = self.views.accessibility_source_identity(pane, editor)?;
+                    Some(split_text_view(
+                        editor,
+                        self.renderer.as_ref(),
+                        bounds,
+                        scale,
+                        tab,
+                        identity,
+                    ))
+                })
+                .collect();
+        }
+        let pane_bounds = if self.views.open() {
+            self.views.bounds[self.views.pane() as usize]
+        } else {
+            None
+        };
+        let text_bounds = pane_bounds.map_or(editor_bounds, |pane| {
+            bareline_ui::rect(
+                editor_bounds.x + pane.x,
+                editor_bounds.y + pane.y,
+                pane.width,
+                pane.height,
+            )
+        });
+        let text_height = if pane_bounds.is_some() {
+            text_bounds.height + 24.0
+        } else {
+            text_bounds.height
+        };
+        if !split
+            && self.modal.is_none()
+            && let (Some(editor), Some(renderer)) = (editor, self.renderer.as_ref())
+        {
+            snapshot.text_geometry = editor
+                .accessibility_geometry(renderer, text_bounds.width, text_height)
+                .into_iter()
+                .filter_map(|(range, rect)| {
+                    let x = rect.x.max(0.0);
+                    let y = rect.y.max(0.0);
+                    let right = (rect.x + rect.width).min(text_bounds.width);
+                    let bottom = (rect.y + rect.height).min(text_bounds.height);
+                    (right > x && bottom > y).then_some(bareline_platform::accessibility::AccessibilityTextBox {
+                        start: range.start,
+                        end: range.end,
+                        bounds: [
+                            (x as f64 + text_bounds.x as f64) * scale,
+                            (y as f64 + text_bounds.y as f64) * scale,
+                            (right - x) as f64 * scale,
+                            (bottom - y) as f64 * scale,
+                        ],
+                    })
+                })
+                .collect();
+        }
+        if !split
+            && self.modal.is_none()
+            && let Some(bareline_app::workspace::WorkspaceEditor::Paged(editor)) = editor
+        {
             use bareline_document::TextOffset;
             use bareline_editor_surface::paged_view::SourceAffinity;
             // A platform text run is contiguous in source coordinates. Keep one
             // real piece instead of presenting a concatenated folded gap as text.
             snapshot.text = snapshot.text.take().and_then(|text| {
-                let local_start=text.start_byte;
-                let local_end=local_start.checked_add(text.value.len())?;
-                let piece=editor.source_segments().iter().find(|piece|piece.local.end.0>local_start && piece.local.start.0<local_end);
-                let (start,end)=piece.map_or((local_start,local_end),|piece|(local_start.max(piece.local.start.0),local_end.min(piece.local.end.0)));
-                let source=editor.source_offset(TextOffset(start),SourceAffinity::After)?;
-                let value=text.value.get(start-local_start..end-local_start)?.to_owned();
-                let (anchor,caret)=editor.global_selection();
-                bareline_app::accessibility::bounded_text(value,source.0,anchor.0,caret.0)
+                let local_start = text.start_byte;
+                let local_end = local_start.checked_add(text.value.len())?;
+                let piece = editor
+                    .source_segments()
+                    .iter()
+                    .find(|piece| piece.local.end.0 > local_start && piece.local.start.0 < local_end);
+                let (start, end) = piece.map_or((local_start, local_end), |piece| {
+                    (local_start.max(piece.local.start.0), local_end.min(piece.local.end.0))
+                });
+                let source = editor.source_offset(TextOffset(start), SourceAffinity::After)?;
+                let value = text.value.get(start - local_start..end - local_start)?.to_owned();
+                let (anchor, caret) = editor.global_selection();
+                bareline_app::accessibility::bounded_text(value, source.0, anchor.0, caret.0)
             });
             map_paged_geometry(editor, &mut snapshot.text_geometry);
             if let Some(context) = &mut snapshot.text_context {
                 context.source_identity = editor.snapshot().identity_token();
                 let (anchor, caret) = editor.global_selection();
                 context.selection = (anchor.0, caret.0);
+                context.selections = editor
+                    .global_selection_set()
+                    .selections
+                    .iter()
+                    .take(1024)
+                    .map(|selection| (selection.anchor, selection.caret))
+                    .collect();
             }
         }
         // AccessKit Windows adds native client-to-screen origin; bounds must be
         // physical client pixels, while renderer/control layout uses logical px.
         for node in &mut snapshot.nodes {
             if node.id == bareline_app::accessibility::EDITOR_ID {
-                node.bounds[0] = editor_bounds.x as f64;
-                node.bounds[2] = editor_bounds.width as f64;
-                node.bounds[3] = (editor_bounds.height as f64 - node.bounds[1]).max(0.0);
-                node.bounds[1] += editor_bounds.y as f64;
+                node.bounds[0] = text_bounds.x as f64;
+                node.bounds[2] = text_bounds.width as f64;
+                node.bounds[3] = (text_bounds.height as f64 - node.bounds[1]).max(0.0);
+                node.bounds[1] += text_bounds.y as f64;
             }
             for coordinate in &mut node.bounds {
                 *coordinate *= scale;
@@ -276,47 +1248,246 @@ impl Shell {
 }
 
 impl Shell {
+    fn modal_accessibility_action(
+        &mut self,
+        el: &winit::event_loop::ActiveEventLoop,
+        action: &bareline_platform::accessibility::AccessibilityAction,
+    ) -> bool {
+        use bareline_platform::accessibility::AccessibilityAction;
+        let Some(modal) = self.modal else {
+            return false;
+        };
+        match modal.surface {
+            super::modal::ModalSurface::Run => match action {
+                AccessibilityAction::Focus(id)
+                    if [modal.semantics.primary, modal.semantics.submit, modal.semantics.cancel].contains(id) =>
+                {
+                    self.modal_focus(modal.surface, *id);
+                    true
+                }
+                AccessibilityAction::SetValue { id, value } if *id == super::modal::RUN_FIELD_ID => {
+                    self.set_modal_accessibility_value(*id, value)
+                }
+                AccessibilityAction::SetSelection {
+                    source_identity,
+                    anchor,
+                    caret,
+                } if modal_text_selection_matches(modal, *source_identity) => {
+                    self.run_prompt.field.set_selection(*anchor, *caret);
+                    self.modal_changed(modal.surface);
+                    true
+                }
+                AccessibilityAction::Invoke(id) if *id == super::modal::RUN_SUBMIT_ID => {
+                    self.run_prompt_submit();
+                    true
+                }
+                AccessibilityAction::Invoke(id) if *id == super::modal::RUN_CANCEL_ID => {
+                    self.dismiss_modal(modal.surface);
+                    true
+                }
+                _ => true,
+            },
+            super::modal::ModalSurface::Goto => match action {
+                AccessibilityAction::Focus(id)
+                    if [modal.semantics.primary, modal.semantics.submit, modal.semantics.cancel].contains(id) =>
+                {
+                    self.modal_focus(modal.surface, *id);
+                    true
+                }
+                AccessibilityAction::SetValue { id, value } if *id == super::modal::GOTO_FIELD_ID => {
+                    self.set_modal_accessibility_value(*id, value)
+                }
+                AccessibilityAction::SetSelection {
+                    source_identity,
+                    anchor,
+                    caret,
+                } if modal_text_selection_matches(modal, *source_identity) => {
+                    self.goto.field.set_selection(*anchor, *caret);
+                    self.modal_changed(modal.surface);
+                    true
+                }
+                AccessibilityAction::Invoke(id) if *id == super::modal::GOTO_SUBMIT_ID => {
+                    self.goto_submit();
+                    true
+                }
+                AccessibilityAction::Invoke(id) if *id == super::modal::GOTO_CANCEL_ID => {
+                    self.dismiss_modal(modal.surface);
+                    true
+                }
+                _ => true,
+            },
+            super::modal::ModalSurface::CompareOptions => {
+                // Compare owns all actions while its options surface is live;
+                // unknown/stale targets are consumed instead of reaching editors.
+                if let AccessibilityAction::SetSelection {
+                    source_identity,
+                    anchor,
+                    caret,
+                } = action
+                    && modal.active_text_owner == Some(59_999)
+                    && modal_text_selection_matches(modal, *source_identity)
+                {
+                    self.compare.color_field.set_selection(*anchor, *caret);
+                    self.modal_changed(modal.surface);
+                    return true;
+                }
+                let accepted = self.compare_accessibility(el, action);
+                if accepted && matches!(action, AccessibilityAction::SetValue { id: 59_999, .. }) {
+                    self.modal_changed(modal.surface);
+                }
+                if accepted && let Some(focus) = self.compare_accessibility_focus() {
+                    self.modal_focus(modal.surface, focus);
+                }
+                true
+            }
+            super::modal::ModalSurface::Recovery => {
+                let accepted = self.recovery_accessibility(el, action);
+                if accepted && let Some(focus) = self.recovery_accessibility_focus() {
+                    self.modal_focus(modal.surface, focus);
+                }
+                // Recovery owns the active accessibility layer. Unknown and
+                // stale background actions never continue into the editor.
+                true
+            }
+            super::modal::ModalSurface::NotificationDetails => match action {
+                AccessibilityAction::Focus(id) if *id == super::toast::DETAILS_CLOSE_ID => {
+                    self.modal_focus(modal.surface, *id);
+                    true
+                }
+                AccessibilityAction::Invoke(id) if *id == super::toast::DETAILS_CLOSE_ID => {
+                    self.dismiss_modal(modal.surface);
+                    true
+                }
+                _ => true,
+            },
+        }
+    }
+
     pub(super) fn accessibility_actions(&mut self, el: &winit::event_loop::ActiveEventLoop) {
         use bareline_app::accessibility::{EDITOR_ID, PAGE_NEXT_ID, PAGE_PREVIOUS_ID, TAB_ID_BASE};
         use bareline_app::workspace::Input;
         use bareline_platform::accessibility::AccessibilityAction;
-        let actions = self
-            .accessibility
-            .as_mut()
-            .map_or_else(Vec::new, |p| p.drain_actions());
+        let actions = self.accessibility.as_mut().map_or_else(Vec::new, |p| p.drain_actions());
         for action in actions {
+            if self.modal_accessibility_action(el, &action) {
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+                continue;
+            }
+            if let AccessibilityAction::SetSelection {
+                source_identity,
+                anchor,
+                caret,
+            } = &action
+                && self.search_text_selection_action(*source_identity, *anchor, *caret)
+            {
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+                continue;
+            }
+            let notification_action = match &action {
+                AccessibilityAction::Focus(id) => Some((*id, false)),
+                AccessibilityAction::Invoke(id) => Some((*id, true)),
+                _ => None,
+            };
+            if let Some((id, invoke)) = notification_action
+                && let Some(notification_action) = self.toasts.accessibility_action(id, invoke)
+            {
+                match notification_action {
+                    super::toast::ToastAction::OpenDetails(id) if self.toasts.open_details(id) => {
+                        self.activate_modal(super::modal::ModalSurface::NotificationDetails);
+                    }
+                    other => self.toasts.perform(other),
+                }
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+                continue;
+            }
             if self.palette.open {
                 let id = match &action {
-                    AccessibilityAction::Focus(id) | AccessibilityAction::Invoke(id) | AccessibilityAction::SetValue { id, .. } => Some(*id),
+                    AccessibilityAction::Focus(id)
+                    | AccessibilityAction::Invoke(id)
+                    | AccessibilityAction::SetValue { id, .. } => Some(*id),
                     _ => None,
                 };
-                if !id.is_some_and(|id| self.palette.semantics().iter().any(|n|n.id.0==id && !n.disabled)) { continue; }
+                if !id.is_some_and(|id| self.palette.semantics().iter().any(|n| n.id.0 == id && !n.disabled)) {
+                    continue;
+                }
             }
             if self.search_folder_open() && !self.palette.open {
-                let target=match &action {
-                    AccessibilityAction::Focus(id)=>Some((*id,false,None)),
-                    AccessibilityAction::Invoke(id)=>Some((*id,true,None)),
-                    AccessibilityAction::SetValue{id,value}=>Some((*id,false,Some(value.as_str()))),
-                    _=>None,
+                let target = match &action {
+                    AccessibilityAction::Focus(id) => Some((*id, false, None)),
+                    AccessibilityAction::Invoke(id) => Some((*id, true, None)),
+                    AccessibilityAction::SetValue { id, value } => Some((*id, false, Some(value.as_str()))),
+                    _ => None,
                 };
-                if let Some((id,invoke,value))=target {
-                    if self.search_folder_accessibility(id,invoke,value) {
-                        if let Some(window)=&self.window {window.request_redraw();}
+                if let Some((id, invoke, value)) = target {
+                    if self.search_folder_accessibility(id, invoke, value) {
+                        if let Some(window) = &self.window {
+                            window.request_redraw();
+                        }
                     }
                 }
                 // A folder dialog owns input; stale background actions cannot
                 // reach the editor or other controllers while it is active.
                 continue;
             }
-            if self.power_accessibility(&action) { continue; }
-            if self.power.open && !self.palette.open { continue; }
+            let dock_target = match &action {
+                AccessibilityAction::Focus(id) => Some((*id, false)),
+                AccessibilityAction::Invoke(id) => Some((*id, true)),
+                _ => None,
+            };
+            if let Some((id, invoke)) = dock_target
+                && self.dock.semantics().iter().any(|node| node.id.0 == id)
+            {
+                if let Some(tab) = self.dock.accessibility_action(id, invoke) {
+                    if invoke {
+                        self.activate_dock_tab(tab);
+                    } else {
+                        self.deactivate_dock_focus();
+                    }
+                } else if id == super::dock::CLOSE_ID && invoke {
+                    self.deactivate_dock_focus();
+                }
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+                continue;
+            }
+            if self.power_accessibility(&action) {
+                continue;
+            }
+            if self.power.open && !self.palette.open {
+                continue;
+            }
             if !self.palette.open && !self.power.open && !self.settings.controller.open {
-                if self.extensions_accessibility(el, &action) { continue; }
-                if self.extensions.open { continue; }
-                if self.utilities_accessibility(el, &action) { continue; }
-                if self.utilities.has_input_focus() { continue; }
-                if self.language_accessibility(el, &action) { continue; }
-                if !self.macros.controller.manager.open && (self.views_accessibility(el, &action) || self.recovery_accessibility(el, &action) || self.compare_accessibility(el, &action) || self.panels_accessibility(el, &action)) { continue; }
+                if self.extensions_accessibility(el, &action) {
+                    continue;
+                }
+                if self.extensions.open {
+                    continue;
+                }
+                if self.utilities_accessibility(el, &action) {
+                    continue;
+                }
+                if self.utilities.has_input_focus() {
+                    continue;
+                }
+                if self.language_accessibility(el, &action) {
+                    continue;
+                }
+                if !self.macros.controller.manager.open
+                    && (self.views_accessibility(el, &action)
+                        || self.recovery_accessibility(el, &action)
+                        || (self.dock.active() == Some(super::dock::DockTab::Compare)
+                            && self.compare_accessibility(el, &action))
+                        || self.panels_accessibility(el, &action))
+                {
+                    continue;
+                }
             }
             if !self.palette.open && !self.power.open && !self.settings.controller.open {
                 let target = match &action {
@@ -326,24 +1497,31 @@ impl Shell {
                     _ => None,
                 };
                 if let Some((id, invoke, value)) = target {
-                    if self.macros_accessibility(el, id, invoke, value) { continue; }
+                    if self.macros_accessibility(el, id, invoke, value) {
+                        continue;
+                    }
                 }
-                if self.macros.controller.manager.open { continue; }
+                if self.macros.controller.manager.open {
+                    continue;
+                }
             }
             if self.shortcuts_accessibility(&action) {
                 continue;
             }
-            if self.shortcuts.open && !self.palette.open { continue; }
+            if self.shortcuts.open && !self.palette.open {
+                continue;
+            }
             let toolbar_target = match &action {
-                AccessibilityAction::Focus(id) | AccessibilityAction::Invoke(id) => self
-                    .toolbar
-                    .controller
-                    .semantics()
-                    .iter()
-                    .any(|node| node.id.0 == *id),
+                AccessibilityAction::Focus(id) | AccessibilityAction::Invoke(id) => {
+                    self.toolbar.controller.semantics().iter().any(|node| node.id.0 == *id)
+                }
                 _ => false,
             };
-            if toolbar_target && !self.palette.open && !self.settings.controller.open && !self.macros.controller.manager.open {
+            if toolbar_target
+                && !self.palette.open
+                && !self.settings.controller.open
+                && !self.macros.controller.manager.open
+            {
                 let (id, invoke) = match action {
                     AccessibilityAction::Focus(id) => (id, false),
                     AccessibilityAction::Invoke(id) => (id, true),
@@ -372,12 +1550,8 @@ impl Shell {
                         self.settings.controller.accessibility_set_value(*id, value);
                         None
                     }
-                    AccessibilityAction::Focus(id) => {
-                        self.settings.controller.accessibility_action(*id, false)
-                    }
-                    AccessibilityAction::Invoke(id) => {
-                        self.settings.controller.accessibility_action(*id, true)
-                    }
+                    AccessibilityAction::Focus(id) => self.settings.controller.accessibility_action(*id, false),
+                    AccessibilityAction::Invoke(id) => self.settings.controller.accessibility_action(*id, true),
                     _ => None,
                 };
                 if let Some(bareline_app::settings::SettingsEffect::CopyKey(key)) = effect
@@ -392,13 +1566,87 @@ impl Shell {
                 continue;
             }
             match action {
-                AccessibilityAction::ScrollToText { source_identity, offset } => {
-                    let height = self.editor_bounds().height;
-                    if let Some(editor) = self.workspace.as_mut().and_then(|w| w.editors.get_mut(self.app.active)) {
-                        if bareline_app::accessibility::source_identity(editor) != source_identity || editor.busy() { continue; }
+                AccessibilityAction::ModifySelection {
+                    source_identity,
+                    start,
+                    end,
+                    add,
+                } => {
+                    let Some(editor) = self.accessibility_editor_mut(source_identity) else {
+                        continue;
+                    };
+                    if editor.busy() {
+                        continue;
+                    }
+                    let mut selections = match &*editor {
+                        bareline_app::workspace::WorkspaceEditor::Paged(paged) => paged.global_selection_set(),
+                        _ => editor.selection_set(),
+                    };
+                    let primary = selections.primary();
+                    let range = start.min(end)..start.max(end);
+                    if add {
+                        if selections.selections.len() >= 1024 {
+                            continue;
+                        }
+                        if !selections.selections.iter().any(|selection| {
+                            (selection.anchor.min(selection.caret)..selection.anchor.max(selection.caret)) == range
+                        }) {
+                            selections.selections.push(bareline_editor_surface::Selection {
+                                anchor: range.start,
+                                caret: range.end,
+                            });
+                        }
+                    } else {
+                        selections.selections.retain(|selection| {
+                            (selection.anchor.min(selection.caret)..selection.anchor.max(selection.caret)) != range
+                        });
+                        if selections.selections.is_empty() {
+                            selections.selections.push(bareline_editor_surface::Selection {
+                                anchor: primary.caret,
+                                caret: primary.caret,
+                            });
+                        }
+                    }
+                    selections.primary = selections
+                        .selections
+                        .iter()
+                        .position(|selection| *selection == primary)
+                        .unwrap_or(0);
+                    let result = match editor {
+                        bareline_app::workspace::WorkspaceEditor::Resident(resident) => {
+                            resident.set_selections(selections)
+                        }
+                        bareline_app::workspace::WorkspaceEditor::Paged(paged) => {
+                            let capture = paged.capture_power();
+                            let source = paged.snapshot().clone();
+                            paged.install_power_state(&source, source.revision, selections, capture.state, &[])
+                        }
+                    };
+                    if let Err(error) = result {
+                        editor.viewport_mut().error = Some(error);
+                    }
+                }
+                AccessibilityAction::ScrollToText {
+                    source_identity,
+                    offset,
+                } => {
+                    let height = (0..2)
+                        .find(|pane| {
+                            self.views
+                                .pane_token(*pane)
+                                .is_some_and(|tab| editor_provider_id(tab) == source_identity.0)
+                        })
+                        .and_then(|pane| self.views.bounds[pane])
+                        .map_or_else(|| self.editor_bounds().height, |bounds| bounds.height);
+                    if let Some(editor) = self.accessibility_editor_mut(source_identity) {
+                        if editor.busy() {
+                            continue;
+                        }
                         match editor {
                             bareline_app::workspace::WorkspaceEditor::Paged(editor) => {
-                                if let Err(error) = editor.request_viewport(bareline_document::TextOffset(offset)) { editor.error = Some(error); }
+                                if let Err(error) = editor.request_viewport(bareline_document::TextOffset(offset)) {
+                                    editor.error = Some(error);
+                                }
                             }
                             bareline_app::workspace::WorkspaceEditor::Resident(editor) => {
                                 editor.accessibility_scroll_to(offset, height);
@@ -406,16 +1654,23 @@ impl Shell {
                         }
                     }
                 }
-                AccessibilityAction::SetSelection { source_identity, anchor, caret } => {
-                    if let Some(editor) = self
-                        .workspace
-                        .as_mut()
-                        .and_then(|w| w.editors.get_mut(self.app.active))
-                    {
-                        if bareline_app::accessibility::source_identity(editor) != source_identity || editor.busy() { continue; }
+                AccessibilityAction::SetSelection {
+                    source_identity,
+                    anchor,
+                    caret,
+                } => {
+                    if let Some(editor) = self.accessibility_editor_mut(source_identity) {
+                        if editor.busy() {
+                            continue;
+                        }
                         match editor {
                             bareline_app::workspace::WorkspaceEditor::Paged(editor) => {
-                                if let Err(error) = editor.restore_selection(bareline_document::TextOffset(anchor), bareline_document::TextOffset(caret)) { editor.error = Some(error); }
+                                if let Err(error) = editor.restore_selection(
+                                    bareline_document::TextOffset(anchor),
+                                    bareline_document::TextOffset(caret),
+                                ) {
+                                    editor.error = Some(error);
+                                }
                             }
                             bareline_app::workspace::WorkspaceEditor::Resident(editor) => {
                                 if bareline_app::accessibility::selection_valid(editor, anchor, caret) {
@@ -431,26 +1686,28 @@ impl Shell {
                         self.palette.field.select_all();
                         self.palette.field.insert(&value);
                         let context = self.command_context();
-                        self.palette.refresh(
-                            &self.app.commands,
-                            &context,
-                            &self.settings.keymap.keymap,
-                        );
-                    } else if let Some(workspace) = &mut self.workspace {
-                        if (id == 6000 || id == 6001) && workspace.find.open {
-                            workspace.find.accessibility_action(id, true);
-                            let field = workspace.find.active_field();
-                            field.select_all();
-                            field.insert(&value);
-                        } else if id == 7000 && workspace.search_panel.open {
-                            workspace.search_focus = true;
-                            workspace.search_panel.accessibility_focus(id);
-                            workspace.search_panel.field.select_all();
-                            workspace.search_panel.field.insert(&value);
-                        }
+                        self.palette
+                            .refresh(&self.app.commands, &context, &self.settings.keymap.keymap);
+                    } else {
+                        self.set_search_accessibility_value(id, &value);
+                    }
+                }
+                AccessibilityAction::Focus(id) if is_editor_provider_id(id) => {
+                    self.blur_dock_ownership();
+                    let pane = (0..2).find(|pane| {
+                        self.views
+                            .pane_token(*pane)
+                            .is_some_and(|tab| editor_provider_id(tab) == id)
+                    });
+                    if let (Some(pane), Some(workspace)) = (pane, &mut self.workspace) {
+                        workspace.find.blur();
+                        workspace.search_focus = false;
+                        self.views
+                            .accessibility_activate_editor(workspace, &mut self.app, pane as u32);
                     }
                 }
                 AccessibilityAction::Focus(id) if id == EDITOR_ID => {
+                    self.blur_dock_ownership();
                     self.palette.dismiss();
                     self.app.palette = false;
                     if let Some(workspace) = &mut self.workspace {
@@ -459,22 +1716,25 @@ impl Shell {
                     }
                 }
                 AccessibilityAction::Invoke(id) if id == PAGE_PREVIOUS_ID || id == PAGE_NEXT_ID => {
-                    let height = self.window.as_ref().map_or(600.0, |w| {
-                        w.inner_size().height as f32 / w.scale_factor() as f32
-                    });
+                    let height = self
+                        .window
+                        .as_ref()
+                        .map_or(600.0, |w| w.inner_size().height as f32 / w.scale_factor() as f32);
                     if let Some(editor) = self
                         .workspace
                         .as_mut()
-                        .and_then(|w| w.editors.get_mut(self.app.active))
+                        .and_then(|w| self.views.active_workspace_editor_mut(w, self.app.active))
                     {
-                        if !editor.page_by(id == PAGE_NEXT_ID) { editor.scroll(
-                            if id == PAGE_PREVIOUS_ID {
-                                -(height as f64)
-                            } else {
-                                height as f64
-                            },
-                            height,
-                        ); }
+                        if !editor.page_by(id == PAGE_NEXT_ID) {
+                            editor.scroll(
+                                if id == PAGE_PREVIOUS_ID {
+                                    -(height as f64)
+                                } else {
+                                    height as f64
+                                },
+                                height,
+                            );
+                        }
                     }
                 }
                 AccessibilityAction::Focus(id) => {
@@ -488,12 +1748,10 @@ impl Shell {
                         if (6000..6300).contains(&id) {
                             workspace.find.accessibility_action(id, true);
                             workspace.search_focus = false;
-                        } else if workspace
-                            .search_panel
-                            .semantics()
-                            .iter()
-                            .any(|n| n.id.0 == id)
+                        } else if self.dock.active() == Some(super::dock::DockTab::Search)
+                            && workspace.search_panel.semantics().iter().any(|n| n.id.0 == id)
                         {
+                            self.dock.blur_focus();
                             workspace.search_focus = true;
                             workspace.search_panel.accessibility_focus(id);
                             workspace.find.blur();
@@ -504,20 +1762,13 @@ impl Shell {
                     let mut command_action = None;
                     if let Some(workspace) = &mut self.workspace {
                         if (6000..6300).contains(&id) {
-                            command_action = workspace
-                                .find
-                                .accessibility_action(id, false)
-                                .map(super::find_action);
-                        } else if workspace
-                            .search_panel
-                            .semantics()
-                            .iter()
-                            .any(|n| n.id.0 == id)
-                            && let Some((source, range)) =
-                                workspace.search_panel.accessibility_activate(id)
-                            && let Some(index) = workspace.activate_search(source, range)
-                        {
-                            self.app.active = index;
+                            command_action = workspace.find.accessibility_action(id, false).map(super::find_action);
+                        } else if self.dock.active() == Some(super::dock::DockTab::Search) {
+                            let (handled, active) = super::search::accessibility_invoke_panel(workspace, id);
+                            if handled && let Some(index) = active {
+                                self.app.active = index;
+                                workspace.bind_find_to(index);
+                            }
                         }
                     }
                     if let Some(action) = command_action {
@@ -536,9 +1787,7 @@ impl Shell {
                                     .find(|c| c.id.0 == node.command_id)
                                     .map(|c| c.id)
                             });
-                        if let Some(action) =
-                            command.and_then(|id| self.app.commands.dispatch_in(id, &context).ok())
-                        {
+                        if let Some(action) = command.and_then(|id| self.app.commands.dispatch_in(id, &context).ok()) {
                             self.palette.dismiss();
                             self.app.palette = false;
                             self.dispatch(el, action);
@@ -554,45 +1803,162 @@ impl Shell {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
+    use super::super::{compare, launch, shortcuts, utilities, views};
     use super::*;
-    use super::super::{launch, views, compare, utilities, shortcuts};
+    use bareline_app::workspace::Input;
     type ShellSetup = fn(&mut Shell, &str);
     type SetupCases = (&'static str, ShellSetup, &'static [&'static str], u64);
 
-    fn headless_shell() -> Shell {
+    #[test]
+    fn modal_text_reads_normalize_every_unicode_byte_start() {
+        use bareline_platform::accessibility::{AccessibilityTextSource, AccessibleRead};
+
+        let source = ModalTextSource {
+            identity: (MODAL_TEXT_NAMESPACE, 1),
+            value: "aé🙂z".into(),
+        };
+        for requested in 0..=source.value.len() {
+            for limit in [0, 1, 2, 3, 4] {
+                let AccessibleRead::Ready { start, text } = source.read(requested, limit) else {
+                    panic!("valid bounded read was unavailable at {requested} with limit {limit}");
+                };
+                assert!(start >= requested);
+                assert!(source.value.is_char_boundary(start));
+                assert!(text.len() <= limit);
+                assert!(source.value[start..].starts_with(&text));
+            }
+        }
+        assert_eq!(source.read(source.value.len() + 1, 1), AccessibleRead::Unavailable);
+        assert_eq!(source.read(0, 64 * 1024 + 1), AccessibleRead::Unavailable);
+    }
+
+    pub(in crate::windows_app) fn headless_shell() -> Shell {
         let launch = launch::LaunchConfig {
-            performance: None, portable: false, settings_path: None, session_path: None,
-            recovery_path: None, extensions_path: None, diagnostics_path: None, paths: vec![],
-            line: None, column: None, read_only: false, monitor: false, no_session: true,
-            no_extensions: true, new_instance: true, help: false, version: false,
-            software: true, hardware: false, smoke: false, prototype: false, perf: false,
+            mode: launch::LaunchMode::Installed,
+            performance: None,
+            profile_initialization: Default::default(),
+            portable: false,
+            settings_path: None,
+            legacy_settings_path: None,
+            session_path: None,
+            legacy_session_path: None,
+            recovery_path: None,
+            legacy_recovery_path: None,
+            extensions_path: None,
+            legacy_extensions_path: None,
+            diagnostics_path: None,
+            paths: vec![],
+            line: None,
+            column: None,
+            read_only: false,
+            monitor: false,
+            no_session: true,
+            no_extensions: true,
+            new_instance: true,
+            software: true,
+            hardware: false,
+            smoke: false,
+            prototype: false,
+            perf: false,
+            diag_handles: false,
         };
         Shell {
-            renderer: None, platform: None, accessibility: None, shell_integration: Default::default(),
-            window: None, app: Default::default(), palette: Default::default(), ui_focus: Default::default(),
-            ui_router: Default::default(), ledger: Default::default(), modifiers: Default::default(),
-            software: true, first_frame: false, smoke: false, failed: false, prototype: None,
-            workspace: None, notify: std::sync::Arc::new(|| {}), pointer: Default::default(),
-            editor_caret: None, perf: false, idle_at: None, frames: 0, log: None, log_directory: None,
-            startup_paths: vec![], session: Default::default(), settings: Default::default(),
-            views: Default::default(), macros: Default::default(), watch: Default::default(),
-            panels: Default::default(), launch: launch::LaunchRuntime::new(&launch), applied_settings: None,
-            update: Default::default(), language: Default::default(), extensions: Default::default(),
-            toolbar: Default::default(), compare: Default::default(), instance: Default::default(),
-            recovery_root: None, shortcuts: Default::default(), recovery: Default::default(),
-            lifecycle: Default::default(), performance: Default::default(), power: Default::default(),
-            utilities: Default::default(), migration: Default::default(), search: Default::default(), scrolling: Default::default(),
-            encoding: Default::default(), inventory: Default::default(),
+            renderer: None,
+            platform: None,
+            accessibility: None,
+            shell_integration: Default::default(),
+            window: None,
+            app: Default::default(),
+            palette: Default::default(),
+            pending_close: None,
+            qa_command_trace: super::super::QaCommandTrace::disabled(),
+            close_trace_serial: 0,
+            dispatch_trace_ticket: None,
+            pending_close_trace_ticket: None,
+            ui_focus: Default::default(),
+            ui_router: Default::default(),
+            modal: None,
+            modal_identity_serial: 0,
+            ledger: Default::default(),
+            modifiers: Default::default(),
+            software: true,
+            first_frame: false,
+            profile_initialization: Default::default(),
+            profile_settings_path: None,
+            profile_settings_revision: 0,
+            profile_extensions_path: None,
+            legacy_settings_path: None,
+            legacy_session_path: None,
+            legacy_recovery_path: None,
+            legacy_extensions_path: None,
+            smoke: false,
+            failed: false,
+            prototype: None,
+            workspace: None,
+            notify: std::sync::Arc::new(|| {}),
+            wake: std::sync::Arc::new(|_| {}),
+            pointer: Default::default(),
+            editor_caret: None,
+            perf: false,
+            idle_at: None,
+            frames: 0,
+            log: None,
+            log_directory: None,
+            startup_paths: vec![],
+            session: Default::default(),
+            settings: Default::default(),
+            views: Default::default(),
+            macros: Default::default(),
+            watch: Default::default(),
+            panels: Default::default(),
+            launch: launch::LaunchRuntime::new(&launch),
+            applied_settings: None,
+            update: Default::default(),
+            language: Default::default(),
+            extensions: Default::default(),
+            toolbar: Default::default(),
+            compare: Default::default(),
+            dock: Default::default(),
+            instance: Default::default(),
+            recovery_root: None,
+            shortcuts: Default::default(),
+            recovery: Default::default(),
+            lifecycle: Default::default(),
+            performance: Default::default(),
+            power: Default::default(),
+            utilities: Default::default(),
+            migration: Default::default(),
+            search: Default::default(),
+            scrolling: Default::default(),
+            encoding: Default::default(),
+            inventory: Default::default(),
+            goto: Default::default(),
+            charsets: Default::default(),
+            run_prompt: Default::default(),
+            toasts: Default::default(),
+            status_pickers: Vec::new(),
         }
     }
 
     fn dump(errors: &mut Vec<String>, name: &str, snapshot: &AccessibilitySnapshot) -> serde_json::Value {
-        if let Err(error)=snapshot.validate() {
-            let mut counts=std::collections::BTreeMap::new();
-            for node in &snapshot.nodes {*counts.entry(node.id).or_insert(0usize)+=1;}
-            let duplicates:Vec<_>=counts.iter().filter(|(_,count)|**count>1).collect();
-            errors.push(format!("{name}: {error}; root={} focus={} focus_present={} duplicates={duplicates:?}; nodes={:?}",snapshot.root,snapshot.focus,counts.contains_key(&snapshot.focus),snapshot.nodes.iter().map(|n|(n.id,n.parent,n.name.as_str())).collect::<Vec<_>>()));
+        if let Err(error) = snapshot.validate() {
+            let mut counts = std::collections::BTreeMap::new();
+            for node in &snapshot.nodes {
+                *counts.entry(node.id).or_insert(0usize) += 1;
+            }
+            let duplicates: Vec<_> = counts.iter().filter(|(_, count)| **count > 1).collect();
+            errors.push(format!(
+                "{name}: {error}; root={} focus={} focus_present={} duplicates={duplicates:?}; nodes={:?}",
+                snapshot.root,
+                snapshot.focus,
+                counts.contains_key(&snapshot.focus),
+                snapshot
+                    .nodes
+                    .iter()
+                    .map(|n| (n.id, n.parent, n.name.as_str()))
+                    .collect::<Vec<_>>()
+            ));
         }
         let mut value = serde_json::to_value(snapshot).unwrap();
         // Document identity is process-allocated, not UI. Preserve revision and all
@@ -604,10 +1970,352 @@ mod tests {
     }
 
     fn shell_snapshot(shell: &Shell) -> AccessibilitySnapshot {
-        let bounds = bareline_ui::rect(shell.panels.width_left(), shell.toolbar.controller.height(),
-            (1000.0-shell.panels.width_left()-shell.panels.width_right()).max(0.0),
-            (800.0-shell.macros.height()-shell.toolbar.controller.height()).max(0.0));
+        let bounds = bareline_ui::rect(
+            shell.panels.width_left(),
+            shell.toolbar.controller.height(),
+            (1000.0 - shell.panels.width_left() - shell.panels.width_right()).max(0.0),
+            (800.0 - shell.toolbar.controller.height()).max(0.0),
+        );
         shell.accessibility_snapshot_with_editor_bounds(1000.0, 800.0, 1.0, bounds)
+    }
+
+    #[test]
+    fn find_focus_and_values_survive_native_snapshot_publication() {
+        let mut shell = app_shell("find.open");
+        let first = shell_snapshot(&shell);
+        first.validate().unwrap();
+        assert_eq!(first.focus, 6000);
+        assert_eq!(
+            first.nodes.iter().find(|n| n.id == 6000).unwrap().value.as_deref(),
+            Some("needle")
+        );
+        let workspace = shell.workspace.as_mut().unwrap();
+        workspace.find.accessibility_action(6001, true);
+        workspace.find.replacement.insert("changed");
+        let second = shell_snapshot(&shell);
+        second.validate().unwrap();
+        assert_eq!(second.focus, 6001);
+        assert!(
+            second
+                .nodes
+                .iter()
+                .find(|n| n.id == 6001)
+                .unwrap()
+                .value
+                .as_deref()
+                .unwrap()
+                .contains("changed")
+        );
+    }
+
+    #[test]
+    fn split_panes_publish_independent_text_owners_and_retire_closed_provider() {
+        for scenario in ["split_vertical", "split_horizontal"] {
+            let mut shell = headless_shell();
+            views::accessibility_test_setup(&mut shell, scenario);
+            let snapshot = shell_snapshot(&shell);
+            snapshot.validate().unwrap();
+            let editors: Vec<_> = snapshot
+                .nodes
+                .iter()
+                .filter(|node| node.role == AccessibilityRole::Editor)
+                .collect();
+            assert_eq!(editors.len(), 2, "{scenario}");
+            assert_ne!(editors[0].id, editors[1].id, "{scenario}");
+            assert!(editors[0].name.starts_with("Pane 1,"), "{scenario}");
+            assert!(editors[1].name.starts_with("Pane 2,"), "{scenario}");
+            assert_eq!(editors.iter().filter(|node| node.id == snapshot.focus).count(), 1);
+            assert_eq!(snapshot.text_views.len(), 2, "{scenario}");
+            assert_ne!(
+                snapshot.text_views[0].context.source_identity, snapshot.text_views[1].context.source_identity,
+                "clones sharing document bytes still require distinct providers"
+            );
+            let sources = shell.accessibility_text_sources();
+            assert_eq!(sources.len(), 2);
+            assert_eq!(sources[0].1.identity(), snapshot.text_views[0].context.source_identity);
+            assert_eq!(sources[1].1.identity(), snapshot.text_views[1].context.source_identity);
+
+            let first = snapshot.text_views[0].context.source_identity;
+            let second_selection = snapshot.text_views[1].context.selection;
+            let first_editor = shell.accessibility_editor_mut(first).unwrap();
+            first_editor.enqueue(Input::SetCaret(0, false));
+            while shell.views.busy(shell.workspace.as_ref().unwrap()) {
+                shell.workspace.as_mut().unwrap().pump();
+                shell.views.pump(shell.workspace.as_mut().unwrap());
+            }
+            let updated = shell_snapshot(&shell);
+            assert_eq!(updated.text_views[0].context.selection, (0, 0));
+            assert_eq!(updated.text_views[1].context.selection, second_selection);
+
+            shell
+                .accessibility_editor_mut(updated.text_views[0].context.source_identity)
+                .unwrap()
+                .enqueue(Input::Insert("shared".into()));
+            while shell.views.busy(shell.workspace.as_ref().unwrap()) {
+                shell.workspace.as_mut().unwrap().pump();
+                shell.views.pump(shell.workspace.as_mut().unwrap());
+            }
+            assert!(
+                shell
+                    .accessibility_editor_mut(updated.text_views[0].context.source_identity)
+                    .is_none(),
+                "an edit must retire actions qualified by the old pane generation"
+            );
+            let post_edit = shell_snapshot(&shell);
+            assert_ne!(
+                post_edit.text_views[0].context.source_identity,
+                updated.text_views[0].context.source_identity
+            );
+            let shared_sources = shell.accessibility_text_sources();
+            let reads: Vec<_> = shared_sources
+                .iter()
+                .map(|(_, source)| source.read(0, 64 * 1024))
+                .collect();
+            assert_eq!(reads[0], reads[1], "shared edits must reach both pane providers");
+
+            let retired = shell_snapshot(&shell).text_views[0].context.source_identity;
+            assert!(views::accessibility_test_close_split(&mut shell));
+            assert!(!shell.views.open());
+            assert!(shell.accessibility_editor_mut(retired).is_none());
+        }
+    }
+
+    #[test]
+    fn compare_editor_providers_match_reserved_viewport_above_shared_dock() {
+        let mut shell = headless_shell();
+        compare::accessibility_test_setup(&mut shell, "open");
+        let snapshot = shell_snapshot(&shell);
+        let editor_origin = bareline_ui::rect(
+            shell.panels.width_left(),
+            shell.toolbar.controller.height(),
+            (1000.0 - shell.panels.width_left() - shell.panels.width_right()).max(0.0),
+            (800.0 - shell.toolbar.controller.height()).max(0.0),
+        );
+        let dock_top = editor_origin.y + shell.dock.current_layout().unwrap().outer.y;
+
+        for pane in 0..2 {
+            let pane_bounds = shell.views.bounds[pane].expect("compare pane layout");
+            let provider = editor_provider_id(shell.views.pane_token(pane).expect("compare pane token"));
+            let node = snapshot
+                .nodes
+                .iter()
+                .find(|node| node.id == provider)
+                .expect("compare editor provider");
+            let provider_bottom = node.bounds[1] + node.bounds[3];
+            let pane_bottom = (editor_origin.y + pane_bounds.y + pane_bounds.height) as f64;
+            assert_eq!(
+                provider_bottom, pane_bottom,
+                "pane {pane} provider must use its rendered viewport"
+            );
+            assert_eq!(
+                pane_bottom, dock_top as f64,
+                "pane {pane} viewport must stop at the shared dock"
+            );
+        }
+    }
+
+    #[test]
+    fn provider_identity_follows_tab_move_clone_and_session_restore() {
+        use bareline_app::views::{SessionTab, ViewController, ViewState};
+        let tab = SessionTab {
+            id: 41,
+            document_id: 9,
+            pinned: false,
+            view: ViewState::default(),
+        };
+        let mut controller = ViewController::new(vec![tab], Some(41)).unwrap();
+        let moved = editor_provider_id(41);
+        controller.move_to_other(41).unwrap();
+        assert_eq!(editor_provider_id(controller.tabs()[0].id), moved);
+
+        let clone = controller.clone_to_other(41).unwrap();
+        assert_ne!(editor_provider_id(clone), moved);
+        let manifest = bareline_file_io::session::SessionManifest {
+            documents: vec![bareline_file_io::session::SessionDocument {
+                id: 9,
+                path: None,
+                title: "Restored".into(),
+            }],
+            tabs: controller.tabs().to_vec(),
+            active_tab: Some(clone),
+            layout: bareline_file_io::session::SessionLayout {
+                split: true,
+                active_pane: controller.active_pane(),
+                active_tabs: [controller.active_tab(0), controller.active_tab(1)],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let restored = ViewController::from_session(&manifest).unwrap();
+        assert!(restored.tabs().iter().any(|tab| editor_provider_id(tab.id) == moved));
+        assert!(
+            restored
+                .tabs()
+                .iter()
+                .any(|tab| editor_provider_id(tab.id) == editor_provider_id(clone))
+        );
+    }
+
+    #[test]
+    fn prompt_and_compare_modals_own_focus_text_and_background_actions() {
+        use bareline_platform::accessibility::AccessibleRead;
+        let mut shell = app_shell("modal");
+        let document_before = shell
+            .workspace
+            .as_ref()
+            .and_then(|workspace| workspace.editors.get(shell.app.active))
+            .map(|editor| editor.snapshot().identity_token())
+            .unwrap();
+        shell.activate_modal(super::super::modal::ModalSurface::Run);
+        shell.run_prompt.open();
+        let mut renderer = bareline_renderer_recording::RecordingBackend::default();
+        let mut ops = Vec::new();
+        shell
+            .run_prompt
+            .draw(
+                &mut renderer,
+                1000.0,
+                800.0,
+                bareline_ui::theme::UiTheme::default(),
+                super::super::modal::RUN_FIELD_ID,
+                &mut ops,
+            )
+            .unwrap();
+        assert!(shell.set_modal_accessibility_value(super::super::modal::RUN_FIELD_ID, r"C:\tool.exe"));
+        let run = shell_snapshot(&shell);
+        run.validate().unwrap();
+        assert_eq!(run.focus, super::super::modal::RUN_FIELD_ID);
+        assert!(
+            run.nodes
+                .iter()
+                .any(|node| { node.id == super::super::modal::RUN_SUBMIT_ID && node.invokable && !node.disabled })
+        );
+        assert!(
+            run.nodes
+                .iter()
+                .any(|node| { node.id == super::super::modal::RUN_CANCEL_ID && node.invokable && !node.disabled })
+        );
+        assert!(
+            run.nodes
+                .iter()
+                .any(|node| { node.id == bareline_app::accessibility::EDITOR_ID && node.disabled && !node.focusable })
+        );
+        assert_eq!(
+            run.text.as_ref().map(|text| text.editor_id),
+            Some(super::super::modal::RUN_FIELD_ID)
+        );
+        let source = shell.accessibility_text_source().unwrap();
+        assert_eq!(source.identity(), run.text_context.as_ref().unwrap().source_identity);
+        let first_run_identity = source.identity();
+        assert_eq!(first_run_identity.0, MODAL_TEXT_NAMESPACE);
+        assert_ne!(first_run_identity, document_before);
+        assert_eq!(
+            source.read(0, 64),
+            AccessibleRead::Ready {
+                start: 0,
+                text: r"C:\tool.exe".into(),
+            }
+        );
+        let document_after = shell
+            .workspace
+            .as_ref()
+            .and_then(|workspace| workspace.editors.get(shell.app.active))
+            .map(|editor| editor.snapshot().identity_token())
+            .unwrap();
+        assert_eq!(
+            document_after, document_before,
+            "UIA prompt value must not edit the document"
+        );
+
+        shell.dismiss_modal(super::super::modal::ModalSurface::Run);
+        assert!(!editor_text_selection_matches(document_before, first_run_identity));
+        assert!(!editor_text_selection_matches(first_run_identity, first_run_identity));
+        shell.activate_modal(super::super::modal::ModalSurface::Run);
+        shell.run_prompt.open = true;
+        let reopened_run = shell_snapshot(&shell);
+        let reopened_identity = reopened_run.text_context.as_ref().unwrap().source_identity;
+        assert_ne!(first_run_identity, reopened_identity);
+        assert!(reopened_identity.1 > first_run_identity.1);
+        assert!(!modal_text_selection_matches(shell.modal.unwrap(), first_run_identity));
+
+        shell.activate_modal(super::super::modal::ModalSurface::Goto);
+        shell.goto.open = true;
+        assert!(
+            !shell.run_prompt.open,
+            "opening an incompatible modal closes the previous owner"
+        );
+        assert!(shell.set_modal_accessibility_value(super::super::modal::GOTO_FIELD_ID, "10:2"));
+        ops.clear();
+        shell
+            .goto
+            .draw(
+                &mut renderer,
+                1000.0,
+                800.0,
+                bareline_ui::theme::UiTheme::default(),
+                super::super::modal::GOTO_FIELD_ID,
+                &mut ops,
+            )
+            .unwrap();
+        let goto = shell_snapshot(&shell);
+        assert_eq!(goto.focus, super::super::modal::GOTO_FIELD_ID);
+        assert_eq!(
+            goto.text.as_ref().map(|text| text.editor_id),
+            Some(super::super::modal::GOTO_FIELD_ID)
+        );
+
+        let mut compare_shell = headless_shell();
+        compare::accessibility_test_setup(&mut compare_shell, "options");
+        let editor_providers = [0, 1].map(|pane| {
+            editor_provider_id(
+                compare_shell
+                    .views
+                    .pane_token(pane)
+                    .expect("compare pane provider token"),
+            )
+        });
+        let restored_editor = editor_providers[compare_shell.views.pane() as usize];
+        compare_shell.blur_dock_ownership();
+        compare_shell.activate_modal(super::super::modal::ModalSurface::CompareOptions);
+        compare_shell.compare.options_open = true;
+        let compare = shell_snapshot(&compare_shell);
+        compare.validate().unwrap();
+        assert_eq!(compare.focus, super::super::modal::COMPARE_GENERAL_ID);
+        assert!(compare.nodes.iter().any(|node| {
+            node.id == super::super::modal::COMPARE_DONE_ID && node.name == "Done" && node.invokable && !node.disabled
+        }));
+        for provider in editor_providers {
+            let editor = compare
+                .nodes
+                .iter()
+                .find(|node| node.id == provider)
+                .expect("compare modal must retain both editor providers as inert background");
+            assert_eq!(editor.role, AccessibilityRole::Editor);
+            assert!(editor.disabled && !editor.focusable && !editor.invokable);
+        }
+        assert!(
+            compare.nodes.iter().any(|node| {
+                node.id == super::super::modal::COMPARE_GENERAL_ID && node.role == AccessibilityRole::Tab
+            })
+        );
+        assert!(
+            compare.nodes.iter().any(|node| {
+                node.id == super::super::modal::COMPARE_COLORS_ID && node.role == AccessibilityRole::Tab
+            })
+        );
+
+        assert!(compare_shell.dismiss_modal(super::super::modal::ModalSurface::CompareOptions));
+        let restored = shell_snapshot(&compare_shell);
+        restored.validate().unwrap();
+        assert_eq!(restored.focus, restored_editor);
+        for provider in editor_providers {
+            let editor = restored
+                .nodes
+                .iter()
+                .find(|node| node.id == provider)
+                .expect("dismissed compare modal must restore both editor providers");
+            assert!(editor.focusable && !editor.disabled);
+        }
     }
 
     fn app_shell(scenario: &str) -> Shell {
@@ -622,65 +2330,552 @@ mod tests {
         if scenario.starts_with("toolbar") || scenario == "all_app_panels" {
             shell.toolbar.controller.model.visible = true;
         }
-        let editor_height=800.0-shell.toolbar.controller.height();
+        let editor_height = 800.0 - shell.toolbar.controller.height();
         if scenario.starts_with("find") || scenario == "all_app_panels" {
             let workspace = shell.workspace.as_mut().unwrap();
             workspace.find.show_replace();
             workspace.find.field.insert("needle");
             workspace.find.replacement.insert("replacement");
-            if scenario == "find.replace_focus" { workspace.find.accessibility_action(6001, false); }
-            if scenario == "find.match_case_focus" { let id=workspace.find.semantics(1000.0).iter().find(|n|n.command_id=="search.match_case").unwrap().id.0; workspace.find.accessibility_action(id, true); }
+            if scenario == "find.replace_focus" {
+                workspace.find.accessibility_action(6001, false);
+            }
+            if scenario == "find.match_case_focus" {
+                let id = workspace
+                    .find
+                    .semantics(1000.0)
+                    .iter()
+                    .find(|n| n.command_id == "search.match_case")
+                    .unwrap()
+                    .id
+                    .0;
+                workspace.find.accessibility_action(id, true);
+            }
             workspace.find.draw(&mut backend, 1000.0, &mut operations).unwrap();
         }
         if scenario.starts_with("search") || scenario == "all_app_panels" {
-            let workspace = shell.workspace.as_mut().unwrap();
-            workspace.search_panel.open = true;
-            workspace.search_panel.field.insert("workspace");
-            workspace.search_panel.draw(&mut backend,1000.0,editor_height,&[],&mut operations).unwrap();
+            {
+                let workspace = shell.workspace.as_mut().unwrap();
+                workspace.search_panel.show();
+                workspace.search_focus = true;
+                workspace.search_panel.field.insert("workspace");
+            }
+            shell.sync_bottom_dock(1000.0, editor_height);
+            let bounds = shell.dock.current_layout().unwrap().body;
+            shell
+                .workspace
+                .as_mut()
+                .unwrap()
+                .search_panel
+                .draw_in(&mut backend, bounds, &[], &mut operations)
+                .unwrap();
         }
         if scenario.starts_with("settings") || scenario == "all_app_panels" {
             shell.settings.controller.show();
-            if scenario == "settings.query_value" { assert!(shell.settings.controller.accessibility_set_value(8000,"font")); }
-            shell.settings.controller.draw(bareline_ui::rect(0.0,0.0,1000.0,800.0),&mut backend,&mut operations).unwrap();
+            if scenario == "settings.query_value" {
+                assert!(shell.settings.controller.accessibility_set_value(8000, "font"));
+            }
+            shell
+                .settings
+                .controller
+                .draw(
+                    bareline_ui::rect(0.0, 0.0, 1000.0, 800.0),
+                    &mut backend,
+                    &mut operations,
+                )
+                .unwrap();
         }
         if scenario.starts_with("palette") || scenario == "all_app_panels" {
-            shell.palette.show(&shell.app.commands,&context,&keymap);
-            shell.palette.draw(&mut backend,1000.0,800.0,&mut operations).unwrap();
-            if scenario == "palette.result_selection" { assert!(shell.palette.key(bareline_ui::controls::Key::Down,&shell.app.commands,&context).is_none()); }
+            shell.palette.show(&shell.app.commands, &context, &keymap);
+            shell
+                .palette
+                .draw(&mut backend, 1000.0, 800.0, &mut operations)
+                .unwrap();
+            if scenario == "palette.result_selection" {
+                assert!(
+                    shell
+                        .palette
+                        .key(bareline_ui::controls::Key::Down, &shell.app.commands, &context)
+                        .is_none()
+                );
+            }
         }
         if scenario.starts_with("toolbar") || scenario == "all_app_panels" {
             shell.toolbar.controller.model.visible = true;
-            shell.toolbar.controller.refresh(&shell.app.commands,&context,&keymap,1000.0);
-            if scenario == "toolbar.focus" { shell.toolbar.controller.focus(); }
-            if scenario == "toolbar.customize" { shell.toolbar.controller.customize(&shell.app.commands); }
-            shell.toolbar.controller.draw(1000.0,800.0,Default::default(),&mut operations);
+            shell
+                .toolbar
+                .controller
+                .refresh(&shell.app.commands, &context, &keymap, 1000.0);
+            if scenario == "toolbar.focus" {
+                shell.toolbar.controller.focus();
+            }
+            if scenario == "toolbar.customize" {
+                shell.toolbar.controller.customize(&shell.app.commands);
+            }
+            shell
+                .toolbar
+                .controller
+                .draw(1000.0, 800.0, Default::default(), &mut operations);
         }
         shell
+    }
+
+    #[test]
+    fn search_provider_tracks_field_selection_modes_and_close_without_editing_document() {
+        let mut shell = app_shell("find.open");
+        let document_before = shell.workspace.as_ref().unwrap().editors[shell.app.active]
+            .snapshot()
+            .identity_token();
+
+        assert!(shell.set_search_accessibility_value(6000, "café"));
+        let find = shell_snapshot(&shell);
+        assert_eq!(find.focus, 6000);
+        assert_eq!(find.text.as_ref().map(|text| text.editor_id), Some(6000));
+        let find_identity = find.text_context.as_ref().unwrap().source_identity;
+        assert_eq!(find_identity.0, SEARCH_TEXT_NAMESPACE);
+        assert!(shell.search_text_selection_action(find_identity, 0, "café".len()));
+        assert_eq!(
+            shell.workspace.as_ref().unwrap().find.field.selection(),
+            (0, "café".len())
+        );
+
+        assert!(shell.set_search_accessibility_value(6001, "changed"));
+        let replace = shell_snapshot(&shell);
+        assert_eq!(replace.focus, 6001);
+        assert_eq!(replace.text.as_ref().map(|text| text.editor_id), Some(6001));
+        assert_ne!(replace.text_context.as_ref().unwrap().source_identity, find_identity);
+
+        {
+            let workspace = shell.workspace.as_mut().unwrap();
+            workspace.find.hide();
+            workspace.search_panel.show();
+            workspace.search_focus = true;
+        }
+        shell.sync_bottom_dock(1000.0, 800.0);
+        assert!(shell.set_search_accessibility_value(7000, "workspace"));
+        let files = shell_snapshot(&shell);
+        assert_eq!(files.focus, 7000);
+        assert_eq!(files.text.as_ref().map(|text| text.editor_id), Some(7000));
+        assert!(files.nodes.iter().any(|node| {
+            node.id == bareline_app::search_panel::FILES_TAB_ID
+                && node.role == AccessibilityRole::Tab
+                && node.selected
+                && node.invokable
+        }));
+        assert!(
+            files
+                .nodes
+                .iter()
+                .any(|node| { node.id == 90_000_031 && node.role == AccessibilityRole::TabList })
+        );
+        assert_eq!(
+            files
+                .nodes
+                .iter()
+                .filter(|node| node.parent == 90_000_031 && node.selected)
+                .map(|node| node.id)
+                .collect::<Vec<_>>(),
+            vec![bareline_app::search_panel::FILES_TAB_ID]
+        );
+        let files_identity = files.text_context.as_ref().unwrap().source_identity;
+        let (handled, active) = super::super::search::accessibility_invoke_panel(
+            shell.workspace.as_mut().unwrap(),
+            bareline_app::search_panel::REPLACE_TAB_ID,
+        );
+        assert!(handled);
+        assert_eq!(active, None);
+        assert!(shell.workspace.as_ref().unwrap().find.replacing);
+        assert!(!shell.workspace.as_ref().unwrap().search_panel.open);
+        super::super::search::select_panel_tab(
+            shell.workspace.as_mut().unwrap(),
+            bareline_app::search_panel::SearchTab::Files,
+        );
+        assert!(shell.workspace.as_ref().unwrap().search_panel.open);
+        assert!(shell.workspace.as_ref().unwrap().search_focus);
+        shell.workspace.as_mut().unwrap().search_panel.hide();
+        shell.workspace.as_mut().unwrap().search_focus = false;
+        shell.sync_bottom_dock(1000.0, 800.0);
+        assert!(shell.search_text_selection_action(files_identity, 0, 1));
+        assert!(!editor_text_selection_matches(document_before, files_identity));
+        assert_eq!(
+            shell.workspace.as_ref().unwrap().editors[shell.app.active]
+                .snapshot()
+                .identity_token(),
+            document_before
+        );
+
+        shell.workspace.as_mut().unwrap().search_panel.show();
+        shell.workspace.as_mut().unwrap().search_focus = true;
+        shell.sync_bottom_dock(1000.0, 800.0);
+        let reopened = shell_snapshot(&shell);
+        assert_ne!(
+            reopened.text_context.as_ref().unwrap().source_identity,
+            files_identity,
+            "a reopened field must not recycle a queued provider identity"
+        );
+    }
+
+    #[test]
+    fn bottom_dock_exposes_one_selected_surface_and_retires_background_search_owner() {
+        let mut shell = app_shell("search.open");
+        shell.macros.controller.output_open = true;
+        shell.sync_bottom_dock(1000.0, 800.0);
+        assert!(shell.dock.activate(super::super::dock::DockTab::Output));
+        shell.activate_dock_tab(super::super::dock::DockTab::Output);
+        let snapshot = shell_snapshot(&shell);
+        snapshot.validate().unwrap();
+        assert_eq!(snapshot.focus, super::super::macros::OUTPUT_BODY_ID);
+        assert_eq!(
+            snapshot
+                .nodes
+                .iter()
+                .filter(|node| { super::super::dock::TAB_IDS.contains(&node.id) && node.selected })
+                .count(),
+            1
+        );
+        assert!(!snapshot.nodes.iter().any(|node| node.id == 7000));
+        assert_ne!(snapshot.text.as_ref().map(|text| text.editor_id), Some(7000));
+        assert!(
+            shell
+                .accessibility_text_source()
+                .is_none_or(|source| { source.identity().0 != SEARCH_TEXT_NAMESPACE })
+        );
+
+        let output = "src/example.rs:12:3\nBuild finished";
+        assert!(
+            shell
+                .macros
+                .controller
+                .update_output_snapshot(Some(output), (output.len(), 0), "Exited(0)",)
+        );
+        let body = shell.dock.current_layout().unwrap().body;
+        shell
+            .macros
+            .draw_output_in(body, bareline_renderer::Point::default(), &mut Vec::new());
+        let _ = shell.macros.controller.output_accessibility(2_000_000, false);
+        shell.focus_dock_body(super::super::dock::DockTab::Output);
+        assert_eq!(shell_snapshot(&shell).focus, 2_000_000);
+
+        shell.dock.focus_active();
+        shell.deactivate_dock_focus();
+        assert_eq!(shell_snapshot(&shell).focus, super::super::dock::TAB_IDS[2]);
+        shell.blur_dock_ownership();
+        assert_eq!(shell_snapshot(&shell).focus, bareline_app::accessibility::EDITOR_ID);
+    }
+
+    #[test]
+    fn compare_dock_exposes_both_current_hunk_copy_directions() {
+        let mut shell = headless_shell();
+        super::super::compare::accessibility_test_setup(&mut shell, "open");
+        let snapshot = shell_snapshot(&shell);
+        snapshot.validate().unwrap();
+        for command in ["compare.copyLeftToRight", "compare.copyRightToLeft"] {
+            let title = shell
+                .app
+                .commands
+                .entries()
+                .find(|entry| entry.id.0 == command)
+                .unwrap()
+                .title;
+            assert!(
+                snapshot.nodes.iter().any(|node| node.name == title && node.invokable),
+                "missing {command}"
+            );
+        }
+    }
+
+    #[test]
+    fn shared_body_focus_transfer_retires_header_and_shift_tab_returns_to_editor() {
+        let mut shell = headless_shell();
+        views::accessibility_test_setup(&mut shell, "open");
+        {
+            let workspace = shell.workspace.as_mut().unwrap();
+            workspace.search_panel.show();
+        }
+        shell.sync_bottom_dock(1000.0, 800.0);
+        assert!(shell.dock.activate(super::super::dock::DockTab::Search));
+        shell.dock.focus_active();
+        assert!(shell.dock.accessibility_focus().is_some());
+
+        shell.focus_dock_body(super::super::dock::DockTab::Search);
+        shell.workspace.as_mut().unwrap().search_panel.accessibility_focus(7000);
+        assert_eq!(shell_snapshot(&shell).focus, 7000);
+        assert!(shell.dock.accessibility_focus().is_none());
+
+        shell.dock.focus_active();
+        shell.focus_dock_body(super::super::dock::DockTab::Compare);
+        assert!(shell.compare.dock_has_focus());
+        assert!(shell.dock.accessibility_focus().is_none());
+
+        shell.dock.focus_active();
+        shell.focus_dock_body(super::super::dock::DockTab::Output);
+        assert!(shell.macros.output_focused());
+        assert!(shell.dock.accessibility_focus().is_none());
+
+        shell.dock.focus_active();
+        assert!(shell.traverse_dock_header(false));
+        assert_eq!(shell_snapshot(&shell).focus, 7000);
+        shell.dock.focus_active();
+        assert!(shell.traverse_dock_header(true));
+        let snapshot = shell_snapshot(&shell);
+        assert!(
+            !super::super::dock::TAB_IDS.contains(&snapshot.focus),
+            "editor ownership must not retain a dock tab as accessibility focus"
+        );
+        assert_eq!(snapshot.focus, bareline_app::accessibility::EDITOR_ID);
+    }
+
+    #[test]
+    fn recovery_modal_hides_background_text_and_restores_the_find_invoker() {
+        let mut shell = app_shell("find.open");
+        shell.ui_focus.set_targets(vec![bareline_ui::focus::FocusTarget {
+            id: bareline_ui::ViewId(bareline_app::accessibility::EDITOR_ID),
+            enabled: true,
+        }]);
+        assert!(
+            shell
+                .ui_focus
+                .focus(bareline_ui::ViewId(bareline_app::accessibility::EDITOR_ID))
+        );
+        super::super::recovery::accessibility_modal_test_setup(&mut shell);
+        assert_eq!(shell.modal.unwrap().invoker, 6000);
+        let recovery = shell_snapshot(&shell);
+        recovery.validate().unwrap();
+        assert_eq!(recovery.focus, super::super::modal::RECOVERY_CLOSE_ID);
+        assert!(recovery.text.is_none());
+        assert!(recovery.text_context.is_none());
+        assert!(shell.accessibility_text_source().is_none());
+        assert!(
+            recovery
+                .nodes
+                .iter()
+                .any(|node| { node.id == bareline_app::accessibility::EDITOR_ID && node.disabled && !node.focusable })
+        );
+        assert!(
+            recovery
+                .nodes
+                .iter()
+                .any(|node| { node.id == super::super::modal::RECOVERY_CLOSE_ID && node.invokable && !node.disabled })
+        );
+
+        shell.dismiss_modal(super::super::modal::ModalSurface::Recovery);
+        let closed = shell_snapshot(&shell);
+        assert_eq!(closed.focus, 6000);
+        assert_eq!(closed.text.as_ref().map(|text| text.editor_id), Some(6000));
+        assert!(shell.accessibility_text_source().is_some());
+        assert!(
+            closed
+                .nodes
+                .iter()
+                .any(|node| { node.id == 6000 && !node.disabled && node.focusable })
+        );
+
+        let button = shell
+            .workspace
+            .as_ref()
+            .unwrap()
+            .find
+            .semantics(1200.0)
+            .into_iter()
+            .find(|node| node.command_id == "search.match_case")
+            .unwrap()
+            .id
+            .0;
+        shell
+            .workspace
+            .as_mut()
+            .unwrap()
+            .find
+            .accessibility_action(button, true);
+        shell.ui_focus.set_targets(vec![bareline_ui::focus::FocusTarget {
+            id: bareline_ui::ViewId(bareline_app::accessibility::EDITOR_ID),
+            enabled: true,
+        }]);
+        assert!(
+            shell
+                .ui_focus
+                .focus(bareline_ui::ViewId(bareline_app::accessibility::EDITOR_ID))
+        );
+        super::super::recovery::accessibility_modal_test_setup(&mut shell);
+        assert_eq!(shell.modal.unwrap().invoker, button);
+        shell.dismiss_modal(super::super::modal::ModalSurface::Recovery);
+        let button_restored = shell_snapshot(&shell);
+        assert_eq!(button_restored.focus, button);
+        assert!(
+            button_restored
+                .nodes
+                .iter()
+                .any(|node| node.id == button && node.focusable && !node.disabled)
+        );
+    }
+
+    #[test]
+    fn settings_layer_suppresses_background_find_text_ownership() {
+        let mut shell = app_shell("find.open");
+        let find = shell_snapshot(&shell);
+        let find_identity = find.text_context.as_ref().unwrap().source_identity;
+        assert_eq!(find.focus, 6000);
+        assert_eq!(find.text.as_ref().map(|text| text.editor_id), Some(6000));
+        assert!(shell.accessibility_text_source().is_some());
+
+        shell.settings.controller.show();
+        let settings = shell_snapshot(&shell);
+        settings.validate().unwrap();
+        assert_eq!(settings.focus, 8000);
+        assert!(settings.text.is_none());
+        assert!(settings.text_context.is_none());
+        assert!(shell.accessibility_text_source().is_none());
+        assert!(
+            settings
+                .nodes
+                .iter()
+                .any(|node| { node.id == 6000 && node.disabled && !node.focusable })
+        );
+
+        let selection_before = shell.workspace.as_ref().unwrap().find.field.selection();
+        assert!(shell.search_text_selection_action(find_identity, 0, 0));
+        assert_eq!(
+            shell.workspace.as_ref().unwrap().find.field.selection(),
+            selection_before,
+            "a provider retired by Settings must not mutate the background Find field"
+        );
+
+        shell.settings.controller.dismiss();
+        let restored = shell_snapshot(&shell);
+        assert_eq!(restored.focus, 6000);
+        assert_eq!(restored.text.as_ref().map(|text| text.editor_id), Some(6000));
+        assert!(shell.accessibility_text_source().is_some());
+    }
+
+    #[test]
+    fn folder_button_suppresses_background_find_text_ownership() {
+        let mut shell = app_shell("find.open");
+        let find = shell_snapshot(&shell);
+        let find_identity = find.text_context.as_ref().unwrap().source_identity;
+        let selection_before = shell.workspace.as_ref().unwrap().find.field.selection();
+
+        shell.search_folder_accessibility_test_setup(3);
+        let folder = shell_snapshot(&shell);
+        folder.validate().unwrap();
+        assert_eq!(folder.focus, 77_003);
+        assert!(folder.text.is_none());
+        assert!(folder.text_context.is_none());
+        assert!(shell.accessibility_text_source().is_none());
+        assert!(
+            folder
+                .nodes
+                .iter()
+                .any(|node| node.id == 6000 && node.disabled && !node.focusable)
+        );
+        assert!(shell.search_text_selection_action(find_identity, 0, 0));
+        assert_eq!(
+            shell.workspace.as_ref().unwrap().find.field.selection(),
+            selection_before,
+            "a folder button must not leave the background Find provider actionable"
+        );
     }
 
     #[test]
     fn complete_native_semantic_json_golden() {
         let mut errors = Vec::new();
         let mut cases = std::collections::BTreeMap::new();
-        cases.insert("default".to_owned(), dump(&mut errors,"default",&shell_snapshot(&headless_shell())));
-        for scenario in ["default_document","find.open","find.replace_focus","find.match_case_focus","search.open","settings.open","settings.query_value","palette.open","palette.result_selection","toolbar.open","toolbar.focus","toolbar.customize","all_app_panels"] {
+        cases.insert(
+            "default".to_owned(),
+            dump(&mut errors, "default", &shell_snapshot(&headless_shell())),
+        );
+        for scenario in [
+            "default_document",
+            "find.open",
+            "find.replace_focus",
+            "find.match_case_focus",
+            "search.open",
+            "settings.open",
+            "settings.query_value",
+            "palette.open",
+            "palette.result_selection",
+            "toolbar.open",
+            "toolbar.focus",
+            "toolbar.customize",
+            "all_app_panels",
+        ] {
             let snapshot = shell_snapshot(&app_shell(scenario));
-            if !snapshot.nodes.iter().any(|n|n.id==2) {errors.push(format!("{scenario}: document fixture must expose editor"));}
-            let target=if scenario.starts_with("find") {Some(6000)} else if scenario.starts_with("search") {Some(7000)} else if scenario.starts_with("settings") {Some(90_000_012)} else if scenario.starts_with("palette") {Some(90_000_002)} else if scenario.starts_with("toolbar") {Some(90_000_003)} else {None};
-            if let Some(target)=target {if !snapshot.nodes.iter().any(|n|n.id==target) {errors.push(format!("{scenario}: missing actual surface {target}"));}}
-            if scenario=="all_app_panels" && snapshot.nodes.iter().any(|node|(7000..=7003).contains(&node.id)&&node.bounds[1]+node.bounds[3]>800.0) {
+            if !snapshot.nodes.iter().any(|n| n.id == 2) {
+                errors.push(format!("{scenario}: document fixture must expose editor"));
+            }
+            let target = if scenario.starts_with("find") {
+                Some(6000)
+            } else if scenario.starts_with("search") {
+                Some(7000)
+            } else if scenario.starts_with("settings") {
+                Some(90_000_012)
+            } else if scenario.starts_with("palette") {
+                Some(90_000_002)
+            } else if scenario.starts_with("toolbar") {
+                Some(90_000_003)
+            } else {
+                None
+            };
+            if let Some(target) = target {
+                if !snapshot.nodes.iter().any(|n| n.id == target) {
+                    errors.push(format!("{scenario}: missing actual surface {target}"));
+                }
+            }
+            if scenario == "all_app_panels"
+                && snapshot
+                    .nodes
+                    .iter()
+                    .any(|node| (7000..=7003).contains(&node.id) && node.bounds[1] + node.bounds[3] > 800.0)
+            {
                 errors.push("all_app_panels: search layout must reserve toolbar height".into());
             }
-            if scenario=="palette.result_selection" && (snapshot.focus!=11000 || !snapshot.nodes.iter().any(|node|node.id==11000&&node.focusable&&!node.disabled) || !snapshot.nodes.iter().any(|node|node.id==11002&&node.selected&&node.invokable&&!node.focusable&&!node.disabled)) {
-                errors.push("palette.result_selection: Down must select second invokable row while query retains focus".into());
+            if scenario == "palette.result_selection"
+                && (snapshot.focus != 11000
+                    || !snapshot
+                        .nodes
+                        .iter()
+                        .any(|node| node.id == 11000 && node.focusable && !node.disabled)
+                    || !snapshot.nodes.iter().any(|node| {
+                        node.id == 11002 && node.selected && node.invokable && !node.focusable && !node.disabled
+                    }))
+            {
+                errors.push(
+                    "palette.result_selection: Down must select second invokable row while query retains focus".into(),
+                );
             }
-            cases.insert(scenario.to_owned(),dump(&mut errors,scenario,&snapshot));
+            cases.insert(scenario.to_owned(), dump(&mut errors, scenario, &snapshot));
         }
         let setups: &[SetupCases] = &[
-            ("views", views::accessibility_test_setup, &["closed","open","populated","focus_close","focus_overflow","mru","vertical"],90_000_001),
-            ("compare", compare::accessibility_test_setup, &["closed","open","populated","options","colors","focus","value"],90_000_025),
-            ("utilities", utilities::accessibility_test_setup, &["closed","open","populated","options","focus","value"],90_000_026),
-            ("shortcuts", shortcuts::accessibility_test_setup, &["closed","open","filtered","focus_binding","error"],90_000_004),
+            (
+                "views",
+                views::accessibility_test_setup,
+                &[
+                    "closed",
+                    "open",
+                    "populated",
+                    "focus_close",
+                    "focus_overflow",
+                    "mru",
+                    "vertical",
+                ],
+                90_000_001,
+            ),
+            (
+                "compare",
+                compare::accessibility_test_setup,
+                &["closed", "open", "populated", "options", "colors", "focus", "value"],
+                90_000_025,
+            ),
+            (
+                "utilities",
+                utilities::accessibility_test_setup,
+                &["closed", "open", "populated", "options", "focus", "value"],
+                90_000_026,
+            ),
+            (
+                "shortcuts",
+                shortcuts::accessibility_test_setup,
+                &["closed", "open", "filtered", "focus_binding", "error"],
+                90_000_004,
+            ),
         ];
         let mut all_chrome = Vec::new();
         for (prefix, setup, scenarios, group) in setups {
@@ -689,119 +2884,312 @@ mod tests {
                 setup(&mut shell, scenario);
                 let snapshot = shell_snapshot(&shell);
                 if *scenario != "closed" {
-                    if !snapshot.nodes.iter().any(|n|n.id==*group) {errors.push(format!("{prefix}.{scenario}: missing actual container {group}"));}
-                    if !snapshot.nodes.iter().any(|n|n.id!=*group && n.parent==*group) {errors.push(format!("{prefix}.{scenario}: missing actual controls"));}
+                    if !snapshot.nodes.iter().any(|n| n.id == *group) {
+                        errors.push(format!("{prefix}.{scenario}: missing actual container {group}"));
+                    }
+                    if !snapshot.nodes.iter().any(|n| n.id != *group && n.parent == *group) {
+                        errors.push(format!("{prefix}.{scenario}: missing actual controls"));
+                    }
                 }
                 if *scenario == "populated" {
                     // Retain complete owner subtrees, excluding other shell surfaces.
-                    let parents: std::collections::BTreeMap<_,_> = snapshot.nodes.iter().map(|n|(n.id,n.parent)).collect();
-                    all_chrome.extend(snapshot.nodes.iter().filter(|n| {
-                        let mut id=n.id;
-                        for _ in 0..parents.len() { if id==*group{return true;} let Some(parent)=parents.get(&id) else {break}; if *parent==1{break;} id=*parent; }
-                        false
-                    }).cloned());
+                    let parents: std::collections::BTreeMap<_, _> =
+                        snapshot.nodes.iter().map(|n| (n.id, n.parent)).collect();
+                    all_chrome.extend(
+                        snapshot
+                            .nodes
+                            .iter()
+                            .filter(|n| {
+                                let mut id = n.id;
+                                for _ in 0..parents.len() {
+                                    if id == *group {
+                                        return true;
+                                    }
+                                    let Some(parent) = parents.get(&id) else { break };
+                                    if *parent == 1 {
+                                        break;
+                                    }
+                                    id = *parent;
+                                }
+                                false
+                            })
+                            .cloned(),
+                    );
                 }
-                cases.insert(format!("{prefix}.{scenario}"),dump(&mut errors,&format!("{prefix}.{scenario}"),&snapshot));
+                cases.insert(
+                    format!("{prefix}.{scenario}"),
+                    dump(&mut errors, &format!("{prefix}.{scenario}"), &snapshot),
+                );
             }
         }
         let fixture_groups = [
-            ("power",super::super::power::accessibility_test_cases(), Some((90_000_006,"Column editor and clipboard history"))),
-            ("recovery",super::super::recovery::accessibility_test_cases(), None),
-            ("panels",super::super::workspace_panels::accessibility_test_cases(), None),
-            ("language",super::super::language::accessibility_test_cases(), None),
-            ("extensions",super::super::extensions::accessibility_test_cases(), None),
+            (
+                "power",
+                super::super::power::accessibility_test_cases(),
+                Some((90_000_006, "Column editor and clipboard history")),
+            ),
+            ("recovery", super::super::recovery::accessibility_test_cases(), None),
+            (
+                "panels",
+                super::super::workspace_panels::accessibility_test_cases(),
+                None,
+            ),
+            ("language", super::super::language::accessibility_test_cases(), None),
+            ("extensions", super::super::extensions::accessibility_test_cases(), None),
         ];
-        for (prefix,fixtures, group) in fixture_groups {
+        for (prefix, fixtures, group) in fixture_groups {
             let mut representative: Option<Vec<AccessibilityNode>> = None;
             for (name, nodes, focus) in fixtures {
-                if !name.ends_with("closed") && nodes.is_empty() {errors.push(format!("{prefix}/{name}: missing actual controls"));}
-                let mut chrome=Vec::new();
-                if let Some((id,label))=group { semantic_group(&mut chrome,id,label,nodes); } else {chrome=nodes;}
-                if !chrome.is_empty() {
-                    let root=match prefix {"power"=>90_000_006,"recovery"=>100900,"panels"=>90_000_009,"language"=>70000,"extensions"=>60000,_=>unreachable!()};
-                    if !chrome.iter().any(|n|n.id==root) {errors.push(format!("{prefix}/{name}: missing owner hierarchy {root}"));}
+                if !name.ends_with("closed") && nodes.is_empty() {
+                    errors.push(format!("{prefix}/{name}: missing actual controls"));
                 }
-                if representative.as_ref().is_none_or(|previous|chrome.len()>previous.len()) || name.ends_with("all_open") {representative=Some(chrome.clone());}
-                let layer=group.map(|(id,_)|id).filter(|_|!chrome.is_empty());
-                let snapshot=compose_snapshot("Bareline",1000.0,800.0,None,chrome,focus.unwrap_or(1),layer);
-                if cases.insert(format!("{prefix}/{name}"),dump(&mut errors,&format!("{prefix}/{name}"),&snapshot)).is_some() {errors.push(format!("duplicate fixture case {prefix}/{name}"));}
+                let mut chrome = Vec::new();
+                if let Some((id, label)) = group {
+                    semantic_group(&mut chrome, id, label, nodes);
+                } else {
+                    chrome = nodes;
+                }
+                if !chrome.is_empty() {
+                    let root = match prefix {
+                        "power" => 90_000_006,
+                        "recovery" => 100900,
+                        "panels" => 90_000_009,
+                        "language" => 70000,
+                        "extensions" => 60000,
+                        _ => unreachable!(),
+                    };
+                    if !chrome.iter().any(|n| n.id == root) {
+                        errors.push(format!("{prefix}/{name}: missing owner hierarchy {root}"));
+                    }
+                }
+                if representative
+                    .as_ref()
+                    .is_none_or(|previous| chrome.len() > previous.len())
+                    || name.ends_with("all_open")
+                {
+                    representative = Some(chrome.clone());
+                }
+                let layer = group.map(|(id, _)| id).filter(|_| !chrome.is_empty());
+                let snapshot = compose_snapshot("Bareline", 1000.0, 800.0, None, chrome, focus.unwrap_or(1), layer);
+                if cases
+                    .insert(
+                        format!("{prefix}/{name}"),
+                        dump(&mut errors, &format!("{prefix}/{name}"), &snapshot),
+                    )
+                    .is_some()
+                {
+                    errors.push(format!("duplicate fixture case {prefix}/{name}"));
+                }
             }
-            if let Some(nodes)=representative {all_chrome.extend(nodes);}
+            if let Some(nodes) = representative {
+                all_chrome.extend(nodes);
+            }
         }
         let mut macro_manager = Vec::new();
         let mut macro_output = Vec::new();
-        for (name,nodes,focus) in super::super::macros::accessibility_test_cases() {
-            let (output,manager): (Vec<_>,Vec<_>) = nodes.into_iter().partition(|n|n.id>=2_000_000);
-            let mut chrome=Vec::new();
-            semantic_group(&mut chrome,90_000_014,"Macro and Run manager",manager.clone());
-            semantic_group(&mut chrome,90_000_015,"Command output",output.clone());
+        for (name, nodes, focus) in super::super::macros::accessibility_test_cases() {
+            let (output, manager): (Vec<_>, Vec<_>) = nodes.into_iter().partition(|n| n.id >= 2_000_000);
+            let mut chrome = Vec::new();
+            semantic_group(&mut chrome, 90_000_014, "Macro and Run manager", manager.clone());
+            semantic_group(&mut chrome, 90_000_015, "Command output", output.clone());
             // The shared status (23300) remains present with output alone;
             // production gates the modal layer on manager.open, not that alert.
-            let layer=manager.iter().any(|node|node.id!=23300).then_some(90_000_014);
-            let snapshot=compose_snapshot("Bareline",1000.0,800.0,None,chrome,focus.unwrap_or(1),layer);
-            if name=="macros_output_link_focus" && (snapshot.focus!=2_000_000 || !snapshot.nodes.iter().any(|node|node.id==2_000_000&&node.focusable&&node.invokable&&!node.disabled)) {
-                errors.push("macros_output_link_focus: actual link must retain focus and actions with manager closed".into());
+            let layer = manager.iter().any(|node| node.id != 23300).then_some(90_000_014);
+            let snapshot = compose_snapshot("Bareline", 1000.0, 800.0, None, chrome, focus.unwrap_or(1), layer);
+            if name == "macros_output_link_focus"
+                && (snapshot.focus != 2_000_000
+                    || !snapshot
+                        .nodes
+                        .iter()
+                        .any(|node| node.id == 2_000_000 && node.focusable && node.invokable && !node.disabled))
+            {
+                errors.push(
+                    "macros_output_link_focus: actual link must retain focus and actions with manager closed".into(),
+                );
             }
-            cases.insert(name.into(),dump(&mut errors,name,&snapshot));
-            if manager.len()>macro_manager.len() {macro_manager=manager;}
-            if output.len()>macro_output.len() {macro_output=output;}
+            cases.insert(name.into(), dump(&mut errors, name, &snapshot));
+            if manager.len() > macro_manager.len() {
+                macro_manager = manager;
+            }
+            if output.len() > macro_output.len() {
+                macro_output = output;
+            }
         }
-        if macro_manager.is_empty() {errors.push("actual macro manager fixture required".into());}
-        if !macro_output.iter().any(|n|n.focusable) {errors.push("actual populated output row fixture required".into());}
-        semantic_group(&mut all_chrome,90_000_014,"Macro and Run manager",macro_manager);
-        semantic_group(&mut all_chrome,90_000_015,"Command output",macro_output);
+        if macro_manager.is_empty() {
+            errors.push("actual macro manager fixture required".into());
+        }
+        if !macro_output.iter().any(|n| n.focusable) {
+            errors.push("actual populated output row fixture required".into());
+        }
+        semantic_group(&mut all_chrome, 90_000_014, "Macro and Run manager", macro_manager);
+        semantic_group(&mut all_chrome, 90_000_015, "Command output", macro_output);
         let app = app_shell("all_app_panels");
         let app_snapshot = shell_snapshot(&app);
         // Full retained app controls join native owner subtrees. Their modal
         // flags are reset by taking each surface's own nonmodal snapshot below.
-        for scenario in ["find.open","search.open","settings.open","palette.open","toolbar.open"] {
-            let shell=app_shell(scenario);
-            let surface=shell_snapshot(&shell);
-            let allowed=match scenario {
-                "find.open"=>shell.workspace.as_ref().unwrap().find.semantics(1000.0).iter().map(|n|n.id.0).chain([9001]).collect(),
-                "search.open"=>shell.workspace.as_ref().unwrap().search_panel.semantics().iter().map(|n|n.id.0).chain([9002]).collect(),
-                "settings.open"=>vec![90_000_012],"palette.open"=>vec![90_000_002],_=>vec![90_000_003]
+        for scenario in [
+            "find.open",
+            "search.open",
+            "settings.open",
+            "palette.open",
+            "toolbar.open",
+        ] {
+            let shell = app_shell(scenario);
+            let surface = shell_snapshot(&shell);
+            let allowed = match scenario {
+                "find.open" => shell
+                    .workspace
+                    .as_ref()
+                    .unwrap()
+                    .find
+                    .semantics(1000.0)
+                    .iter()
+                    .map(|n| n.id.0)
+                    .chain([9001])
+                    .collect(),
+                "search.open" => shell
+                    .workspace
+                    .as_ref()
+                    .unwrap()
+                    .search_panel
+                    .semantics()
+                    .iter()
+                    .map(|n| n.id.0)
+                    .chain([9002, 90_000_031])
+                    .collect(),
+                "settings.open" => vec![90_000_012],
+                "palette.open" => vec![90_000_002],
+                _ => vec![90_000_003],
             };
-            let parents:std::collections::BTreeMap<_,_>=surface.nodes.iter().map(|n|(n.id,n.parent)).collect();
+            let parents: std::collections::BTreeMap<_, _> = surface.nodes.iter().map(|n| (n.id, n.parent)).collect();
             all_chrome.extend(surface.nodes.into_iter().filter(|n| {
-                let mut id=n.id;
-                for _ in 0..parents.len() {if allowed.contains(&id){return true;} let Some(parent)=parents.get(&id) else{break}; if *parent==1{break;} id=*parent;}
+                let mut id = n.id;
+                for _ in 0..parents.len() {
+                    if allowed.contains(&id) {
+                        return true;
+                    }
+                    let Some(parent) = parents.get(&id) else { break };
+                    if *parent == 1 {
+                        break;
+                    }
+                    id = *parent;
+                }
                 false
             }));
         }
-        all_chrome.extend(app_snapshot.nodes.into_iter().filter(|n|n.id==90_000_020||n.parent==90_000_020));
-        let editor=app.workspace.as_ref().unwrap().editors.first().map(|e|&**e);
-        let mut shortcuts_shell=headless_shell();
-        shortcuts::accessibility_test_setup(&mut shortcuts_shell,"open");
-        all_chrome.extend(shell_snapshot(&shortcuts_shell).nodes.into_iter().filter(|n|n.id==90_000_004||n.parent==90_000_004));
-        for layer in [90_000_002,90_000_004,90_000_006,90_000_012,60_000,90_000_026,90_000_014] {
-            if !all_chrome.iter().any(|n|n.id==layer) {errors.push(format!("all_panels.modal_{layer}: missing actual layer"));}
-            let snapshot=compose_snapshot("Bareline",1000.0,800.0,editor,all_chrome.clone(),2,Some(layer));
-            if !snapshot.nodes.iter().any(|n|n.id==snapshot.focus&&n.focusable&&!n.disabled) {errors.push(format!("all_panels.modal_{layer}: focus {} must be enabled and focusable",snapshot.focus));}
-            cases.insert(format!("all_panels.modal_{layer}"),dump(&mut errors,&format!("all_panels.modal_{layer}"),&snapshot));
+        all_chrome.extend(
+            app_snapshot
+                .nodes
+                .into_iter()
+                .filter(|n| n.id == 90_000_020 || n.parent == 90_000_020),
+        );
+        let editor = app.workspace.as_ref().unwrap().editors.first().map(|e| e.viewport());
+        let mut shortcuts_shell = headless_shell();
+        shortcuts::accessibility_test_setup(&mut shortcuts_shell, "open");
+        all_chrome.extend(
+            shell_snapshot(&shortcuts_shell)
+                .nodes
+                .into_iter()
+                .filter(|n| n.id == 90_000_004 || n.parent == 90_000_004),
+        );
+        for layer in [
+            90_000_002, 90_000_004, 90_000_006, 90_000_012, 60_000, 90_000_026, 90_000_014,
+        ] {
+            if !all_chrome.iter().any(|n| n.id == layer) {
+                errors.push(format!("all_panels.modal_{layer}: missing actual layer"));
+            }
+            let snapshot = compose_snapshot("Bareline", 1000.0, 800.0, editor, all_chrome.clone(), 2, Some(layer));
+            if !snapshot
+                .nodes
+                .iter()
+                .any(|n| n.id == snapshot.focus && n.focusable && !n.disabled)
+            {
+                errors.push(format!(
+                    "all_panels.modal_{layer}: focus {} must be enabled and focusable",
+                    snapshot.focus
+                ));
+            }
+            cases.insert(
+                format!("all_panels.modal_{layer}"),
+                dump(&mut errors, &format!("all_panels.modal_{layer}"), &snapshot),
+            );
         }
-        assert!(errors.is_empty(), "semantic fixture validation failures:\n{}", errors.join("\n"));
-        let actual=serde_json::to_string_pretty(&cases).unwrap()+"\n";
-        let path=std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/a11y/native-semantic.json");
-        if let Some(candidate)=std::env::var_os("BARELINE_CAPTURE_ACCESSIBILITY_GOLDEN") {
+        assert!(
+            errors.is_empty(),
+            "semantic fixture validation failures:\n{}",
+            errors.join("\n")
+        );
+        let actual = serde_json::to_string_pretty(&cases).unwrap() + "\n";
+        let actual = normalize_relative_ages(&actual);
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/a11y/native-semantic.json");
+        if let Some(candidate) = std::env::var_os("BARELINE_CAPTURE_ACCESSIBILITY_GOLDEN") {
             std::fs::write(candidate, &actual).expect("write explicitly requested candidate");
             panic!("candidate captured; review full JSON and install baseline, then rerun without capture");
         }
-        let expected=std::fs::read_to_string(&path).expect("reviewed full semantic baseline must exist");
+        let expected = std::fs::read_to_string(&path).expect("reviewed full semantic baseline must exist");
         let actual: serde_json::Value = serde_json::from_str(&actual).expect("serialized actual semantics");
-        let expected: serde_json::Value = serde_json::from_str(&expected).expect("valid reviewed semantic baseline");
-        assert_eq!(actual,expected,"full semantic fields, hierarchy, focus and action capabilities changed");
+        let expected: serde_json::Value =
+            serde_json::from_str(&normalize_relative_ages(&expected)).expect("valid reviewed semantic baseline");
+        assert_eq!(
+            actual, expected,
+            "full semantic fields, hierarchy, focus and action capabilities changed"
+        );
     }
 }
 
+/// Checkpoint ages are measured against the wall clock, so the reviewed golden
+/// must not encode a particular capture date. Normalize "<n> day(s)/hour(s)/
+/// minute(s) ago" to a stable token before both capture and comparison.
+#[cfg(test)]
+fn normalize_relative_ages(text: &str) -> String {
+    fn unit_span(rest: &str) -> Option<usize> {
+        for unit in [" minute", " minutes", " hour", " hours", " day", " days"] {
+            if rest.starts_with(unit) && rest[unit.len()..].starts_with(" ago") {
+                return Some(unit.len() + " ago".len());
+            }
+        }
+        None
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut index = 0;
+    while index < text.len() {
+        let ch = text[index..].chars().next().unwrap();
+        if ch.is_ascii_digit() {
+            let digits_end = text[index..]
+                .find(|c: char| !c.is_ascii_digit())
+                .map(|offset| index + offset)
+                .unwrap_or(text.len());
+            if let Some(span) = unit_span(&text[digits_end..]) {
+                out.push_str("<age>");
+                index = digits_end + span;
+                continue;
+            }
+        }
+        out.push(ch);
+        index += ch.len_utf8();
+    }
+    out
+}
+
 /// Translate each real shaped box independently; a hidden seam is never text.
-pub(super) fn map_paged_geometry(editor:&bareline_editor_surface::paged_view::PagedEditorSurface, boxes:&mut Vec<bareline_platform::accessibility::AccessibilityTextBox>) {
+pub(super) fn map_paged_geometry(
+    editor: &bareline_editor_surface::paged_view::PagedEditorSurface,
+    boxes: &mut Vec<bareline_platform::accessibility::AccessibilityTextBox>,
+) {
     use bareline_document::TextOffset;
     use bareline_editor_surface::paged_view::SourceAffinity;
     boxes.retain_mut(|rect| {
-        let Some(start)=editor.source_offset(TextOffset(rect.start),SourceAffinity::After) else{return false;};
-        let Some(end)=editor.source_offset(TextOffset(rect.end),SourceAffinity::Before) else{return false;};
-        if end.0.checked_sub(start.0)!=rect.end.checked_sub(rect.start){return false;}
-        rect.start=start.0;rect.end=end.0;true
+        let Some(start) = editor.source_offset(TextOffset(rect.start), SourceAffinity::After) else {
+            return false;
+        };
+        let Some(end) = editor.source_offset(TextOffset(rect.end), SourceAffinity::Before) else {
+            return false;
+        };
+        if end.0.checked_sub(start.0) != rect.end.checked_sub(rect.start) {
+            return false;
+        }
+        rect.start = start.0;
+        rect.end = end.0;
+        true
     });
 }

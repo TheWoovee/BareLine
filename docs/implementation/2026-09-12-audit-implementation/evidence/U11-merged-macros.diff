@@ -1,0 +1,245 @@
+diff --git a/apps/bareline/src/windows_app/macros.rs "b/D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\U11-merge-current.rs"
+index 8146518..5b77314 100644
+--- a/apps/bareline/src/windows_app/macros.rs
++++ "b/D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\U11-merge-current.rs"
+@@ -8,7 +8,7 @@ use bareline_app::macros::{
+         process::{ExternalDefinition, LaunchMode, PlaceholderContext, ProcessPermission, ProcessState},
+     },
+ };
+-use bareline_renderer::{DrawOp, Rect};
++use bareline_renderer::{DrawOp, Point, Rect};
+ use bareline_ui::controls::{Key as UiKey, UiEvent};
+ use std::{
+     io::{Read, Write},
+@@ -115,6 +115,7 @@ pub struct MacrosRuntime {
+     external: Option<ExternalDefinition>,
+     pending: Option<mpsc::Receiver<Result<FileResult, String>>>,
+     bounds: Rect,
++    output_offset: Point,
+     focused: bool,
+     next_name: u32,
+     directory: Option<PathBuf>,
+@@ -141,6 +142,7 @@ impl Default for MacrosRuntime {
+             external: None,
+             pending: None,
+             bounds: Rect::default(),
++            output_offset: Point::default(),
+             focused: false,
+             next_name: 1,
+             directory: None,
+@@ -160,6 +162,19 @@ impl Default for MacrosRuntime {
+     }
+ }
+ impl MacrosRuntime {
++    pub(super) fn set_output_focused(&mut self, focused: bool) {
++        self.focused = focused;
++    }
++    #[cfg(test)]
++    pub(super) fn output_has_focus(&self) -> bool {
++        self.focused
++    }
++    fn output_point(&self, point: Point) -> Point {
++        Point {
++            x: point.x - self.output_offset.x,
++            y: point.y - self.output_offset.y,
++        }
++    }
+     pub fn configure(&mut self, directory: Option<PathBuf>) {
+         self.read_directory = directory.clone();
+         self.directory = directory;
+@@ -405,12 +420,35 @@ impl MacrosRuntime {
+     pub fn height(&self) -> f32 {
+         if self.controller.output_open { 200.0 } else { 0.0 }
+     }
++    pub(super) fn output_dock_state(&self) -> super::dock::DockSurfaceState {
++        let (available, busy, revision) = self.controller.output_dock_state();
++        super::dock::DockSurfaceState {
++            available,
++            busy,
++            revision,
++        }
++    }
+     pub fn draw_output(&mut self, width: f32, height: f32, ops: &mut Vec<DrawOp>) {
+         self.bounds = bareline_ui::rect(0.0, (height - 24.0 - self.height()).max(0.0), width, self.height());
++        self.output_offset = Point::default();
+         self.controller.draw_output(self.bounds, self.theme, ops);
+     }
++    pub(super) fn draw_output_in(
++        &mut self,
++        bounds: bareline_renderer::Rect,
++        window_offset: bareline_renderer::Point,
++        ops: &mut Vec<DrawOp>,
++    ) {
++        self.bounds = bareline_ui::rect(
++            bounds.x + window_offset.x,
++            bounds.y + window_offset.y,
++            bounds.width,
++            bounds.height,
++        );
++        self.output_offset = window_offset;
++        self.controller.draw_output(bounds, self.theme, ops);
++    }
+     pub fn draw(&mut self, renderer: &mut WindowsRenderer, width: f32, height: f32, ops: &mut Vec<DrawOp>) {
+-        self.bounds = bareline_ui::rect(0.0, (height - 24.0 - self.height()).max(0.0), width, self.height());
+         if let Err(error) = self.controller.manager.draw(
+             renderer,
+             width,
+@@ -577,7 +615,12 @@ impl Shell {
+         if !self.macros.controller.semantics().iter().any(|node| node.id.0 == id) {
+             return false;
+         }
++        if id >= 2_000_000 && self.dock.active() != Some(super::dock::DockTab::Output) {
++            return true;
++        }
+         if id >= 2_000_000 {
++            self.dock.blur_focus();
++            self.macros.focused = true;
+             if let Some(link) = self.macros.controller.output_accessibility(id, invoke) {
+                 self.macros_open_link(link);
+             }
+@@ -649,6 +692,7 @@ impl Shell {
+         {
+             self.macros.controller.status = "Open a document before playing a macro".into();
+             self.macros.controller.output_open = true;
++            self.request_dock_tab(super::dock::DockTab::Output);
+             return true;
+         }
+         if !self.macros.storage_ready
+@@ -660,6 +704,7 @@ impl Shell {
+             self.macros.controller.status =
+                 "Macro storage is loading or failed; use Retry Loading Macros before changing it.".into();
+             self.macros.controller.output_open = true;
++            self.request_dock_tab(super::dock::DockTab::Output);
+             return true;
+         }
+         if matches!(id, "macro.rename" | "macro.play_n" | "macro.shortcut" | "macro.ghost")
+@@ -688,6 +733,9 @@ impl Shell {
+                 self.macros.controller.capture_replay_target(workspace, self.app.active);
+             }
+             (self.notify)();
++            if self.macros.controller.output_open {
++                self.request_dock_tab(super::dock::DockTab::Output);
++            }
+             return true;
+         }
+         let result: Result<(), String> = match id {
+@@ -862,6 +910,23 @@ impl Shell {
+             self.macros.controller.status = error;
+             self.macros.controller.output_open = true;
+         }
++        if self.macros.controller.output_open
++            && matches!(
++                id,
++                "macro.record"
++                    | "macro.play"
++                    | "macro.play_eof"
++                    | "macro.play_n"
++                    | "macro.resume"
++                    | "run.execute"
++                    | "output.clear"
++                    | "output.copy"
++                    | "output.save"
++                    | "output.open_link"
++            )
++        {
++            self.request_dock_tab(super::dock::DockTab::Output);
++        }
+         if let Some(window) = &self.window {
+             window.request_redraw();
+         }
+@@ -1005,6 +1070,7 @@ impl Shell {
+         if let Err(error) = self.macros.load_library(self.notify.clone()) {
+             self.macros.controller.status = error;
+         }
++        let mut reveal_output = false;
+         if let Some(receiver) = &self.macros.pending {
+             match receiver.try_recv() {
+                 Ok(result) => {
+@@ -1053,6 +1119,7 @@ impl Shell {
+                     } else if !background {
+                         self.macros.controller.output_open = true;
+                     }
++                    reveal_output = self.macros.controller.output_open && !background;
+                     if let Some(window) = &self.window {
+                         window.request_redraw();
+                     }
+@@ -1064,6 +1131,9 @@ impl Shell {
+                 Err(mpsc::TryRecvError::Empty) => {}
+             }
+         }
++        if reveal_output {
++            self.request_dock_tab(super::dock::DockTab::Output);
++        }
+         if self.macros.dirty && self.macros.pending.is_none() {
+             if let Err(error) = self.macros.save_library(self.notify.clone()) {
+                 self.macros.dirty = false;
+@@ -1268,6 +1338,7 @@ impl Shell {
+             return true;
+         }
+         if !self.macros.controller.output_open
++            || self.dock.active() != Some(super::dock::DockTab::Output)
+             || self.palette.open
+             || self.utilities.has_input_focus()
+             || self.search_modal()
+@@ -1284,6 +1355,22 @@ impl Shell {
+         {
+             return false;
+         }
++        if let WindowEvent::KeyboardInput { event, .. } = event
++            && event.state == ElementState::Pressed
++            && event.logical_key == Key::Named(NamedKey::Tab)
++            && self.macros.focused
++        {
++            self.deactivate_dock_focus();
++            if self.modifiers.shift_key() {
++                self.dock.focus_active();
++            } else {
++                self.dock.blur_focus();
++            }
++            if let Some(window) = &self.window {
++                window.request_redraw();
++            }
++            return true;
++        }
+         let ui = match event {
+             WindowEvent::MouseWheel { delta, .. } if self.macros.bounds.contains(self.pointer) => {
+                 let dy = match delta {
+@@ -1303,11 +1390,14 @@ impl Shell {
+                 button: MouseButton::Left,
+                 ..
+             } if self.macros.bounds.contains(self.pointer) => {
+-                self.macros.focused = true;
++                if *state == ElementState::Pressed {
++                    self.focus_dock_body(super::dock::DockTab::Output);
++                }
++                let local = self.macros.output_point(self.pointer);
+                 Some(if *state == ElementState::Pressed {
+-                    UiEvent::PointerDown(self.pointer)
++                    UiEvent::PointerDown(local)
+                 } else {
+-                    UiEvent::PointerUp(self.pointer)
++                    UiEvent::PointerUp(local)
+                 })
+             }
+             WindowEvent::KeyboardInput { event, .. } if self.macros.focused && event.state == ElementState::Pressed => {
+@@ -1377,6 +1467,20 @@ mod tests {
+     use super::*;
+     use bareline_commands::{CommandContext, CommandId};
+ 
++    #[test]
++    fn dock_output_keeps_window_hit_bounds_and_local_controller_coordinates() {
++        let mut runtime = MacrosRuntime::default();
++        runtime.controller.output_open = true;
++        let body = bareline_ui::rect(18.0, 260.0, 420.0, 175.0);
++        let offset = Point { x: 76.0, y: 44.0 };
++        runtime.draw_output_in(body, offset, &mut Vec::new());
++        assert_eq!(runtime.bounds, bareline_ui::rect(94.0, 304.0, 420.0, 175.0));
++        assert_eq!(
++            runtime.output_point(Point { x: 114.0, y: 334.0 }),
++            Point { x: 38.0, y: 290.0 }
++        );
++    }
++
+     fn assert_open_close_enabled(runtime: &MacrosRuntime, label: &str) {
+         assert!(runtime.controller.manager.open, "{label}");
+         let mut context = CommandContext::default();

@@ -1,0 +1,18 @@
+{
+  "arguments": [
+    "test",
+    "-p",
+    "bareline-app",
+    "--lib",
+    "workspace::tests::stale_prepared_destination_rejects_content_revision_for_resident_and_paged",
+    "--offline",
+    "--locked",
+    "--",
+    "--exact"
+  ],
+  "completed_utc": "2026-09-12T06:34:19.4298339Z",
+  "integration_snapshot": "7b178da5c4b9d01fcce24653f45c0c4a73352d3d",
+  "exit_code": 0,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\T03-stale-revision-central.log"
+}

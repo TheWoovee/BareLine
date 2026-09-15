@@ -1,0 +1,16 @@
+{
+  "arguments": [
+    "test",
+    "-p",
+    "bareline-editor-surface",
+    "--lib",
+    "peer_tests::go_to_end_resolves_to_the_last_line_once_the_index_is_complete",
+    "--offline",
+    "--locked"
+  ],
+  "completed_utc": "2026-09-12T10:15:54.0793972Z",
+  "integration_snapshot": "6e30cff06519f51c59a62f017af787fcca27c774",
+  "exit_code": 0,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\U13-known-lines-central.log"
+}

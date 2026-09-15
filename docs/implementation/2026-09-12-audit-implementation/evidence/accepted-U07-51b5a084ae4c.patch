@@ -1,0 +1,216 @@
+diff --git a/apps/bareline/src/windows_app/accessibility.rs b/apps/bareline/src/windows_app/accessibility.rs
+index 5afee76..71378c6 100644
+--- a/apps/bareline/src/windows_app/accessibility.rs
++++ b/apps/bareline/src/windows_app/accessibility.rs
+@@ -189,11 +189,51 @@ impl Shell {
+             })
+     }
+ 
++    fn active_accessibility_layer(&self) -> Option<u64> {
++        if let Some(modal) = self.modal.filter(|modal| modal.inert_background) {
++            Some(modal.semantics.group)
++        } else if self.palette.open {
++            Some(90_000_002)
++        } else if self.search_folder_open() {
++            Some(90_000_030)
++        } else if self.shortcuts.open {
++            Some(90_000_004)
++        } else if self.power.open {
++            Some(90_000_006)
++        } else if self.settings.controller.open {
++            Some(90_000_012)
++        } else if self.extensions.open {
++            Some(60_000)
++        } else if self.utilities.has_input_focus() {
++            Some(90_000_026)
++        } else if self.macros.controller.manager.open {
++            Some(90_000_014)
++        } else {
++            None
++        }
++    }
++
++    fn owned_accessibility_text_field(&self) -> Option<(u64, (u64, u64), &bareline_ui::text_field::TextField)> {
++        if let Some(field) = self.modal_text_field() {
++            return Some(field);
++        }
++        if self.modal.is_some() {
++            return None;
++        }
++        match self.active_accessibility_layer() {
++            None => self.search_text_field(),
++            Some(90_000_030) => self
++                .search_folder_accessibility_text_field()
++                .map(|(owner, generation, field)| (owner, search_text_identity(owner, generation), field)),
++            Some(_) => None,
++        }
++    }
++
+     fn search_text_selection_action(&mut self, source_identity: (u64, u64), anchor: usize, caret: usize) -> bool {
+         if source_identity.0 != SEARCH_TEXT_NAMESPACE {
+             return false;
+         }
+-        let Some((owner, current, _)) = self.search_text_field() else {
++        let Some((owner, current, _)) = self.owned_accessibility_text_field() else {
+             return true;
+         };
+         if source_identity != current {
+@@ -240,7 +280,7 @@ impl Shell {
+     pub(super) fn accessibility_text_source(
+         &self,
+     ) -> Option<std::sync::Arc<dyn bareline_platform::accessibility::AccessibilityTextSource>> {
+-        if let Some((_owner, identity, field)) = self.modal_text_field() {
++        if let Some((_owner, identity, field)) = self.owned_accessibility_text_field() {
+             return Some(std::sync::Arc::new(ModalTextSource {
+                 identity,
+                 value: field.value().to_owned(),
+@@ -249,12 +289,6 @@ impl Shell {
+         if self.modal.is_some() {
+             return None;
+         }
+-        if let Some((_owner, identity, field)) = self.search_text_field() {
+-            return Some(std::sync::Arc::new(ModalTextSource {
+-                identity,
+-                value: field.value().to_owned(),
+-            }));
+-        }
+         if self.search_accessibility_active() {
+             return None;
+         }
+@@ -613,27 +647,7 @@ impl Shell {
+                 .map(|node| bareline_app::accessibility::semantic_node(node, 1))
+                 .collect(),
+         );
+-        let active_layer = if let Some(modal) = self.modal.filter(|modal| modal.inert_background) {
+-            Some(modal.semantics.group)
+-        } else if self.palette.open {
+-            Some(90_000_002)
+-        } else if self.search_folder_open() {
+-            Some(90_000_030)
+-        } else if self.shortcuts.open {
+-            Some(90_000_004)
+-        } else if self.power.open {
+-            Some(90_000_006)
+-        } else if self.settings.controller.open {
+-            Some(90_000_012)
+-        } else if self.extensions.open {
+-            Some(60_000)
+-        } else if self.utilities.has_input_focus() {
+-            Some(90_000_026)
+-        } else if self.macros.controller.manager.open {
+-            Some(90_000_014)
+-        } else {
+-            None
+-        };
++        let active_layer = self.active_accessibility_layer();
+         let mut snapshot = compose_snapshot(
+             "Bareline",
+             width,
+@@ -657,13 +671,7 @@ impl Shell {
+             },
+             active_layer,
+         );
+-        let owned_text = self.modal_text_field().or_else(|| {
+-            if self.modal.is_none() {
+-                self.search_text_field()
+-            } else {
+-                None
+-            }
+-        });
++        let owned_text = self.owned_accessibility_text_field();
+         if let Some((owner, identity, field)) = owned_text {
+             let (anchor, caret) = field.selection();
+             if let Some(mut text) =
+@@ -1865,6 +1873,72 @@ mod tests {
+         );
+     }
+ 
++    #[test]
++    fn settings_layer_suppresses_background_find_text_ownership() {
++        let mut shell = app_shell("find.open");
++        let find = shell_snapshot(&shell);
++        let find_identity = find.text_context.as_ref().unwrap().source_identity;
++        assert_eq!(find.focus, 6000);
++        assert_eq!(find.text.as_ref().map(|text| text.editor_id), Some(6000));
++        assert!(shell.accessibility_text_source().is_some());
++
++        shell.settings.controller.show();
++        let settings = shell_snapshot(&shell);
++        settings.validate().unwrap();
++        assert_eq!(settings.focus, 8000);
++        assert!(settings.text.is_none());
++        assert!(settings.text_context.is_none());
++        assert!(shell.accessibility_text_source().is_none());
++        assert!(
++            settings
++                .nodes
++                .iter()
++                .any(|node| { node.id == 6000 && node.disabled && !node.focusable })
++        );
++
++        let selection_before = shell.workspace.as_ref().unwrap().find.field.selection();
++        assert!(shell.search_text_selection_action(find_identity, 0, 0));
++        assert_eq!(
++            shell.workspace.as_ref().unwrap().find.field.selection(),
++            selection_before,
++            "a provider retired by Settings must not mutate the background Find field"
++        );
++
++        shell.settings.controller.dismiss();
++        let restored = shell_snapshot(&shell);
++        assert_eq!(restored.focus, 6000);
++        assert_eq!(restored.text.as_ref().map(|text| text.editor_id), Some(6000));
++        assert!(shell.accessibility_text_source().is_some());
++    }
++
++    #[test]
++    fn folder_button_suppresses_background_find_text_ownership() {
++        let mut shell = app_shell("find.open");
++        let find = shell_snapshot(&shell);
++        let find_identity = find.text_context.as_ref().unwrap().source_identity;
++        let selection_before = shell.workspace.as_ref().unwrap().find.field.selection();
++
++        shell.search_folder_accessibility_test_setup(3);
++        let folder = shell_snapshot(&shell);
++        folder.validate().unwrap();
++        assert_eq!(folder.focus, 77_003);
++        assert!(folder.text.is_none());
++        assert!(folder.text_context.is_none());
++        assert!(shell.accessibility_text_source().is_none());
++        assert!(
++            folder
++                .nodes
++                .iter()
++                .any(|node| node.id == 6000 && node.disabled && !node.focusable)
++        );
++        assert!(shell.search_text_selection_action(find_identity, 0, 0));
++        assert_eq!(
++            shell.workspace.as_ref().unwrap().find.field.selection(),
++            selection_before,
++            "a folder button must not leave the background Find provider actionable"
++        );
++    }
++
+     #[test]
+     fn complete_native_semantic_json_golden() {
+         let mut errors = Vec::new();
+diff --git a/apps/bareline/src/windows_app/search/folder.rs b/apps/bareline/src/windows_app/search/folder.rs
+index c8521b9..5cb8a2b 100644
+--- a/apps/bareline/src/windows_app/search/folder.rs
++++ b/apps/bareline/src/windows_app/search/folder.rs
+@@ -278,6 +278,15 @@ impl FolderControls {
+     }
+ }
+ impl Shell {
++    #[cfg(test)]
++    pub(in crate::windows_app) fn search_folder_accessibility_test_setup(&mut self, focus: usize) {
++        self.search.folder.show(
++            PathBuf::from("accessibility-folder"),
++            bareline_search::SearchQuery::literal("needle"),
++        );
++        self.search.folder.focus_control(focus);
++    }
++
+     pub(in crate::windows_app) fn search_folder_open(&self) -> bool {
+         self.search.folder.open
+     }

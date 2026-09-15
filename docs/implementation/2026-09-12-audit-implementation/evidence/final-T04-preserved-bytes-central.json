@@ -1,0 +1,17 @@
+{
+  "arguments": [
+    "test",
+    "-p",
+    "bareline-platform-windows",
+    "--lib",
+    "files::tests::staged_save_preserves_original_on_failure_and_conflict_and_tracks_captured_state",
+    "--locked",
+    "--",
+    "--exact"
+  ],
+  "completed_utc": "2026-09-12T14:09:53.5866755Z",
+  "integration_snapshot": "127e99ed7bcc477015c4c698bc34347db433c53f",
+  "exit_code": 0,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\final-T04-preserved-bytes-central.log"
+}

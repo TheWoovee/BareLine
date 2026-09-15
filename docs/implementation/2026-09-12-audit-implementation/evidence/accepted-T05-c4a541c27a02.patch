@@ -1,0 +1,507 @@
+diff --git a/apps/bareline/src/windows_app.rs b/apps/bareline/src/windows_app.rs
+index 519cfcf..9c97831 100644
+--- a/apps/bareline/src/windows_app.rs
++++ b/apps/bareline/src/windows_app.rs
+@@ -68,6 +68,8 @@ struct CloseTarget {
+     discarding: bool,
+     /// User read-only state restored if the discarded tab is reopened.
+     was_read_only: bool,
++    /// The request was accepted for this stable owner but deferred by document work.
++    deferred: bool,
+ }
+ impl CloseTarget {
+     fn matches(self, index: usize, identity: (u64, u64), tab: Option<u64>) -> bool {
+@@ -1730,14 +1732,23 @@ impl Shell {
+         true
+     }
+     fn request_close(&mut self, _el: &ActiveEventLoop) {
++        self.queue_application_close();
++    }
++    fn queue_application_close(&mut self) {
+         self.pending_close = Some(PendingClose::Application);
+         (self.notify)();
+     }
+     fn drain_pending_close(&mut self, el: &ActiveEventLoop) {
+         match self.pending_close.take() {
+-            Some(PendingClose::Application) => self.request_close_now(el, false),
++            Some(PendingClose::Application) => {
++                if self.application_close_ready(PendingClose::Application) {
++                    self.request_close_now(el, false);
++                }
++            }
+             Some(PendingClose::ApplicationDiscarding(identities)) => {
+-                if self.discard_for_exit_identities(&identities) {
++                if self.discard_for_exit_identities(&identities)
++                    && self.application_close_ready(PendingClose::ApplicationDiscarding(identities))
++                {
+                     self.request_close_now(el, true);
+                 }
+             }
+@@ -1753,7 +1764,7 @@ impl Shell {
+                     if let Some(workspace) = &mut self.workspace {
+                         workspace.message = Some("Exit cancelled because one or more documents were not saved.".into());
+                     }
+-                } else {
++                } else if self.application_close_ready(PendingClose::ApplicationAfterSaves) {
+                     self.request_close_now(el, true);
+                 }
+             }
+@@ -1768,9 +1779,8 @@ impl Shell {
+     /// `true` when the caller may close it right away.
+     fn confirm_close_document(&mut self, index: usize, target: &mut CloseTarget) -> bool {
+         if self.workspace.as_ref().is_some_and(|w| w.document_busy(index)) {
+-            if let Some(platform) = &self.platform {
+-                platform.pending_operation_notice();
+-            }
++            target.deferred = true;
++            self.pending_close = Some(PendingClose::Document(*target));
+             return false;
+         }
+         if !self.workspace.as_ref().is_some_and(|w| w.editors[index].dirty()) {
+@@ -1786,6 +1796,9 @@ impl Shell {
+         // Bind before the match: scrutinee temporaries would keep `self.platform`
+         // borrowed across the arms that need `&mut self`.
+         let choice = platform.confirm_save_document(&name);
++        self.apply_close_choice(index, target, choice)
++    }
++    fn apply_close_choice(&mut self, index: usize, target: &mut CloseTarget, choice: SaveChoice) -> bool {
+         match choice {
+             SaveChoice::Cancel => false,
+             SaveChoice::DontSave => {
+@@ -1853,6 +1866,7 @@ impl Shell {
+         target.index = index;
+         if !target.discarding
+             && !target.saving
++            && !target.deferred
+             && !target.matches(self.app.active, editor.document_identity(), self.active_close_tab())
+         {
+             return;
+@@ -1946,19 +1960,20 @@ impl Shell {
+             .iter()
+             .position(|editor| editor.document_identity().0 == owner)
+     }
+-    fn request_close_now(&mut self, el: &ActiveEventLoop, confirmed: bool) {
++    /// Retains an accepted exit request while asynchronous state prevents prompting or exit.
++    /// The completing worker already owns the wake that will drain it again.
++    fn application_close_ready(&mut self, pending: PendingClose) -> bool {
+         if self.settings.keymap_busy() || self.settings.controller.saving() {
+-            if let Some(platform) = &self.platform {
+-                platform.pending_operation_notice();
+-            }
+-            return;
++            self.pending_close = Some(pending);
++            return false;
+         }
+-        if let Some(workspace) = &self.workspace {
+-            if workspace.io_busy() {
+-                self.platform.as_ref().unwrap().pending_operation_notice();
+-                return;
+-            }
++        if self.workspace.as_ref().is_some_and(|workspace| workspace.io_busy()) {
++            self.pending_close = Some(pending);
++            return false;
+         }
++        true
++    }
++    fn request_close_now(&mut self, el: &ActiveEventLoop, confirmed: bool) {
+         if !confirmed && !self.confirm_exit() {
+             return;
+         }
+@@ -1993,6 +2008,9 @@ impl Shell {
+         }
+         let names: Vec<String> = unsaved.iter().map(|(_, name)| name.clone()).collect();
+         let choice = self.platform.as_ref().unwrap().confirm_save_all(&names);
++        self.apply_exit_choice(&unsaved, choice)
++    }
++    fn apply_exit_choice(&mut self, unsaved: &[(usize, String)], choice: SaveChoice) -> bool {
+         match choice {
+             SaveChoice::Cancel => false,
+             SaveChoice::DontSave => {
+@@ -2638,6 +2656,7 @@ impl Shell {
+                         saving: false,
+                         discarding: false,
+                         was_read_only: editor.read_only(),
++                        deferred: false,
+                     }));
+                     (self.notify)();
+                 }
+@@ -4778,7 +4797,7 @@ mod deferred_close_tests {
+         path::Path,
+         sync::{
+             Arc, Condvar, Mutex,
+-            atomic::{AtomicBool, Ordering},
++            atomic::{AtomicBool, AtomicUsize, Ordering},
+         },
+         time::{Duration, Instant},
+     };
+@@ -4870,6 +4889,131 @@ mod deferred_close_tests {
+         }
+     }
+ 
++    #[derive(Default)]
++    struct WorkerGateState {
++        entered: bool,
++        released: bool,
++    }
++    #[derive(Default)]
++    struct WorkerGate {
++        state: Mutex<WorkerGateState>,
++        wake: Condvar,
++    }
++    impl WorkerGate {
++        fn enter_and_wait(&self) -> std::io::Result<()> {
++            let deadline = Instant::now() + Duration::from_secs(10);
++            let mut state = self.state.lock().unwrap();
++            state.entered = true;
++            self.wake.notify_all();
++            while !state.released {
++                let remaining = deadline.saturating_duration_since(Instant::now());
++                if remaining.is_zero() {
++                    return Err(std::io::Error::new(
++                        std::io::ErrorKind::TimedOut,
++                        "test worker gate timed out",
++                    ));
++                }
++                let (next, timeout) = self.wake.wait_timeout(state, remaining).unwrap();
++                state = next;
++                if timeout.timed_out() && !state.released {
++                    return Err(std::io::Error::new(
++                        std::io::ErrorKind::TimedOut,
++                        "test worker gate timed out",
++                    ));
++                }
++            }
++            Ok(())
++        }
++        fn wait_entered(&self) -> std::io::Result<()> {
++            let deadline = Instant::now() + Duration::from_secs(10);
++            let mut state = self.state.lock().unwrap();
++            while !state.entered {
++                let remaining = deadline.saturating_duration_since(Instant::now());
++                if remaining.is_zero() {
++                    return Err(std::io::Error::new(
++                        std::io::ErrorKind::TimedOut,
++                        "worker never reached gate",
++                    ));
++                }
++                let (next, timeout) = self.wake.wait_timeout(state, remaining).unwrap();
++                state = next;
++                if timeout.timed_out() && !state.entered {
++                    return Err(std::io::Error::new(
++                        std::io::ErrorKind::TimedOut,
++                        "worker never reached gate",
++                    ));
++                }
++            }
++            Ok(())
++        }
++        fn release(&self) {
++            self.state.lock().unwrap().released = true;
++            self.wake.notify_all();
++        }
++    }
++    struct GateRelease(Arc<WorkerGate>);
++    impl Drop for GateRelease {
++        fn drop(&mut self) {
++            self.0.release();
++        }
++    }
++
++    struct DiscoveryGate(Arc<WorkerGate>);
++    impl LocalFileSystem for DiscoveryGate {
++        fn identity(&self, _: &std::fs::File) -> std::io::Result<bareline_platform::FileIdentity> {
++            unreachable!()
++        }
++        fn validate_target(&self, _: &Path) -> std::io::Result<()> {
++            unreachable!()
++        }
++        fn inspect_commit_transactions(
++            &self,
++            _: &Path,
++            _: &dyn bareline_platform::CommitCancellation,
++        ) -> std::io::Result<Vec<bareline_platform::CommitRecovery>> {
++            self.0.enter_and_wait()?;
++            Ok(Vec::new())
++        }
++        fn commit(&self, _: &Path, _: &Path, _: bool) -> std::io::Result<()> {
++            unreachable!()
++        }
++    }
++
++    struct SaveGate(Arc<WorkerGate>);
++    impl LocalFileSystem for SaveGate {
++        fn guard_directory(&self, path: &Path) -> std::io::Result<Arc<dyn Send + Sync>> {
++            LocalFileSystem::guard_directory(&bareline_platform_windows::WindowsFileSystem, path)
++        }
++        fn available_space(&self, path: &Path) -> std::io::Result<u64> {
++            LocalFileSystem::available_space(&bareline_platform_windows::WindowsFileSystem, path)
++        }
++        fn identity(&self, file: &std::fs::File) -> std::io::Result<bareline_platform::FileIdentity> {
++            LocalFileSystem::identity(&bareline_platform_windows::WindowsFileSystem, file)
++        }
++        fn validate_target(&self, path: &Path) -> std::io::Result<()> {
++            self.0.enter_and_wait()?;
++            LocalFileSystem::validate_target(&bareline_platform_windows::WindowsFileSystem, path)
++        }
++        fn prepare_commit(
++            &self,
++            staged: &Path,
++            target: &Path,
++            mode: bareline_platform::CommitMode,
++            cancellation: &dyn bareline_platform::CommitCancellation,
++        ) -> std::io::Result<bareline_platform::PreparedCommit> {
++            bareline_platform::prepare_simulated_commit(self, staged, target, mode, cancellation)
++        }
++        fn commit_transaction(
++            &self,
++            transaction: bareline_platform::PreparedCommit,
++        ) -> std::io::Result<bareline_platform::CommitReceipt> {
++            bareline_platform::simulate_commit_transaction(self, transaction)
++        }
++        fn commit(&self, staged: &Path, target: &Path, existed: bool) -> std::io::Result<()> {
++            LocalFileSystem::commit(&bareline_platform_windows::WindowsFileSystem, staged, target, existed)
++        }
++    }
++
+     fn settle(workspace: &mut Workspace) {
+         let deadline = Instant::now() + Duration::from_secs(10);
+         loop {
+@@ -4882,6 +5026,171 @@ mod deferred_close_tests {
+         }
+     }
+ 
++    #[test]
++    fn application_close_intent_survives_busy_worker_wake_and_cancel_is_terminal() {
++        let root = std::env::temp_dir().join(format!(
++            "bareline-exit-busy-{}-{}",
++            std::process::id(),
++            std::time::SystemTime::now()
++                .duration_since(std::time::UNIX_EPOCH)
++                .unwrap()
++                .as_nanos()
++        ));
++        std::fs::create_dir(&root).unwrap();
++        let gate = Arc::new(WorkerGate::default());
++        let _release_on_failure = GateRelease(gate.clone());
++        let (notifier, notified) = std::sync::mpsc::channel();
++        let mut workspace = Workspace::new(
++            Arc::new(move || {
++                let _ = notifier.send(());
++            }),
++            Arc::new(DiscoveryGate(gate.clone())),
++        )
++        .unwrap();
++        assert!(workspace.discover_save_recovery(&root));
++        gate.wait_entered().unwrap();
++        let mut shell = headless_shell();
++        shell.workspace = Some(workspace);
++        let close_wakes = Arc::new(AtomicUsize::new(0));
++        let wake_count = close_wakes.clone();
++        shell.notify = Arc::new(move || {
++            wake_count.fetch_add(1, Ordering::SeqCst);
++        });
++
++        shell.queue_application_close();
++        let pending = shell.pending_close.take().unwrap();
++        assert!(!shell.application_close_ready(pending));
++        assert!(matches!(shell.pending_close, Some(PendingClose::Application)));
++        let pending = shell.pending_close.take().unwrap();
++        assert!(!shell.application_close_ready(pending));
++        assert!(matches!(shell.pending_close, Some(PendingClose::Application)));
++        assert_eq!(close_wakes.load(Ordering::SeqCst), 1, "busy pumps must not self-wake");
++        gate.release();
++        notified.recv_timeout(Duration::from_secs(10)).unwrap();
++        settle(shell.workspace.as_mut().unwrap());
++        let pending = shell.pending_close.take().unwrap();
++        assert!(shell.application_close_ready(pending));
++        assert!(shell.pending_close.is_none());
++
++        shell.pending_close = None;
++        assert!(!shell.apply_exit_choice(&[(0, "draft".into())], super::SaveChoice::Cancel));
++        assert!(shell.pending_close.is_none(), "Cancel must retire the exit request");
++        drop(shell);
++        std::fs::remove_dir_all(root).unwrap();
++    }
++
++    #[test]
++    fn document_close_intent_resumes_for_stable_owner_after_busy_save_and_tab_move() {
++        let root = std::env::temp_dir().join(format!(
++            "bareline-close-busy-{}-{}",
++            std::process::id(),
++            std::time::SystemTime::now()
++                .duration_since(std::time::UNIX_EPOCH)
++                .unwrap()
++                .as_nanos()
++        ));
++        std::fs::create_dir(&root).unwrap();
++        let path = root.join("saved.txt");
++        let gate = Arc::new(WorkerGate::default());
++        let _release_on_failure = GateRelease(gate.clone());
++        let (notifier, notified) = std::sync::mpsc::channel();
++        let mut workspace = Workspace::new(
++            Arc::new(move || {
++                let _ = notifier.send(());
++            }),
++            Arc::new(SaveGate(gate.clone())),
++        )
++        .unwrap();
++        workspace.new_document().unwrap();
++        workspace.new_document().unwrap();
++        workspace.editors[0].enqueue(Input::Insert("save before close".into()));
++        settle(&mut workspace);
++        let identity = workspace.editors[0].document_identity();
++        assert!(workspace.save(0, path.clone()));
++        gate.wait_entered().unwrap();
++        let mut shell = headless_shell();
++        shell.app.tabs = workspace.titles();
++        shell.workspace = Some(workspace);
++        let close_wakes = Arc::new(AtomicUsize::new(0));
++        let wake_count = close_wakes.clone();
++        shell.notify = Arc::new(move || {
++            wake_count.fetch_add(1, Ordering::SeqCst);
++        });
++        let mut renderer = bareline_renderer_recording::RecordingBackend::default();
++        shell.close_document_with_renderer(
++            CloseTarget {
++                index: 0,
++                identity,
++                tab: None,
++                saving: false,
++                discarding: false,
++                was_read_only: false,
++                deferred: false,
++            },
++            &mut renderer,
++        );
++        assert!(matches!(
++            shell.pending_close,
++            Some(PendingClose::Document(CloseTarget { deferred: true, .. }))
++        ));
++        let PendingClose::Document(target) = shell.pending_close.take().unwrap() else {
++            unreachable!()
++        };
++        shell.close_document_with_renderer(target, &mut renderer);
++        assert!(matches!(
++            shell.pending_close,
++            Some(PendingClose::Document(CloseTarget { deferred: true, .. }))
++        ));
++        assert_eq!(close_wakes.load(Ordering::SeqCst), 0, "busy pumps must not self-wake");
++        assert!(shell.workspace.as_mut().unwrap().reorder(&[1, 0]));
++        shell.app.tabs = shell.workspace.as_ref().unwrap().titles();
++        shell.app.active = 0;
++
++        gate.release();
++        notified.recv_timeout(Duration::from_secs(10)).unwrap();
++        settle(shell.workspace.as_mut().unwrap());
++        let PendingClose::Document(target) = shell.pending_close.take().unwrap() else {
++            panic!("busy close lost its stable owner");
++        };
++        shell.close_document_with_renderer(target, &mut renderer);
++        let workspace = shell.workspace.as_ref().unwrap();
++        assert_eq!(workspace.editors.len(), 1);
++        assert_ne!(workspace.editors[0].document_identity().0, identity.0);
++        assert_eq!(std::fs::read_to_string(path).unwrap(), "save before close");
++        drop(shell);
++        std::fs::remove_dir_all(root).unwrap();
++    }
++
++    #[test]
++    fn changed_document_retires_deferred_close_without_closing_or_requeueing() {
++        let mut workspace =
++            Workspace::new(Arc::new(|| {}), Arc::new(bareline_platform_windows::WindowsFileSystem)).unwrap();
++        workspace.new_document().unwrap();
++        workspace.editors[0].enqueue(Input::Insert("first".into()));
++        settle(&mut workspace);
++        let identity = workspace.editors[0].document_identity();
++        workspace.editors[0].enqueue(Input::Insert(" later".into()));
++        settle(&mut workspace);
++        let mut shell = headless_shell();
++        shell.workspace = Some(workspace);
++        let mut renderer = bareline_renderer_recording::RecordingBackend::default();
++        shell.close_document_with_renderer(
++            CloseTarget {
++                index: 0,
++                identity,
++                tab: None,
++                saving: false,
++                discarding: false,
++                was_read_only: false,
++                deferred: true,
++            },
++            &mut renderer,
++        );
++        assert_eq!(shell.workspace.as_ref().unwrap().editors.len(), 1);
++        assert!(shell.workspace.as_ref().unwrap().editors[0].dirty());
++        assert!(shell.pending_close.is_none());
++    }
++
+     #[test]
+     fn deferred_close_rejects_changed_tab_document_or_index() {
+         let target = CloseTarget {
+@@ -4891,6 +5200,7 @@ mod deferred_close_tests {
+             saving: false,
+             discarding: false,
+             was_read_only: false,
++            deferred: false,
+         };
+         assert!(target.matches(2, (41, 7), Some(9)));
+         assert!(!target.matches(1, (41, 7), Some(9)));
+@@ -5016,6 +5326,7 @@ mod deferred_close_tests {
+             saving: false,
+             discarding: true,
+             was_read_only: false,
++            deferred: false,
+         };
+         let mut shell = headless_shell();
+         shell.workspace = Some(workspace);
+@@ -5063,6 +5374,7 @@ mod deferred_close_tests {
+                 saving: false,
+                 discarding: false,
+                 was_read_only: false,
++                deferred: false,
+             },
+             &mut renderer,
+         );
+@@ -5077,6 +5389,7 @@ mod deferred_close_tests {
+                 saving: false,
+                 discarding: false,
+                 was_read_only: true,
++                deferred: false,
+             },
+             &mut renderer,
+         );
+@@ -5126,6 +5439,7 @@ mod deferred_close_tests {
+             saving: true,
+             discarding: false,
+             was_read_only: false,
++            deferred: false,
+         };
+         assert!(close.matches(0, document, Some(1)));
+         assert!(!close.matches(0, viewport, Some(1)));
+diff --git a/docs/implementation/2026-09-12-audit-implementation/PR-T05-R5.md b/docs/implementation/2026-09-12-audit-implementation/PR-T05-R5.md
+new file mode 100644
+index 0000000..fe0270b
+--- /dev/null
++++ b/docs/implementation/2026-09-12-audit-implementation/PR-T05-R5.md
+@@ -0,0 +1,21 @@
++# PR-T05 R5: Retain busy close intent
++
++- **Baseline:** `861522334c777282bbce79cb8aa66048a3ce980c`
++- **Scope:** Preserve one document-close or application-exit request while recovery, settings, or I/O is busy, then resume it from the existing shell wake/pump path without UI-thread waiting.
++- **Safety:** Stable document/tab/revision ownership and full application dirty-set revalidation remain authoritative. Explicit user cancellation and terminal save failures do not requeue themselves.
++
++## Evidence
++
++- `rustfmt --edition 2024 apps/bareline/src/windows_app.rs` — passed.
++- `git diff --check` — passed (Git reports the repository's expected LF-to-CRLF warning only).
++- Literal census: all `CloseTarget` constructors initialize the new deferred state; all three application terminal variants pass through the retained busy boundary before prompting or exit.
++- Added deterministic headless regressions for a gated application recovery scan, a gated document save with tab reordering, explicit Cancel retirement, and revision change retirement.
++- Repeated busy dispatch is asserted to retain exactly one request without a self-wake or native pending-operation dialog. Test gates use one predicate mutex, bounded waits, and an unwind release guard.
++
++Root-owned contained command proposed after integration:
++
++```text
++cargo test --offline --locked -p bareline --lib deferred_close_tests
++```
++
++Native one-shot Close/Exit qualification remains pending after integration.

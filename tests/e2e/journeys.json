@@ -1,5 +1,13 @@
 {
   "schema_version": 1,
+  "qualification_mappings": [
+    {
+      "journey": "column_multi_cursor",
+      "evidence_id": "AC-006-01",
+      "required_steps": ["s1", "s2", "s3"],
+      "scope": "The three observed steps exercise complete column insertion across tabs, wide glyphs and short lines by display column, followed by restoration in one undo transaction."
+    }
+  ],
   "journeys": [
     {
       "id": "plain_text",
@@ -89,18 +97,18 @@
       "steps": [
         {
           "id": "s1",
-          "action": "Select rectangle across tabs and wide glyphs",
-          "expected": "Selection uses display columns"
+          "action": "Select a rectangle across tabs, wide glyphs and a line shorter than the target display column",
+          "expected": "Selection and insertion targets follow display columns across all three line shapes"
         },
         {
           "id": "s2",
-          "action": "Insert numbered column and multi-cursor text",
-          "expected": "Expected text at every intended selection only"
+          "action": "Perform one column insertion across the selected rectangle",
+          "expected": "Inserted text appears at every intended display column, including on the short line"
         },
         {
           "id": "s3",
-          "action": "Undo",
-          "expected": "Original document restored"
+          "action": "Invoke Undo once",
+          "expected": "One undo transaction restores the original document"
         }
       ]
     },

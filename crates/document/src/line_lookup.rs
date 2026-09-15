@@ -68,8 +68,7 @@ impl LineLookupRequest {
         })
     }
     pub fn matches_snapshot(&self, snapshot: &PagedSnapshot) -> bool {
-        self.snapshot.same_document(snapshot)
-            && self.snapshot.content_state == snapshot.content_state
+        self.snapshot.same_document(snapshot) && self.snapshot.content_state == snapshot.content_state
     }
     /// Last verified UTF-8 boundary; includes CR state across window boundaries.
     pub fn verified_checkpoint(&self) -> Option<LineCheckpoint> {
@@ -99,10 +98,7 @@ impl LineLookupRequest {
             return LineLookupPoll::Finished;
         }
         let result = self.step();
-        if !matches!(
-            result,
-            LineLookupPoll::Progress(_) | LineLookupPoll::Pending(_)
-        ) {
+        if !matches!(result, LineLookupPoll::Progress(_) | LineLookupPoll::Pending(_)) {
             self.finished = true;
             self.request = None;
         }
@@ -117,19 +113,16 @@ impl LineLookupRequest {
             }
             return match self.target {
                 LineTarget::Byte(_) => LineLookupPoll::Line(self.breaks),
-                LineTarget::Line(_) => self
-                    .start
-                    .map_or(LineLookupPoll::Failed(Error::OutOfBounds), |start| {
-                        LineLookupPoll::Range(TextOffset(start)..TextOffset(self.cursor))
-                    }),
+                LineTarget::Line(_) => self.start.map_or(LineLookupPoll::Failed(Error::OutOfBounds), |start| {
+                    LineLookupPoll::Range(TextOffset(start)..TextOffset(self.cursor))
+                }),
             };
         }
         if self.request.is_none() {
-            match self.snapshot.begin_viewport(
-                TextOffset(self.cursor),
-                self.window_bytes,
-                &self.budget,
-            ) {
+            match self
+                .snapshot
+                .begin_viewport(TextOffset(self.cursor), self.window_bytes, &self.budget)
+            {
                 Ok(request) => self.request = Some(request),
                 Err(error) => return LineLookupPoll::Failed(error),
             }
@@ -152,9 +145,7 @@ impl LineLookupRequest {
                 if !window.text().is_char_boundary(local) {
                     return LineLookupPoll::Failed(Error::InvalidBoundary);
                 }
-                return LineLookupPoll::Line(
-                    self.breaks - usize::from(self.preceding_cr && byte == b'\n'),
-                );
+                return LineLookupPoll::Line(self.breaks - usize::from(self.preceding_cr && byte == b'\n'));
             }
             if self.preceding_cr
                 && byte != b'\n'

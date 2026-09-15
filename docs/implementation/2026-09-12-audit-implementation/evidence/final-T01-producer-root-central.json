@@ -1,0 +1,16 @@
+{
+  "arguments": [
+    "test",
+    "-p",
+    "bareline-file-io",
+    "owned_cache::tests::producer_root_resolution_requires_exact_registered_authority",
+    "--locked",
+    "--",
+    "--exact"
+  ],
+  "completed_utc": "2026-09-12T14:06:05.5779485Z",
+  "integration_snapshot": "f4132f5b602f09b58d043834b4adea441ee5bd9a",
+  "exit_code": 0,
+  "zero_tests": true,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\final-T01-producer-root-central.log"
+}

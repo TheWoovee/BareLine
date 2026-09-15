@@ -12,9 +12,25 @@ $sbom.components=@($sbom.components)+@($helper.components)+@($sbom.metadata.comp
 $sbom.dependencies=@($sbom.dependencies)+@($helper.dependencies)
 # Remove build-local metadata, retaining package identities, licenses and dependency edges.
 $sbom.Remove('serialNumber'); $sbom.Remove('metadata')
-foreach ($component in $sbom.components) { $component.Remove('evidence'); $component.Remove('properties') }
 $refs=@{}
-foreach($component in $sbom.components){if($component['bom-ref']){$refs[$component['bom-ref']]=if($component.purl){$component.purl}else{"component:$($component.name)@$($component.version)"}}}
+function Register-Components($components) {
+    foreach ($component in $components) {
+        $component.Remove('evidence'); $component.Remove('properties')
+        # Local Cargo download URLs describe the build checkout, not package identity.
+        # Preserve any target subpath while removing only the local URL qualifier.
+        if ($component.purl -match '^([^?#]+)\?download_url=file://[^#]*(#.*)?$') {
+            $component.purl = $Matches[1] + $Matches[2]
+        }
+        if ($component['bom-ref']) {
+            $identity = if ($component.purl) { $component.purl } else { "component:$($component.name)@$($component.version)" }
+            # Keep Cargo's target discriminator distinct from its parent package.
+            if ($component['bom-ref'] -match ' ([-A-Za-z0-9]+-target-\d+)$') { $identity += ':' + $Matches[1] }
+            $refs[$component['bom-ref']] = $identity
+        }
+        if ($component.components) { Register-Components $component.components }
+    }
+}
+Register-Components $sbom.components
 $native=@()
 foreach ($component in @('lexilla','scintilla')) {
     $directory=Join-Path $repo "native/lexilla-bridge/bundled/$component"
@@ -28,7 +44,7 @@ $packaging=@(Get-ChildItem -LiteralPath $PSScriptRoot -File -Recurse | Sort-Obje
 })
 function Normalize($value) {
     if ($value -is [Collections.IDictionary]) { $result=[ordered]@{}; foreach($key in @($value.Keys | Sort-Object)) {$result[$key]=Normalize $value[$key]}; return $result }
-    if ($value -is [string]) { if($refs.ContainsKey($value)){return $refs[$value]}; if ($value.Contains($repo,[StringComparison]::OrdinalIgnoreCase) -or $value -match '(file://|[A-Za-z]:[\\/])') {throw 'Absolute developer path remains in SBOM'}; return $value }
+    if ($value -is [string]) { if($refs.ContainsKey($value)){return $refs[$value]}; if ($value.Contains($repo,[StringComparison]::OrdinalIgnoreCase) -or $value -match '(file://|(?<![A-Za-z])[A-Za-z]:[\\/])') {throw 'Absolute developer path remains in SBOM'}; return $value }
     if ($value -is [Collections.IEnumerable]) {return ,@($value | ForEach-Object {Normalize $_} | Sort-Object {$_ | ConvertTo-Json -Compress -Depth 100})}
     return $value
 }

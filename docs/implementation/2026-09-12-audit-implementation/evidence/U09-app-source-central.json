@@ -1,0 +1,14 @@
+{
+  "arguments": [
+    "test",
+    "-p",
+    "bareline-app",
+    "--lib",
+    "find_results_and_replace_actions_follow_the_bound_document_generation"
+  ],
+  "completed_utc": "2026-09-12T08:57:19.6214603Z",
+  "integration_snapshot": "91cc150ceb2e72c61208bbc7c155e5f231ee246c",
+  "exit_code": 0,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\U09-app-source-central.log"
+}

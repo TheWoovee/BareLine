@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Distribution contracts. No network, registry, shell execution or document I/O.
 pub mod cli;
-pub mod update;
-pub mod trust;
 pub mod importer;
+pub mod trust;
+pub mod update;
 
 use std::path::{Path, PathBuf};
 

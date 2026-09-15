@@ -1,0 +1,3419 @@
+diff --git a/crates/app/src/find.rs b/crates/app/src/find.rs
+index b0c98bd..da06fde 100644
+--- a/crates/app/src/find.rs
++++ b/crates/app/src/find.rs
+@@ -285,7 +285,7 @@ impl FindController {
+             self.worker.as_ref().unwrap().submit_paged(
+                 snapshot,
+                 query,
+-                move |ticket| handle.resolve_page(ticket),
++                move |ticket| handle.resolve_page(ticket).map_err(|error| error.to_string()),
+                 notify,
+             ),
+         ));
+@@ -471,7 +471,7 @@ impl FindController {
+             } else {
+                 ReplaceScope::One(selection)
+             },
+-            move |ticket| handle.resolve_page(ticket),
++            move |ticket| handle.resolve_page(ticket).map_err(|error| error.to_string()),
+             notify,
+         ))
+     }
+diff --git a/crates/app/src/styling/paged.rs b/crates/app/src/styling/paged.rs
+index a5388fc..6ebad9d 100644
+--- a/crates/app/src/styling/paged.rs
++++ b/crates/app/src/styling/paged.rs
+@@ -215,7 +215,7 @@ pub(super) fn read(
+                 return Ok(window.text().to_owned());
+             }
+             WindowPoll::Pending(ticket) => {
+-                if !handle.resolve_page(ticket)? {
++                if !handle.resolve_page(ticket).map_err(|error| error.to_string())? {
+                     std::thread::yield_now();
+                 }
+             }
+diff --git a/crates/app/src/utilities.rs b/crates/app/src/utilities.rs
+index a8f8448..a36af4e 100644
+--- a/crates/app/src/utilities.rs
++++ b/crates/app/src/utilities.rs
+@@ -73,7 +73,11 @@ impl Read for PagedTextReader {
+                             break 'retry;
+                         }
+                         bareline_document::paged::WindowPoll::Pending(ticket) => {
+-                            if !self.source.resolve_page(ticket).map_err(std::io::Error::other)? {
++                            if !self
++                                .source
++                                .resolve_page(ticket)
++                                .map_err(|error| std::io::Error::other(error.to_string()))?
++                            {
+                                 std::thread::sleep(std::time::Duration::from_millis(1));
+                             }
+                         }
+diff --git a/crates/app/src/workspace.rs b/crates/app/src/workspace.rs
+index 00eaef4..def0357 100644
+--- a/crates/app/src/workspace.rs
++++ b/crates/app/src/workspace.rs
+@@ -3039,7 +3039,9 @@ impl Workspace {
+                         paged.push(bareline_search::sources::PagedOpenDocument {
+                             snapshot: handle.snapshot().clone(),
+                             label,
+-                            resolve: Box::new(move |ticket| handle.resolve_page(ticket)),
++                            resolve: Box::new(move |ticket| {
++                                handle.resolve_page(ticket).map_err(|error| error.to_string())
++                            }),
+                         });
+                     }
+                 }
+diff --git a/crates/app/src/workspace/encoding.rs b/crates/app/src/workspace/encoding.rs
+index c98d004..cd7c45c 100644
+--- a/crates/app/src/workspace/encoding.rs
++++ b/crates/app/src/workspace/encoding.rs
+@@ -335,7 +335,10 @@ fn plan_eol(
+             match request.poll() {
+                 WindowPoll::Ready(window) => break window,
+                 WindowPoll::Pending(ticket) => {
+-                    if !handle.resolve_captured_page(ticket)? {
++                    if !handle
++                        .resolve_captured_page(ticket)
++                        .map_err(|error| error.to_string())?
++                    {
+                         std::thread::yield_now();
+                     }
+                 }
+@@ -516,7 +519,10 @@ fn scan_eol(
+             match request.poll() {
+                 WindowPoll::Ready(window) => break window,
+                 WindowPoll::Pending(ticket) => {
+-                    if !handle.resolve_captured_page(ticket)? {
++                    if !handle
++                        .resolve_captured_page(ticket)
++                        .map_err(|error| error.to_string())?
++                    {
+                         std::thread::sleep(std::time::Duration::from_millis(1));
+                     }
+                 }
+diff --git a/crates/editor-surface/src/mapped_viewport.rs b/crates/editor-surface/src/mapped_viewport.rs
+index 48f7ae6..f374e9d 100644
+--- a/crates/editor-surface/src/mapped_viewport.rs
++++ b/crates/editor-surface/src/mapped_viewport.rs
+@@ -131,7 +131,10 @@ fn lookup(
+             LineLookupPoll::Line(_) | LineLookupPoll::Range(_) => return Ok(result),
+             LineLookupPoll::Progress(_) => {}
+             LineLookupPoll::Pending(ticket) => {
+-                if !handle.resolve_captured_page(ticket)? {
++                if !handle
++                    .resolve_captured_page(ticket)
++                    .map_err(|error| error.to_string())?
++                {
+                     std::thread::yield_now();
+                 }
+             }
+@@ -267,7 +270,10 @@ fn build(
+             match request.poll() {
+                 WindowPoll::Ready(window) => break window,
+                 WindowPoll::Pending(ticket) => {
+-                    if !handle.resolve_captured_page(ticket)? {
++                    if !handle
++                        .resolve_captured_page(ticket)
++                        .map_err(|error| error.to_string())?
++                    {
+                         std::thread::yield_now();
+                     }
+                 }
+diff --git a/crates/editor-surface/src/paged_navigation.rs b/crates/editor-surface/src/paged_navigation.rs
+index be2f725..79e879c 100644
+--- a/crates/editor-surface/src/paged_navigation.rs
++++ b/crates/editor-surface/src/paged_navigation.rs
+@@ -118,7 +118,10 @@ pub(crate) fn snap_grapheme(
+                     return Ok((window.range().start.0, window.text().to_owned()));
+                 }
+                 bareline_document::paged::WindowPoll::Pending(ticket) => {
+-                    if !handle.resolve_captured_page(ticket)? {
++                    if !handle
++                        .resolve_captured_page(ticket)
++                        .map_err(|error| error.to_string())?
++                    {
+                         std::thread::yield_now();
+                     }
+                 }
+@@ -400,7 +403,10 @@ fn lookup(
+             LineLookupPoll::Pending(ticket) => {
+                 // The handle is immutable; historical view roots remain usable.
+                 // The applying view separately checks source identity/content state.
+-                if !handle.resolve_captured_page(ticket)? {
++                if !handle
++                    .resolve_captured_page(ticket)
++                    .map_err(|error| error.to_string())?
++                {
+                     std::thread::sleep(std::time::Duration::from_millis(1));
+                 }
+             }
+diff --git a/crates/editor-surface/src/paged_power.rs b/crates/editor-surface/src/paged_power.rs
+index 028629a..f7526b2 100644
+--- a/crates/editor-surface/src/paged_power.rs
++++ b/crates/editor-surface/src/paged_power.rs
+@@ -277,7 +277,11 @@ fn lookup(capture: &Capture, target: LineTarget, options: &StagingOptions) -> Re
+             value @ (LineLookupPoll::Line(_) | LineLookupPoll::Range(_)) => return Ok(value),
+             LineLookupPoll::Progress(_) => {}
+             LineLookupPoll::Pending(ticket) => {
+-                if !capture.source.resolve_captured_page(ticket)? {
++                if !capture
++                    .source
++                    .resolve_captured_page(ticket)
++                    .map_err(|error| error.to_string())?
++                {
+                     std::thread::yield_now();
+                 }
+             }
+@@ -1121,7 +1125,11 @@ fn window(
+                 return Ok((window.range().start, window.text().into()));
+             }
+             bareline_document::paged::WindowPoll::Pending(ticket) => {
+-                if !capture.source.resolve_captured_page(ticket)? {
++                if !capture
++                    .source
++                    .resolve_captured_page(ticket)
++                    .map_err(|error| error.to_string())?
++                {
+                     std::thread::yield_now();
+                 }
+             }
+@@ -1544,7 +1552,10 @@ fn stage(
+             SourceTransactionPoll::Progress => {}
+             SourceTransactionPoll::Pending(ticket) => {
+                 if !request.resolve_owned(ticket).map_err(|e| format!("{e:?}"))?
+-                    && !capture.source.resolve_captured_page(ticket)?
++                    && !capture
++                        .source
++                        .resolve_captured_page(ticket)
++                        .map_err(|error| error.to_string())?
+                 {
+                     std::thread::yield_now();
+                 }
+diff --git a/crates/editor-surface/src/paged_spill.rs b/crates/editor-surface/src/paged_spill.rs
+index 978fb88..c789058 100644
+--- a/crates/editor-surface/src/paged_spill.rs
++++ b/crates/editor-surface/src/paged_spill.rs
+@@ -1,17 +1,15 @@
+ // SPDX-License-Identifier: MPL-2.0
+ //! Existing Paged actors spill resident edit/history leaves on the I/O worker.
+ use super::*;
+-use bareline_file_io::paged_service::PagedSpillState as SpillState;
+-
+ struct SpillCompletion {
+-    state: Arc<Mutex<SpillState>>,
++    actor: PagedSession,
+     wake: JobWake,
+     finished: bool,
+ }
+ impl SpillCompletion {
+-    fn new(state: Arc<Mutex<SpillState>>, notify: Arc<dyn Fn() + Send + Sync>) -> Self {
++    fn new(actor: PagedSession, notify: Arc<dyn Fn() + Send + Sync>) -> Self {
+         Self {
+-            state,
++            actor,
+             wake: JobWake::new(notify),
+             finished: false,
+         }
+@@ -24,9 +22,7 @@ impl SpillCompletion {
+ impl Drop for SpillCompletion {
+     fn drop(&mut self) {
+         if !self.finished {
+-            let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+-            state.pending = false;
+-            state.error = Some("Paged spill worker failed".into());
++            self.actor.finish_spill(Some("Paged spill worker failed".into()));
+         }
+     }
+ }
+@@ -37,39 +33,26 @@ impl PagedEditorSurface {
+         platform: Arc<dyn LocalFileSystem>,
+         options: bareline_file_io::source::SourceOptions,
+     ) {
+-        let spill = self.actor.spill_handle();
+-        if let Ok(mut state) = spill.lock() {
+-            state.config = Some((cache, platform, options));
+-            state.attempted = None;
+-        }
++        self.actor.configure_spill(cache, platform, options);
+     }
+     pub(super) fn pump_owned_spill(&mut self) {
+-        let spill = self.actor.spill_handle();
+-        if let Ok(mut state) = spill.try_lock() {
+-            if let Some(error) = state.error.take() {
+-                self.error = Some(error);
+-            }
++        if let Some(error) = self.actor.take_spill_error() {
++            self.error = Some(error);
+         }
+         if self.captured.is_some() || self.busy() || self.budget.used() <= self.budget.limit().saturating_mul(3) / 4 {
+             return;
+         }
+         let stamp = (self.snapshot.identity_token().0, self.snapshot.content_state);
+-        let spill = self.actor.spill_handle();
+-        let Ok(mut state) = spill.try_lock() else {
++        let Some(reservation) = self.actor.reserve_spill(stamp) else {
+             return;
+         };
+-        if state.pending || state.attempted == Some(stamp) {
+-            return;
+-        }
+-        let Some((cache, platform, options)) = state.config.clone() else {
+-            return;
+-        };
+-        state.pending = true;
+-        state.attempted = Some(stamp);
+-        drop(state);
++        let bareline_file_io::paged_service::PagedSpillReservation {
++            cache,
++            platform,
++            options,
++        } = reservation;
+         let actor = self.actor.clone();
+         let peer = self.peer.clone();
+-        let state = spill;
+         let budget = self.budget.clone();
+         let quota = self.streaming_quota;
+         let cancel = self.cancellation.clone();
+@@ -77,20 +60,20 @@ impl PagedEditorSurface {
+         let submitted = worker().submit(
+             WorkKind::Maintenance,
+             Box::new(move || {
+-                let completion = SpillCompletion::new(state.clone(), notify);
++                let completion = SpillCompletion::new(actor.clone(), notify);
+                 let result = (|| -> Result<(), String> {
+                     cancel
+                         .check()
+                         .map_err(|error| format!("Paged spill cancelled: {error:?}"))?;
++                    let requested = actor.state().map_err(|error| error.to_string())?.stamp;
+                     let plan = {
+-                        let opened = actor.lock().map_err(|_| "Paged actor stopped")?;
+-                        let snapshot = opened.transcoded.document.snapshot();
++                        let opened = actor.lock_document().map_err(|error| error.to_string())?;
++                        let snapshot = opened.document().snapshot();
+                         if (snapshot.identity_token().0, snapshot.content_state) != stamp {
+                             return Ok(());
+                         }
+                         opened
+-                            .transcoded
+-                            .document
++                            .document()
+                             .capture_spill()
+                             .map_err(|error| format!("Paged spill capture: {error:?}"))?
+                     };
+@@ -110,33 +93,27 @@ impl PagedEditorSurface {
+                     cancel
+                         .check()
+                         .map_err(|error| format!("Paged spill cancelled: {error:?}"))?;
+-                    let mut opened = actor.lock().map_err(|_| "Paged actor stopped")?;
+-                    // Core validates document/revision/content/saved state and both history
+-                    // depths. Any concurrent change discards preparation without publication.
+-                    opened
+-                        .transcoded
+-                        .document
+-                        .attach_spill(prepared)
+-                        .map_err(|error| format!("Paged spill stale or unavailable: {error:?}"))?;
++                    let receipt = actor.execute(
++                        bareline_file_io::paged_service::PagedLifecycleCommand::Spill { requested, prepared },
++                        &cancel,
++                    );
++                    if !actor.receipt_applies(&receipt) {
++                        return Ok(());
++                    }
++                    match receipt.terminal.map_err(|error| error.to_string())? {
++                        bareline_file_io::paged_service::PagedTerminalOutcome::Spilled => {}
++                        _ => return Err("Unexpected spill receipt".into()),
++                    }
+                     let mut peer = peer.lock().map_err(|_| "Paged peer state stopped")?;
+                     peer.epoch = peer.epoch.wrapping_add(1);
+                     Ok(())
+                 })();
+-                if let Ok(mut state) = state.lock() {
+-                    state.pending = false;
+-                    if let Err(error) = result {
+-                        state.error = Some(error);
+-                    }
+-                }
++                actor.finish_spill(result.err());
+                 completion.finish();
+             }),
+         );
+         if submitted.is_err() {
+-            let spill = self.actor.spill_handle();
+-            if let Ok(mut state) = spill.lock() {
+-                state.pending = false;
+-                state.attempted = None;
+-            }
++            self.actor.cancel_spill_reservation();
+         }
+     }
+ }
+@@ -217,17 +194,16 @@ mod tests {
+             panic!("fixture open")
+         };
+         let snapshot = opened.transcoded.document.snapshot();
+-        let window = read_window(
+-            &mut opened,
+-            &mut None,
+-            &snapshot,
+-            0,
+-            1,
+-            &budget,
+-            &Cancellation::default(),
+-            &std::sync::atomic::AtomicBool::new(false),
+-        )
+-        .unwrap();
++        let mut request = snapshot.begin_viewport(TextOffset(0), 1, &budget).unwrap();
++        let window = loop {
++            match request.poll() {
++                bareline_document::paged::WindowPoll::Ready(window) => break window,
++                bareline_document::paged::WindowPoll::Pending(ticket) => {
++                    opened.transcoded.source.read_page(ticket).unwrap();
++                }
++                _ => panic!("fixture window unavailable"),
++            }
++        };
+         opened
+             .transcoded
+             .document
+@@ -258,20 +234,15 @@ mod tests {
+         loop {
+             view.pump();
+             assert!(Instant::now() < deadline);
+-            let done = {
+-                let spill = view.actor.spill_handle();
+-                let state = spill.lock().unwrap();
+-                assert!(state.error.is_none(), "{:?}", state.error);
+-                state.attempted.is_some() && !state.pending
+-            };
++            let done = view.actor.spill_finished().unwrap();
+             if done {
+                 break;
+             }
+             std::thread::yield_now();
+         }
+         {
+-            let opened = view.actor.lock().unwrap();
+-            let doc = &opened.transcoded.document;
++            let opened = view.actor.lock_document().unwrap();
++            let doc = opened.document();
+             assert_eq!(doc.snapshot().identity_token(), identity);
+             assert_eq!(doc.snapshot().content_state, content);
+             assert_eq!(doc.history_stats().undo_changes, 1);
+@@ -287,9 +258,9 @@ mod tests {
+         assert!(view.error.is_none(), "{:?}", view.error);
+         assert_eq!(view.snapshot().identity_token(), identity);
+         {
+-            let mut opened = view.actor.lock().unwrap();
+-            opened.transcoded.document.undo().unwrap();
+-            assert_eq!(opened.transcoded.document.snapshot().len(), 1);
++            let mut opened = view.actor.lock_document().unwrap();
++            opened.document_mut().undo().unwrap();
++            assert_eq!(opened.document().snapshot().len(), 1);
+         }
+         // Keep destruction on this thread: viewport prefetch also retains the
+         // actor, but runs independently of the shared paged I/O worker.
+diff --git a/crates/editor-surface/src/paged_transfer.rs b/crates/editor-surface/src/paged_transfer.rs
+index cc57ae4..b80e561 100644
+--- a/crates/editor-surface/src/paged_transfer.rs
++++ b/crates/editor-surface/src/paged_transfer.rs
+@@ -273,9 +273,6 @@ struct Endpoint {
+     actor: PagedSession,
+     snapshot: PagedSnapshot,
+     peer: Arc<Mutex<PeerState>>,
+-    recovery: Arc<Mutex<Option<bareline_file_io::paged_recovery::PagedRecovery>>>,
+-    status: Arc<Mutex<bareline_file_io::paged_recovery::PagedRecoveryStatus>>,
+-    config: Option<(PathBuf, Arc<dyn LocalFileSystem>)>,
+     notify: Arc<dyn Fn() + Send + Sync>,
+ }
+ impl Endpoint {
+@@ -285,9 +282,6 @@ impl Endpoint {
+             actor: view.actor.clone(),
+             snapshot: view.snapshot.clone(),
+             peer: view.peer.clone(),
+-            recovery: view.actor.recovery_handle(),
+-            status: view.actor.recovery_status_handle(),
+-            config: view.actor.recovery_config(),
+             notify: view.notify.clone(),
+         }
+     }
+@@ -296,10 +290,10 @@ fn commit(mut staged: Staged, endpoints: &[Endpoint], options: &StagingOptions)
+     options.cancellation.check().map_err(|_| "Transfer cancelled")?;
+     let mut guards = Vec::with_capacity(endpoints.len());
+     for endpoint in endpoints {
+-        guards.push(endpoint.actor.lock().map_err(|_| "Transfer actor stopped")?);
++        guards.push(endpoint.actor.lock_document().map_err(|error| error.to_string())?);
+     }
+     for (opened, endpoint) in guards.iter().zip(endpoints) {
+-        if opened.transcoded.document.snapshot().identity_token() != endpoint.snapshot.identity_token() {
++        if opened.document().snapshot().identity_token() != endpoint.snapshot.identity_token() {
+             return Err("Transfer document changed".into());
+         }
+     }
+@@ -309,10 +303,8 @@ fn commit(mut staged: Staged, endpoints: &[Endpoint], options: &StagingOptions)
+         .ok_or("Missing transfer destination")?;
+     for (generation, store) in &staged.foreign {
+         guards[destination]
+-            .transcoded
+-            .store
+-            .retain_foreign(*generation, store)
+-            .map_err(|e| format!("{e:?}"))?;
++            .retain_foreign_source(*generation, store)
++            .map_err(|error| error.to_string())?;
+     }
+     let mut tokens = Vec::new();
+     let mut modified = Vec::new();
+@@ -324,35 +316,22 @@ fn commit(mut staged: Staged, endpoints: &[Endpoint], options: &StagingOptions)
+             staged.source.take()
+         };
+         if let Some(token) = token {
+-            if endpoint.config.is_none() {
++            if !endpoint.actor.recovery_enabled() {
+                 return Err("Enable recovery before transferring text".into());
+             }
+-            ensure_stream_recovery(
+-                &guards[index],
+-                &endpoint.snapshot,
+-                &endpoint.config,
+-                &endpoint.recovery,
+-                &endpoint.status,
+-                &endpoint.notify,
+-            )?;
++            endpoint
++                .actor
++                .ensure_recovery(&guards[index], &endpoint.snapshot, endpoint.notify.clone())
++                .map_err(|error| error.to_string())?;
+             tokens.push(token);
+             modified.push(index);
+         }
+     }
+-    let mut journals = Vec::new();
+-    for index in &modified {
+-        journals.push(
+-            endpoints[*index]
+-                .recovery
+-                .lock()
+-                .map_err(|_| "Recovery actor stopped")?,
+-        );
+-    }
+     let mut documents: Vec<_> = guards
+         .iter_mut()
+         .enumerate()
+         .filter(|(index, _)| modified.contains(index))
+-        .map(|(_, opened)| &mut opened.transcoded.document)
++        .map(|(_, opened)| opened.document_mut())
+         .collect();
+     options.cancellation.check().map_err(|_| "Transfer cancelled")?;
+     let snapshots;
+@@ -361,11 +340,10 @@ fn commit(mut staged: Staged, endpoints: &[Endpoint], options: &StagingOptions)
+         let lease = documents[0]
+             .lease_source_transaction(tokens.remove(0))
+             .map_err(|e| format!("{e:?}"))?;
+-        journals[0].as_mut().ok_or("Recovery unavailable")?.append_sources(
+-            lease.snapshot(),
+-            lease.edits(),
+-            options.quota,
+-        )?;
++        endpoints[modified[0]]
++            .actor
++            .append_recovery_sources(lease.snapshot(), lease.edits(), options.quota)
++            .map_err(|error| error.to_string())?;
+         snapshots = vec![lease.snapshot().clone()];
+         selections = vec![selection_set(&lease.metadata().after, 0)];
+         lease.publish();
+@@ -382,10 +360,6 @@ fn commit(mut staged: Staged, endpoints: &[Endpoint], options: &StagingOptions)
+             .iter()
+             .map(|member| selection_set(&member.metadata().after, 0))
+             .collect::<Vec<_>>();
+-        let mut recovery_refs = journals
+-            .iter_mut()
+-            .map(|journal| journal.as_mut().ok_or("Recovery unavailable"))
+-            .collect::<Result<Vec<_>, _>>()?;
+         let group_id = lease.id();
+         register_group(group_id, endpoints, options, &staged.capture, &selections)?;
+         let edits = lease
+@@ -393,8 +367,12 @@ fn commit(mut staged: Staged, endpoints: &[Endpoint], options: &StagingOptions)
+             .iter()
+             .map(|member| bareline_file_io::paged_recovery::group::GroupEdits::Source(member.edits()))
+             .collect::<Vec<_>>();
+-        if let Err(error) = bareline_file_io::paged_recovery::group::commit(
+-            &mut recovery_refs,
++        let sessions = modified
++            .iter()
++            .map(|index| endpoints[*index].actor.clone())
++            .collect::<Vec<_>>();
++        if let Err(error) = bareline_file_io::paged_service::commit_recovery_group(
++            &sessions,
+             &snapshots,
+             &edits,
+             publication_id(),
+@@ -402,7 +380,7 @@ fn commit(mut staged: Staged, endpoints: &[Endpoint], options: &StagingOptions)
+             &options.cancellation,
+         ) {
+             unregister_group(group_id);
+-            return Err(error);
++            return Err(error.to_string());
+         }
+         lease.publish();
+     }
+@@ -629,9 +607,15 @@ fn validate(
+                         .pending_snapshot()
+                         .is_some_and(|snapshot| snapshot.same_document(capture.source.snapshot()));
+                     let handled = if source {
+-                        capture.source.resolve_captured_page(ticket)
++                        capture
++                            .source
++                            .resolve_captured_page(ticket)
++                            .map_err(|error| error.to_string())
+                     } else {
+-                        capture.destination.resolve_captured_page(ticket)
++                        capture
++                            .destination
++                            .resolve_captured_page(ticket)
++                            .map_err(|error| error.to_string())
+                     }?;
+                     if !handled {
+                         std::thread::yield_now();
+@@ -776,11 +760,11 @@ pub(super) fn pump_history(view: &mut PagedEditorSurface) -> bool {
+ }
+ pub(super) fn try_history(view: &mut PagedEditorSurface, undo: bool) -> Option<Result<(), String>> {
+     let group = {
+-        let opened = match view.actor.try_lock() {
++        let opened = match view.actor.try_document() {
+             Ok(opened) => opened,
+             Err(_) => return Some(Err("Transfer actor is busy".into())),
+         };
+-        opened.transcoded.document.history_group(undo)
++        opened.document().history_group(undo)
+     }?;
+     let record = match registry().lock() {
+         Ok(registry) => registry.groups.iter().find(|record| record.id == group).cloned(),
+@@ -847,16 +831,9 @@ pub(super) fn try_history(view: &mut PagedEditorSurface, undo: bool) -> Option<R
+ fn commit_history(record: &GroupRecord, undo: bool) -> Result<Published, String> {
+     let mut guards = Vec::new();
+     for endpoint in &record.endpoints {
+-        guards.push(endpoint.actor.lock().map_err(|_| "Linked history actor stopped")?);
++        guards.push(endpoint.actor.lock_document().map_err(|error| error.to_string())?);
+     }
+-    let mut journals = Vec::new();
+-    for endpoint in &record.endpoints {
+-        journals.push(endpoint.recovery.lock().map_err(|_| "Linked recovery actor stopped")?);
+-    }
+-    let mut documents: Vec<_> = guards
+-        .iter_mut()
+-        .map(|opened| &mut opened.transcoded.document)
+-        .collect();
++    let mut documents: Vec<_> = guards.iter_mut().map(|opened| opened.document_mut()).collect();
+     let lease =
+         bareline_document::paged_group::lease_history_group(&mut documents, record.id, undo, &record.options.budget)
+             .map_err(|error| format!("{error:?}"))?;
+@@ -865,23 +842,25 @@ fn commit_history(record: &GroupRecord, undo: bool) -> Result<Published, String>
+         .iter()
+         .map(|member| member.snapshot().clone())
+         .collect::<Vec<_>>();
+-    let mut references = journals
+-        .iter_mut()
+-        .map(|journal| journal.as_mut().ok_or("Linked recovery unavailable"))
+-        .collect::<Result<Vec<_>, _>>()?;
+     let edits = lease
+         .members()
+         .iter()
+         .map(|member| bareline_file_io::paged_recovery::group::GroupEdits::History(member.edits()))
+         .collect::<Vec<_>>();
+-    bareline_file_io::paged_recovery::group::commit(
+-        &mut references,
++    let sessions = record
++        .endpoints
++        .iter()
++        .map(|endpoint| endpoint.actor.clone())
++        .collect::<Vec<_>>();
++    bareline_file_io::paged_service::commit_recovery_group(
++        &sessions,
+         &snapshots,
+         &edits,
+         publication_id(),
+         record.options.quota,
+         &Cancellation::default(),
+-    )?;
++    )
++    .map_err(|error| error.to_string())?;
+     lease.publish();
+     for endpoint in &record.endpoints {
+         if let Ok(mut peer) = endpoint.peer.lock() {
+@@ -1073,15 +1052,7 @@ mod tests {
+         let mut next = destination.snapshot.clone();
+         next.revision = bareline_document::Revision(next.revision.0 + 1);
+         assert!(
+-            destination
+-                .actor
+-                .recovery_handle()
+-                .lock()
+-                .unwrap()
+-                .as_mut()
+-                .unwrap()
+-                .append(&next, &[])
+-                .is_err(),
++            destination.actor.append_recovery_edits(&next, &[]).is_err(),
+             "old journal must remain poisoned after space returns"
+         );
+         let restored = bareline_file_io::paged_recovery::restore(
+diff --git a/crates/editor-surface/src/paged_view.rs b/crates/editor-surface/src/paged_view.rs
+index 91ba783..afc8659 100644
+--- a/crates/editor-surface/src/paged_view.rs
++++ b/crates/editor-surface/src/paged_view.rs
+@@ -153,6 +153,11 @@ impl From<&str> for PagedOperationError {
+         Self::Message(value.into())
+     }
+ }
++impl From<PagedLifecycleError> for PagedOperationError {
++    fn from(value: PagedLifecycleError) -> Self {
++        Self::Lifecycle(value)
++    }
++}
+ impl std::fmt::Display for PagedOperationError {
+     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+         match self {
+@@ -205,150 +210,6 @@ struct Completed {
+ struct PeerState {
+     epoch: u64,
+ }
+-use bareline_file_io::paged_service::RetiredPagedGeneration as RetiredGeneration;
+-/// Immutable snapshot plus generation-checked page resolver for background consumers.
+-/// Never resolve pages on the UI thread. Busy returns without waiting for the actor.
+-#[derive(Clone)]
+-#[cfg(any())]
+-struct LegacyPagedReadHandle {
+-    _generation: Arc<()>,
+-    retired: Arc<Mutex<Vec<RetiredGeneration>>>,
+-    _views: Arc<()>,
+-    tail: Arc<Mutex<Option<bareline_file_io::tail::TailSession>>>,
+-    actor: PagedSession,
+-    actor_gate: Arc<ActorGate>,
+-    snapshot: PagedSnapshot,
+-}
+-#[cfg(any())]
+-impl LegacyPagedReadHandle {
+-    /// Captures provenance without opening files. Sealed readers are acquired by
+-    /// the consumer's worker, never by the UI thread.
+-    pub fn original_store(&self) -> Result<bareline_file_io::codecs::disk::DiskDecoded, String> {
+-        self.acquire_store().map_err(String::from)
+-    }
+-    /// Enum-returning core so in-crate callers can branch on `PagedError::Busy`
+-    /// without comparing error text. A `WouldBlock` is `Busy`; a poisoned lock is
+-    /// `Poisoned` (was previously conflated with `Busy` here).
+-    fn acquire_store(&self) -> Result<bareline_file_io::codecs::disk::DiskDecoded, PagedError> {
+-        let opened = match self.actor.try_lock() {
+-            Ok(opened) => opened,
+-            Err(std::sync::TryLockError::WouldBlock) => return Err(PagedError::Busy),
+-            Err(std::sync::TryLockError::Poisoned(_)) => return Err(PagedError::Poisoned),
+-        };
+-        let current = opened.transcoded.document.snapshot();
+-        if !current.same_document(&self.snapshot) || current.content_state != self.snapshot.content_state {
+-            return Err(PagedError::Changed);
+-        }
+-        Ok(opened.transcoded.store.clone())
+-    }
+-    pub fn snapshot(&self) -> &PagedSnapshot {
+-        &self.snapshot
+-    }
+-    pub fn resolve_page(&self, ticket: bareline_document::source::PageTicket) -> Result<bool, String> {
+-        self.resolve(ticket, false)
+-    }
+-    /// Historical comparisons may retain an immutable root through later edits.
+-    /// Resolve only tickets referenced by that captured root and still owned by this
+-    /// actor's original/append generation. Reopen/unlock to another document fails closed.
+-    pub fn resolve_captured_page(&self, ticket: bareline_document::source::PageTicket) -> Result<bool, String> {
+-        self.resolve(ticket, true)
+-    }
+-    fn resolve(&self, ticket: bareline_document::source::PageTicket, historical: bool) -> Result<bool, String> {
+-        let referenced = self.snapshot.pieces().any(|piece| {
+-            let (source, range) = match piece {
+-                bareline_document::paged::PagedPiece::Original { source, range }
+-                | bareline_document::paged::PagedPiece::OriginalOwned { source, range, .. }
+-                | bareline_document::paged::PagedPiece::OwnedSource { source, range, .. } => (source, range),
+-                bareline_document::paged::PagedPiece::Inserted(_) => return false,
+-            };
+-            ticket.generation == source.generation()
+-                && ticket.page.checked_mul(source.page_size() as u64).is_some_and(|start| {
+-                    start < range.end && start.saturating_add(source.page_size() as u64) > range.start
+-                })
+-        });
+-        if !referenced {
+-            return Err("Page is not part of the captured source generation".into());
+-        }
+-        let mut opened = match self.actor.try_lock() {
+-            Ok(opened) => opened,
+-            Err(std::sync::TryLockError::WouldBlock) => return Ok(false),
+-            Err(std::sync::TryLockError::Poisoned(_)) => return Err("Paged source worker failed".into()),
+-        };
+-        let current = opened.transcoded.document.snapshot();
+-        if historical && !current.same_document(&self.snapshot) {
+-            drop(opened);
+-            let mut retired = match self.retired.try_lock() {
+-                Ok(retired) => retired,
+-                Err(std::sync::TryLockError::WouldBlock) => return Ok(false),
+-                Err(_) => return Err("Captured generation owner failed".into()),
+-            };
+-            let generation = retired
+-                .iter_mut()
+-                .find(|generation| {
+-                    generation
+-                        .opened
+-                        .transcoded
+-                        .document
+-                        .snapshot()
+-                        .same_document(&self.snapshot)
+-                })
+-                .ok_or("Captured generation is unavailable")?;
+-            if self
+-                .snapshot
+-                .resolve_owned(ticket)
+-                .map_err(|error| format!("Captured owned source unavailable: {error:?}"))?
+-            {
+-                return Ok(true);
+-            }
+-            let handled = match generation.tail.as_mut() {
+-                Some(tail) => tail
+-                    .read_page(ticket)
+-                    .map_err(|error| source_read_error(error, &self.source_mismatch))?,
+-                None => false,
+-            };
+-            if !handled {
+-                generation
+-                    .opened
+-                    .transcoded
+-                    .source
+-                    .read_page(ticket)
+-                    .map_err(|error| source_read_error(error, &self.source_mismatch))?;
+-            }
+-            return Ok(true);
+-        }
+-        if !current.same_document(&self.snapshot)
+-            || (!historical && current.content_state != self.snapshot.content_state)
+-        {
+-            return Err("Paged source changed; recompare or search again".into());
+-        }
+-        if self
+-            .snapshot
+-            .resolve_owned(ticket)
+-            .map_err(|error| format!("Owned source unavailable: {error:?}"))?
+-        {
+-            return Ok(true);
+-        }
+-        let mut tail = match self.tail.try_lock() {
+-            Ok(tail) => tail,
+-            Err(std::sync::TryLockError::WouldBlock) => return Ok(false),
+-            Err(_) => return Err("Tail worker failed".into()),
+-        };
+-        let handled = match tail.as_mut() {
+-            Some(tail) => tail
+-                .read_page(ticket)
+-                .map_err(|error| source_read_error(error, &self.source_mismatch))?,
+-            None => false,
+-        };
+-        if !handled {
+-            opened
+-                .transcoded
+-                .source
+-                .read_page(ticket)
+-                .map_err(|error| source_read_error(error, &self.source_mismatch))?;
+-        }
+-        Ok(true)
+-    }
+-}
+ pub struct PagedEditorSurface {
+     manual_hidden: Vec<std::ops::Range<usize>>,
+     mapping_dirty: bool,
+@@ -442,8 +303,11 @@ impl PagedEditorSurface {
+                 WorkKind::Maintenance,
+                 Box::new(move || {
+                     let completion = JobWake::new(notify);
+-                    let mut opened = actor.lock().unwrap_or_else(|error| error.into_inner());
+-                    opened.transcoded.document.set_history_limit(max_changes);
++                    let mut opened = match actor.lock_document() {
++                        Ok(opened) => opened,
++                        Err(_) => return,
++                    };
++                    opened.document_mut().set_history_limit(max_changes);
+                     drop(opened);
+                     completion.finish();
+                 }),
+@@ -470,12 +334,8 @@ impl PagedEditorSurface {
+         self.actor.take_save_cleanup()
+     }
+     pub fn encoding_state(&self) -> Option<bareline_file_io::codecs::state::EncodingState> {
+-        bareline_file_io::codecs::state::metadata_encoding(self.snapshot.metadata()).or_else(|| {
+-            self.actor
+-                .try_lock()
+-                .ok()
+-                .map(|opened| opened.transcoded.store.state.clone())
+-        })
++        bareline_file_io::codecs::state::metadata_encoding(self.snapshot.metadata())
++            .or_else(|| self.actor.state().ok().map(|state| state.encoding))
+     }
+     pub fn apply_document_metadata(&mut self, metadata: bareline_document::DocumentMetadata) -> Result<(), String> {
+         if self.surface.user_read_only {
+@@ -491,7 +351,7 @@ impl PagedEditorSurface {
+             .read_handle(self.snapshot.clone(), self.view_generation.clone(), self.views.clone())
+     }
+     pub fn new(opened: Box<PagedOpened>, budget: Budget, notify: Arc<dyn Fn() + Send + Sync>) -> Result<Self, String> {
+-        let snapshot = opened.transcoded.document.snapshot();
++        let snapshot = opened.document().snapshot();
+         let prefix = DocumentBuilder::new(budget.clone(), Budget::new(0))
+             .map_err(|error| format!("{error:?}"))?
+             .prefix();
+@@ -502,16 +362,12 @@ impl PagedEditorSurface {
+         surface.user_read_only = opened.transcoded.store.state.binary_warning;
+         let initial_eol = (opened.recovery_origin.is_none()
+             && snapshot.revision.0 == 0
+-            && snapshot.content_state == opened.transcoded.document.saved_content_state())
++            && snapshot.content_state == opened.document().saved_content_state())
+         .then_some((snapshot.identity_token(), opened.transcoded.store.eol));
+-        let can_undo = opened.transcoded.document.can_undo();
+-        let can_redo = opened.transcoded.document.can_redo();
++        let can_undo = opened.document().can_undo();
++        let can_redo = opened.document().can_redo();
+         let actor = PagedSession::new(opened);
+-        let generation_owner = actor
+-            .generation_owner()
+-            .lock()
+-            .unwrap_or_else(|error| error.into_inner())
+-            .clone();
++        let generation_owner = actor.current_generation_owner();
+         let mut view = Self {
+             mapped: None,
+             mapping_job: None,
+@@ -734,80 +590,16 @@ impl PagedEditorSurface {
+     }
+     /// Begin durable discard off the UI thread and report when the tombstone permits close.
+     pub fn discard_recovery(&mut self) -> bareline_file_io::recovery_retirement::DiscardPoll {
+-        let discard_handle = self.actor.recovery_discard_handle();
+-        let mut discard = match discard_handle.lock() {
+-            Ok(discard) => discard,
+-            Err(_) => {
+-                return bareline_file_io::recovery_retirement::DiscardPoll::TombstoneFailed(
+-                    "Recovery discard state stopped".into(),
+-                );
+-            }
+-        };
+-        if discard.is_none() {
+-            let recovery_handle = self.actor.recovery_handle();
+-            let recovery = match recovery_handle.try_lock() {
+-                Ok(mut recovery) => recovery.take(),
+-                Err(std::sync::TryLockError::WouldBlock) => {
+-                    return bareline_file_io::recovery_retirement::DiscardPoll::Pending;
+-                }
+-                Err(std::sync::TryLockError::Poisoned(_)) => {
+-                    return bareline_file_io::recovery_retirement::DiscardPoll::TombstoneFailed(
+-                        "Recovery actor stopped".into(),
+-                    );
+-                }
+-            };
+-            let origin = self.actor.take_recovery_origin();
+-            if recovery.is_none() && origin.is_none() {
+-                return bareline_file_io::recovery_retirement::DiscardPoll::Durable;
+-            }
+-            let platform = recovery
+-                .as_ref()
+-                .map_or_else(|| self.actor.recovery_platform(), |recovery| recovery.platform());
+-            let notify = self.notify.clone();
+-            let hold = {
+-                let hold_handle = self.actor.recovery_cleanup_hold();
+-                let mut current = hold_handle.lock().unwrap_or_else(|error| error.into_inner());
+-                current
+-                    .get_or_insert_with(bareline_file_io::recovery_retirement::CleanupHold::new)
+-                    .clone()
+-            };
+-            *discard = Some(
+-                bareline_file_io::recovery_retirement::DiscardTicket::request_with_cleanup_hold(
+-                    bareline_file_io::recovery_retirement::RecoveryOwnership {
+-                        recoveries: recovery.into_iter().collect(),
+-                        paths: origin.into_iter().collect(),
+-                        platform,
+-                    },
+-                    &hold,
+-                    notify,
+-                ),
+-            );
+-        }
+-        let outcome = discard.as_ref().unwrap().poll();
+-        if matches!(
+-            outcome,
+-            bareline_file_io::recovery_retirement::DiscardPoll::TombstoneFailed(_)
+-        ) {
+-            discard.as_ref().unwrap().retry();
+-        }
+-        outcome
++        self.actor.poll_recovery_discard(self.notify.clone())
+     }
+     pub fn resume_recovery_after_discard(&mut self) {
+-        let discard_handle = self.actor.recovery_discard_handle();
+-        if let Ok(mut discard) = discard_handle.lock() {
+-            *discard = None;
+-        }
+         // The retired recovery can still finish a cancelled baseline job. Give
+         // reopened editing a new status owner so that late completion cannot
+         // publish an error into the replacement journal generation.
+-        self.actor.fresh_recovery_status();
++        self.actor.resume_recovery_after_discard();
+     }
+     pub fn recovery_status(&self) -> bareline_file_io::paged_recovery::PagedRecoveryStatus {
+-        self.actor
+-            .recovery_status_handle()
+-            .lock()
+-            .map(|status| status.clone())
+-            .unwrap_or_default()
++        self.actor.recovery_status()
+     }
+     pub fn mark_recovered(&mut self) {
+         self.actor.mark_recovered();
+@@ -880,7 +672,7 @@ impl PagedEditorSurface {
+         self.mapped.as_ref().map_or(&[], |map| map.segments.as_slice())
+     }
+     pub fn source_changed(&self) -> bool {
+-        self.tail_changed || self.actor.source_mismatch().load(std::sync::atomic::Ordering::Acquire)
++        self.tail_changed || self.actor.source_changed()
+     }
+     pub fn source_offset(&self, local: TextOffset, affinity: SourceAffinity) -> Option<TextOffset> {
+         if local.0 > self.surface.snapshot.len() {
+@@ -2232,9 +2024,11 @@ impl PagedEditorSurface {
+                                     }
+                                     WindowPoll::Pending(ticket) => {
+                                         let ready = if historical {
+-                                            handle.resolve_captured_page(ticket)?
++                                            handle
++                                                .resolve_captured_page(ticket)
++                                                .map_err(|error| error.to_string())?
+                                         } else {
+-                                            handle.resolve_page(ticket)?
++                                            handle.resolve_page(ticket).map_err(|error| error.to_string())?
+                                         };
+                                         if !ready {
+                                             handle.wait_after(observed, ACTOR_WAIT);
+@@ -2899,7 +2693,10 @@ impl PagedEditorSurface {
+                                 match request.poll() {
+                                     WindowPoll::Ready(window) => break Ok(window),
+                                     WindowPoll::Pending(ticket) => {
+-                                        if !captured.resolve_captured_page(ticket)? {
++                                        if !captured
++                                            .resolve_captured_page(ticket)
++                                            .map_err(|error| error.to_string())?
++                                        {
+                                             captured.wait_after(observed, ACTOR_WAIT);
+                                         }
+                                     }
+@@ -2935,16 +2732,9 @@ impl PagedEditorSurface {
+             return Ok(());
+         }
+         let actor = self.actor.clone();
+-        let source_mismatch = self.actor.source_mismatch();
+-        let retired = self.actor.retired_generations();
+-        let generation_owner = self.actor.generation_owner();
++        let source_owner = self.actor.clone();
+         let peer = self.peer.clone();
+-        let tail_arc = self.actor.tail_handle();
+-        let recovery = self.actor.recovery_handle();
+-        let recovery_config = self.actor.recovery_config();
+         let streaming_quota = self.streaming_quota;
+-        let recovery_status = self.actor.recovery_status_handle();
+-        let failed_retirements = self.actor.failed_retirements();
+         let budget = self.budget.clone();
+         let cancellation = self.cancellation.clone();
+         let notify = self.notify.clone();
+@@ -2963,10 +2753,12 @@ impl PagedEditorSurface {
+                 Box::new(move || {
+                     let completion = JobCompletion::new(sender, notify.clone());
+                     let result = (|| {
+-                        cancellation.check().map_err(|error| format!("{error:?}"))?;
+-                        let mut opened = actor.lock().map_err(|_| "Paged actor stopped.")?;
+-                        let mut tail = tail_arc.lock().map_err(|_| "Tail actor stopped.")?;
+-                        if tail.is_some()
++                        cancellation
++                            .check()
++                            .map_err(|_| PagedOperationError::Lifecycle(PagedLifecycleError::Cancelled))?;
++                        let mut opened = actor.lock_document()?;
++                        let mut tail = actor.lock_tail()?;
++                        if tail.is_active()
+                             && matches!(
+                                 &action,
+                                 Action::Edit { .. }
+@@ -2983,20 +2775,17 @@ impl PagedEditorSurface {
+                                     .into(),
+                             );
+                         }
+-                        let saved_state = actor.saved_state();
+-                        if opened.transcoded.document.snapshot().revision != revision
+-                            && !matches!(&action, Action::Read(_))
+-                        {
++                        if opened.document().snapshot().revision != revision && !matches!(&action, Action::Read(_)) {
+                             return Err("Document changed; retry the operation.".into());
+                         }
+                         let mut start = current_start;
+                         let mut caret = current_caret;
+                         let mut saved = None;
+                         let mut committed_selection = None;
+-                        let baseline = opened.transcoded.document.snapshot();
+-                        let previous_path = opened.path.clone();
+-                        let previous_fingerprint = opened.fingerprint.clone();
+-                        let previously_following = tail.is_some();
++                        let baseline = opened.document().snapshot();
++                        let previous_path = actor.path();
++                        let previous_fingerprint = actor.fingerprint();
++                        let previously_following = tail.is_active();
+                         let mut retry_recovery = false;
+                         let mut recovery_edits = Vec::new();
+                         let mut streaming_protected = false;
+@@ -3006,81 +2795,41 @@ impl PagedEditorSurface {
+                                 request,
+                                 follow,
+                             } => {
+-                                if tail.is_none() {
+-                                    *tail = Some(
+-                                        bareline_file_io::tail::TailSession::new(
+-                                            &opened,
+-                                            platform,
+-                                            budget.clone(),
+-                                            cancellation.clone(),
+-                                        )
+-                                        .map_err(|e| format!("{e:?}"))?,
+-                                    );
++                                if !tail.is_active() {
++                                    tail.start(&opened, platform, budget.clone(), cancellation.clone())?;
+                                     if follow {
+-                                        caret = opened.transcoded.document.snapshot().len();
++                                        caret = opened.document().snapshot().len();
+                                         start = caret.saturating_sub(WINDOW / 2);
+                                     }
+                                 }
+-                                let session = tail.as_mut().unwrap();
+-                                if request {
+-                                    session.request(&opened.path).map_err(|e| format!("{e:?}"))?;
+-                                }
+-                                if session.step(&mut opened).map_err(|e| format!("{e:?}"))? && follow {
+-                                    caret = opened.transcoded.document.snapshot().len();
++                                if actor.step_tail(&mut opened, &mut tail, request)? && follow {
++                                    caret = opened.document().snapshot().len();
+                                     start = caret.saturating_sub(WINDOW / 2);
+                                 }
+                             }
+                             Action::UnlockTail => {
+-                                let session = tail.as_ref().ok_or("Monitoring is not active")?;
+-                                let fixed = session
+-                                    .freeze(&opened)
+-                                    .map_err(|e| format!("Cannot capture fixed generation: {e:?}"))?;
+-                                let previous = std::mem::replace(&mut *opened, fixed);
+-                                let old_owner = std::mem::replace(
+-                                    &mut *generation_owner.lock().map_err(|_| "Generation owner failed")?,
+-                                    Arc::new(()),
+-                                );
+-                                let mut retained = retired.lock().map_err(|_| "Captured generation owner failed")?;
+-                                retained.retain(|generation| Arc::strong_count(&generation.owner) > 1);
+-                                retained.push(RetiredGeneration {
+-                                    owner: old_owner,
+-                                    opened: previous,
+-                                    tail: tail.take(),
+-                                });
+-                                saved = Some(opened.fingerprint.clone());
++                                saved = Some(actor.unlock_tail(&mut opened, &mut tail)?);
+                             }
+                             Action::RetryRecovery => {
+-                                if let Some((_, platform)) = &recovery_config {
+-                                    let paths = std::mem::take(
+-                                        &mut *failed_retirements
+-                                            .lock()
+-                                            .map_err(|_| "Recovery retirement state stopped")?,
+-                                    );
+-                                    let mut failed = Vec::new();
+-                                    let mut failure = None;
+-                                    for path in paths {
+-                                        if let Err(error) =
+-                                            bareline_file_io::recovery::discard(&path, platform.as_ref())
+-                                        {
+-                                            failed.push(path);
+-                                            failure = Some(error.to_string());
+-                                        }
+-                                    }
+-                                    *failed_retirements
+-                                        .lock()
+-                                        .map_err(|_| "Recovery retirement state stopped")? = failed;
+-                                    if let Some(error) = failure {
+-                                        if let Ok(mut status) = recovery_status.lock() {
+-                                            status.error = Some(error.clone());
+-                                        }
+-                                        return Err(error);
+-                                    }
+-                                }
+-                                if Some(baseline.content_state) == saved_state {
+-                                    if let Ok(mut status) = recovery_status.lock() {
+-                                        *status = Default::default();
+-                                    }
+-                                } else {
++                                let lifecycle_stamp = actor.stamp_for(&opened);
++                                drop(tail);
++                                drop(opened);
++                                actor.signal_document_released();
++                                let receipt = actor.execute(
++                                    bareline_file_io::paged_service::PagedLifecycleCommand::RetryRecovery {
++                                        requested: lifecycle_stamp,
++                                    },
++                                    &cancellation,
++                                );
++                                let rebuild = match receipt.terminal.map_err(PagedOperationError::Lifecycle)? {
++                                    bareline_file_io::paged_service::PagedTerminalOutcome::RecoveryRetried {
++                                        rebuild,
++                                    } => rebuild,
++                                    _ => return Err("Unexpected recovery receipt".into()),
++                                };
++                                opened = actor.lock_document()?;
++                                tail = actor.lock_tail()?;
++                                if rebuild {
+                                     retry_recovery = true;
+                                     recovery_edits.push(bareline_file_io::recovery::RecoveryEdit {
+                                         offset: 0,
+@@ -3094,30 +2843,19 @@ impl PagedEditorSurface {
+                                 caret = offset;
+                             }
+                             Action::Metadata(metadata) => {
+-                                let revision = opened.transcoded.document.snapshot().revision;
++                                let revision = opened.document().snapshot().revision;
+                                 opened
+-                                    .transcoded
+-                                    .document
++                                    .document_mut()
+                                     .apply_metadata(revision, metadata)
+                                     .map_err(|error| format!("{error:?}"))?;
+                             }
+                             Action::Source(prepared, completion) => {
+-                                ensure_stream_recovery(
+-                                    &opened,
+-                                    &baseline,
+-                                    &recovery_config,
+-                                    &recovery,
+-                                    &recovery_status,
+-                                    &notify,
+-                                )?;
++                                actor.ensure_recovery(&opened, &baseline, notify.clone())?;
+                                 let lease = opened
+-                                    .transcoded
+-                                    .document
++                                    .document_mut()
+                                     .lease_source_transaction(prepared)
+                                     .map_err(|e| format!("{e:?}"))?;
+-                                if let Some(journal) = recovery.lock().map_err(|_| "Recovery actor stopped")?.as_mut() {
+-                                    journal.append_sources(lease.snapshot(), lease.edits(), streaming_quota)?;
+-                                }
++                                actor.append_recovery_sources(lease.snapshot(), lease.edits(), streaming_quota)?;
+                                 if let Some(selection) = lease.metadata().after.first() {
+                                     caret = selection.caret.0;
+                                     start = caret.saturating_sub(WINDOW / 2);
+@@ -3141,10 +2879,10 @@ impl PagedEditorSurface {
+                                 streaming_protected = true;
+                             }
+                             Action::Prepared(transaction, completion) => {
+-                                if tail.is_some() {
++                                if tail.is_active() {
+                                     return Err("Monitoring document is read-only".into());
+                                 }
+-                                let snapshot = opened.transcoded.document.snapshot();
++                                let snapshot = opened.document().snapshot();
+                                 if transaction.base_revision != snapshot.revision {
+                                     return Err("Replacement source changed".into());
+                                 }
+@@ -3173,7 +2911,7 @@ impl PagedEditorSurface {
+                                         length + 8,
+                                         &budget,
+                                         &cancellation,
+-                                        &source_mismatch,
++                                        &source_owner,
+                                     )?;
+                                     let from = edit
+                                         .range
+@@ -3196,14 +2934,13 @@ impl PagedEditorSurface {
+                                     windows.push(window);
+                                 }
+                                 let revision = opened
+-                                    .transcoded
+-                                    .document
++                                    .document_mut()
+                                     .apply_materialized(transaction, &windows)
+                                     .map_err(|error| format!("{error:?}"))?;
+                                 if let Some(completion) = completion {
+                                     completion.complete_once(Ok(revision));
+                                 }
+-                                caret = caret.min(opened.transcoded.document.snapshot().len());
++                                caret = caret.min(opened.document().snapshot().len());
+                                 start = start.min(caret);
+                             }
+                             Action::Edit { range, insert } => {
+@@ -3215,7 +2952,7 @@ impl PagedEditorSurface {
+                                 if insert.len() > WINDOW || length > WINDOW {
+                                     return Err("Edit exceeds the bounded viewport budget.".into());
+                                 }
+-                                let snapshot = opened.transcoded.document.snapshot();
++                                let snapshot = opened.document().snapshot();
+                                 let window = read_window(
+                                     &mut opened,
+                                     &mut tail,
+@@ -3224,7 +2961,7 @@ impl PagedEditorSurface {
+                                     (length + 8).min(WINDOW + 8),
+                                     &budget,
+                                     &cancellation,
+-                                    &source_mismatch,
++                                    &source_owner,
+                                 )?;
+                                 // Mirror the `Prepared` path: never index the read
+                                 // window with unchecked arithmetic.
+@@ -3249,8 +2986,7 @@ impl PagedEditorSurface {
+                                 });
+                                 caret = range.start.0 + insert.len();
+                                 opened
+-                                    .transcoded
+-                                    .document
++                                    .document_mut()
+                                     .apply_materialized(
+                                         EditTransaction {
+                                             base_revision: revision,
+@@ -3263,27 +2999,16 @@ impl PagedEditorSurface {
+                             }
+                             Action::Undo | Action::Redo => {
+                                 let undo = matches!(action, Action::Undo);
+-                                ensure_stream_recovery(
+-                                    &opened,
+-                                    &baseline,
+-                                    &recovery_config,
+-                                    &recovery,
+-                                    &recovery_status,
+-                                    &notify,
+-                                )?;
++                                actor.ensure_recovery(&opened, &baseline, notify.clone())?;
+                                 let prepared = opened
+-                                    .transcoded
+-                                    .document
++                                    .document()
+                                     .prepare_source_history(undo, &budget)
+                                     .map_err(|e| format!("{e:?}"))?;
+                                 let lease = opened
+-                                    .transcoded
+-                                    .document
++                                    .document_mut()
+                                     .lease_source_history(prepared)
+                                     .map_err(|e| format!("{e:?}"))?;
+-                                if let Some(journal) = recovery.lock().map_err(|_| "Recovery actor stopped")?.as_mut() {
+-                                    journal.append_source_history(lease.snapshot(), lease.edits(), streaming_quota)?;
+-                                }
++                                actor.append_recovery_history(lease.snapshot(), lease.edits(), streaming_quota)?;
+                                 let selections = if undo {
+                                     &lease.metadata().before
+                                 } else {
+@@ -3314,7 +3039,7 @@ impl PagedEditorSurface {
+                                 // Extract the save inputs while the actor is still
+                                 // locked; the save/fingerprint policy lives in
+                                 // `file-io`'s `paged_service`.
+-                                let snapshot = opened.transcoded.document.snapshot();
++                                let snapshot = opened.document().snapshot();
+                                 if destination.document != snapshot.identity_token() {
+                                     return Err("Save destination expired because the document changed.".into());
+                                 }
+@@ -3328,92 +3053,65 @@ impl PagedEditorSurface {
+                                 drop(tail);
+                                 drop(opened);
+                                 actor.signal_document_released();
+-                                let receipt = actor.execute_save(
+-                                    lifecycle_stamp,
+-                                    destination,
+-                                    copy_only,
+-                                    platform.as_ref(),
++                                let receipt = actor.execute(
++                                    bareline_file_io::paged_service::PagedLifecycleCommand::Save {
++                                        requested: lifecycle_stamp,
++                                        destination,
++                                        copy_only,
++                                        platform,
++                                    },
+                                     &cancellation,
+                                 );
++                                let applies = actor.receipt_applies(&receipt);
+                                 let result = receipt.terminal.map_err(PagedOperationError::Lifecycle)?;
+                                 if let bareline_file_io::paged_service::PagedTerminalOutcome::Saved {
+                                     fingerprint,
+                                     copy_only: false,
+                                 } = result
++                                    && applies
+                                 {
+                                     saved = Some(fingerprint);
++                                    if let Ok(state) = actor.state() {
++                                        let _ = actor.execute(
++                                            bareline_file_io::paged_service::PagedLifecycleCommand::RetireRecovery {
++                                                requested: state.stamp,
++                                            },
++                                            &cancellation,
++                                        );
++                                    }
+                                 }
+-                                opened = actor.lock().map_err(|_| "Paged actor stopped.")?;
+-                                tail = tail_arc.lock().map_err(|_| "Tail actor stopped.")?;
++                                opened = actor.lock_document()?;
++                                tail = actor.lock_tail()?;
+                             }
+                         }
+-                        let snapshot = opened.transcoded.document.snapshot();
++                        let snapshot = opened.document().snapshot();
+                         let peer_epoch = {
+                             let mut peer = peer.lock().map_err(|_| "Peer state stopped")?;
+-                            if tail.is_some() {
++                            if tail.is_active() {
+                                 actor.mark_saved_state(snapshot.content_state);
+                             }
+                             if snapshot.content_state != baseline.content_state
+                                 || snapshot.revision != baseline.revision
+-                                || opened.path != previous_path
+-                                || opened.fingerprint != previous_fingerprint
++                                || actor.path() != previous_path
++                                || actor.fingerprint() != previous_fingerprint
+                                 || saved.is_some()
+-                                || previously_following != tail.is_some()
++                                || previously_following != tail.is_active()
+                             {
+                                 peer.epoch = peer.epoch.wrapping_add(1);
+                             }
+                             peer.epoch
+                         };
+-                        if saved.is_some() {
+-                            let retired = recovery.lock().map_err(|_| "Recovery actor stopped")?.take();
+-                            if let Some(retired) = retired {
+-                                let path = retired.directory().to_path_buf();
+-                                match retired.retire() {
+-                                    Ok(_) => {
+-                                        if let Ok(mut status) = recovery_status.lock() {
+-                                            *status = Default::default();
+-                                        }
+-                                    }
+-                                    Err(error) => {
+-                                        failed_retirements
+-                                            .lock()
+-                                            .map_err(|_| "Recovery retirement state stopped")?
+-                                            .push(path);
+-                                        if let Ok(mut status) = recovery_status.lock() {
+-                                            status.error = Some(error);
+-                                        }
+-                                    }
+-                                }
+-                            }
+-                        }
+                         if !streaming_protected
+                             && (!recovery_edits.is_empty() || snapshot.metadata() != baseline.metadata())
+                         {
+-                            if let Some((root, platform)) = recovery_config {
+-                                let protected = (|| -> Result<(), String> {
+-                                    let mut journal = recovery.lock().map_err(|_| "Recovery actor stopped")?;
+-                                    if retry_recovery {
+-                                        *journal = None;
+-                                    }
+-                                    if journal.is_none() {
+-                                        *journal = Some(bareline_file_io::paged_recovery::PagedRecovery::create(
+-                                            &root,
+-                                            opened.transcoded.store.clone(),
+-                                            opened.recovery_origin.is_none().then(|| opened.path.clone()),
+-                                            baseline,
+-                                            platform,
+-                                            recovery_status.clone(),
+-                                            notify.clone(),
+-                                        )?);
+-                                    }
+-                                    journal.as_mut().unwrap().append(&snapshot, &recovery_edits)
+-                                })();
+-                                if let Err(error) = protected {
+-                                    if let Ok(mut status) = recovery_status.lock() {
+-                                        status.error = Some(error);
+-                                    }
+-                                }
+-                            }
++                            let _ = actor.protect_recovery_edits(
++                                &opened,
++                                &baseline,
++                                &snapshot,
++                                &recovery_edits,
++                                retry_recovery,
++                                notify.clone(),
++                            );
+                         }
+                         start = start.min(snapshot.len());
+                         caret = caret.min(snapshot.len());
+@@ -3425,18 +3123,18 @@ impl PagedEditorSurface {
+                             WINDOW,
+                             &budget,
+                             &cancellation,
+-                            &source_mismatch,
++                            &source_owner,
+                         );
+                         Ok(Completed {
+                             selections: committed_selection,
+-                            append_receipt: tail.as_ref().and_then(|tail| tail.append_receipt()),
+-                            generation_owner: generation_owner.lock().map_err(|_| "Generation owner failed")?.clone(),
++                            append_receipt: tail.append_receipt(),
++                            generation_owner: actor.current_generation_owner(),
+                             peer_epoch,
+-                            following: tail.is_some(),
+-                            tail_pending: tail.as_ref().is_some_and(|s| s.pending()),
+-                            source_changed: tail.as_ref().is_some_and(|s| s.source_changed),
+-                            can_undo: opened.transcoded.document.can_undo(),
+-                            can_redo: opened.transcoded.document.can_redo(),
++                            following: tail.is_active(),
++                            tail_pending: tail.pending(),
++                            source_changed: tail.source_changed(),
++                            can_undo: opened.document().can_undo(),
++                            can_redo: opened.document().can_redo(),
+                             snapshot,
+                             window,
+                             caret,
+@@ -3628,25 +3326,15 @@ impl Drop for PagedEditorSurface {
+         }
+     }
+ }
+-fn source_read_error(error: bareline_file_io::lifecycle::FileError, changed: &std::sync::atomic::AtomicBool) -> String {
+-    if matches!(
+-        error,
+-        bareline_file_io::lifecycle::FileError::Changed
+-            | bareline_file_io::lifecycle::FileError::Transcode(bareline_file_io::codecs::disk::DiskError::Changed)
+-    ) {
+-        changed.store(true, std::sync::atomic::Ordering::Release);
+-    }
+-    format!("Paged source unavailable: {error:?}")
+-}
+ fn read_window(
+-    opened: &mut PagedOpened,
+-    tail: &mut Option<bareline_file_io::tail::TailSession>,
++    opened: &mut bareline_file_io::paged_service::PagedDocumentGuard<'_>,
++    tail: &mut bareline_file_io::paged_service::PagedTailGuard<'_>,
+     snapshot: &PagedSnapshot,
+     start: usize,
+     count: usize,
+     budget: &Budget,
+     cancellation: &Cancellation,
+-    source_mismatch: &std::sync::atomic::AtomicBool,
++    session: &PagedSession,
+ ) -> Result<TextWindow, String> {
+     let mut request = snapshot
+         .begin_viewport(TextOffset(start), count, budget)
+@@ -3659,24 +3347,19 @@ fn read_window(
+                 let owned = snapshot
+                     .resolve_owned(ticket)
+                     .map_err(|error| format!("Owned page unavailable: {error:?}"))?;
+-                let handled = owned
+-                    || match tail.as_mut() {
+-                        Some(tail) => tail
+-                            .read_page(ticket)
+-                            .map_err(|error| source_read_error(error, source_mismatch))?,
+-                        None => false,
+-                    };
++                let handled = owned || tail.read_page(ticket).map_err(|error| error.to_string())?;
+                 if !handled {
+-                    opened
+-                        .transcoded
+-                        .source
+-                        .read_page(ticket)
+-                        .map_err(|error| source_read_error(error, source_mismatch))?;
++                    opened.read_source_page(ticket).map_err(|error| {
++                        if matches!(error, bareline_file_io::paged_service::PagedLifecycleError::Changed) {
++                            session.mark_source_changed();
++                        }
++                        error.to_string()
++                    })?;
+                 }
+             }
+             WindowPoll::Unavailable(reason) => {
+                 if reason == bareline_document::source::Unavailable::SourceChanged {
+-                    source_mismatch.store(true, std::sync::atomic::Ordering::Release);
++                    session.mark_source_changed();
+                 }
+                 return Err(format!("Source unavailable: {reason:?}"));
+             }
+@@ -3700,131 +3383,6 @@ mod peer_tests {
+         },
+         time::{Duration, Instant},
+     };
+-    #[cfg(any())]
+-    #[test]
+-    fn paged_error_display_matches_shell_strings() {
+-        // Control flow branches on the variant; the shell boundary renders these
+-        // strings via Display/From, so they must stay stable.
+-        assert_eq!(PagedError::Busy.to_string(), "Paged source is busy");
+-        assert_eq!(PagedError::Poisoned.to_string(), "Paged source worker failed");
+-        assert_eq!(PagedError::Changed.to_string(), "Paged source changed");
+-        let rendered: String = PagedError::Busy.into();
+-        assert_eq!(rendered, "Paged source is busy");
+-    }
+-    #[cfg(any())]
+-    #[test]
+-    fn actor_gate_idle_wait_completes_under_an_outer_watchdog() {
+-        let gate = Arc::new(ActorGate::default());
+-        let (done, completed) = mpsc::sync_channel(1);
+-        std::thread::spawn(move || {
+-            let observed = gate.generation();
+-            done.send(gate.wait_after(observed, Duration::from_millis(20))).unwrap();
+-        });
+-        assert!(
+-            !completed
+-                .recv_timeout(Duration::from_secs(2))
+-                .expect("idle wait deadlocked")
+-        );
+-    }
+-    #[cfg(any())]
+-    #[test]
+-    fn actor_gate_observes_notification_before_wait() {
+-        let gate = ActorGate::default();
+-        let observed = gate.generation();
+-        gate.signal();
+-        assert!(gate.wait_after(observed, Duration::from_secs(2)));
+-    }
+-    #[cfg(any())]
+-    #[test]
+-    fn actor_gate_observes_notification_during_wait() {
+-        let gate = Arc::new(ActorGate::default());
+-        let (entered, waiting) = mpsc::sync_channel(1);
+-        let (done, completed) = mpsc::sync_channel(1);
+-        let waiter_gate = gate.clone();
+-        std::thread::spawn(move || {
+-            let observed = waiter_gate.generation();
+-            done.send(waiter_gate.wait_after_with_entry_receipt(observed, Duration::from_secs(2), &entered))
+-                .unwrap();
+-        });
+-        waiting
+-            .recv_timeout(Duration::from_secs(2))
+-            .expect("waiter never reached the generation-mutex boundary");
+-        gate.signal();
+-        assert!(
+-            completed
+-                .recv_timeout(Duration::from_secs(2))
+-                .expect("release notification was lost")
+-        );
+-    }
+-    #[cfg(any())]
+-    #[test]
+-    fn actor_gate_caller_rechecks_after_spurious_notification() {
+-        let gate = Arc::new(ActorGate::default());
+-        let released = Arc::new(AtomicBool::new(false));
+-        let (entered, waiting) = mpsc::sync_channel(1);
+-        let (attempted, attempts) = mpsc::sync_channel(2);
+-        let (done, completed) = mpsc::sync_channel(1);
+-        let waiter_gate = gate.clone();
+-        let waiter_released = released.clone();
+-        std::thread::spawn(move || {
+-            let mut first = Some(entered);
+-            while !waiter_released.load(Ordering::Acquire) {
+-                let observed = waiter_gate.generation();
+-                if waiter_released.load(Ordering::Acquire) {
+-                    break;
+-                }
+-                let notified = if let Some(entered) = first.take() {
+-                    waiter_gate.wait_after_with_entry_receipt(observed, Duration::from_millis(50), &entered)
+-                } else {
+-                    waiter_gate.wait_after(observed, Duration::from_millis(50))
+-                };
+-                attempted.send(notified).unwrap();
+-            }
+-            done.send(()).unwrap();
+-        });
+-        waiting
+-            .recv_timeout(Duration::from_secs(2))
+-            .expect("waiter never reached the generation-mutex boundary");
+-        gate.spurious_notify_after_wait_entry();
+-        assert!(
+-            !attempts
+-                .recv_timeout(Duration::from_secs(2))
+-                .expect("waiter did not retry")
+-        );
+-        released.store(true, Ordering::Release);
+-        gate.signal();
+-        completed
+-            .recv_timeout(Duration::from_secs(2))
+-            .expect("predicate waiter did not progress");
+-    }
+-    #[cfg(any())]
+-    #[test]
+-    fn actor_gate_cancellation_exits_a_waiting_retry_loop() {
+-        let gate = Arc::new(ActorGate::default());
+-        let cancelled = Arc::new(AtomicBool::new(false));
+-        let ready = Arc::new(Barrier::new(2));
+-        let (done, completed) = mpsc::sync_channel(1);
+-        let waiter_gate = gate.clone();
+-        let waiter_cancelled = cancelled.clone();
+-        let waiter_ready = ready.clone();
+-        std::thread::spawn(move || {
+-            waiter_ready.wait();
+-            while !waiter_cancelled.load(Ordering::Acquire) {
+-                let observed = waiter_gate.generation();
+-                if waiter_cancelled.load(Ordering::Acquire) {
+-                    break;
+-                }
+-                waiter_gate.wait_after(observed, Duration::from_secs(1));
+-            }
+-            done.send(()).unwrap();
+-        });
+-        ready.wait();
+-        cancelled.store(true, Ordering::Release);
+-        gate.signal();
+-        completed
+-            .recv_timeout(Duration::from_secs(2))
+-            .expect("cancelled waiter did not exit");
+-    }
+     #[test]
+     fn paged_adapter_reports_terminal_failure_and_wakes_after_unwind() {
+         let (result_tx, result_rx) = mpsc::sync_channel(1);
+@@ -4921,31 +4479,3 @@ mod peer_tests {
+         std::fs::remove_dir_all(root).unwrap();
+     }
+ }
+-
+-/// Materialize the complete bounded transaction before changing document/history.
+-/// Keep the returned reservation alive until the journal attempt has completed.
+-fn ensure_stream_recovery(
+-    opened: &PagedOpened,
+-    baseline: &PagedSnapshot,
+-    config: &Option<(PathBuf, Arc<dyn LocalFileSystem>)>,
+-    recovery: &Arc<Mutex<Option<bareline_file_io::paged_recovery::PagedRecovery>>>,
+-    status: &Arc<Mutex<bareline_file_io::paged_recovery::PagedRecoveryStatus>>,
+-    notify: &Arc<dyn Fn() + Send + Sync>,
+-) -> Result<(), String> {
+-    let Some((root, platform)) = config else {
+-        return Ok(());
+-    };
+-    let mut journal = recovery.lock().map_err(|_| "Recovery actor stopped")?;
+-    if journal.is_none() {
+-        *journal = Some(bareline_file_io::paged_recovery::PagedRecovery::create(
+-            root,
+-            opened.transcoded.store.clone(),
+-            opened.recovery_origin.is_none().then(|| opened.path.clone()),
+-            baseline.clone(),
+-            platform.clone(),
+-            status.clone(),
+-            notify.clone(),
+-        )?);
+-    }
+-    Ok(())
+-}
+diff --git a/crates/editor-surface/src/power/captured.rs b/crates/editor-surface/src/power/captured.rs
+index 8752488..5340254 100644
+--- a/crates/editor-surface/src/power/captured.rs
++++ b/crates/editor-surface/src/power/captured.rs
+@@ -140,7 +140,9 @@ pub fn prepare_transform(
+                 if !request
+                     .resolve_owned(ticket)
+                     .map_err(|e| io::Error::other(format!("{e:?}")))?
+-                    && !captured.resolve_captured_page(ticket).map_err(io::Error::other)?
++                    && !captured
++                        .resolve_captured_page(ticket)
++                        .map_err(|error| io::Error::other(error.to_string()))?
+                 {
+                     std::thread::yield_now();
+                 }
+@@ -184,7 +186,10 @@ fn plan_ranges(
+                 result @ (LineLookupPoll::Line(_) | LineLookupPoll::Range(_)) => return Ok(result),
+                 LineLookupPoll::Progress(_) => {}
+                 LineLookupPoll::Pending(ticket) => {
+-                    if !captured.resolve_captured_page(ticket).map_err(io::Error::other)? {
++                    if !captured
++                        .resolve_captured_page(ticket)
++                        .map_err(|error| io::Error::other(error.to_string()))?
++                    {
+                         std::thread::yield_now();
+                     }
+                 }
+@@ -349,7 +354,11 @@ impl CapturedRangeReader {
+                     return Ok(());
+                 }
+                 WindowPoll::Pending(ticket) => {
+-                    if !self.captured.resolve_captured_page(ticket).map_err(io::Error::other)? {
++                    if !self
++                        .captured
++                        .resolve_captured_page(ticket)
++                        .map_err(|error| io::Error::other(error.to_string()))?
++                    {
+                         std::thread::yield_now();
+                     }
+                 }
+diff --git a/crates/file-io/src/paged_service.rs b/crates/file-io/src/paged_service.rs
+index 0d355d6..c9ccf51 100644
+--- a/crates/file-io/src/paged_service.rs
++++ b/crates/file-io/src/paged_service.rs
+@@ -8,15 +8,15 @@
+ //! here: the surface hands over the pieces it holds and gets back the new
+ //! fingerprint, so save/fingerprint decisions sit with `file-io`.
+ //!
+-//! The caller must release the paged actor guard before calling [`save`] — the
++//! The caller must release the paged document guard before dispatching [`PagedLifecycleCommand::Save`] — the
+ //! full-file write is long-running and readers keep serving from the released
+ //! actor — and re-acquire it afterwards to publish the returned fingerprint.
+ use crate::cancellation::Cancellation;
+ use crate::codecs::disk::DiskDecoded;
+ use crate::codecs::failure::EncodingFailure;
+ use crate::lifecycle::{
+-    DestinationCondition, FileError, Fingerprint, PagedOpened, PagedSavePolicy, PagedSaved, PreparedDestination,
+-    SaveCleanup, SaveConflict, guard_copy_source, save_paged_to_cancellable,
++    DestinationCondition, FileError, Fingerprint, PagedOpened, PagedSavePolicy, PreparedDestination, SaveCleanup,
++    SaveConflict, guard_copy_source, save_paged_to_cancellable,
+ };
+ use bareline_document::source::Generation;
+ use bareline_document::{ContentStateId, Revision, paged::PagedSnapshot};
+@@ -48,17 +48,23 @@ pub struct PagedLifecycleState {
+     pub recovery_origin: Option<PathBuf>,
+ }
+ 
+-#[derive(Clone, Debug)]
+ pub enum PagedLifecycleCommand {
+     Save {
++        requested: PagedLifecycleStamp,
+         destination: PreparedDestination,
+         copy_only: bool,
++        platform: Arc<dyn LocalFileSystem>,
++    },
++    RetryRecovery {
++        requested: PagedLifecycleStamp,
++    },
++    RetireRecovery {
++        requested: PagedLifecycleStamp,
++    },
++    Spill {
++        requested: PagedLifecycleStamp,
++        prepared: bareline_document::spill::PreparedSpill,
+     },
+-    Reload,
+-    ChangeEncoding(crate::codecs::state::EncodingState),
+-    RetryRecovery,
+-    RetireRecovery,
+-    Spill,
+ }
+ 
+ #[derive(Debug)]
+@@ -91,9 +97,7 @@ impl std::fmt::Display for PagedLifecycleError {
+ #[derive(Debug)]
+ pub enum PagedTerminalOutcome {
+     Saved { fingerprint: Fingerprint, copy_only: bool },
+-    Reloaded,
+-    EncodingChanged,
+-    RecoveryRetried,
++    RecoveryRetried { rebuild: bool },
+     RecoveryRetired,
+     Spilled,
+ }
+@@ -116,23 +120,30 @@ struct PersistentState {
+     saved_state: Option<ContentStateId>,
+     save_as_required: bool,
+     recovery_origin: Option<PathBuf>,
+-    encoding_failure: Option<EncodingFailure>,
+-    save_conflict: Option<SaveConflict>,
+-    save_cleanup: Option<SaveCleanup>,
++    encoding_failures: std::collections::VecDeque<EncodingFailure>,
++    save_conflicts: std::collections::VecDeque<SaveConflict>,
++    save_cleanups: std::collections::VecDeque<SaveCleanup>,
++    active_operation: Option<u64>,
+ }
+ 
+-pub struct RetiredPagedGeneration {
+-    pub owner: Arc<()>,
+-    pub opened: Box<PagedOpened>,
+-    pub tail: Option<crate::tail::TailSession>,
++struct RetiredPagedGeneration {
++    owner: Arc<()>,
++    opened: Box<PagedOpened>,
++    tail: Option<crate::tail::TailSession>,
+ }
+ 
+ #[derive(Default)]
+-pub struct PagedSpillState {
+-    pub pending: bool,
+-    pub config: Option<(PathBuf, Arc<dyn LocalFileSystem>, crate::source::SourceOptions)>,
+-    pub attempted: Option<(u64, ContentStateId)>,
+-    pub error: Option<String>,
++struct PagedSpillState {
++    pending: bool,
++    config: Option<(PathBuf, Arc<dyn LocalFileSystem>, crate::source::SourceOptions)>,
++    attempted: Option<(u64, ContentStateId)>,
++    error: Option<String>,
++}
++
++pub struct PagedSpillReservation {
++    pub cache: PathBuf,
++    pub platform: Arc<dyn LocalFileSystem>,
++    pub options: crate::source::SourceOptions,
+ }
+ 
+ struct SessionInner {
+@@ -141,16 +152,16 @@ struct SessionInner {
+     operation_generation: AtomicU64,
+     recovery_config: Mutex<Option<(PathBuf, Arc<dyn LocalFileSystem>)>>,
+     recovery_platform: Arc<dyn LocalFileSystem>,
+-    recovery: Arc<Mutex<Option<crate::paged_recovery::PagedRecovery>>>,
+-    recovery_discard: Arc<Mutex<Option<crate::recovery_retirement::DiscardTicket>>>,
+-    recovery_cleanup_hold: Arc<Mutex<Option<crate::recovery_retirement::CleanupHold>>>,
++    recovery: Mutex<Option<crate::paged_recovery::PagedRecovery>>,
++    recovery_discard: Mutex<Option<crate::recovery_retirement::DiscardTicket>>,
++    recovery_cleanup_hold: Mutex<Option<crate::recovery_retirement::CleanupHold>>,
+     recovery_status: Mutex<Arc<Mutex<crate::paged_recovery::PagedRecoveryStatus>>>,
+-    failed_retirements: Arc<Mutex<Vec<PathBuf>>>,
+-    tail: Arc<Mutex<Option<crate::tail::TailSession>>>,
+-    retired: Arc<Mutex<Vec<RetiredPagedGeneration>>>,
+-    source_mismatch: Arc<std::sync::atomic::AtomicBool>,
+-    generation_owner: Arc<Mutex<Arc<()>>>,
+-    spill: Arc<Mutex<PagedSpillState>>,
++    failed_retirements: Mutex<Vec<PathBuf>>,
++    tail: Mutex<Option<crate::tail::TailSession>>,
++    retired: Mutex<Vec<RetiredPagedGeneration>>,
++    source_mismatch: std::sync::atomic::AtomicBool,
++    generation_owner: Mutex<Arc<()>>,
++    spill: Mutex<PagedSpillState>,
+     gate_generation: Mutex<u64>,
+     gate_released: Condvar,
+ }
+@@ -164,22 +175,46 @@ pub struct PagedSession(Arc<SessionInner>);
+ /// savepoint, encoding, recovery, or cleanup mutators.
+ pub struct PagedDocumentGuard<'a>(MutexGuard<'a, Box<PagedOpened>>);
+ 
+-impl std::fmt::Debug for PagedDocumentGuard<'_> {
+-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+-        f.write_str("PagedDocumentGuard")
+-    }
+-}
++pub struct PagedTailGuard<'a>(MutexGuard<'a, Option<crate::tail::TailSession>>);
+ 
+-impl std::ops::Deref for PagedDocumentGuard<'_> {
+-    type Target = PagedOpened;
+-    fn deref(&self) -> &Self::Target {
+-        &self.0
++impl PagedTailGuard<'_> {
++    pub fn is_active(&self) -> bool {
++        self.0.is_some()
++    }
++    pub fn start(
++        &mut self,
++        actor: &PagedDocumentGuard<'_>,
++        platform: Arc<dyn LocalFileSystem>,
++        budget: bareline_document::Budget,
++        cancellation: Cancellation,
++    ) -> Result<(), PagedLifecycleError> {
++        if self.0.is_none() {
++            self.0 = Some(
++                crate::tail::TailSession::new(&actor.0, platform, budget, cancellation).map_err(classify_file_error)?,
++            );
++        }
++        Ok(())
++    }
++    pub fn read_page(&mut self, ticket: bareline_document::source::PageTicket) -> Result<bool, PagedLifecycleError> {
++        match self.0.as_mut() {
++            Some(tail) => tail.read_page(ticket).map_err(classify_file_error),
++            None => Ok(false),
++        }
++    }
++    pub fn append_receipt(&self) -> Option<crate::tail::AppendReceipt> {
++        self.0.as_ref().and_then(crate::tail::TailSession::append_receipt)
++    }
++    pub fn pending(&self) -> bool {
++        self.0.as_ref().is_some_and(crate::tail::TailSession::pending)
++    }
++    pub fn source_changed(&self) -> bool {
++        self.0.as_ref().is_some_and(|tail| tail.source_changed)
+     }
+ }
+ 
+-impl std::ops::DerefMut for PagedDocumentGuard<'_> {
+-    fn deref_mut(&mut self) -> &mut Self::Target {
+-        &mut self.0
++impl std::fmt::Debug for PagedDocumentGuard<'_> {
++    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++        f.write_str("PagedDocumentGuard")
+     }
+ }
+ 
+@@ -190,16 +225,30 @@ impl PagedDocumentGuard<'_> {
+     pub fn document_mut(&mut self) -> &mut bareline_document::paged::PagedDocument {
+         &mut self.0.transcoded.document
+     }
+-    pub fn store(&self) -> &DiskDecoded {
+-        &self.0.transcoded.store
+-    }
+     pub fn source_generation(&self) -> Generation {
+         self.0.transcoded.source.source().generation()
+     }
+-    /// Temporary adapter for tail/source transactions. Persistent identity is
+-    /// published only through `PagedSession` methods.
+-    pub fn opened_mut(&mut self) -> &mut PagedOpened {
+-        &mut self.0
++    pub fn retain_foreign_source(
++        &self,
++        generation: Generation,
++        source: &DiskDecoded,
++    ) -> Result<(), PagedLifecycleError> {
++        self.0
++            .transcoded
++            .store
++            .retain_foreign(generation, source)
++            .map_err(|error| PagedLifecycleError::SourceUnavailable(format!("foreign source: {error:?}")))
++    }
++    pub fn read_source_page(
++        &mut self,
++        ticket: bareline_document::source::PageTicket,
++    ) -> Result<(), PagedLifecycleError> {
++        self.0.transcoded.source.read_page(ticket).map_err(|error| match error {
++            FileError::Changed | FileError::Transcode(crate::codecs::disk::DiskError::Changed) => {
++                PagedLifecycleError::Changed
++            }
++            other => PagedLifecycleError::SourceUnavailable(format!("{other:?}")),
++        })
+     }
+ }
+ 
+@@ -213,9 +262,10 @@ impl PagedSession {
+             saved_state,
+             save_as_required: recovered,
+             recovery_origin: opened.recovery_origin.clone(),
+-            encoding_failure: None,
+-            save_conflict: None,
+-            save_cleanup: None,
++            encoding_failures: Default::default(),
++            save_conflicts: Default::default(),
++            save_cleanups: Default::default(),
++            active_operation: None,
+         };
+         let generation_owner = Arc::new(());
+         Self(Arc::new(SessionInner {
+@@ -224,16 +274,16 @@ impl PagedSession {
+             state: Mutex::new(state),
+             operation_generation: AtomicU64::new(0),
+             recovery_config: Mutex::new(None),
+-            recovery: Arc::new(Mutex::new(None)),
+-            recovery_discard: Arc::new(Mutex::new(None)),
+-            recovery_cleanup_hold: Arc::new(Mutex::new(None)),
++            recovery: Mutex::new(None),
++            recovery_discard: Mutex::new(None),
++            recovery_cleanup_hold: Mutex::new(None),
+             recovery_status: Mutex::new(Arc::new(Mutex::new(Default::default()))),
+-            failed_retirements: Arc::new(Mutex::new(Vec::new())),
+-            tail: Arc::new(Mutex::new(None)),
+-            retired: Arc::new(Mutex::new(Vec::new())),
+-            source_mismatch: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+-            generation_owner: Arc::new(Mutex::new(generation_owner)),
+-            spill: Arc::new(Mutex::new(PagedSpillState::default())),
++            failed_retirements: Mutex::new(Vec::new()),
++            tail: Mutex::new(None),
++            retired: Mutex::new(Vec::new()),
++            source_mismatch: std::sync::atomic::AtomicBool::new(false),
++            generation_owner: Mutex::new(generation_owner),
++            spill: Mutex::new(PagedSpillState::default()),
+             gate_generation: Mutex::new(0),
+             gate_released: Condvar::new(),
+         }))
+@@ -248,21 +298,6 @@ impl PagedSession {
+             Err(inner) => Err(Self(inner)),
+         }
+     }
+-    pub fn lock(&self) -> std::sync::LockResult<PagedDocumentGuard<'_>> {
+-        match self.0.actor.lock() {
+-            Ok(actor) => Ok(PagedDocumentGuard(actor)),
+-            Err(error) => Err(std::sync::PoisonError::new(PagedDocumentGuard(error.into_inner()))),
+-        }
+-    }
+-    pub fn try_lock(&self) -> std::sync::TryLockResult<PagedDocumentGuard<'_>> {
+-        match self.0.actor.try_lock() {
+-            Ok(actor) => Ok(PagedDocumentGuard(actor)),
+-            Err(TryLockError::WouldBlock) => Err(TryLockError::WouldBlock),
+-            Err(TryLockError::Poisoned(error)) => Err(TryLockError::Poisoned(std::sync::PoisonError::new(
+-                PagedDocumentGuard(error.into_inner()),
+-            ))),
+-        }
+-    }
+     pub fn lock_document(&self) -> Result<PagedDocumentGuard<'_>, PagedLifecycleError> {
+         self.0
+             .actor
+@@ -299,10 +334,14 @@ impl PagedSession {
+             fingerprint: state.fingerprint.clone(),
+             saved_state: state.saved_state,
+             save_as_required: state.save_as_required,
+-            encoding: actor.store().state.clone(),
++            encoding: actor.0.transcoded.store.state.clone(),
+             recovery_origin: state.recovery_origin.clone(),
+         })
+     }
++    pub fn receipt_applies(&self, receipt: &PagedLifecycleReceipt) -> bool {
++        self.lock_document()
++            .is_ok_and(|actor| receipt.applies_to(self.stamp_for(&actor)))
++    }
+     pub fn stamp_for(&self, actor: &PagedDocumentGuard<'_>) -> PagedLifecycleStamp {
+         let snapshot = actor.document().snapshot();
+         PagedLifecycleStamp {
+@@ -338,14 +377,6 @@ impl PagedSession {
+             .recovery_origin
+             .clone()
+     }
+-    pub fn take_recovery_origin(&self) -> Option<PathBuf> {
+-        self.0
+-            .state
+-            .lock()
+-            .unwrap_or_else(|e| e.into_inner())
+-            .recovery_origin
+-            .take()
+-    }
+     pub fn mark_saved_state(&self, content: ContentStateId) {
+         self.0.state.lock().unwrap_or_else(|e| e.into_inner()).saved_state = Some(content);
+     }
+@@ -363,42 +394,399 @@ impl PagedSession {
+     pub fn recovery_config(&self) -> Option<(PathBuf, Arc<dyn LocalFileSystem>)> {
+         self.0.recovery_config.lock().unwrap_or_else(|e| e.into_inner()).clone()
+     }
+-    pub fn recovery_platform(&self) -> Arc<dyn LocalFileSystem> {
+-        self.0.recovery_platform.clone()
++    pub fn recovery_enabled(&self) -> bool {
++        self.0.recovery_config.lock().is_ok_and(|config| config.is_some())
++    }
++    pub fn ensure_recovery(
++        &self,
++        actor: &PagedDocumentGuard<'_>,
++        baseline: &PagedSnapshot,
++        notify: Arc<dyn Fn() + Send + Sync>,
++    ) -> Result<(), PagedLifecycleError> {
++        let Some((root, platform)) = self.recovery_config() else {
++            return Ok(());
++        };
++        let mut recovery = self
++            .0
++            .recovery
++            .lock()
++            .map_err(|_| PagedLifecycleError::SourceUnavailable("recovery actor stopped".into()))?;
++        if recovery.is_none() {
++            let status = self
++                .0
++                .recovery_status
++                .lock()
++                .map_err(|_| PagedLifecycleError::SourceUnavailable("recovery status stopped".into()))?
++                .clone();
++            *recovery = Some(
++                crate::paged_recovery::PagedRecovery::create(
++                    &root,
++                    actor.0.transcoded.store.clone(),
++                    actor.0.recovery_origin.is_none().then(|| actor.0.path.clone()),
++                    baseline.clone(),
++                    platform,
++                    status,
++                    notify,
++                )
++                .map_err(PagedLifecycleError::SourceUnavailable)?,
++            );
++        }
++        Ok(())
+     }
+-    pub fn recovery_handle(&self) -> Arc<Mutex<Option<crate::paged_recovery::PagedRecovery>>> {
+-        self.0.recovery.clone()
++    pub fn append_recovery_sources(
++        &self,
++        snapshot: &PagedSnapshot,
++        edits: &[bareline_document::paged::SourceEdit],
++        quota: u64,
++    ) -> Result<(), PagedLifecycleError> {
++        let mut recovery = self
++            .0
++            .recovery
++            .lock()
++            .map_err(|_| PagedLifecycleError::SourceUnavailable("recovery actor stopped".into()))?;
++        match recovery.as_mut() {
++            Some(recovery) => recovery
++                .append_sources(snapshot, edits, quota)
++                .map_err(PagedLifecycleError::SourceUnavailable),
++            None => Ok(()),
++        }
+     }
+-    pub fn recovery_discard_handle(&self) -> Arc<Mutex<Option<crate::recovery_retirement::DiscardTicket>>> {
+-        self.0.recovery_discard.clone()
++    pub fn append_recovery_history(
++        &self,
++        snapshot: &PagedSnapshot,
++        edits: &[bareline_document::paged::HistorySourceEdit],
++        quota: u64,
++    ) -> Result<(), PagedLifecycleError> {
++        let mut recovery = self
++            .0
++            .recovery
++            .lock()
++            .map_err(|_| PagedLifecycleError::SourceUnavailable("recovery actor stopped".into()))?;
++        match recovery.as_mut() {
++            Some(recovery) => recovery
++                .append_source_history(snapshot, edits, quota)
++                .map_err(PagedLifecycleError::SourceUnavailable),
++            None => Ok(()),
++        }
+     }
+-    pub fn recovery_cleanup_hold(&self) -> Arc<Mutex<Option<crate::recovery_retirement::CleanupHold>>> {
+-        self.0.recovery_cleanup_hold.clone()
++    pub fn protect_recovery_edits(
++        &self,
++        actor: &PagedDocumentGuard<'_>,
++        baseline: &PagedSnapshot,
++        snapshot: &PagedSnapshot,
++        edits: &[crate::recovery::RecoveryEdit],
++        rebuild: bool,
++        notify: Arc<dyn Fn() + Send + Sync>,
++    ) -> Result<(), PagedLifecycleError> {
++        if rebuild {
++            *self
++                .0
++                .recovery
++                .lock()
++                .map_err(|_| PagedLifecycleError::SourceUnavailable("recovery actor stopped".into()))? = None;
++        }
++        self.ensure_recovery(actor, baseline, notify)?;
++        let Some(mut recovery) = self.0.recovery.lock().ok() else {
++            return Err(PagedLifecycleError::SourceUnavailable("recovery actor stopped".into()));
++        };
++        let result = recovery
++            .as_mut()
++            .ok_or_else(|| PagedLifecycleError::SourceUnavailable("recovery unavailable".into()))?
++            .append(snapshot, edits)
++            .map_err(PagedLifecycleError::SourceUnavailable);
++        if let Err(error) = &result
++            && let Ok(status) = self.0.recovery_status.lock()
++            && let Ok(mut status) = status.lock()
++        {
++            status.error = Some(error.to_string());
++        }
++        result
+     }
+-    pub fn recovery_status_handle(&self) -> Arc<Mutex<crate::paged_recovery::PagedRecoveryStatus>> {
+-        self.0.recovery_status.lock().unwrap_or_else(|e| e.into_inner()).clone()
++    pub fn append_recovery_edits(
++        &self,
++        snapshot: &PagedSnapshot,
++        edits: &[crate::recovery::RecoveryEdit],
++    ) -> Result<(), PagedLifecycleError> {
++        self.0
++            .recovery
++            .lock()
++            .map_err(|_| PagedLifecycleError::SourceUnavailable("recovery actor stopped".into()))?
++            .as_mut()
++            .ok_or_else(|| PagedLifecycleError::SourceUnavailable("recovery unavailable".into()))?
++            .append(snapshot, edits)
++            .map_err(PagedLifecycleError::SourceUnavailable)
++    }
++    fn retry_recovery_maintenance(&self, current: ContentStateId) -> Result<bool, PagedLifecycleError> {
++        if let Some((_, platform)) = self.recovery_config() {
++            let paths = std::mem::take(
++                &mut *self
++                    .0
++                    .failed_retirements
++                    .lock()
++                    .map_err(|_| PagedLifecycleError::SourceUnavailable("recovery retirement stopped".into()))?,
++            );
++            let mut failed = Vec::new();
++            let mut failure = None;
++            for path in paths {
++                if let Err(error) = crate::recovery::discard(&path, platform.as_ref()) {
++                    failed.push(path);
++                    failure = Some(error.to_string());
++                }
++            }
++            *self
++                .0
++                .failed_retirements
++                .lock()
++                .map_err(|_| PagedLifecycleError::SourceUnavailable("recovery retirement stopped".into()))? = failed;
++            if let Some(error) = failure {
++                if let Ok(status) = self.0.recovery_status.lock()
++                    && let Ok(mut status) = status.lock()
++                {
++                    status.error = Some(error.clone());
++                }
++                return Err(PagedLifecycleError::SourceUnavailable(error));
++            }
++        }
++        let rebuild = self.saved_state() != Some(current);
++        if !rebuild
++            && let Ok(status) = self.0.recovery_status.lock()
++            && let Ok(mut status) = status.lock()
++        {
++            *status = Default::default();
++        }
++        Ok(rebuild)
+     }
+-    pub fn fresh_recovery_status(&self) {
++    fn retire_recovery_after_save(&self) -> Result<(), PagedLifecycleError> {
++        let retired = self
++            .0
++            .recovery
++            .lock()
++            .map_err(|_| PagedLifecycleError::SourceUnavailable("recovery actor stopped".into()))?
++            .take();
++        let Some(retired) = retired else {
++            return Ok(());
++        };
++        let path = retired.directory().to_path_buf();
++        match retired.retire() {
++            Ok(_) => {
++                if let Ok(status) = self.0.recovery_status.lock()
++                    && let Ok(mut status) = status.lock()
++                {
++                    *status = Default::default();
++                }
++                Ok(())
++            }
++            Err(error) => {
++                self.0
++                    .failed_retirements
++                    .lock()
++                    .map_err(|_| PagedLifecycleError::SourceUnavailable("recovery retirement stopped".into()))?
++                    .push(path);
++                if let Ok(status) = self.0.recovery_status.lock()
++                    && let Ok(mut status) = status.lock()
++                {
++                    status.error = Some(error.clone());
++                }
++                Err(PagedLifecycleError::SourceUnavailable(error))
++            }
++        }
++    }
++    pub fn recovery_status(&self) -> crate::paged_recovery::PagedRecoveryStatus {
++        self.0
++            .recovery_status
++            .lock()
++            .ok()
++            .and_then(|status| status.lock().ok().map(|status| status.clone()))
++            .unwrap_or_default()
++    }
++    pub fn resume_recovery_after_discard(&self) {
++        if let Ok(mut discard) = self.0.recovery_discard.lock() {
++            *discard = None;
++        }
+         *self.0.recovery_status.lock().unwrap_or_else(|e| e.into_inner()) = Arc::new(Mutex::new(Default::default()));
+         self.0.operation_generation.fetch_add(1, Ordering::AcqRel);
+     }
+-    pub fn failed_retirements(&self) -> Arc<Mutex<Vec<PathBuf>>> {
+-        self.0.failed_retirements.clone()
++    pub fn poll_recovery_discard(
++        &self,
++        notify: Arc<dyn Fn() + Send + Sync>,
++    ) -> crate::recovery_retirement::DiscardPoll {
++        let mut discard = match self.0.recovery_discard.lock() {
++            Ok(discard) => discard,
++            Err(_) => {
++                return crate::recovery_retirement::DiscardPoll::TombstoneFailed(
++                    "Recovery discard state stopped".into(),
++                );
++            }
++        };
++        if discard.is_none() {
++            let recovery = match self.0.recovery.try_lock() {
++                Ok(mut recovery) => recovery.take(),
++                Err(TryLockError::WouldBlock) => return crate::recovery_retirement::DiscardPoll::Pending,
++                Err(TryLockError::Poisoned(_)) => {
++                    return crate::recovery_retirement::DiscardPoll::TombstoneFailed("Recovery actor stopped".into());
++                }
++            };
++            let origin = self
++                .0
++                .state
++                .lock()
++                .unwrap_or_else(|error| error.into_inner())
++                .recovery_origin
++                .take();
++            if recovery.is_none() && origin.is_none() {
++                return crate::recovery_retirement::DiscardPoll::Durable;
++            }
++            let platform = recovery
++                .as_ref()
++                .map_or_else(|| self.0.recovery_platform.clone(), |recovery| recovery.platform());
++            let hold = {
++                let mut current = self
++                    .0
++                    .recovery_cleanup_hold
++                    .lock()
++                    .unwrap_or_else(|error| error.into_inner());
++                current
++                    .get_or_insert_with(crate::recovery_retirement::CleanupHold::new)
++                    .clone()
++            };
++            *discard = Some(crate::recovery_retirement::DiscardTicket::request_with_cleanup_hold(
++                crate::recovery_retirement::RecoveryOwnership {
++                    recoveries: recovery.into_iter().collect(),
++                    paths: origin.into_iter().collect(),
++                    platform,
++                },
++                &hold,
++                notify,
++            ));
++        }
++        let outcome = discard.as_ref().unwrap().poll();
++        if matches!(outcome, crate::recovery_retirement::DiscardPoll::TombstoneFailed(_)) {
++            discard.as_ref().unwrap().retry();
++        }
++        outcome
++    }
++    pub fn lock_tail(&self) -> Result<PagedTailGuard<'_>, PagedLifecycleError> {
++        self.0
++            .tail
++            .lock()
++            .map(PagedTailGuard)
++            .map_err(|_| PagedLifecycleError::SourceUnavailable("tail actor stopped".into()))
+     }
+-    pub fn tail_handle(&self) -> Arc<Mutex<Option<crate::tail::TailSession>>> {
+-        self.0.tail.clone()
++    pub fn unlock_tail(
++        &self,
++        actor: &mut PagedDocumentGuard<'_>,
++        tail: &mut PagedTailGuard<'_>,
++    ) -> Result<Fingerprint, PagedLifecycleError> {
++        let session = tail
++            .0
++            .as_ref()
++            .ok_or_else(|| PagedLifecycleError::SourceUnavailable("monitoring is not active".into()))?;
++        let fixed = session.freeze(&actor.0).map_err(classify_file_error)?;
++        let previous = std::mem::replace(&mut *actor.0, fixed);
++        let old_owner = std::mem::replace(
++            &mut *self
++                .0
++                .generation_owner
++                .lock()
++                .map_err(|_| PagedLifecycleError::SourceUnavailable("generation owner stopped".into()))?,
++            Arc::new(()),
++        );
++        let mut retired = self
++            .0
++            .retired
++            .lock()
++            .map_err(|_| PagedLifecycleError::SourceUnavailable("retired generation owner stopped".into()))?;
++        retired.retain(|generation| Arc::strong_count(&generation.owner) > 1);
++        retired.push(RetiredPagedGeneration {
++            owner: old_owner,
++            opened: previous,
++            tail: tail.0.take(),
++        });
++        let fingerprint = actor.0.fingerprint.clone();
++        let mut state = self.0.state.lock().unwrap_or_else(|error| error.into_inner());
++        state.path = actor.0.path.clone();
++        state.fingerprint = fingerprint.clone();
++        Ok(fingerprint)
+     }
+-    pub fn retired_generations(&self) -> Arc<Mutex<Vec<RetiredPagedGeneration>>> {
+-        self.0.retired.clone()
++    pub fn step_tail(
++        &self,
++        actor: &mut PagedDocumentGuard<'_>,
++        tail: &mut PagedTailGuard<'_>,
++        request: bool,
++    ) -> Result<bool, PagedLifecycleError> {
++        let tail = tail
++            .0
++            .as_mut()
++            .ok_or_else(|| PagedLifecycleError::SourceUnavailable("monitoring is not active".into()))?;
++        if request {
++            tail.request(&actor.0.path).map_err(classify_file_error)?;
++        }
++        let changed = tail.step(&mut actor.0).map_err(classify_file_error)?;
++        let mut state = self.0.state.lock().unwrap_or_else(|error| error.into_inner());
++        state.path = actor.0.path.clone();
++        state.fingerprint = actor.0.fingerprint.clone();
++        Ok(changed)
+     }
+-    pub fn source_mismatch(&self) -> Arc<std::sync::atomic::AtomicBool> {
+-        self.0.source_mismatch.clone()
++    pub fn source_changed(&self) -> bool {
++        self.0.source_mismatch.load(Ordering::Acquire)
+     }
+-    pub fn generation_owner(&self) -> Arc<Mutex<Arc<()>>> {
+-        self.0.generation_owner.clone()
++    pub fn mark_source_changed(&self) {
++        self.0.source_mismatch.store(true, Ordering::Release);
+     }
+-    pub fn spill_handle(&self) -> Arc<Mutex<PagedSpillState>> {
+-        self.0.spill.clone()
++    pub fn current_generation_owner(&self) -> Arc<()> {
++        self.0
++            .generation_owner
++            .lock()
++            .unwrap_or_else(|error| error.into_inner())
++            .clone()
++    }
++    pub fn configure_spill(
++        &self,
++        cache: PathBuf,
++        platform: Arc<dyn LocalFileSystem>,
++        options: crate::source::SourceOptions,
++    ) {
++        let mut spill = self.0.spill.lock().unwrap_or_else(|error| error.into_inner());
++        spill.config = Some((cache, platform, options));
++        spill.attempted = None;
++    }
++    pub fn take_spill_error(&self) -> Option<String> {
++        self.0.spill.try_lock().ok().and_then(|mut spill| spill.error.take())
++    }
++    pub fn reserve_spill(&self, stamp: (u64, ContentStateId)) -> Option<PagedSpillReservation> {
++        let mut spill = self.0.spill.try_lock().ok()?;
++        if spill.pending || spill.attempted == Some(stamp) {
++            return None;
++        }
++        let (cache, platform, options) = spill.config.clone()?;
++        spill.pending = true;
++        spill.attempted = Some(stamp);
++        Some(PagedSpillReservation {
++            cache,
++            platform,
++            options,
++        })
++    }
++    pub fn finish_spill(&self, error: Option<String>) {
++        if let Ok(mut spill) = self.0.spill.lock() {
++            spill.pending = false;
++            if error.is_some() {
++                spill.error = error;
++            }
++        }
++    }
++    pub fn cancel_spill_reservation(&self) {
++        if let Ok(mut spill) = self.0.spill.lock() {
++            spill.pending = false;
++            spill.attempted = None;
++        }
++    }
++    pub fn spill_finished(&self) -> Result<bool, String> {
++        let spill = self.0.spill.lock().map_err(|_| "Paged spill state stopped")?;
++        if let Some(error) = &spill.error {
++            return Err(error.clone());
++        }
++        Ok(spill.attempted.is_some() && !spill.pending)
+     }
+     pub fn signal_document_released(&self) {
+         let mut generation = self.0.gate_generation.lock().unwrap_or_else(|e| e.into_inner());
+@@ -408,15 +796,41 @@ impl PagedSession {
+     fn gate_generation(&self) -> u64 {
+         *self.0.gate_generation.lock().unwrap_or_else(|e| e.into_inner())
+     }
+-    fn wait_after(&self, observed: u64, timeout: std::time::Duration) {
++    fn wait_after(&self, observed: u64, timeout: std::time::Duration) -> bool {
+         let guard = self.0.gate_generation.lock().unwrap_or_else(|e| e.into_inner());
+-        if *guard == observed {
+-            let _ = self
+-                .0
+-                .gate_released
+-                .wait_timeout_while(guard, timeout, |generation| *generation == observed)
+-                .unwrap_or_else(|e| e.into_inner());
++        if *guard != observed {
++            return true;
+         }
++        let (guard, _) = self
++            .0
++            .gate_released
++            .wait_timeout_while(guard, timeout, |generation| *generation == observed)
++            .unwrap_or_else(|e| e.into_inner());
++        *guard != observed
++    }
++    #[cfg(test)]
++    fn wait_after_with_entry_receipt(
++        &self,
++        observed: u64,
++        timeout: std::time::Duration,
++        entered: &std::sync::mpsc::SyncSender<()>,
++    ) -> bool {
++        let guard = self.0.gate_generation.lock().unwrap_or_else(|e| e.into_inner());
++        entered.send(()).unwrap();
++        if *guard != observed {
++            return true;
++        }
++        let (guard, _) = self
++            .0
++            .gate_released
++            .wait_timeout_while(guard, timeout, |generation| *generation == observed)
++            .unwrap_or_else(|e| e.into_inner());
++        *guard != observed
++    }
++    #[cfg(test)]
++    fn spurious_gate_notify(&self) {
++        let _guard = self.0.gate_generation.lock().unwrap_or_else(|e| e.into_inner());
++        self.0.gate_released.notify_all();
+     }
+     pub fn read_handle(&self, snapshot: PagedSnapshot, generation: Arc<()>, views: Arc<()>) -> PagedReadHandle {
+         PagedReadHandle {
+@@ -431,19 +845,23 @@ impl PagedSession {
+             .state
+             .lock()
+             .ok()
+-            .and_then(|state| state.encoding_failure.clone())
++            .and_then(|state| state.encoding_failures.front().cloned())
+     }
+     pub fn take_save_conflict(&self) -> Option<SaveConflict> {
+         self.0
+             .state
+             .lock()
+             .ok()
+-            .and_then(|mut state| state.save_conflict.take())
++            .and_then(|mut state| state.save_conflicts.pop_front())
+     }
+     pub fn take_save_cleanup(&self) -> Option<SaveCleanup> {
+-        self.0.state.lock().ok().and_then(|mut state| state.save_cleanup.take())
++        self.0
++            .state
++            .lock()
++            .ok()
++            .and_then(|mut state| state.save_cleanups.pop_front())
+     }
+-    pub fn execute_save(
++    fn execute_save(
+         &self,
+         requested: PagedLifecycleStamp,
+         destination: PreparedDestination,
+@@ -451,30 +869,60 @@ impl PagedSession {
+         platform: &dyn LocalFileSystem,
+         cancellation: &Cancellation,
+     ) -> PagedLifecycleReceipt {
+-        let terminal = (|| {
++        let reserved = (|| {
+             cancellation.check().map_err(|_| PagedLifecycleError::Cancelled)?;
+-            let (store, generation, snapshot) = {
++            let (store, source_generation, snapshot, operation_generation) = {
+                 let actor = self.lock_document()?;
+                 if self.stamp_for(&actor) != requested
+                     || destination.document != actor.document().snapshot().identity_token()
+                 {
+                     return Err(PagedLifecycleError::Changed);
+                 }
++                let mut state = self
++                    .0
++                    .state
++                    .lock()
++                    .map_err(|_| PagedLifecycleError::SourceUnavailable("lifecycle state stopped".into()))?;
++                if state.active_operation.is_some() {
++                    return Err(PagedLifecycleError::Busy);
++                }
++                let generation = self
++                    .0
++                    .operation_generation
++                    .fetch_add(1, Ordering::AcqRel)
++                    .wrapping_add(1);
++                state.active_operation = Some(generation);
+                 (
+-                    actor.store().clone(),
++                    actor.0.transcoded.store.clone(),
+                     actor.source_generation(),
+                     actor.document().snapshot(),
++                    generation,
+                 )
+             };
++            Ok((store, source_generation, snapshot, operation_generation))
++        })();
++        let (store, source_generation, snapshot, operation_generation) = match reserved {
++            Ok((store, source_generation, snapshot, operation_generation)) => {
++                (store, source_generation, snapshot, operation_generation)
++            }
++            Err(error) => {
++                return PagedLifecycleReceipt {
++                    requested,
++                    terminal: Err(error),
++                };
++            }
++        };
++        let accepted = PagedLifecycleStamp {
++            operation_generation,
++            ..requested
++        };
++        let terminal = (|| {
+             let (source_path, recovered_origin) = {
+-                let mut state = self
++                let state = self
+                     .0
+                     .state
+                     .lock()
+                     .map_err(|_| PagedLifecycleError::SourceUnavailable("lifecycle state stopped".into()))?;
+-                state.encoding_failure = None;
+-                state.save_conflict = None;
+-                state.save_cleanup = None;
+                 (state.path.clone(), state.recovery_origin.is_some())
+             };
+             let _copy_source = if copy_only && !recovered_origin {
+@@ -486,7 +934,7 @@ impl PagedSession {
+                 encoding: store.state.save_target,
+                 bom: store.state.bom,
+                 store,
+-                generation,
++                generation: source_generation,
+             };
+             let saved = match save_paged_to_cancellable(
+                 snapshot.clone(),
+@@ -504,27 +952,41 @@ impl PagedSession {
+                         .lock()
+                         .map_err(|_| PagedLifecycleError::SourceUnavailable("lifecycle state stopped".into()))?;
+                     if let FileError::EncodingAt(failure) = &error {
+-                        state.encoding_failure = Some(failure.clone());
++                        state.encoding_failures.push_back(failure.clone());
++                    }
++                    if let Some(conflict) = error.save_conflict() {
++                        state.save_conflicts.push_back(conflict);
++                    }
++                    if state.active_operation == Some(operation_generation) {
++                        state.active_operation = None;
+                     }
+-                    state.save_conflict = error.save_conflict();
+                     return Err(classify_file_error(error));
+                 }
+             };
+-            let mut actor = self.lock_document()?;
+-            if self.stamp_for(&actor) != requested {
+-                return Err(PagedLifecycleError::Changed);
++            {
++                let mut state = self
++                    .0
++                    .state
++                    .lock()
++                    .map_err(|_| PagedLifecycleError::SourceUnavailable("lifecycle state stopped".into()))?;
++                if let Some(cleanup) = saved.cleanup.clone() {
++                    state.save_cleanups.push_back(cleanup);
++                }
++                if !copy_only {
++                    state.path = destination.path.clone();
++                    state.fingerprint = saved.fingerprint.clone();
++                    state.saved_state = Some(snapshot.content_state);
++                    state.save_as_required = false;
++                }
++                if state.active_operation == Some(operation_generation) {
++                    state.active_operation = None;
++                }
+             }
+-            let mut state = self
+-                .0
+-                .state
+-                .lock()
+-                .map_err(|_| PagedLifecycleError::SourceUnavailable("lifecycle state stopped".into()))?;
+-            state.save_cleanup = saved.cleanup.clone();
+-            if !copy_only {
+-                state.path = destination.path.clone();
+-                state.fingerprint = saved.fingerprint.clone();
+-                state.saved_state = Some(snapshot.content_state);
+-                state.save_as_required = false;
++            // The transaction is already committed. Synchronize the legacy
++            // opened record when available, but never downgrade the durable
++            // terminal result or discard cleanup authority if that mirror is
++            // temporarily unavailable.
++            if !copy_only && let Ok(mut actor) = self.lock_document() {
+                 actor.0.path = destination.path;
+                 actor.0.fingerprint = saved.fingerprint.clone();
+             }
+@@ -533,39 +995,65 @@ impl PagedSession {
+                 copy_only,
+             })
+         })();
+-        PagedLifecycleReceipt { requested, terminal }
++        if terminal.is_err()
++            && let Ok(mut state) = self.0.state.lock()
++            && state.active_operation == Some(operation_generation)
++        {
++            state.active_operation = None;
++        }
++        PagedLifecycleReceipt {
++            requested: accepted,
++            terminal,
++        }
+     }
+-    pub fn publish_saved(
+-        &self,
+-        requested: PagedLifecycleStamp,
+-        path: PathBuf,
+-        saved: &PagedSaved,
+-        content: ContentStateId,
+-    ) -> Result<PagedLifecycleReceipt, PagedLifecycleError> {
+-        let mut actor = self.lock_document()?;
+-        let current = self.stamp_for(&actor);
+-        if requested != current {
+-            return Err(PagedLifecycleError::Changed);
++    pub fn execute(&self, command: PagedLifecycleCommand, cancellation: &Cancellation) -> PagedLifecycleReceipt {
++        match command {
++            PagedLifecycleCommand::Save {
++                requested,
++                destination,
++                copy_only,
++                platform,
++            } => self.execute_save(requested, destination, copy_only, platform.as_ref(), cancellation),
++            PagedLifecycleCommand::RetryRecovery { requested } => {
++                let terminal = self
++                    .state()
++                    .and_then(|state| {
++                        if state.stamp != requested {
++                            return Err(PagedLifecycleError::Changed);
++                        }
++                        self.retry_recovery_maintenance(state.stamp.content)
++                    })
++                    .map(|rebuild| PagedTerminalOutcome::RecoveryRetried { rebuild });
++                PagedLifecycleReceipt { requested, terminal }
++            }
++            PagedLifecycleCommand::RetireRecovery { requested } => {
++                let terminal = self
++                    .state()
++                    .and_then(|state| {
++                        if state.stamp != requested {
++                            return Err(PagedLifecycleError::Changed);
++                        }
++                        self.retire_recovery_after_save()
++                    })
++                    .map(|()| PagedTerminalOutcome::RecoveryRetired);
++                PagedLifecycleReceipt { requested, terminal }
++            }
++            PagedLifecycleCommand::Spill { requested, prepared } => {
++                let terminal = (|| {
++                    cancellation.check().map_err(|_| PagedLifecycleError::Cancelled)?;
++                    let mut actor = self.lock_document()?;
++                    if self.stamp_for(&actor) != requested {
++                        return Err(PagedLifecycleError::Changed);
++                    }
++                    actor
++                        .document_mut()
++                        .attach_spill(prepared)
++                        .map_err(|error| PagedLifecycleError::SourceUnavailable(format!("spill: {error:?}")))?;
++                    Ok(PagedTerminalOutcome::Spilled)
++                })();
++                PagedLifecycleReceipt { requested, terminal }
++            }
+         }
+-        let mut state = self
+-            .0
+-            .state
+-            .lock()
+-            .map_err(|_| PagedLifecycleError::SourceUnavailable("lifecycle state stopped".into()))?;
+-        state.path = path.clone();
+-        state.fingerprint = saved.fingerprint.clone();
+-        state.saved_state = Some(content);
+-        state.save_as_required = false;
+-        state.save_cleanup = saved.cleanup.clone();
+-        actor.0.path = path;
+-        actor.0.fingerprint = saved.fingerprint.clone();
+-        Ok(PagedLifecycleReceipt {
+-            requested,
+-            terminal: Ok(PagedTerminalOutcome::Saved {
+-                fingerprint: saved.fingerprint.clone(),
+-                copy_only: false,
+-            }),
+-        })
+     }
+ }
+ 
+@@ -573,6 +1061,9 @@ fn classify_file_error(error: FileError) -> PagedLifecycleError {
+     match error {
+         FileError::Cancelled => PagedLifecycleError::Cancelled,
+         FileError::EncodingAt(failure) => PagedLifecycleError::Encoding(failure),
++        FileError::Changed | FileError::Transcode(crate::codecs::disk::DiskError::Changed) => {
++            PagedLifecycleError::Changed
++        }
+         other => {
+             if let Some(conflict) = other.save_conflict() {
+                 PagedLifecycleError::Conflict(conflict)
+@@ -583,6 +1074,36 @@ fn classify_file_error(error: FileError) -> PagedLifecycleError {
+     }
+ }
+ 
++pub fn commit_recovery_group(
++    sessions: &[PagedSession],
++    snapshots: &[PagedSnapshot],
++    edits: &[crate::paged_recovery::group::GroupEdits<'_>],
++    publication: u64,
++    quota: u64,
++    cancellation: &Cancellation,
++) -> Result<(), PagedLifecycleError> {
++    let mut guards = Vec::with_capacity(sessions.len());
++    for session in sessions {
++        guards.push(
++            session
++                .0
++                .recovery
++                .lock()
++                .map_err(|_| PagedLifecycleError::SourceUnavailable("recovery actor stopped".into()))?,
++        );
++    }
++    let mut recoveries = guards
++        .iter_mut()
++        .map(|recovery| {
++            recovery
++                .as_mut()
++                .ok_or_else(|| PagedLifecycleError::SourceUnavailable("recovery unavailable".into()))
++        })
++        .collect::<Result<Vec<_>, _>>()?;
++    crate::paged_recovery::group::commit(&mut recoveries, snapshots, edits, publication, quota, cancellation)
++        .map_err(PagedLifecycleError::SourceUnavailable)
++}
++
+ /// Immutable, renderer-free snapshot/read capability. It retains the session,
+ /// source generation, recovery cleanup hold, and every historical source owner
+ /// needed by this captured root.
+@@ -613,21 +1134,28 @@ impl PagedReadHandle {
+         if !current.same_document(&self.snapshot) || current.content_state != self.snapshot.content_state {
+             return Err(PagedLifecycleError::Changed);
+         }
+-        Ok(opened.store().clone())
++        Ok(opened.0.transcoded.store.clone())
+     }
+     pub fn actor_generation(&self) -> u64 {
+         self.session.gate_generation()
+     }
+-    pub fn wait_after(&self, observed: u64, timeout: std::time::Duration) {
+-        self.session.wait_after(observed, timeout);
++    pub fn wait_after(&self, observed: u64, timeout: std::time::Duration) -> bool {
++        self.session.wait_after(observed, timeout)
+     }
+-    pub fn resolve_page(&self, ticket: bareline_document::source::PageTicket) -> Result<bool, String> {
++    pub fn resolve_page(&self, ticket: bareline_document::source::PageTicket) -> Result<bool, PagedLifecycleError> {
+         self.resolve(ticket, false)
+     }
+-    pub fn resolve_captured_page(&self, ticket: bareline_document::source::PageTicket) -> Result<bool, String> {
++    pub fn resolve_captured_page(
++        &self,
++        ticket: bareline_document::source::PageTicket,
++    ) -> Result<bool, PagedLifecycleError> {
+         self.resolve(ticket, true)
+     }
+-    fn resolve(&self, ticket: bareline_document::source::PageTicket, historical: bool) -> Result<bool, String> {
++    fn resolve(
++        &self,
++        ticket: bareline_document::source::PageTicket,
++        historical: bool,
++    ) -> Result<bool, PagedLifecycleError> {
+         let referenced = self.snapshot.pieces().any(|piece| {
+             let (source, range) = match piece {
+                 bareline_document::paged::PagedPiece::Original { source, range }
+@@ -641,21 +1169,24 @@ impl PagedReadHandle {
+                 })
+         });
+         if !referenced {
+-            return Err("Page is not part of the captured source generation".into());
++            return Err(PagedLifecycleError::Changed);
+         }
+         let mut opened = match self.session.try_document() {
+             Ok(opened) => opened,
+             Err(PagedLifecycleError::Busy) => return Ok(false),
+-            Err(error) => return Err(error.to_string()),
++            Err(error) => return Err(error),
+         };
+         let current = opened.document().snapshot();
+         if historical && !current.same_document(&self.snapshot) {
+             drop(opened);
+-            let retired = self.session.retired_generations();
+-            let mut retired = match retired.try_lock() {
++            let mut retired = match self.session.0.retired.try_lock() {
+                 Ok(retired) => retired,
+                 Err(TryLockError::WouldBlock) => return Ok(false),
+-                Err(_) => return Err("Captured generation owner failed".into()),
++                Err(_) => {
++                    return Err(PagedLifecycleError::SourceUnavailable(
++                        "captured generation owner stopped".into(),
++                    ));
++                }
+             };
+             let generation = retired
+                 .iter_mut()
+@@ -667,11 +1198,11 @@ impl PagedReadHandle {
+                         .snapshot()
+                         .same_document(&self.snapshot)
+                 })
+-                .ok_or("Captured generation is unavailable")?;
++                .ok_or_else(|| PagedLifecycleError::SourceUnavailable("captured generation is unavailable".into()))?;
+             if self
+                 .snapshot
+                 .resolve_owned(ticket)
+-                .map_err(|error| format!("Captured owned source unavailable: {error:?}"))?
++                .map_err(|error| PagedLifecycleError::SourceUnavailable(format!("captured owned source: {error:?}")))?
+             {
+                 return Ok(true);
+             }
+@@ -694,20 +1225,19 @@ impl PagedReadHandle {
+         if !current.same_document(&self.snapshot)
+             || (!historical && current.content_state != self.snapshot.content_state)
+         {
+-            return Err(PagedLifecycleError::Changed.to_string());
++            return Err(PagedLifecycleError::Changed);
+         }
+         if self
+             .snapshot
+             .resolve_owned(ticket)
+-            .map_err(|error| format!("Owned source unavailable: {error:?}"))?
++            .map_err(|error| PagedLifecycleError::SourceUnavailable(format!("owned source: {error:?}")))?
+         {
+             return Ok(true);
+         }
+-        let tail = self.session.tail_handle();
+-        let mut tail = match tail.try_lock() {
++        let mut tail = match self.session.0.tail.try_lock() {
+             Ok(tail) => tail,
+             Err(TryLockError::WouldBlock) => return Ok(false),
+-            Err(_) => return Err("Tail worker failed".into()),
++            Err(_) => return Err(PagedLifecycleError::SourceUnavailable("tail worker stopped".into())),
+         };
+         let handled = match tail.as_mut() {
+             Some(tail) => tail
+@@ -727,104 +1257,14 @@ impl PagedReadHandle {
+     }
+ }
+ 
+-fn source_read_error(error: FileError, changed: &std::sync::atomic::AtomicBool) -> String {
++fn source_read_error(error: FileError, changed: &std::sync::atomic::AtomicBool) -> PagedLifecycleError {
+     if matches!(
+         error,
+         FileError::Changed | FileError::Transcode(crate::codecs::disk::DiskError::Changed)
+     ) {
+         changed.store(true, Ordering::Release);
+     }
+-    format!("Paged source unavailable: {error:?}")
+-}
+-
+-/// Everything the paged save path needs from the surface, extracted while the
+-/// actor is still locked so the guard can be dropped across the write.
+-pub struct PagedSaveRequest<'a> {
+-    /// Decoded original store; supplies the on-disk encoding and BOM policy.
+-    pub store: DiskDecoded,
+-    /// Generation of the source the snapshot was captured against.
+-    pub generation: Generation,
+-    /// The immutable snapshot to serialize.
+-    pub snapshot: PagedSnapshot,
+-    /// Destination path (Save or Save As / copy).
+-    pub target: &'a Path,
+-    /// Exact destination condition captured before overwrite consent.
+-    pub condition: &'a DestinationCondition,
+-    /// The document's current on-disk path, used to guard a copy-only export.
+-    pub source_path: &'a Path,
+-    /// True when this document was restored from recovery and has no original
+-    /// file to guard for a copy.
+-    pub recovered_origin: bool,
+-    /// A copy-only export must not change the document's save identity.
+-    pub copy_only: bool,
+-    pub platform: &'a dyn LocalFileSystem,
+-    pub cancellation: &'a Cancellation,
+-    /// Slot the surface reads to surface an encoding failure to the user; this
+-    /// service clears it before a write and records the failing range on
+-    /// [`FileError::EncodingAt`].
+-    pub encoding_failure: &'a Mutex<Option<EncodingFailure>>,
+-    pub save_conflict: &'a Mutex<Option<crate::lifecycle::SaveConflict>>,
+-    pub save_cleanup: &'a Mutex<Option<crate::lifecycle::SaveCleanup>>,
+-}
+-
+-/// Perform the full-file paged save and return the new fingerprint (and the
+-/// captured snapshot). Errors are rendered to `String` here — the shell/surface
+-/// boundary — while the failing encoding range, if any, is left in
+-/// `encoding_failure` for the surface to display.
+-pub fn save(request: PagedSaveRequest<'_>) -> Result<PagedSaved, String> {
+-    // Hold the copy source open for the duration of the write so a copy-only
+-    // export sees a stable original.
+-    let _copy_source = if request.copy_only && !request.recovered_origin {
+-        guard_copy_source(request.source_path, request.target, request.platform)
+-            .map_err(|error| format!("{error:?}"))?
+-    } else {
+-        None
+-    };
+-    let policy = PagedSavePolicy {
+-        store: request.store.clone(),
+-        generation: request.generation,
+-        encoding: request.store.state.save_target,
+-        bom: request.store.state.bom,
+-    };
+-    if let Ok(mut slot) = request.encoding_failure.lock() {
+-        *slot = None;
+-    }
+-    if let Ok(mut slot) = request.save_conflict.lock() {
+-        *slot = None;
+-    }
+-    if let Ok(mut slot) = request.save_cleanup.lock() {
+-        *slot = None;
+-    }
+-    let saved = save_paged_to_cancellable(
+-        request.snapshot,
+-        request.target,
+-        request.condition,
+-        &policy,
+-        request.platform,
+-        request.cancellation,
+-    )
+-    .map_err(|error| {
+-        if let FileError::EncodingAt(failure) = &error {
+-            if let Ok(mut slot) = request.encoding_failure.lock() {
+-                *slot = Some(failure.clone());
+-            }
+-        }
+-        if let Some(conflict) = error.save_conflict()
+-            && let Ok(mut slot) = request.save_conflict.lock()
+-        {
+-            *slot = Some(conflict);
+-        }
+-        format!("{error:?}")
+-    })?;
+-    if let Ok(mut slot) = request.encoding_failure.lock() {
+-        *slot = None;
+-    }
+-    if let Some(cleanup) = saved.cleanup.clone()
+-        && let Ok(mut slot) = request.save_cleanup.lock()
+-    {
+-        *slot = Some(cleanup);
+-    }
+-    Ok(saved)
++    PagedLifecycleError::SourceUnavailable(format!("{error:?}"))
+ }
+ 
+ #[cfg(test)]
+@@ -836,9 +1276,11 @@ mod lifecycle_contract_tests {
+         source::SourceOptions,
+     };
+     use bareline_document::Budget;
+-    use bareline_platform::FileIdentity;
++    use bareline_document::{Edit, EditTransaction, TextOffset, WindowPoll};
++    use bareline_platform::{CommitReceipt, FileIdentity, PreparedCommit};
+     use std::{
+         fs::File,
++        sync::mpsc,
+         time::{SystemTime, UNIX_EPOCH},
+     };
+ 
+@@ -874,6 +1316,55 @@ mod lifecycle_contract_tests {
+         }
+     }
+ 
++    struct GatedPlatform {
++        entered: mpsc::SyncSender<()>,
++        release: Mutex<mpsc::Receiver<()>>,
++    }
++    impl LocalFileSystem for GatedPlatform {
++        fn validate_target(&self, _: &Path) -> std::io::Result<()> {
++            Ok(())
++        }
++        fn available_space(&self, _: &Path) -> std::io::Result<u64> {
++            Ok(u64::MAX)
++        }
++        fn guard_directory(&self, _: &Path) -> std::io::Result<Arc<dyn Send + Sync>> {
++            Ok(Arc::new(()))
++        }
++        fn open_sealed_read(&self, path: &Path) -> std::io::Result<File> {
++            File::open(path)
++        }
++        fn identity(&self, file: &File) -> std::io::Result<FileIdentity> {
++            Platform.identity(file)
++        }
++        fn prepare_commit(
++            &self,
++            staged: &Path,
++            target: &Path,
++            mode: bareline_platform::CommitMode,
++            cancellation: &dyn bareline_platform::CommitCancellation,
++        ) -> std::io::Result<PreparedCommit> {
++            bareline_platform::prepare_simulated_commit(self, staged, target, mode, cancellation)
++        }
++        fn commit_transaction(&self, transaction: PreparedCommit) -> std::io::Result<CommitReceipt> {
++            self.entered.send(()).map_err(std::io::Error::other)?;
++            self.release
++                .lock()
++                .map_err(|_| std::io::Error::other("release gate stopped"))?
++                .recv_timeout(std::time::Duration::from_secs(5))
++                .map_err(std::io::Error::other)?;
++            bareline_platform::simulate_commit_transaction(self, transaction)
++        }
++        fn cleanup_commit(&self, _: &mut CommitReceipt) -> std::io::Result<()> {
++            Err(std::io::Error::new(
++                std::io::ErrorKind::PermissionDenied,
++                "controlled cleanup failure",
++            ))
++        }
++        fn commit(&self, stage: &Path, target: &Path, _: bool) -> std::io::Result<()> {
++            std::fs::rename(stage, target)
++        }
++    }
++
+     #[test]
+     fn headless_client_gets_exact_copy_and_generation_fenced_terminal_receipt() {
+         let root = std::env::temp_dir().join(format!(
+@@ -911,17 +1402,19 @@ mod lifecycle_contract_tests {
+         };
+         let session = PagedSession::new(opened);
+         let state = session.state().unwrap();
+-        let receipt = session.execute_save(
+-            state.stamp,
+-            PreparedDestination {
+-                path: copy.clone(),
+-                condition: DestinationCondition::MustBeAbsent,
+-                consent: DestinationConsent::NotRequired,
+-                document: (state.stamp.document, state.stamp.revision.0),
+-                operation: SaveOperation::SaveCopy,
++        let receipt = session.execute(
++            PagedLifecycleCommand::Save {
++                requested: state.stamp,
++                destination: PreparedDestination {
++                    path: copy.clone(),
++                    condition: DestinationCondition::MustBeAbsent,
++                    consent: DestinationConsent::NotRequired,
++                    document: (state.stamp.document, state.stamp.revision.0),
++                    operation: SaveOperation::SaveCopy,
++                },
++                copy_only: true,
++                platform: platform.clone(),
+             },
+-            true,
+-            platform.as_ref(),
+             &Cancellation::default(),
+         );
+         assert!(receipt.applies_to(session.state().unwrap().stamp));
+@@ -937,4 +1430,225 @@ mod lifecycle_contract_tests {
+         drop(session);
+         std::fs::remove_dir_all(root).unwrap();
+     }
++
++    #[test]
++    fn committed_save_survives_concurrent_edit_and_retains_cleanup_authority() {
++        let root = std::env::temp_dir().join(format!(
++            "bareline-paged-session-gated-{}-{}",
++            std::process::id(),
++            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
++        ));
++        std::fs::create_dir(&root).unwrap();
++        let source = root.join("source.txt");
++        let target = root.join("saved.txt");
++        let second = root.join("second.txt");
++        let bytes = b"\xef\xbb\xbfalpha\r\nbeta\r\n";
++        std::fs::write(&source, bytes).unwrap();
++        let (entered_tx, entered_rx) = mpsc::sync_channel(1);
++        let (release_tx, release_rx) = mpsc::sync_channel(1);
++        let platform = Arc::new(GatedPlatform {
++            entered: entered_tx,
++            release: Mutex::new(release_rx),
++        });
++        let TranscodeOutcome::Complete(opened) = open_paged_encoded(
++            PagedOpenRequest {
++                path: source,
++                bytes: Budget::new(4 * 1024 * 1024),
++                history: Budget::new(1024 * 1024),
++                cache: root.clone(),
++                options: DiskOptions {
++                    temp_quota_bytes: 4 * 1024 * 1024,
++                    interpret: None,
++                },
++                source_options: SourceOptions {
++                    resident_max_bytes: 0,
++                    page_size_bytes: 4096,
++                    page_cache_bytes: 8192,
++                },
++            },
++            platform.clone(),
++            Cancellation::default(),
++            |_| {},
++        ) else {
++            panic!("paged fixture did not open")
++        };
++        let session = PagedSession::new(opened);
++        let accepted = session.state().unwrap();
++        let accepted_stamp = accepted.stamp;
++        let request = PreparedDestination {
++            path: target.clone(),
++            condition: DestinationCondition::MustBeAbsent,
++            consent: DestinationConsent::NotRequired,
++            document: (accepted_stamp.document, accepted_stamp.revision.0),
++            operation: SaveOperation::SaveAs,
++        };
++        let saving = session.clone();
++        let saving_platform = platform.clone();
++        let thread = std::thread::spawn(move || {
++            saving.execute(
++                PagedLifecycleCommand::Save {
++                    requested: accepted_stamp,
++                    destination: request,
++                    copy_only: false,
++                    platform: saving_platform,
++                },
++                &Cancellation::default(),
++            )
++        });
++        entered_rx
++            .recv_timeout(std::time::Duration::from_secs(5))
++            .expect("save never reached commit gate");
++
++        let while_saving = session.state().unwrap();
++        let busy = session.execute(
++            PagedLifecycleCommand::Save {
++                requested: while_saving.stamp,
++                destination: PreparedDestination {
++                    path: second,
++                    condition: DestinationCondition::MustBeAbsent,
++                    consent: DestinationConsent::NotRequired,
++                    document: (while_saving.stamp.document, while_saving.stamp.revision.0),
++                    operation: SaveOperation::SaveAs,
++                },
++                copy_only: false,
++                platform: platform.clone(),
++            },
++            &Cancellation::default(),
++        );
++        assert!(matches!(busy.terminal, Err(PagedLifecycleError::Busy)));
++
++        {
++            let mut actor = session.lock_document().unwrap();
++            let snapshot = actor.document().snapshot();
++            let read_budget = Budget::new(4096);
++            let mut read = snapshot
++                .begin_read(TextOffset(0)..TextOffset(snapshot.len()), snapshot.len(), &read_budget)
++                .unwrap();
++            let window = loop {
++                match read.poll() {
++                    WindowPoll::Pending(ticket) => actor.0.transcoded.source.read_page(ticket).unwrap(),
++                    WindowPoll::Ready(window) => break window,
++                    _ => panic!("unexpected read outcome"),
++                }
++            };
++            actor
++                .document_mut()
++                .apply_materialized(
++                    EditTransaction {
++                        base_revision: snapshot.revision,
++                        edits: vec![Edit {
++                            range: TextOffset(0)..TextOffset(1),
++                            insert: "Z".into(),
++                        }],
++                    },
++                    &[window],
++                )
++                .unwrap();
++        }
++        release_tx.send(()).unwrap();
++        let receipt = thread.join().unwrap();
++        assert!(matches!(
++            &receipt.terminal,
++            Ok(PagedTerminalOutcome::Saved { copy_only: false, .. })
++        ));
++        assert!(!session.receipt_applies(&receipt));
++        assert_eq!(std::fs::read(&target).unwrap(), bytes);
++        let current = session.state().unwrap();
++        assert_eq!(current.path, target);
++        assert_eq!(current.saved_state, Some(accepted_stamp.content));
++        assert_ne!(current.stamp.content, accepted_stamp.content);
++        assert!(session.take_save_cleanup().is_some());
++        drop(session);
++        std::fs::remove_dir_all(root).unwrap();
++    }
++
++    #[test]
++    fn document_release_gate_preserves_predicate_across_notification_orderings() {
++        let root = std::env::temp_dir().join(format!(
++            "bareline-paged-session-gate-{}-{}",
++            std::process::id(),
++            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
++        ));
++        std::fs::create_dir(&root).unwrap();
++        let source = root.join("source.txt");
++        std::fs::write(&source, b"gate\n").unwrap();
++        let platform = Arc::new(Platform);
++        let TranscodeOutcome::Complete(opened) = open_paged_encoded(
++            PagedOpenRequest {
++                path: source,
++                bytes: Budget::new(1024 * 1024),
++                history: Budget::new(1024 * 1024),
++                cache: root.clone(),
++                options: DiskOptions {
++                    temp_quota_bytes: 1024 * 1024,
++                    interpret: None,
++                },
++                source_options: SourceOptions {
++                    resident_max_bytes: 0,
++                    page_size_bytes: 4096,
++                    page_cache_bytes: 8192,
++                },
++            },
++            platform,
++            Cancellation::default(),
++            |_| {},
++        ) else {
++            panic!("paged fixture did not open")
++        };
++        let session = PagedSession::new(opened);
++
++        let observed = session.gate_generation();
++        assert!(!session.wait_after(observed, std::time::Duration::from_millis(20)));
++
++        let observed = session.gate_generation();
++        session.signal_document_released();
++        assert!(session.wait_after(observed, std::time::Duration::from_secs(1)));
++
++        let observed = session.gate_generation();
++        let (entered_tx, entered_rx) = mpsc::sync_channel(1);
++        let waiting = session.clone();
++        let waiter = std::thread::spawn(move || {
++            waiting.wait_after_with_entry_receipt(observed, std::time::Duration::from_secs(2), &entered_tx)
++        });
++        entered_rx
++            .recv_timeout(std::time::Duration::from_secs(2))
++            .expect("waiter never reached release gate");
++        session.signal_document_released();
++        assert!(waiter.join().unwrap());
++
++        let observed = session.gate_generation();
++        let (entered_tx, entered_rx) = mpsc::sync_channel(1);
++        let waiting = session.clone();
++        let waiter = std::thread::spawn(move || {
++            waiting.wait_after_with_entry_receipt(observed, std::time::Duration::from_millis(20), &entered_tx)
++        });
++        entered_rx
++            .recv_timeout(std::time::Duration::from_secs(2))
++            .expect("waiter never reached spurious-notify gate");
++        session.spurious_gate_notify();
++        assert!(!waiter.join().unwrap());
++
++        let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
++        let ready = Arc::new(std::sync::Barrier::new(2));
++        let waiting = session.clone();
++        let waiter_cancelled = cancelled.clone();
++        let waiter_ready = ready.clone();
++        let waiter = std::thread::spawn(move || {
++            waiter_ready.wait();
++            while !waiter_cancelled.load(Ordering::Acquire) {
++                let observed = waiting.gate_generation();
++                if waiter_cancelled.load(Ordering::Acquire) {
++                    break;
++                }
++                waiting.wait_after(observed, std::time::Duration::from_secs(1));
++            }
++        });
++        ready.wait();
++        cancelled.store(true, Ordering::Release);
++        session.signal_document_released();
++        waiter.join().unwrap();
++
++        drop(session);
++        std::fs::remove_dir_all(root).unwrap();
++    }
+ }
+diff --git a/docs/implementation/2026-09-12-audit-implementation/PR-T16.md b/docs/implementation/2026-09-12-audit-implementation/PR-T16.md
+index 03f4acd..2e0df66 100644
+--- a/docs/implementation/2026-09-12-audit-implementation/PR-T16.md
++++ b/docs/implementation/2026-09-12-audit-implementation/PR-T16.md
+@@ -8,12 +8,13 @@
+ 
+ ## Evidence
+ 
+-- `file-io::paged_service::PagedSession` is the shared owner for the paged actor, path/fingerprint, opaque savepoint, encoding/conflict/cleanup state, recovery configuration/status/discard/cleanup hold, source generations, tail session, spill state, and operation generation. `PagedEditorSurface` no longer stores duplicate path, fingerprint, saved-state, save-as, recovery, tail, retired-generation, or spill owners.
++- `file-io::paged_service::PagedSession` is the shared owner for the paged actor, path/fingerprint, opaque savepoint, encoding/conflict/cleanup state, recovery configuration/status/discard/cleanup hold, source generations, tail session, spill state, and operation generation. Its inner persistence locks are private; the surface receives a document-only edit guard plus named tail, recovery, retirement, spill and grouped-recovery transitions. `PagedEditorSurface` no longer stores duplicate path, fingerprint, saved-state, save-as, recovery, tail, retired-generation, or spill owners.
+ - `PagedReadHandle` moved to file-io. It is renderer-free, retains the session and cleanup hold transitively, resolves current and historical source pages, and exposes typed `Busy`/`Changed`/`SourceUnavailable` outcomes before the display adapter renders text.
+-- Save and Save Copy run through `execute_save`, which validates document identity, revision, content state, source generation, and operation generation before writing and again before publishing. The typed terminal receipt retains `Cancelled`, `Encoding`, `Conflict`, `SourceUnavailable`, and cleanup state; displaced/proposed-byte artifacts remain owned by the unchanged T04 save primitive.
++- Save and Save Copy dispatch `PagedLifecycleCommand::Save`. Acceptance reserves a unique operation generation before the document guard is released. A second save receives typed `Busy`; a later document edit makes the initiating view receipt stale without rewriting the committed disk result. A committed save always publishes its accepted path/fingerprint/savepoint and retains every cleanup warning. The accepted savepoint remains the older content state when an edit races the write, so the current document stays dirty. Displaced/proposed-byte artifacts remain owned by the unchanged T04 save primitive.
++- Recovery retry and retirement and spill attachment also dispatch concrete typed commands. Page resolution returns typed `Busy`/`Changed`/`SourceUnavailable` results. Reload and encoding reinterpretation continue to build a replacement file-io session from a sealed read handle; there is no unused same-session reload/encoding command placeholder.
+ - Recovery resume installs a fresh status owner and increments the operation generation. Every peer and captured read handle owns the same session, so the T05 `CleanupHold` remains live until the final view/read owner drops; durable discard and physical cleanup remain separate in `recovery_retirement`.
+ - Cross-document transfer and linked undo still acquire all document-only session guards before publication and use the unchanged grouped recovery commit/lease primitives.
+-- Added a renderer-free file-io lifecycle contract that Save Copy preserves UTF-8 BOM/CRLF bytes exactly, does not change the source identity, and rejects stale receipt application. Extended the controlled peer-view test so a stale lifecycle save command cannot write or change presentation state.
++- Added renderer-free file-io lifecycle contracts that Save Copy preserves UTF-8 BOM/CRLF bytes exactly and that a gated committed Save As survives a concurrent document edit, rejects a second save as busy, leaves the newer content dirty, and retains post-commit cleanup authority. Ported the T09 release-gate behaviors to the file-io session: timeout, notify-before-wait, notify-during-wait, spurious notification predicate recheck, and cancellation wake.
+ - Lightweight local evidence: direct `rustfmt --edition 2024` on changed Rust files and `git diff --check` pass. Cargo and native checks remain central by policy.
+ 
+ ## Proposed contained integration commands
+@@ -21,14 +22,16 @@
+ Run centrally with the shared target, `--offline --locked`, stopping on the first failure:
+ 
+ 1. `cargo test -p bareline-file-io paged_service::lifecycle_contract_tests::headless_client_gets_exact_copy_and_generation_fenced_terminal_receipt --offline --locked`
+-2. `cargo test -p bareline-editor-surface paged_view::peer_tests::peer_owns_full_document_and_survives_other_view_close --offline --locked`
+-3. `cargo test -p bareline-editor-surface paged_spill::tests::pressure_spills_existing_paged_edit_history_and_refreshes_same_identity --offline --locked`
+-4. `cargo test -p bareline-editor-surface paged_transfer::tests::opaque_cross_document_move_restart_and_linked_undo_preserve_raw_bytes --offline --locked`
+-5. `cargo test -p bareline-app workspace::tests::paged_workspace_edits_undoes_navigates_and_saves --offline --locked`
+-6. `cargo test -p bareline-app workspace::tests::readonly_paged_reload_replaces_same_tab_and_preserves_policy --offline --locked`
+-7. `cargo test -p bareline-app workspace::tests::paged_recovery_restart_preserves_opaque_undo_and_recovers_stale_pointer --offline --locked`
+-8. `cargo test -p bareline-app workspace::tests::paged_recovery_failed_retirement_is_retryable --offline --locked`
+-9. `cargo test -p bareline-file-io recovery_retirement::tests::final_cleanup_hold_drop_cannot_miss_receipt_registration --offline --locked`
++2. `cargo test -p bareline-file-io paged_service::lifecycle_contract_tests::committed_save_survives_concurrent_edit_and_retains_cleanup_authority --offline --locked`
++3. `cargo test -p bareline-file-io paged_service::lifecycle_contract_tests::document_release_gate_preserves_predicate_across_notification_orderings --offline --locked`
++4. `cargo test -p bareline-editor-surface paged_view::peer_tests::peer_owns_full_document_and_survives_other_view_close --offline --locked`
++5. `cargo test -p bareline-editor-surface paged_spill::tests::pressure_spills_existing_paged_edit_history_and_refreshes_same_identity --offline --locked`
++6. `cargo test -p bareline-editor-surface paged_transfer::tests::opaque_cross_document_move_restart_and_linked_undo_preserve_raw_bytes --offline --locked`
++7. `cargo test -p bareline-app workspace::tests::paged_workspace_edits_undoes_navigates_and_saves --offline --locked`
++8. `cargo test -p bareline-app workspace::tests::readonly_paged_reload_replaces_same_tab_and_preserves_policy --offline --locked`
++9. `cargo test -p bareline-app workspace::tests::paged_recovery_restart_preserves_opaque_undo_and_recovers_stale_pointer --offline --locked`
++10. `cargo test -p bareline-app workspace::tests::paged_recovery_failed_retirement_is_retryable --offline --locked`
++11. `cargo test -p bareline-file-io recovery_retirement::tests::final_cleanup_hold_drop_cannot_miss_receipt_registration --offline --locked`
+ 
+ ## Deferred qualification
+ 

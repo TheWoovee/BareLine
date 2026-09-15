@@ -1,0 +1,42 @@
+Window: "Bareline", App: bareline-audit.exe.
+	0 region Bareline Secondary Actions: Raise
+		1 title bar
+			2 menu bar System ID: MenuBar
+				33 menu item System
+			4 button Minimize
+			5 button Maximize
+			6 button Close
+		7 menu bar Application ID: MenuBar
+			34 menu item File
+			35 menu item Edit
+			36 menu item Search
+			37 menu item View
+			38 menu item Encoding
+			39 menu item Language
+			40 menu item Settings
+			41 menu item Macro
+			42 menu item Run
+			43 menu item Tools
+			44 menu item Window
+			45 menu item Help
+		20 edit Editor
+		21 button Previous editor viewport
+		22 button Next editor viewport
+		23 group Document tabs
+			24 tab item (selectable) replace.txt •, pane 1, modified
+				25 button Close replace.txt •
+		26 group Status bar
+			27 status Language: Plain text
+			28 status Document size: 18 bytes, 1 lines
+			29 status Caret position: Line 1, column 19
+			30 status Line endings: LF
+			31 status Encoding: UTF-8
+			32 status Editing mode: Insert
+		204 group Macro and Run manager
+			205 alert Macro and process status: Macro complete
+
+Document text: ```
+alpha alpha betaxx
+```
+Focused: 20 edit Editor
+Document: alpha alpha betaxx

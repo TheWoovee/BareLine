@@ -21,11 +21,7 @@ pub struct DynamicContributions {
 }
 impl DynamicContributions {
     /// All validation precedes replacement, so invalid updates retain old entries.
-    pub fn replace_owner(
-        &mut self,
-        owner: &str,
-        records: Vec<DynamicCommandRecord>,
-    ) -> Result<(), &'static str> {
+    pub fn replace_owner(&mut self, owner: &str, records: Vec<DynamicCommandRecord>) -> Result<(), &'static str> {
         fn valid(value: &str) -> bool {
             !value.is_empty()
                 && value.len() <= 128
@@ -36,11 +32,7 @@ impl DynamicContributions {
         if !valid(owner) || records.len() > 256 {
             return Err("Contribution owner/count limit");
         }
-        let other = self
-            .records
-            .keys()
-            .filter(|(existing, _)| existing != owner)
-            .count();
+        let other = self.records.keys().filter(|(existing, _)| existing != owner).count();
         if other + records.len() > 1024 {
             return Err("Total contribution limit");
         }
@@ -50,10 +42,7 @@ impl DynamicContributions {
                 || !valid(&record.identity.id)
                 || record.title.is_empty()
                 || record.title.len() > 256
-                || record
-                    .disabled_reason
-                    .as_ref()
-                    .is_some_and(|reason| reason.len() > 512)
+                || record.disabled_reason.as_ref().is_some_and(|reason| reason.len() > 512)
             {
                 return Err("Invalid contribution");
             }
@@ -99,11 +88,7 @@ mod tests {
         let mut model = DynamicContributions::default();
         model.replace_owner("fixture", vec![command(1)]).unwrap();
         let old = command(1).identity;
-        assert!(
-            model
-                .replace_owner("fixture", vec![command(2), command(2)])
-                .is_err()
-        );
+        assert!(model.replace_owner("fixture", vec![command(2), command(2)]).is_err());
         assert!(model.resolve(&old).is_some());
         model.replace_owner("fixture", vec![command(2)]).unwrap();
         assert!(model.resolve(&old).is_none());

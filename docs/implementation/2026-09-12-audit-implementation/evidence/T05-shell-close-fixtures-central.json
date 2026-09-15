@@ -1,0 +1,17 @@
+{
+  "arguments": [
+    "test",
+    "-p",
+    "bareline",
+    "--bin",
+    "bareline",
+    "deferred_close_tests",
+    "--offline",
+    "--locked"
+  ],
+  "completed_utc": "2026-09-12T09:58:33.8804069Z",
+  "integration_snapshot": "79f389e03cb2510d6b7ef26f4b0e13a7f84ea54b",
+  "exit_code": 101,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\T05-shell-close-fixtures-central.log"
+}

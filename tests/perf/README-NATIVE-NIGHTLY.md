@@ -30,7 +30,36 @@ artifacts supplied by the operator, not downloaded or guessed by this tool):
   "schema_version": 1,
   "interactive_desktop_ready": true,
   "machine_id": "ACTUAL-HOSTNAME",
-  "configuration": "reviewed display/DPI/font/theme/wrap/syntax/power configuration",
+  "configuration": "stable-reviewed-profile-id",
+  "qualification_environment": {
+    "hardware": {
+      "cpu_model": "actual model",
+      "logical_cpus": 16,
+      "physical_memory_bytes": 34359738368,
+      "storage_model": "actual volume/device model"
+    },
+    "os": {
+      "name": "Windows",
+      "release": "11",
+      "version": "actual platform.version() value",
+      "build": "actual build component",
+      "architecture": "AMD64"
+    },
+    "power": {"mode": "actual plan", "source": "AC"},
+    "display": {"dpi": 96, "scale_percent": 100},
+    "fonts": [
+      {"family": "actual family", "version": "actual version", "path": "font file", "sha256": "SHA256"}
+    ],
+    "editor": {"theme": "light", "wrap": "off", "syntax": "plain text"},
+    "acquisition": {
+      "setup_compilation": {"status": "measured", "duration_us": 123, "output_bytes": 456},
+      "download": {"status": "unavailable", "reason": "offline provisioned comparator"}
+    },
+    "cold_cache": {
+      "method": "reviewed method named by the pinned cold-cache plan",
+      "plan_sha256": "same SHA256 as cold_cache below"
+    }
+  },
   "repetitions": 3,
   "settings": {"path": "absolute settings.toml path", "sha256": "SHA256"},
   "fixtures": {
@@ -44,6 +73,22 @@ artifacts supplied by the operator, not downloaded or guessed by this tool):
   }
 }
 ```
+
+The runner verifies the hostname, OS identity/build, architecture, logical CPU
+count and every font-file hash before launching a case. The remaining hardware,
+power, display and editor fields are explicit operator pins retained in every
+manifest and report. If the plan is absent or any case is unavailable/failed,
+`native_nightly.py` writes `native-report.json` and exits nonzero so the workflow
+can retain the report without presenting the run as successful.
+
+`native-report.json` uses `schema_version: 2` and
+`kind: performance_qualification_report`. It includes exact source identity
+before/after, the executable path/version/SHA-256 when available, structured
+configuration, stable coverage and row IDs, explicit ineligibility reasons and
+`claims_eligible: false`. Missing and failed cases carry no numeric substitute.
+If source identity is unavailable or changes during any case, raw observations
+remain in that case report but its rows are unqualified, excluded from rolling
+regression input, and the native command exits nonzero.
 
 The fixture map must provide `open_10mb`, `open_100mb`, `open_1gb`, `open_5gb`,
 `long_line`, `scroll`, `edit_to_paint`, `syntax_viewport`, `literal_search`,

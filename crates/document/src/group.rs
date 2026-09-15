@@ -17,30 +17,21 @@ fn members(documents: &[&mut Document]) -> Result<Arc<[u64]>, Error> {
     if documents.len() < 2 || documents.len() > MAX_GROUP_DOCUMENTS {
         return Err(Error::OutOfBounds);
     }
-    let mut ids: Vec<_> = documents
-        .iter()
-        .map(|document| document.current.document_id)
-        .collect();
+    let mut ids: Vec<_> = documents.iter().map(|document| document.current.document_id).collect();
     ids.sort_unstable();
     if ids.windows(2).any(|ids| ids[0] == ids[1]) {
         return Err(Error::WrongDocument);
     }
     Ok(ids.into())
 }
-pub fn commit(
-    documents: &mut [&mut Document],
-    mut prepared: Vec<PreparedEdit>,
-) -> Result<UndoGroup, Error> {
+pub fn commit(documents: &mut [&mut Document], mut prepared: Vec<PreparedEdit>) -> Result<UndoGroup, Error> {
     if documents.len() != prepared.len() {
         return Err(Error::OutOfBounds);
     }
     let members = members(documents)?;
     for (document, edit) in documents.iter_mut().zip(&prepared) {
         document.validate_prepared(edit)?;
-        document
-            .undo
-            .try_reserve(1)
-            .map_err(|_| Error::BudgetExceeded)?;
+        document.undo.try_reserve(1).map_err(|_| Error::BudgetExceeded)?;
     }
     let id = UndoGroup(crate::unique());
     for edit in &mut prepared {
@@ -61,11 +52,7 @@ pub fn undo(documents: &mut [&mut Document], expected: UndoGroup) -> Result<(), 
 pub fn redo(documents: &mut [&mut Document], expected: UndoGroup) -> Result<(), Error> {
     move_history(documents, expected, true)
 }
-fn move_history(
-    documents: &mut [&mut Document],
-    expected: UndoGroup,
-    redo: bool,
-) -> Result<(), Error> {
+fn move_history(documents: &mut [&mut Document], expected: UndoGroup, redo: bool) -> Result<(), Error> {
     let members = members(documents)?;
     let mut revisions = Vec::with_capacity(documents.len());
     let mut changes = Vec::with_capacity(documents.len());
@@ -89,11 +76,7 @@ fn move_history(
             document.current.revision,
             *revisions.last().expect("prepared revision"),
             document.current.content_state,
-            if redo {
-                entry.after_state
-            } else {
-                entry.before_state
-            },
+            if redo { entry.after_state } else { entry.before_state },
             if redo {
                 crate::change::ChangeDirection::Redo
             } else {
@@ -102,14 +85,8 @@ fn move_history(
             &entry.edits,
             &document.bytes,
         )?);
-        let destination = if redo {
-            &mut document.undo
-        } else {
-            &mut document.redo
-        };
-        destination
-            .try_reserve(1)
-            .map_err(|_| Error::BudgetExceeded)?;
+        let destination = if redo { &mut document.undo } else { &mut document.redo };
+        destination.try_reserve(1).map_err(|_| Error::BudgetExceeded)?;
     }
     for ((document, revision), change) in documents.iter_mut().zip(revisions).zip(changes) {
         document.current.applied_change = Some(change);
@@ -128,11 +105,7 @@ fn move_history(
         } else {
             entry.before.clone()
         };
-        document.current.content_state = if redo {
-            entry.after_state
-        } else {
-            entry.before_state
-        };
+        document.current.content_state = if redo { entry.after_state } else { entry.before_state };
         document.current.revision = revision;
         if redo {
             document.undo.push(entry);

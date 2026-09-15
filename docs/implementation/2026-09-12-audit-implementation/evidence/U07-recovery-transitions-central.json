@@ -1,0 +1,17 @@
+{
+  "arguments": [
+    "test",
+    "-p",
+    "bareline",
+    "--bin",
+    "bareline",
+    "windows_app::recovery::tests",
+    "--offline",
+    "--locked"
+  ],
+  "completed_utc": "2026-09-12T07:19:26.2972228Z",
+  "integration_snapshot": "54c56d7d2a8ee470b6a777ba5a1152f8971385bc",
+  "exit_code": 0,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\U07-recovery-transitions-central.log"
+}

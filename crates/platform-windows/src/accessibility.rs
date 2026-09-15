@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 use accesskit::{
-    Action, ActionData, ActionHandler, ActivationHandler, Node, NodeId, Role, TextPosition,
-    TextSelection, TreeInfo, TreeUpdate,
+    Action, ActionData, ActionHandler, ActivationHandler, Node, NodeId, Role, TextPosition, TextSelection, TreeInfo,
+    TreeUpdate,
 };
 use accesskit_windows::SubclassingAdapter;
 use bareline_platform::accessibility::*;
@@ -30,6 +30,7 @@ fn tree(snapshot: &AccessibilitySnapshot) -> TreeUpdate {
             AccessibilityRole::Separator => Role::Splitter,
             AccessibilityRole::Tooltip => Role::Tooltip,
             AccessibilityRole::Alert => Role::Alert,
+            AccessibilityRole::TabList => Role::TabList,
             AccessibilityRole::Tab => Role::Tab,
             AccessibilityRole::Scrollbar => Role::ScrollBar,
             AccessibilityRole::Tree => Role::Tree,
@@ -66,10 +67,7 @@ fn tree(snapshot: &AccessibilitySnapshot) -> TreeUpdate {
         if item.role == AccessibilityRole::Tab || item.role == AccessibilityRole::ListItem {
             node.set_selected(item.selected);
         }
-        if matches!(
-            item.role,
-            AccessibilityRole::Checkbox | AccessibilityRole::Radio
-        ) {
+        if matches!(item.role, AccessibilityRole::Checkbox | AccessibilityRole::Radio) {
             node.set_toggled(accesskit::Toggled::from(item.selected));
         }
         if let Some(expanded) = item.expanded {
@@ -84,7 +82,18 @@ fn tree(snapshot: &AccessibilitySnapshot) -> TreeUpdate {
             .filter(|n| n.id != item.id && n.parent == item.id)
             .map(|n| NodeId(n.id))
             .collect();
-        if let Some(text) = snapshot.text.as_ref().filter(|t| t.editor_id == item.id) {
+        let text = snapshot
+            .text
+            .as_ref()
+            .filter(|text| text.editor_id == item.id)
+            .or_else(|| {
+                snapshot
+                    .text_views
+                    .iter()
+                    .find(|view| view.editor_id == item.id)
+                    .and_then(|view| view.text.as_ref())
+            });
+        if let Some(text) = text {
             children.extend(text_runs(text).iter().map(|r| r.id));
             if let Some((anchor, focus)) = text.selection {
                 node.set_text_selection(TextSelection {
@@ -97,7 +106,11 @@ fn tree(snapshot: &AccessibilitySnapshot) -> TreeUpdate {
         node.set_children(children);
         nodes.push((NodeId(item.id), node));
     }
-    if let Some(text) = &snapshot.text {
+    for text in snapshot
+        .text
+        .iter()
+        .chain(snapshot.text_views.iter().filter_map(|view| view.text.as_ref()))
+    {
         for line in text_runs(text) {
             let mut run = Node::new(Role::TextRun);
             run.set_value(line.value.to_owned());
@@ -163,11 +176,7 @@ fn text_runs(text: &AccessibilityText) -> Vec<TextRun<'_>> {
 }
 fn text_position(text: &AccessibilityText, index: usize) -> TextPosition {
     let runs = text_runs(text);
-    let line = runs
-        .iter()
-        .rev()
-        .find(|r| r.character_start <= index)
-        .unwrap();
+    let line = runs.iter().rev().find(|r| r.character_start <= index).unwrap();
     TextPosition {
         node: line.id,
         character_index: index - line.character_start,
@@ -175,9 +184,12 @@ fn text_position(text: &AccessibilityText, index: usize) -> TextPosition {
 }
 fn validate(snapshot: &AccessibilitySnapshot) -> Result<(), &'static str> {
     snapshot.validate()?;
-    if let Some(text) = &snapshot.text {
-        let mut ids: std::collections::BTreeSet<_> =
-            snapshot.nodes.iter().map(|n| NodeId(n.id)).collect();
+    let mut ids: std::collections::BTreeSet<_> = snapshot.nodes.iter().map(|n| NodeId(n.id)).collect();
+    for text in snapshot
+        .text
+        .iter()
+        .chain(snapshot.text_views.iter().filter_map(|view| view.text.as_ref()))
+    {
         for run in text_runs(text) {
             if !ids.insert(run.id) {
                 return Err("text run ID collides with chrome");
@@ -193,9 +205,7 @@ struct Shared {
 struct Activate(Arc<Mutex<Shared>>);
 impl ActivationHandler for Activate {
     fn request_initial_tree(&mut self) -> Option<TreeUpdate> {
-        Some(tree(
-            &self.0.lock().unwrap_or_else(|e| e.into_inner()).snapshot,
-        ))
+        Some(tree(&self.0.lock().unwrap_or_else(|e| e.into_inner()).snapshot))
     }
 }
 struct Actions {
@@ -217,12 +227,8 @@ impl ActionHandler for Actions {
             return;
         };
         let action = match request.action {
-            Action::Focus if target.focusable => {
-                Some(AccessibilityAction::Focus(request.target_node.0))
-            }
-            Action::Click if target.invokable => {
-                Some(AccessibilityAction::Invoke(request.target_node.0))
-            }
+            Action::Focus if target.focusable => Some(AccessibilityAction::Focus(request.target_node.0)),
+            Action::Click if target.invokable => Some(AccessibilityAction::Invoke(request.target_node.0)),
             Action::SetValue if target.role == AccessibilityRole::TextField => {
                 if let Some(ActionData::Value(value)) = request.data {
                     (value.len() <= 16 * 1024).then(|| AccessibilityAction::SetValue {
@@ -233,9 +239,11 @@ impl ActionHandler for Actions {
                     None
                 }
             }
-            Action::SetTextSelection if target.role == AccessibilityRole::Editor => {
-                if let (Some(text), Some(ActionData::SetTextSelection(selection))) =
-                    (&state.snapshot.text, request.data)
+            Action::SetTextSelection
+                if matches!(target.role, AccessibilityRole::Editor | AccessibilityRole::TextField) =>
+            {
+                if let (Some((Some(text), context, _)), Some(ActionData::SetTextSelection(selection))) =
+                    (state.snapshot.text_view(target.id), request.data)
                 {
                     let offset = |position: TextPosition| {
                         let runs = text_runs(text);
@@ -251,8 +259,11 @@ impl ActionHandler for Actions {
                     };
                     offset(selection.anchor)
                         .zip(offset(selection.focus))
-                        .zip(state.snapshot.text_context.as_ref())
-                        .map(|((anchor, caret), context)| AccessibilityAction::SetSelection { source_identity: context.source_identity, anchor, caret })
+                        .map(|(anchor, caret)| AccessibilityAction::SetSelection {
+                            source_identity: context.source_identity,
+                            anchor,
+                            caret,
+                        })
                 } else {
                     None
                 }
@@ -283,8 +294,7 @@ impl WindowsAccessibility {
     ) -> Result<Self, &'static str> {
         validate(&snapshot)?;
         let hwnd = HWND(raw as *mut _);
-        if !unsafe { IsWindow(Some(hwnd)) }.as_bool() || unsafe { IsWindowVisible(hwnd) }.as_bool()
-        {
+        if !unsafe { IsWindow(Some(hwnd)) }.as_bool() || unsafe { IsWindowVisible(hwnd) }.as_bool() {
             return Err("accessibility requires a valid, hidden window");
         }
         let shared = Arc::new(Mutex::new(Shared {
@@ -302,10 +312,27 @@ impl WindowsAccessibility {
         let text_provider = Arc::new(text_provider::Factory::new(shared.clone(), notify));
         let factory: Arc<dyn accesskit_windows::PatternOverride> = text_provider.clone();
         let registration = accesskit_windows::register_pattern_override(hwnd, &factory);
-        Ok(Self { adapter, shared, _registration: registration, text_provider })
+        Ok(Self {
+            adapter,
+            shared,
+            _registration: registration,
+            text_provider,
+        })
     }
     pub fn set_text_source(&mut self, source: Option<Arc<dyn AccessibilityTextSource>>) {
-        self.text_provider.set_source(source);
+        let owner = self
+            .shared
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .snapshot
+            .text
+            .as_ref()
+            .map_or(2, |text| text.editor_id);
+        self.text_provider
+            .set_sources(source.into_iter().map(|source| (owner, source)).collect());
+    }
+    pub fn set_text_sources(&mut self, sources: Vec<(u64, Arc<dyn AccessibilityTextSource>)>) {
+        self.text_provider.set_sources(sources);
     }
     pub fn update(&mut self, snapshot: AccessibilitySnapshot) {
         if let Err(reason) = validate(&snapshot) {
@@ -319,21 +346,41 @@ impl WindowsAccessibility {
         if old == snapshot {
             return;
         }
+        #[cfg(feature = "qa-inventory")]
+        let qa_changed = {
+            let metadata = |snapshot: &AccessibilitySnapshot| {
+                let find = snapshot.nodes.iter().find(|node| node.id == 6000);
+                (
+                    snapshot.focus,
+                    find.map(|node| (node.disabled, node.focusable, node.value.as_ref().map(String::len))),
+                )
+            };
+            let current = metadata(&snapshot);
+            let changed = metadata(&old) != current;
+            if changed {
+                eprintln!(
+                    "event=qa_accessibility_snapshot focus={} find_metadata={:?}",
+                    current.0, current.1
+                );
+            }
+            changed
+        };
         // This snapshot is already bounded to the visible semantic viewport.
         // Publish it atomically: text runs, their editor selection and dynamic
         // popup children must describe the same frame to native clients.
-        if let Some(events) = self.adapter.update_if_active(|| tree(&snapshot)) {
+        if let Some(events) = self.adapter.update_if_active(|| {
+            let update = tree(&snapshot);
+            #[cfg(feature = "qa-inventory")]
+            if qa_changed {
+                eprintln!("event=qa_accessibility_bridge_update focus={}", update.focus.0);
+            }
+            update
+        }) {
             events.raise();
         }
     }
     pub fn drain_actions(&mut self) -> Vec<AccessibilityAction> {
-        std::mem::take(
-            &mut self
-                .shared
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .actions,
-        )
+        std::mem::take(&mut self.shared.lock().unwrap_or_else(|e| e.into_inner()).actions)
     }
 }
 
@@ -345,7 +392,13 @@ mod tests {
             root: 1,
             focus: 2,
             text_geometry: Vec::new(),
-            text_context: Some(AccessibilityTextContext { source_identity: (7, 3), selection: (5_000_000_001, 5_000_000_003), composition: None }),
+            text_views: Vec::new(),
+            text_context: Some(AccessibilityTextContext {
+                source_identity: (7, 3),
+                selection: (5_000_000_001, 5_000_000_003),
+                selections: Vec::new(),
+                composition: None,
+            }),
             nodes: vec![
                 AccessibilityNode {
                     id: 1,
@@ -421,16 +474,45 @@ mod tests {
         assert!(model.validate().is_ok());
         let update = tree(&model);
         assert_eq!(update.nodes.len(), 3);
-        assert_eq!(
-            update.nodes[1]
-                .1
-                .text_selection()
-                .unwrap()
-                .focus
-                .character_index,
-            2
-        );
+        assert_eq!(update.nodes[1].1.text_selection().unwrap().focus.character_index, 2);
         assert_eq!(update.nodes[2].1.value(), Some("aé"));
+    }
+    #[test]
+    fn provider_tree_maps_tab_list_and_selected_tab() {
+        let mut model = snapshot();
+        model.nodes.push(AccessibilityNode {
+            id: 10,
+            parent: 1,
+            role: AccessibilityRole::TabList,
+            name: "Search modes".into(),
+            value: None,
+            bounds: [0., 0., 300., 30.],
+            disabled: false,
+            selected: false,
+            expanded: None,
+            focusable: false,
+            invokable: false,
+        });
+        model.nodes.push(AccessibilityNode {
+            id: 11,
+            parent: 10,
+            role: AccessibilityRole::Tab,
+            name: "Files".into(),
+            value: None,
+            bounds: [200., 0., 100., 30.],
+            disabled: false,
+            selected: true,
+            expanded: None,
+            focusable: true,
+            invokable: true,
+        });
+        let update = tree(&model);
+        let list = update.nodes.iter().find(|(id, _)| *id == NodeId(10)).unwrap();
+        let tab = update.nodes.iter().find(|(id, _)| *id == NodeId(11)).unwrap();
+        assert_eq!(list.1.role(), Role::TabList);
+        assert_eq!(tab.1.role(), Role::Tab);
+        assert_eq!(tab.1.is_selected(), Some(true));
+        assert!(tab.1.supports_action(Action::Click));
     }
     #[test]
     fn provider_actions_map_to_absolute_bytes_without_document_reads() {
@@ -482,9 +564,7 @@ mod tests {
 pub fn high_contrast_enabled() -> std::io::Result<bool> {
     use windows::Win32::UI::{
         Accessibility::{HCF_HIGHCONTRASTON, HIGHCONTRASTW},
-        WindowsAndMessaging::{
-            SPI_GETHIGHCONTRAST, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SystemParametersInfoW,
-        },
+        WindowsAndMessaging::{SPI_GETHIGHCONTRAST, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SystemParametersInfoW},
     };
     let mut state = HIGHCONTRASTW {
         cbSize: std::mem::size_of::<HIGHCONTRASTW>() as u32,

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Revision-bound power edits. Offsets address UTF-8 text, never original bytes.
+pub mod captured;
 pub mod consumer;
 pub mod streaming;
-pub mod captured;
 use crate::Selection;
 use bareline_document::{DocumentSnapshot, Edit, EditTransaction, Error, TextOffset};
 use std::ops::Range;
@@ -23,10 +23,7 @@ impl From<Selection> for SelectionSet {
 }
 impl SelectionSet {
     pub fn primary(&self) -> Selection {
-        self.selections
-            .get(self.primary)
-            .copied()
-            .unwrap_or_default()
+        self.selections.get(self.primary).copied().unwrap_or_default()
     }
     pub fn escape(&mut self) {
         *self = self.primary().into();
@@ -63,11 +60,7 @@ fn charge(total: &mut usize, n: usize, limits: Limits) -> Result<(), Error> {
         .ok_or(Error::BudgetExceeded)?;
     Ok(())
 }
-fn line(
-    snapshot: &DocumentSnapshot,
-    number: usize,
-    limits: Limits,
-) -> Result<(usize, String), Error> {
+fn line(snapshot: &DocumentSnapshot, number: usize, limits: Limits) -> Result<(usize, String), Error> {
     let r = snapshot.line_range(number)?;
     let s = snapshot.read(r.clone(), limits.max_bytes)?;
     Ok((r.start.0, s))
@@ -83,21 +76,59 @@ fn snap(snapshot: &DocumentSnapshot, offset: usize, limits: Limits) -> Result<us
     while !snapshot.is_boundary(TextOffset(boundary)) {
         boundary -= 1;
     }
-    let (start, s) = line(snapshot, snapshot.line_at(TextOffset(boundary))?, limits)?;
-    Ok(start
-        + s.grapheme_indices(true)
-            .map(|(i, _)| i)
-            .chain(Some(s.len()))
-            .take_while(|i| *i <= offset - start)
-            .last()
-            .unwrap_or(0))
+    // Endpoints need no source read. Interior carets need only bounded grapheme
+    // context, never a materialized logical line (which may exceed the budget).
+    if boundary == 0 || boundary == snapshot.len() {
+        return Ok(boundary);
+    }
+    use unicode_segmentation::{GraphemeCursor, GraphemeIncomplete};
+    let mut cursor = GraphemeCursor::new(boundary, snapshot.len(), true);
+    let mut total = 0;
+    let mut read_chunk = |at: usize, backwards: bool| -> Result<(usize, String), Error> {
+        let (mut start, mut end) = if backwards {
+            (at.saturating_sub(4096), at)
+        } else {
+            (at, at.saturating_add(4096).min(snapshot.len()))
+        };
+        while !snapshot.is_boundary(TextOffset(start)) {
+            start += 1;
+        }
+        while !snapshot.is_boundary(TextOffset(end)) {
+            end -= 1;
+        }
+        charge(&mut total, end - start, limits)?;
+        snapshot
+            .read(TextOffset(start)..TextOffset(end), limits.max_bytes)
+            .map(|text| (start, text))
+    };
+    let (mut start, mut text) = read_chunk(boundary, false)?;
+    loop {
+        match cursor.is_boundary(&text, start) {
+            Ok(true) => return Ok(boundary),
+            Ok(false) => break,
+            Err(GraphemeIncomplete::PreContext(end)) => {
+                let (from, context) = read_chunk(end, true)?;
+                cursor.provide_context(&context, from);
+            }
+            Err(_) => return Err(Error::InvalidBoundary),
+        }
+    }
+    loop {
+        match cursor.prev_boundary(&text, start) {
+            Ok(result) => return Ok(result.unwrap_or(0)),
+            Err(GraphemeIncomplete::PrevChunk) => {
+                (start, text) = read_chunk(start, true)?;
+            }
+            Err(GraphemeIncomplete::PreContext(end)) => {
+                let (from, context) = read_chunk(end, true)?;
+                cursor.provide_context(&context, from);
+            }
+            Err(_) => return Err(Error::InvalidBoundary),
+        }
+    }
 }
 /// Normalizes editing ranges; overlapping selections and duplicate carets mutate once.
-pub fn normalize(
-    snapshot: &DocumentSnapshot,
-    set: &SelectionSet,
-    limits: Limits,
-) -> Result<SelectionSet, Error> {
+pub fn normalize(snapshot: &DocumentSnapshot, set: &SelectionSet, limits: Limits) -> Result<SelectionSet, Error> {
     if limits.tab_width > limits.max_bytes {
         return Err(Error::BudgetExceeded);
     }
@@ -143,11 +174,7 @@ pub fn normalize(
         primary,
     })
 }
-pub(crate) fn finish(
-    snapshot: &DocumentSnapshot,
-    mut edits: Vec<Edit>,
-    limits: Limits,
-) -> Result<PowerEdit, Error> {
+pub(crate) fn finish(snapshot: &DocumentSnapshot, mut edits: Vec<Edit>, limits: Limits) -> Result<PowerEdit, Error> {
     if limits.tab_width > limits.max_bytes {
         return Err(Error::BudgetExceeded);
     }
@@ -163,10 +190,7 @@ pub(crate) fn finish(
     let mut delta = 0isize;
     let mut selections = Vec::new();
     for e in &edits {
-        if e.range.start > e.range.end
-            || !snapshot.is_boundary(e.range.start)
-            || !snapshot.is_boundary(e.range.end)
-        {
+        if e.range.start > e.range.end || !snapshot.is_boundary(e.range.start) || !snapshot.is_boundary(e.range.end) {
             return Err(Error::InvalidBoundary);
         }
         if previous.is_some_and(|end| e.range.start.0 < end) {
@@ -182,10 +206,7 @@ pub(crate) fn finish(
             .checked_add_signed(delta)
             .and_then(|v| v.checked_add(e.insert.len()))
             .ok_or(Error::BudgetExceeded)?;
-        selections.push(Selection {
-            anchor: p,
-            caret: p,
-        });
+        selections.push(Selection { anchor: p, caret: p });
         delta += e.insert.len() as isize - (e.range.end.0 - e.range.start.0) as isize;
     }
     if selections.is_empty() {
@@ -196,10 +217,7 @@ pub(crate) fn finish(
             base_revision: snapshot.revision,
             edits,
         },
-        selections: SelectionSet {
-            selections,
-            primary: 0,
-        },
+        selections: SelectionSet { selections, primary: 0 },
     })
 }
 pub fn replace(
@@ -265,11 +283,7 @@ pub struct DisplayColumnMap {
     pub stops: Vec<(usize, usize)>,
 }
 impl DisplayColumnMap {
-    pub fn with_metrics(
-        text: &str,
-        tab_width: usize,
-        mut width: impl FnMut(&str) -> usize,
-    ) -> Self {
+    pub fn with_metrics(text: &str, tab_width: usize, mut width: impl FnMut(&str) -> usize) -> Self {
         let mut col = 0;
         let mut stops = vec![(0, 0)];
         for (i, g) in text.grapheme_indices(true) {
@@ -288,12 +302,7 @@ impl DisplayColumnMap {
         })
     }
     pub fn at(&self, column: usize) -> (usize, usize) {
-        let &(byte, col) = self
-            .stops
-            .iter()
-            .rev()
-            .find(|(_, c)| *c <= column)
-            .unwrap_or(&(0, 0));
+        let &(byte, col) = self.stops.iter().rev().find(|(_, c)| *c <= column).unwrap_or(&(0, 0));
         (byte, column.saturating_sub(col))
     }
     pub fn column(&self, byte: usize) -> usize {
@@ -346,12 +355,15 @@ pub fn column_insert(
     insert: ColumnInsert,
     limits: Limits,
 ) -> Result<PowerEdit, Error> {
-    column_insert_mapped(snapshot,rectangle,insert,limits,None)
+    column_insert_mapped(snapshot, rectangle, insert, limits, None)
 }
 pub fn column_insert_mapped(
-    snapshot:&DocumentSnapshot,rectangle:Rectangle,insert:ColumnInsert,limits:Limits,
-    maps:Option<&std::collections::BTreeMap<usize,DisplayColumnMap>>,
-)->Result<PowerEdit,Error> {
+    snapshot: &DocumentSnapshot,
+    rectangle: Rectangle,
+    insert: ColumnInsert,
+    limits: Limits,
+    maps: Option<&std::collections::BTreeMap<usize, DisplayColumnMap>>,
+) -> Result<PowerEdit, Error> {
     if rectangle.first_line > rectangle.last_line || rectangle.last_line >= snapshot.line_count() {
         return Err(Error::OutOfBounds);
     }
@@ -364,7 +376,12 @@ pub fn column_insert_mapped(
         let (start, text) = line(snapshot, n, limits)?;
         let body = content(&text);
         let fallback;
-        let map = if let Some(maps)=maps {maps.get(&n).ok_or(Error::OutOfBounds)?}else{fallback=DisplayColumnMap::new(body,limits.tab_width);&fallback};
+        let map = if let Some(maps) = maps {
+            maps.get(&n).ok_or(Error::OutOfBounds)?
+        } else {
+            fallback = DisplayColumnMap::new(body, limits.tab_width);
+            &fallback
+        };
         let left = rectangle.start_column.min(rectangle.end_column);
         let right = rectangle.start_column.max(rectangle.end_column);
         let (a, mut pad) = map.at(left);
@@ -373,11 +390,7 @@ pub fn column_insert_mapped(
         }
         let (mut b, _) = map.at(right);
         if right > left && map.column(b) < right && b < body.len() {
-            b = map
-                .stops
-                .iter()
-                .find(|(p, _)| *p > b)
-                .map_or(b, |(p, _)| *p);
+            b = map.stops.iter().find(|(p, _)| *p > b).map_or(b, |(p, _)| *p);
         }
         let value = match &insert {
             ColumnInsert::Text(s) => {
@@ -403,10 +416,7 @@ pub fn column_insert_mapped(
                     )
                     .ok_or(Error::BudgetExceeded)?;
                 let s = number(value, *base, *width)?;
-                if s.len()
-                    .checked_mul(*repeat)
-                    .is_none_or(|v| v > limits.max_bytes)
-                {
+                if s.len().checked_mul(*repeat).is_none_or(|v| v > limits.max_bytes) {
                     return Err(Error::BudgetExceeded);
                 }
                 s.repeat(*repeat)
@@ -420,12 +430,7 @@ pub fn column_insert_mapped(
         replacement.push_str(&value);
         let (right_byte, inside) = map.at(right);
         if inside > 0 && right_byte < body.len() && body[right_byte..].starts_with('\t') {
-            let next = map
-                .stops
-                .iter()
-                .find(|(p, _)| *p > right_byte)
-                .copied()
-                .unwrap();
+            let next = map.stops.iter().find(|(p, _)| *p > right_byte).copied().unwrap();
             b = next.0;
             let suffix = next.1 - right;
             charge(&mut total, suffix, limits)?;
@@ -491,9 +496,7 @@ pub fn transform(
             let first = snapshot.line_at(TextOffset(r.start))?;
             let last = snapshot
                 .line_at(TextOffset(if r.end > r.start { r.end - 1 } else { r.end }))
-                .or_else(|_| {
-                    snapshot.line_at(TextOffset(snap(snapshot, r.end.saturating_sub(1), limits)?))
-                })?;
+                .or_else(|_| snapshot.line_at(TextOffset(snap(snapshot, r.end.saturating_sub(1), limits)?)))?;
             r = snapshot.line_range(first)?.start.0..snapshot.line_range(last)?.end.0;
         }
         if let Some(prev) = ranges.last_mut()
@@ -545,11 +548,7 @@ pub fn transform(
                     .into_iter()
                     .find(|(_, e)| !e.is_empty())
                     .map_or("\n", |(_, e)| e);
-                let separator = if source.ends_with(['\r', '\n']) {
-                    ""
-                } else {
-                    eol
-                };
+                let separator = if source.ends_with(['\r', '\n']) { "" } else { eol };
                 if source
                     .len()
                     .checked_mul(2)
@@ -595,26 +594,7 @@ pub fn transform(
                         case_sensitive,
                         numeric,
                     } => {
-                        rows.sort_by(|a, b| {
-                            let x = if *case_sensitive {
-                                a.0.to_string()
-                            } else {
-                                a.0.to_lowercase()
-                            };
-                            let y = if *case_sensitive {
-                                b.0.to_string()
-                            } else {
-                                b.0.to_lowercase()
-                            };
-                            if *numeric {
-                                match (x.trim().parse::<f64>(), y.trim().parse::<f64>()) {
-                                    (Ok(x), Ok(y)) => x.total_cmp(&y),
-                                    _ => x.cmp(&y),
-                                }
-                            } else {
-                                x.cmp(&y)
-                            }
-                        });
+                        rows.sort_by_cached_key(|row| sort_key(row.0, *case_sensitive, *numeric));
                         if *descending {
                             rows.reverse();
                         }
@@ -634,22 +614,13 @@ pub fn transform(
                         Transform::TrimStart => body.trim_start().to_string(),
                         Transform::TrimEnd => body.trim_end().to_string(),
                         Transform::Trim => body.trim().to_string(),
-                        Transform::Indent => format!(
-                            "{}{}",
-                            " ".repeat(limits.tab_width.min(limits.max_bytes)),
-                            body
-                        ),
+                        Transform::Indent => format!("{}{}", " ".repeat(limits.tab_width.min(limits.max_bytes)), body),
                         Transform::Unindent => {
                             if let Some(s) = body.strip_prefix('\t') {
                                 s.to_string()
                             } else {
                                 body.chars()
-                                    .skip(
-                                        body.chars()
-                                            .take(limits.tab_width)
-                                            .take_while(|c| *c == ' ')
-                                            .count(),
-                                    )
+                                    .skip(body.chars().take(limits.tab_width).take_while(|c| *c == ' ').count())
                                     .collect()
                             }
                         }
@@ -659,19 +630,14 @@ pub fn transform(
                             for g in body.graphemes(true) {
                                 if g == "\t" {
                                     let n = limits.tab_width.max(1) - col % limits.tab_width.max(1);
-                                    if out
-                                        .len()
-                                        .checked_add(n)
-                                        .is_none_or(|v| v > limits.max_bytes)
-                                    {
+                                    if out.len().checked_add(n).is_none_or(|v| v > limits.max_bytes) {
                                         return Err(Error::BudgetExceeded);
                                     }
                                     out.extend(std::iter::repeat_n(' ', n));
                                     col += n;
                                 } else {
                                     out.push_str(g);
-                                    col +=
-                                        DisplayColumnMap::new(g, limits.tab_width).column(g.len());
+                                    col += DisplayColumnMap::new(g, limits.tab_width).column(g.len());
                                 }
                             }
                             out
@@ -759,6 +725,34 @@ pub fn transform(
     }
     finish(snapshot, edits, limits)
 }
+/// Total-order sort key for line sorting, shared by the in-memory and the
+/// streaming sort so both order identically.
+///
+/// With `numeric` set, lines that parse as a number sort by value first (using
+/// `f64::total_cmp` semantics, so `NaN` has a defined place); every line that
+/// does not parse sorts lexically **after** all numeric lines. Without
+/// `numeric` the key is purely lexical. The key is a plain tuple, so the order
+/// is total by construction and `sort_by_cached_key` cannot panic on it.
+pub(crate) fn sort_key(text: &str, case_sensitive: bool, numeric: bool) -> (bool, i64, String) {
+    let folded = if case_sensitive {
+        text.to_string()
+    } else {
+        text.to_lowercase()
+    };
+    if numeric {
+        if let Ok(value) = folded.trim().parse::<f64>() {
+            return (false, total_order_bits(value), folded);
+        }
+    }
+    (true, 0, folded)
+}
+
+/// Maps a `f64` onto an `i64` whose natural order matches `f64::total_cmp`.
+fn total_order_bits(value: f64) -> i64 {
+    let bits = value.to_bits() as i64;
+    bits ^ (((bits >> 63) as u64 >> 1) as i64)
+}
+
 fn split_rows(text: &str) -> Vec<(&str, &str)> {
     let mut rows = Vec::new();
     let bytes = text.as_bytes();
@@ -820,23 +814,12 @@ pub fn add_caret(
     let mut out = normalize(snapshot, set, limits)?;
     let p = out.primary();
     let n = snapshot.line_at(TextOffset(p.caret))?;
-    let target = if below {
-        n.checked_add(1)
-    } else {
-        n.checked_sub(1)
-    }
-    .ok_or(Error::OutOfBounds)?;
+    let target = if below { n.checked_add(1) } else { n.checked_sub(1) }.ok_or(Error::OutOfBounds)?;
     let (start, text) = line(snapshot, n, limits)?;
     let column = DisplayColumnMap::new(content(&text), limits.tab_width).column(p.caret - start);
     let (start, text) = line(snapshot, target, limits)?;
-    let p = start
-        + DisplayColumnMap::new(content(&text), limits.tab_width)
-            .at(column)
-            .0;
-    out.selections.push(Selection {
-        anchor: p,
-        caret: p,
-    });
+    let p = start + DisplayColumnMap::new(content(&text), limits.tab_width).at(column).0;
+    out.selections.push(Selection { anchor: p, caret: p });
     out.primary = out.selections.len() - 1;
     normalize(snapshot, &out, limits)
 }
@@ -848,15 +831,38 @@ pub fn select_occurrences(
 ) -> Result<SelectionSet, Error> {
     let mut out = normalize(snapshot, set, limits)?;
     let p = out.primary();
-    let primary_range=p.range();
-    let needle = snapshot.read(TextOffset(primary_range.start)..TextOffset(primary_range.end), limits.max_bytes)?;
+    let primary_range = p.range();
+    let needle = snapshot.read(
+        TextOffset(primary_range.start)..TextOffset(primary_range.end),
+        limits.max_bytes,
+    )?;
     if needle.is_empty() {
+        let mut start = p.caret.saturating_sub(16 * 1024);
+        let mut end = p.caret.saturating_add(16 * 1024).min(snapshot.len());
+        while start < p.caret && !snapshot.is_boundary(TextOffset(start)) {
+            start += 1;
+        }
+        while end > p.caret && !snapshot.is_boundary(TextOffset(end)) {
+            end -= 1;
+        }
+        let text = snapshot.read(TextOffset(start)..TextOffset(end), limits.max_bytes)?;
+        if let Some((at, word)) = text
+            .unicode_word_indices()
+            .find(|(at, word)| start + at <= p.caret && p.caret < start + at + word.len())
+        {
+            let from = start + at;
+            let to = from + word.len();
+            if (from > start || start == 0) && (to < end || end == snapshot.len()) {
+                out.selections[out.primary] = Selection {
+                    anchor: from,
+                    caret: to,
+                };
+            }
+        }
         return Ok(out);
     }
     let text = snapshot.read(TextOffset(0)..TextOffset(snapshot.len()), limits.max_bytes)?;
-    let matches = text
-        .match_indices(&needle)
-        .map(|(i, _)| i..i + needle.len());
+    let matches = text.match_indices(&needle).map(|(i, _)| i..i + needle.len());
     for r in matches
         .clone()
         .filter(|r| all || r.start >= primary_range.end)
@@ -896,10 +902,7 @@ pub fn drag_text(
     if !copy && (range.start..=range.end).contains(&target) {
         return finish(snapshot, Vec::new(), limits);
     }
-    let text = snapshot.read(
-        TextOffset(range.start)..TextOffset(range.end),
-        limits.max_bytes,
-    )?;
+    let text = snapshot.read(TextOffset(range.start)..TextOffset(range.end), limits.max_bytes)?;
     let mut edits = vec![Edit {
         range: TextOffset(target)..TextOffset(target),
         insert: text,
@@ -916,13 +919,135 @@ pub fn drag_text(
 mod tests {
     use super::*;
     use bareline_document::{Budget, Document};
+    /// 64 rows mixing plain integers, floats, signed values, `NaN`, and lines
+    /// that only start with digits — the shape that made the old two-branch
+    /// comparator intransitive.
+    pub(super) fn mixed_sort_rows() -> Vec<String> {
+        let seeds = [
+            "10",
+            "2",
+            "12 apples",
+            "1st",
+            "-3.5",
+            "NaN",
+            "0",
+            "007",
+            "3",
+            "banana",
+            "1e3",
+            "-0",
+            "inf",
+            "-inf",
+            "42",
+            "12",
+            "9 lives",
+            "100",
+            "5.5",
+            "5.50",
+            "2nd place",
+            "apple",
+            "Zebra",
+            "  7  ",
+            "0.1",
+            "-1",
+            "1000000",
+            "3.14159",
+            "NaN too",
+            "",
+            " ",
+            "0x10",
+        ];
+        let mut rows = Vec::with_capacity(64);
+        for seed in seeds {
+            rows.push(seed.to_string());
+        }
+        for seed in seeds {
+            rows.push(seed.to_string());
+        }
+        rows
+    }
+
+    #[test]
+    fn numeric_sort_of_sixty_four_mixed_rows_is_total_and_deterministic() {
+        let rows = mixed_sort_rows();
+        assert_eq!(rows.len(), 64);
+        let input = rows.join("\n");
+        let action = Transform::Sort {
+            descending: false,
+            case_sensitive: true,
+            numeric: true,
+        };
+        let sort_once = |text: &str| {
+            let document = doc(text);
+            let snapshot = document.snapshot();
+            let selection = Selection {
+                anchor: 0,
+                caret: text.len(),
+            };
+            let edit = transform(&snapshot, &selection.into(), action.clone(), Limits::default()).unwrap();
+            let mut document = document;
+            document.apply(edit.transaction).unwrap();
+            self::text(&document)
+        };
+        let sorted = sort_once(&input);
+        // Deterministic: sorting the sorted text is a fixed point.
+        assert_eq!(sort_once(&sorted), sorted);
+        let mut expected = rows.clone();
+        expected.sort_by_cached_key(|row| sort_key(row, true, true));
+        assert_eq!(sorted.split('\n').collect::<Vec<_>>(), expected);
+        // Numeric lines come first and are ordered by value, non-numeric after.
+        let numeric: Vec<f64> = sorted
+            .split('\n')
+            .map_while(|row| row.trim().parse::<f64>().ok())
+            .filter(|value| !value.is_nan())
+            .collect();
+        assert!(numeric.windows(2).all(|pair| pair[0] <= pair[1]));
+        let first_text = sorted
+            .split('\n')
+            .position(|row| row.trim().parse::<f64>().is_err())
+            .unwrap();
+        assert!(
+            sorted
+                .split('\n')
+                .skip(first_text)
+                .all(|row| row.trim().parse::<f64>().is_err())
+        );
+    }
+    #[test]
+    fn collapsed_caret_on_giant_line_uses_bounded_grapheme_context() {
+        let text = format!("{}e\u{301}\u{1f642}z", "x".repeat(20 << 20));
+        let document = doc(&text);
+        let snapshot = document.snapshot();
+        let limits = Limits {
+            max_bytes: 16 * 1024,
+            ..Limits::default()
+        };
+        for (requested, expected) in [
+            (text.len(), text.len()),
+            (10 << 20, 10 << 20),
+            ((20 << 20) + 1, 20 << 20),
+            ((20 << 20) + 4, (20 << 20) + 3),
+        ] {
+            let selection = Selection {
+                anchor: requested,
+                caret: requested,
+            };
+            let actual = normalize(&snapshot, &selection.into(), limits).unwrap().primary();
+            assert_eq!(
+                actual,
+                Selection {
+                    anchor: expected,
+                    caret: expected
+                }
+            );
+        }
+    }
     fn doc(s: &str) -> Document {
         Document::from_utf8(s, Budget::new(64 << 20), Budget::new(64 << 20)).unwrap()
     }
     fn text(d: &Document) -> String {
         let s = d.snapshot();
-        s.read(TextOffset(0)..TextOffset(s.len()), 64 << 20)
-            .unwrap()
+        s.read(TextOffset(0)..TextOffset(s.len()), 64 << 20).unwrap()
     }
     #[test]
     fn ten_thousand_carets_one_undo_and_grapheme_delete() {
@@ -934,10 +1059,7 @@ mod tests {
                 caret: n * 5 + 4,
             })
             .collect();
-        let set = SelectionSet {
-            selections,
-            primary: 0,
-        };
+        let set = SelectionSet { selections, primary: 0 };
         let edit = replace(&d.snapshot(), &set, "•", Limits::default()).unwrap();
         d.apply(edit.transaction).unwrap();
         assert_eq!(text(&d), "🦀•\n".repeat(10_000));
@@ -993,41 +1115,20 @@ mod tests {
             caret: d.snapshot().len(),
         }
         .into();
-        let edit = transform(
-            &d.snapshot(),
-            &set,
-            Transform::RemoveDuplicates,
-            Limits::default(),
-        )
-        .unwrap();
+        let edit = transform(&d.snapshot(), &set, Transform::RemoveDuplicates, Limits::default()).unwrap();
         d.apply(edit.transaction).unwrap();
         assert_eq!(text(&d), "b\r\na\r\n");
         d.undo().unwrap();
         let set = SelectionSet {
-            selections: vec![
-                Selection {
-                    anchor: 0,
-                    caret: 3,
-                },
-                Selection {
-                    anchor: 1,
-                    caret: 4,
-                },
-            ],
+            selections: vec![Selection { anchor: 0, caret: 3 }, Selection { anchor: 1, caret: 4 }],
             primary: 1,
         };
         let edit = replace(&d.snapshot(), &set, "x", Limits::default()).unwrap();
         assert_eq!(edit.transaction.edits.len(), 1);
-        let mut builder =
-            bareline_document::DocumentBuilder::new(Budget::new(1024), Budget::new(1024)).unwrap();
+        let mut builder = bareline_document::DocumentBuilder::new(Budget::new(1024), Budget::new(1024)).unwrap();
         builder.append("a").unwrap();
         assert!(matches!(
-            replace(
-                &builder.prefix(),
-                &Selection::default().into(),
-                "x",
-                Limits::default()
-            ),
+            replace(&builder.prefix(), &Selection::default().into(), "x", Limits::default()),
             Err(Error::IncompleteSource)
         ));
         assert!(matches!(
@@ -1048,11 +1149,7 @@ mod tests {
         let mut d = doc("a\n\nb\n");
         let edit = transform(
             &d.snapshot(),
-            &Selection {
-                anchor: 0,
-                caret: 3,
-            }
-            .into(),
+            &Selection { anchor: 0, caret: 3 }.into(),
             Transform::MoveDown,
             Limits::default(),
         )
@@ -1065,11 +1162,7 @@ mod tests {
         let mut d = doc("a\r\nb\r\n");
         let edit = transform(
             &d.snapshot(),
-            &Selection {
-                anchor: 0,
-                caret: 6,
-            }
-            .into(),
+            &Selection { anchor: 0, caret: 6 }.into(),
             Transform::Duplicate,
             Limits::default(),
         )
@@ -1085,8 +1178,7 @@ mod tests {
         };
         let copied = rectangle_copy(&d.snapshot(), rectangle, Limits::default()).unwrap();
         assert_eq!(copied, "  \n🦀\n  ");
-        let edit =
-            rectangle_paste(&d.snapshot(), rectangle, "•\n界\n🦀", Limits::default()).unwrap();
+        let edit = rectangle_paste(&d.snapshot(), rectangle, "•\n界\n🦀", Limits::default()).unwrap();
         d.apply(edit.transaction).unwrap();
         assert_eq!(text(&d), "  •X\n界界\nx 🦀");
     }
@@ -1119,13 +1211,7 @@ impl ClipboardHistory {
     pub fn admit(&mut self, text: &str) -> Result<(), Error> {
         self.admit_with_limits(text, 20, 16 << 20, 4 << 20)
     }
-    pub fn admit_with_limits(
-        &mut self,
-        text: &str,
-        count: usize,
-        total: usize,
-        entry: usize,
-    ) -> Result<(), Error> {
+    pub fn admit_with_limits(&mut self, text: &str, count: usize, total: usize, entry: usize) -> Result<(), Error> {
         if !self.enabled {
             return Ok(());
         }
@@ -1174,10 +1260,7 @@ pub struct Bookmarks {
 }
 impl Bookmarks {
     pub fn toggle(&mut self, snapshot: &DocumentSnapshot, offset: usize) -> Result<(), Error> {
-        let start = snapshot
-            .line_range(snapshot.line_at(TextOffset(offset))?)?
-            .start
-            .0;
+        let start = snapshot.line_range(snapshot.line_at(TextOffset(offset))?)?.start.0;
         if !self.anchors.remove(&start) {
             self.anchors.insert(start);
         }
@@ -1209,8 +1292,7 @@ impl Bookmarks {
                 let mut delta = 0isize;
                 for e in &transaction.edits {
                     if e.range.end.0 <= anchor {
-                        delta +=
-                            e.insert.len() as isize - (e.range.end.0 - e.range.start.0) as isize;
+                        delta += e.insert.len() as isize - (e.range.end.0 - e.range.start.0) as isize;
                     } else if e.range.start.0 <= anchor {
                         return e.range.start.0.saturating_add_signed(delta);
                     }
@@ -1219,11 +1301,7 @@ impl Bookmarks {
             })
             .collect();
     }
-    pub fn selections(
-        &self,
-        snapshot: &DocumentSnapshot,
-        limits: Limits,
-    ) -> Result<SelectionSet, Error> {
+    pub fn selections(&self, snapshot: &DocumentSnapshot, limits: Limits) -> Result<SelectionSet, Error> {
         if self.anchors.len() > limits.max_selections {
             return Err(Error::BudgetExceeded);
         }
@@ -1238,14 +1316,7 @@ impl Bookmarks {
         if selections.is_empty() {
             return Err(Error::OutOfBounds);
         }
-        normalize(
-            snapshot,
-            &SelectionSet {
-                selections,
-                primary: 0,
-            },
-            limits,
-        )
+        normalize(snapshot, &SelectionSet { selections, primary: 0 }, limits)
     }
 }
 #[cfg(test)]
@@ -1314,9 +1385,15 @@ pub fn rectangle_paste(
     text: &str,
     limits: Limits,
 ) -> Result<PowerEdit, Error> {
-    rectangle_paste_mapped(snapshot,rectangle,text,limits,None)
+    rectangle_paste_mapped(snapshot, rectangle, text, limits, None)
 }
-pub fn rectangle_paste_mapped(snapshot:&DocumentSnapshot,rectangle:Rectangle,text:&str,limits:Limits,maps:Option<&std::collections::BTreeMap<usize,DisplayColumnMap>>)->Result<PowerEdit,Error> {
+pub fn rectangle_paste_mapped(
+    snapshot: &DocumentSnapshot,
+    rectangle: Rectangle,
+    text: &str,
+    limits: Limits,
+    maps: Option<&std::collections::BTreeMap<usize, DisplayColumnMap>>,
+) -> Result<PowerEdit, Error> {
     if text.len() > limits.max_bytes {
         return Err(Error::BudgetExceeded);
     }
@@ -1335,9 +1412,7 @@ pub fn rectangle_paste_mapped(snapshot:&DocumentSnapshot,rectangle:Rectangle,tex
     let mut edits = Vec::new();
     let mut total = 0;
     for row in 0..count {
-        let value = rows
-            .get(if rows.len() > 1 { row } else { 0 })
-            .map_or("", |s| *s);
+        let value = rows.get(if rows.len() > 1 { row } else { 0 }).map_or("", |s| *s);
         let projected = column_insert_mapped(
             snapshot,
             Rectangle {
@@ -1357,19 +1432,19 @@ pub fn rectangle_paste_mapped(snapshot:&DocumentSnapshot,rectangle:Rectangle,tex
     }
     finish(snapshot, edits, limits)
 }
-pub fn rectangle_copy(
+pub fn rectangle_copy(snapshot: &DocumentSnapshot, rectangle: Rectangle, limits: Limits) -> Result<String, Error> {
+    rectangle_copy_mapped(snapshot, rectangle, limits, None)
+}
+pub fn rectangle_copy_mapped(
     snapshot: &DocumentSnapshot,
     rectangle: Rectangle,
     limits: Limits,
+    maps: Option<&std::collections::BTreeMap<usize, DisplayColumnMap>>,
 ) -> Result<String, Error> {
-    rectangle_copy_mapped(snapshot,rectangle,limits,None)
-}
-pub fn rectangle_copy_mapped(snapshot:&DocumentSnapshot,rectangle:Rectangle,limits:Limits,maps:Option<&std::collections::BTreeMap<usize,DisplayColumnMap>>)->Result<String,Error> {
     if !snapshot.is_complete() {
         return Err(Error::IncompleteSource);
     }
-    if rectangle.first_line > rectangle.last_line
-        || rectangle.last_line - rectangle.first_line >= limits.max_selections
+    if rectangle.first_line > rectangle.last_line || rectangle.last_line - rectangle.first_line >= limits.max_selections
     {
         return Err(Error::BudgetExceeded);
     }
@@ -1381,7 +1456,12 @@ pub fn rectangle_copy_mapped(snapshot:&DocumentSnapshot,rectangle:Rectangle,limi
         let (_, text) = line(snapshot, n, limits)?;
         let body = content(&text);
         let fallback;
-        let map=if let Some(maps)=maps{maps.get(&n).ok_or(Error::OutOfBounds)?}else{fallback=DisplayColumnMap::new(body,limits.tab_width);&fallback};
+        let map = if let Some(maps) = maps {
+            maps.get(&n).ok_or(Error::OutOfBounds)?
+        } else {
+            fallback = DisplayColumnMap::new(body, limits.tab_width);
+            &fallback
+        };
         if n > rectangle.first_line {
             charge(&mut bytes, 1, limits)?;
             output.push('\n');
@@ -1416,38 +1496,36 @@ pub fn toggle_caret(
 ) -> Result<SelectionSet, Error> {
     let mut out = normalize(snapshot, set, limits)?;
     let p = snap(snapshot, offset, limits)?;
-    if let Some(i) = out
-        .selections
-        .iter()
-        .position(|s| s.anchor == p && s.caret == p)
-    {
+    if let Some(i) = out.selections.iter().position(|s| s.anchor == p && s.caret == p) {
         if out.selections.len() > 1 {
             out.selections.remove(i);
             out.primary = out.primary.min(out.selections.len() - 1);
         }
     } else {
-        out.selections.push(Selection {
-            anchor: p,
-            caret: p,
-        });
+        out.selections.push(Selection { anchor: p, caret: p });
         out.primary = out.selections.len() - 1;
     }
     normalize(snapshot, &out, limits)
 }
-pub fn expand_lines(
-    snapshot: &DocumentSnapshot,
-    set: &SelectionSet,
-    limits: Limits,
-) -> Result<SelectionSet, Error> {
+pub fn expand_lines(snapshot: &DocumentSnapshot, set: &SelectionSet, limits: Limits) -> Result<SelectionSet, Error> {
     let mut out = normalize(snapshot, set, limits)?;
     for s in &mut out.selections {
-        let range=s.range();let backward=s.anchor>s.caret;
+        let range = s.range();
+        let backward = s.anchor > s.caret;
         let start = snapshot.line_at(TextOffset(range.start))?;
-        let mut last=if range.end>range.start{range.end-1}else{range.end};
-        while !snapshot.is_boundary(TextOffset(last)){last-=1;}
+        let mut last = if range.end > range.start {
+            range.end - 1
+        } else {
+            range.end
+        };
+        while !snapshot.is_boundary(TextOffset(last)) {
+            last -= 1;
+        }
         let end = snapshot.line_at(TextOffset(last))?;
-        let first=snapshot.line_range(start)?.start.0;let last=snapshot.line_range(end)?.end.0;
-        s.anchor=if backward{last}else{first};s.caret=if backward{first}else{last};
+        let first = snapshot.line_range(start)?.start.0;
+        let last = snapshot.line_range(end)?.end.0;
+        s.anchor = if backward { last } else { first };
+        s.caret = if backward { first } else { last };
     }
     normalize(snapshot, &out, limits)
 }
@@ -1502,49 +1580,25 @@ pub fn register_commands(registry: &mut bareline_commands::CommandRegistry) {
     for (id, title, shortcut) in [
         ("editor.caret.above", "Add Caret Above", "Ctrl+Alt+Up"),
         ("editor.caret.below", "Add Caret Below", "Ctrl+Alt+Down"),
-        (
-            "editor.selection.nextOccurrence",
-            "Select Next Occurrence",
-            "Ctrl+D",
-        ),
+        ("editor.selection.nextOccurrence", "Select Next Occurrence", "Ctrl+D"),
         (
             "editor.selection.allOccurrences",
             "Select All Occurrences",
             "Ctrl+Shift+L",
         ),
         ("editor.selection.skipOccurrence", "Skip Occurrence", ""),
-        (
-            "editor.selection.undoOccurrence",
-            "Undo Added Occurrence",
-            "",
-        ),
-        (
-            "editor.selection.rotatePrimary",
-            "Rotate Primary Selection",
-            "",
-        ),
+        ("editor.selection.undoOccurrence", "Undo Added Occurrence", ""),
+        ("editor.selection.rotatePrimary", "Rotate Primary Selection", ""),
         ("editor.selection.expandLines", "Expand to Lines", ""),
-        (
-            "editor.selection.escape",
-            "Keep Primary Selection",
-            "Escape",
-        ),
+        ("editor.selection.escape", "Keep Primary Selection", "Escape"),
         ("editor.column.insert", "Column Editor…", "Alt+C"),
         ("editor.lines.hide", "Hide Selected Lines", ""),
         ("editor.lines.showAll", "Show Hidden Lines", ""),
         ("editor.paste.plainText", "Paste Plain Text", "Ctrl+Shift+V"),
         ("editor.paste.fromHistory", "Paste from History…", ""),
-        (
-            "editor.clipboard.toggleHistory",
-            "Toggle Clipboard History",
-            "",
-        ),
+        ("editor.clipboard.toggleHistory", "Toggle Clipboard History", ""),
         ("editor.comment.toggleLine", "Toggle Line Comment", "Ctrl+/"),
-        (
-            "editor.comment.toggleBlock",
-            "Toggle Block Comment",
-            "Ctrl+Shift+/",
-        ),
+        ("editor.comment.toggleBlock", "Toggle Block Comment", "Ctrl+Shift+/"),
         ("editor.bookmark.toggle", "Toggle Bookmark", "Ctrl+F2"),
         ("editor.bookmark.next", "Next Bookmark", "F2"),
         ("editor.bookmark.previous", "Previous Bookmark", "Shift+F2"),
@@ -1570,16 +1624,8 @@ pub fn register_commands(registry: &mut bareline_commands::CommandRegistry) {
         ("editor.lines.sortAscending", "Sort Lines Ascending", ""),
         ("editor.lines.sortDescending", "Sort Lines Descending", ""),
         ("editor.lines.sortNumeric", "Sort Lines Numerically", ""),
-        (
-            "editor.lines.sortIgnoreCase",
-            "Sort Lines Ignoring Case",
-            "",
-        ),
-        (
-            "editor.lines.removeDuplicates",
-            "Remove Duplicate Lines",
-            "",
-        ),
+        ("editor.lines.sortIgnoreCase", "Sort Lines Ignoring Case", ""),
+        ("editor.lines.removeDuplicates", "Remove Duplicate Lines", ""),
         (
             "editor.lines.removeConsecutiveDuplicates",
             "Remove Consecutive Duplicate Lines",
@@ -1668,11 +1714,7 @@ impl OccurrenceHistory {
         self.count = 0;
     }
 }
-pub fn skip_occurrence(
-    snapshot: &DocumentSnapshot,
-    set: &SelectionSet,
-    limits: Limits,
-) -> Result<SelectionSet, Error> {
+pub fn skip_occurrence(snapshot: &DocumentSnapshot, set: &SelectionSet, limits: Limits) -> Result<SelectionSet, Error> {
     let normalized = normalize(snapshot, set, limits)?;
     let old = normalized.primary();
     let mut next = select_occurrences(snapshot, &normalized, false, limits)?;
@@ -1684,8 +1726,10 @@ pub fn skip_occurrence(
 }
 
 /// Clipboard rows retain a final empty row, unlike line-transform terminator parsing.
-fn clipboard_rows(text:&str)->Vec<&str>{
-    let mut rows:Vec<_>=split_rows(text).into_iter().map(|(body,_)|body).collect();
-    if text.is_empty()||text.ends_with(['\r','\n']){rows.push("");}
+fn clipboard_rows(text: &str) -> Vec<&str> {
+    let mut rows: Vec<_> = split_rows(text).into_iter().map(|(body, _)| body).collect();
+    if text.is_empty() || text.ends_with(['\r', '\n']) {
+        rows.push("");
+    }
     rows
 }

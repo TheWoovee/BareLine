@@ -110,7 +110,9 @@ mod tests {
             encoding: bareline_platform::PathEncoding::WindowsUtf16Le,
             data: "QwA6AFwAANg=".into(),
             display: "unpaired UTF-16 fixture".into(),
-        }.to_native().unwrap();
+        }
+        .to_native()
+        .unwrap();
         let parsed = parse([path.clone().into_os_string()]).unwrap();
         assert_eq!(parsed.paths[0].as_os_str(), path.as_os_str());
     }

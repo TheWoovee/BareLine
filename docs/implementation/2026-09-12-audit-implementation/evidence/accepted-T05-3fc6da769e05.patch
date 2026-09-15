@@ -1,0 +1,94 @@
+diff --git a/apps/bareline/src/windows_app.rs b/apps/bareline/src/windows_app.rs
+index 62140ad..ed9714b 100644
+--- a/apps/bareline/src/windows_app.rs
++++ b/apps/bareline/src/windows_app.rs
+@@ -1535,14 +1535,16 @@ impl Shell {
+     /// Runs the Save / Don't Save / Cancel prompt for one document. Returns
+     /// `true` when the caller may close it right away.
+     fn confirm_close_document(&mut self, index: usize, target: &mut CloseTarget) -> bool {
+-        let Some(platform) = &self.platform else { return false };
+         if self.workspace.as_ref().is_some_and(|w| w.document_busy(index)) {
+-            platform.pending_operation_notice();
++            if let Some(platform) = &self.platform {
++                platform.pending_operation_notice();
++            }
+             return false;
+         }
+         if !self.workspace.as_ref().is_some_and(|w| w.editors[index].dirty()) {
+             return true;
+         }
++        let Some(platform) = &self.platform else { return false };
+         let name = self
+             .app
+             .tabs
+@@ -4406,7 +4408,9 @@ mod deferred_close_tests {
+         ));
+         let gate = Arc::new(TombstoneGate::default());
+         let mut workspace = Workspace::new(Arc::new(|| {}), gate.clone()).unwrap();
+-        workspace.recovery_root = Some(root.join("recovery"));
++        let recovery_root = root.join("recovery");
++        std::fs::create_dir_all(&recovery_root).unwrap();
++        workspace.recovery_root = Some(recovery_root);
+         workspace.new_document().unwrap();
+         workspace.editors[0].enqueue(Input::Insert("first draft".into()));
+         settle(&mut workspace);
+@@ -4470,7 +4474,9 @@ mod deferred_close_tests {
+         ));
+         let gate = Arc::new(TombstoneGate::default());
+         let mut workspace = Workspace::new(Arc::new(|| {}), gate.clone()).unwrap();
+-        workspace.recovery_root = Some(root.join("recovery"));
++        let recovery_root = root.join("recovery");
++        std::fs::create_dir_all(&recovery_root).unwrap();
++        workspace.recovery_root = Some(recovery_root);
+         workspace.new_document().unwrap();
+         workspace.new_document().unwrap();
+         workspace.editors[0].enqueue(Input::Insert("discard me".into()));
+diff --git a/crates/file-io/src/paged_recovery.rs b/crates/file-io/src/paged_recovery.rs
+index a6b8f46..bd25147 100644
+--- a/crates/file-io/src/paged_recovery.rs
++++ b/crates/file-io/src/paged_recovery.rs
+@@ -105,7 +105,7 @@ impl PagedRecovery {
+             },
+             platform.as_ref(),
+         )
+-        .map_err(|e| e.to_string())?;
++        .map_err(|e| format!("Create paged recovery journal at {}: {e}", directory.display()))?;
+         *status.lock().map_err(|_| "Recovery state stopped")? = PagedRecoveryStatus {
+             directory: Some(directory.clone()),
+             ..Default::default()
+@@ -175,8 +175,10 @@ impl PagedRecovery {
+                 let result = (|| -> Result<(), String> {
+                     let retained = store
+                         .retain_recovery(&source_path, &cancel)
+-                        .map_err(|e| format!("{e:?}"))?;
+-                    let text = retained.sealed_text_reader(&cancel).map_err(|e| format!("{e:?}"))?;
++                        .map_err(|e| format!("Retain paged baseline at {}: {e:?}", source_path.display()))?;
++                    let text = retained
++                        .sealed_text_reader(&cancel)
++                        .map_err(|e| format!("Open retained paged baseline at {}: {e:?}", source_path.display()))?;
+                     let mut text = SnapshotRead {
+                         source: text,
+                         store: store.clone(),
+@@ -187,19 +189,19 @@ impl PagedRecovery {
+                     };
+                     let prepared = preparation
+                         .copy(&mut text, || Ok(true), &cancel)
+-                        .map_err(|e| e.to_string())?;
++                        .map_err(|e| format!("Copy paged baseline into {}: {e}", directory.display()))?;
+                     crate::session::publish_json(
+                         &directory.join("paged-source.json"),
+                         &serde_json::to_vec(&serde_json::json!({"version":1,"source":name}))
+                             .map_err(|e| e.to_string())?,
+                         platform.as_ref(),
+                     )
+-                    .map_err(|e| e.to_string())?;
++                    .map_err(|e| format!("Publish paged baseline receipt in {}: {e}", directory.display()))?;
+                     writer
+                         .lock()
+                         .map_err(|_| "Recovery writer stopped")?
+                         .attach_baseline(prepared, platform.as_ref())
+-                        .map_err(|e| e.to_string())?;
++                        .map_err(|e| format!("Attach paged baseline in {}: {e}", directory.display()))?;
+                     Ok(())
+                 })();
+                 if let Ok(mut state) = status.lock() {

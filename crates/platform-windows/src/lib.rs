@@ -1,20 +1,24 @@
 // SPDX-License-Identifier: MPL-2.0
 #[cfg(windows)]
-mod remote_read;
+mod dark_mode;
+mod menu_bar;
 #[cfg(windows)]
 mod native;
+#[cfg(windows)]
+mod remote_read;
 #[cfg(windows)]
 pub use native::*;
 #[cfg(windows)]
 mod renderer;
 #[cfg(windows)]
-pub use renderer::WindowsRenderer;
+pub use renderer::{InstalledFontFamily, WindowsRenderer, installed_font_families};
 #[cfg(windows)]
 mod files;
 #[cfg(windows)]
 pub use files::WindowsFileSystem;
 #[cfg(windows)]
 mod clipboard;
+mod owned_cache;
 #[cfg(windows)]
 mod path_trust;
 #[cfg(windows)]
@@ -32,7 +36,10 @@ pub use accessibility::WindowsAccessibility;
 #[cfg(windows)]
 mod process;
 #[cfg(windows)]
-pub use process::WindowsProcessLauncher;
+pub use process::{
+    HostExit, SandboxedChild, SandboxedProcessLauncher, WindowsProcessLauncher,
+    sandbox_grant_restricted_qualification_write, sandbox_lock_to_current_user,
+};
 
 #[cfg(windows)]
 pub mod extension_transport;
@@ -44,8 +51,6 @@ pub mod update;
 #[cfg(windows)]
 mod workspace_files;
 #[cfg(windows)]
-pub use process::confirm_external_command;
-
 #[cfg(windows)]
 pub use accessibility::high_contrast_enabled;
 
@@ -53,7 +58,7 @@ pub use accessibility::high_contrast_enabled;
 pub mod printing;
 
 #[cfg(windows)]
-pub use workspace_files::{WorkspaceDeleteUndo, retain_deleted_entry, restore_deleted_entry};
+pub use workspace_files::{WorkspaceDeleteUndo, restore_deleted_entry, retain_deleted_entry};
 
 #[cfg(windows)]
 mod rename;

@@ -1,0 +1,15 @@
+{
+  "arguments": [
+    "test",
+    "-p",
+    "bareline-app",
+    "small_recovery_restores_an_editable_untitled_document",
+    "--offline",
+    "--locked"
+  ],
+  "completed_utc": "2026-09-12T09:45:12.9751405Z",
+  "integration_snapshot": "4d2d60c011356091852571cda434817362e3e78a",
+  "exit_code": 101,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\T05-small-recovery-central.log"
+}

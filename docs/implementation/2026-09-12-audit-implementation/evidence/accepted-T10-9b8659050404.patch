@@ -1,0 +1,1536 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 1ee42bd..2e5e00e 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -44,6 +44,16 @@ jobs:
+             target/clippy-census.stderr.log
+             target/clippy-ratchet.log
+       - run: cargo test --workspace --locked
++      - name: Qualify actual first-party WASI components with the release host
++        shell: pwsh
++        run: ./scripts/test-first-party.ps1 -Suite Fast
++      - name: Retain first-party runtime qualification telemetry
++        if: always()
++        uses: actions/upload-artifact@v4
++        with:
++          name: first-party-runtime-qualification
++          path: target/first-party/
++          if-no-files-found: error
+       - run: cargo build -p bareline --locked
+       - run: cargo xtask perf smoke
+   neutral:
+diff --git a/.github/workflows/perf-nightly.yml b/.github/workflows/perf-nightly.yml
+index 16241c4..d3b3c0b 100644
+--- a/.github/workflows/perf-nightly.yml
++++ b/.github/workflows/perf-nightly.yml
+@@ -7,6 +7,27 @@ on:
+ permissions:
+   contents: read
+ jobs:
++  first-party-large:
++    if: vars.BARELINE_FIRST_PARTY_LARGE_ENABLED == 'true'
++    runs-on: windows-latest
++    timeout-minutes: 20
++    continue-on-error: true
++    steps:
++      - uses: actions/checkout@v4
++      - uses: dtolnay/rust-toolchain@master
++        with:
++          toolchain: '1.98.1'
++      - name: Run informational 1 GiB JSON and 5 GiB synthetic Hex qualification
++        shell: pwsh
++        run: ./scripts/test-first-party.ps1 -Suite Large
++      - name: Preserve hashes, phase timings, byte counts, deadlines, and semantic result
++        if: always()
++        uses: actions/upload-artifact@v4
++        with:
++          name: first-party-large-${{ github.sha }}-${{ github.run_id }}
++          path: target/first-party/
++          retention-days: 90
++          if-no-files-found: error
+   measure:
+     if: vars.BARELINE_PERF_ENABLED == 'true'
+     runs-on: windows-latest
+diff --git a/apps/extension-host/src/lib.rs b/apps/extension-host/src/lib.rs
+index 5f7700b..a878009 100644
+--- a/apps/extension-host/src/lib.rs
++++ b/apps/extension-host/src/lib.rs
+@@ -20,6 +20,34 @@ struct State {
+     wasi: WasiCtx,
+     table: ResourceTable,
+     limits: StoreLimits,
++    qualification_telemetry: bool,
++    execution_started: std::time::Instant,
++    first_broker_reported: bool,
++}
++
++fn qualification_telemetry() -> bool {
++    std::env::var_os("BARELINE_QUALIFICATION_TELEMETRY").is_some_and(|value| value == "1")
++}
++
++fn qualification_case_id() -> String {
++    std::env::var("BARELINE_QUALIFICATION_CASE_ID").unwrap_or_else(|_| "uncorrelated".into())
++}
++
++fn report_phase(phase: &str, elapsed: Duration) {
++    let case_id = qualification_case_id();
++    let host_pid = std::process::id();
++    eprintln!(
++        "{{\"schema\":\"bareline.first-party-runtime.v1\",\"event\":\"phase\",\"case_id\":\"{case_id}\",\"host_pid\":{host_pid},\"phase\":\"{phase}\",\"elapsed_us\":{}}}",
++        elapsed.as_micros()
++    );
++}
++
++fn report_phase_start(phase: &str) {
++    let case_id = qualification_case_id();
++    let host_pid = std::process::id();
++    eprintln!(
++        "{{\"schema\":\"bareline.first-party-runtime.v1\",\"event\":\"phase_start\",\"case_id\":\"{case_id}\",\"host_pid\":{host_pid},\"phase\":\"{phase}\"}}"
++    );
+ }
+ impl WasiView for State {
+     fn ctx(&mut self) -> WasiCtxView<'_> {
+@@ -126,6 +154,11 @@ impl Runtime {
+             wasmtime::bail!("component size exceeds 32 MiB");
+         }
+ 
++        let telemetry = qualification_telemetry();
++        let prepare_started = std::time::Instant::now();
++        if telemetry {
++            report_phase_start("prepare");
++        }
+         let mut wasi = WasiCtxBuilder::new();
+         wasi.allow_tcp(false).allow_udp(false).allow_ip_name_lookup(false);
+         let state = State {
+@@ -141,6 +174,9 @@ impl Runtime {
+                 .instances(16)
+                 .trap_on_grow_failure(true)
+                 .build(),
++            qualification_telemetry: telemetry,
++            execution_started: std::time::Instant::now(),
++            first_broker_reported: false,
+         };
+         let mut store = Store::new(&self.engine, state);
+         store.limiter(|state| &mut state.limits);
+@@ -158,7 +194,18 @@ impl Runtime {
+                 if frame.len() > bareline_extensions_protocol::MAX_FRAME_BYTES {
+                     return Ok((Err::<Vec<u8>, String>("frame limit".into()),));
+                 }
++                if store.data().qualification_telemetry && !store.data().first_broker_reported {
++                    report_phase("first_broker", store.data().execution_started.elapsed());
++                    store.data_mut().first_broker_reported = true;
++                }
++                let response_started = std::time::Instant::now();
++                if store.data().qualification_telemetry {
++                    report_phase_start("response");
++                }
+                 let result = (store.data_mut().broker)(frame);
++                if store.data().qualification_telemetry {
++                    report_phase("response", response_started.elapsed());
++                }
+                 Ok((result.and_then(|bytes| {
+                     if bytes.len() <= bareline_extensions_protocol::MAX_CHUNK_BYTES {
+                         Ok(bytes)
+@@ -168,6 +215,9 @@ impl Runtime {
+                 }),))
+             },
+         )?;
++        if telemetry {
++            report_phase("prepare", prepare_started.elapsed());
++        }
+         let engine = self.engine.clone();
+         let (stop_tx, stop_rx) = mpsc::channel();
+         // Fine-grained cancellation without an always-running host timer.
+@@ -192,10 +242,32 @@ impl Runtime {
+         )
+         .map_err(|error| wasmtime::Error::msg(format!("extension watchdog unavailable: {error}")))?;
+         let result: wasmtime::Result<()> = (|| {
++            let compile_started = std::time::Instant::now();
++            if store.data().qualification_telemetry {
++                report_phase_start("compile");
++            }
+             let component = Component::from_binary(&self.engine, bytes)?;
++            if store.data().qualification_telemetry {
++                report_phase("compile", compile_started.elapsed());
++            }
++            let instantiate_started = std::time::Instant::now();
++            if store.data().qualification_telemetry {
++                report_phase_start("instantiate");
++            }
+             let instance = linker.instantiate(&mut store, &component)?;
+             let run = instance.get_typed_func::<(), ()>(&mut store, "run")?;
++            if store.data().qualification_telemetry {
++                report_phase("instantiate", instantiate_started.elapsed());
++            }
++            store.data_mut().execution_started = std::time::Instant::now();
++            let execute_started = std::time::Instant::now();
++            if store.data().qualification_telemetry {
++                report_phase_start("execute");
++            }
+             run.call(&mut store, ())?;
++            if store.data().qualification_telemetry {
++                report_phase("execute", execute_started.elapsed());
++            }
+             Ok(())
+         })();
+         let _ = stop_tx.send(());
+diff --git a/apps/extension-host/src/main.rs b/apps/extension-host/src/main.rs
+index 8fc1352..e160980 100644
+--- a/apps/extension-host/src/main.rs
++++ b/apps/extension-host/src/main.rs
+@@ -9,7 +9,19 @@ fn run() -> Result<(), String> {
+     use std::{
+         io::Read,
+         sync::{Arc, atomic::AtomicBool},
+-        time::Duration,
++        time::{Duration, Instant},
++    };
++    let qualification_telemetry =
++        std::env::var_os("BARELINE_QUALIFICATION_TELEMETRY").is_some_and(|value| value == "1");
++    let qualification_case_id =
++        std::env::var("BARELINE_QUALIFICATION_CASE_ID").unwrap_or_else(|_| "uncorrelated".into());
++    let host_pid = std::process::id();
++    let report_phase_start = |phase: &str| {
++        if qualification_telemetry {
++            eprintln!(
++                "{{\"schema\":\"bareline.first-party-runtime.v1\",\"event\":\"phase_start\",\"case_id\":\"{qualification_case_id}\",\"host_pid\":{host_pid},\"phase\":\"{phase}\"}}"
++            );
++        }
+     };
+     // `args_os` so a non-UTF-8 argv is an error instead of a panic.
+     let args: Vec<String> = std::env::args_os()
+@@ -25,7 +37,15 @@ fn run() -> Result<(), String> {
+         _ => return Err("unknown execution budget".into()),
+     };
+     let parent = args[1].parse().map_err(|_| "parent PID")?;
++    let authentication_started = Instant::now();
++    report_phase_start("authentication");
+     let mut pipe = AuthenticatedPipe::connect(&args[0], parent, Duration::from_secs(5)).map_err(|e| e.to_string())?;
++    if qualification_telemetry {
++        eprintln!(
++            "{{\"schema\":\"bareline.first-party-runtime.v1\",\"event\":\"phase\",\"case_id\":\"{qualification_case_id}\",\"host_pid\":{host_pid},\"phase\":\"authentication\",\"elapsed_us\":{}}}",
++            authentication_started.elapsed().as_micros()
++        );
++    }
+     pipe.set_timeout(Duration::from_millis(budget.timeout_ms()));
+     let mut prefix = [0; 4];
+     pipe.read_exact(&mut prefix).map_err(|e| e.to_string())?;
+@@ -39,15 +59,40 @@ fn run() -> Result<(), String> {
+     if context.arguments.len() > 4096 {
+         return Err("invocation arguments limit".into());
+     }
++    let hash_read_started = Instant::now();
++    report_phase_start("hash_read");
+     let file = std::fs::File::open(&args[2]).map_err(|e| e.to_string())?;
+     let mut component = Vec::new();
+     file.take(32 * 1024 * 1024 + 1)
+         .read_to_end(&mut component)
+         .map_err(|e| e.to_string())?;
+-    if component.len() > 32 * 1024 * 1024 || format!("{:x}", Sha256::digest(&component)) != args[3] {
++    let observed_hash = format!("{:x}", Sha256::digest(&component));
++    if component.len() > 32 * 1024 * 1024 || observed_hash != args[3] {
+         return Err("component hash or size".into());
+     }
++    if qualification_telemetry {
++        let profile = if cfg!(debug_assertions) { "debug" } else { "release" };
++        let hash_read = hash_read_started.elapsed();
++        eprintln!(
++            "{{\"schema\":\"bareline.first-party-runtime.v1\",\"event\":\"phase\",\"case_id\":\"{qualification_case_id}\",\"host_pid\":{host_pid},\"phase\":\"hash_read\",\"elapsed_us\":{}}}",
++            hash_read.as_micros()
++        );
++        eprintln!(
++            "{{\"schema\":\"bareline.first-party-runtime.v1\",\"event\":\"component\",\"case_id\":\"{qualification_case_id}\",\"host_pid\":{host_pid},\"profile\":\"{profile}\",\"sha256\":\"{observed_hash}\",\"component_bytes\":{},\"host_deadline_ms\":{},\"hash_read_us\":{}}}",
++            component.len(),
++            budget.timeout_ms(),
++            hash_read.as_micros()
++        );
++    }
++    let runtime_started = Instant::now();
++    report_phase_start("runtime_init");
+     let runtime = bareline_extension_host::Runtime::new().map_err(|e| e.to_string())?;
++    if qualification_telemetry {
++        eprintln!(
++            "{{\"schema\":\"bareline.first-party-runtime.v1\",\"event\":\"phase\",\"case_id\":\"{qualification_case_id}\",\"host_pid\":{host_pid},\"phase\":\"runtime_init\",\"elapsed_us\":{}}}",
++            runtime_started.elapsed().as_micros()
++        );
++    }
+     runtime
+         .invoke_with_policy(
+             &component,
+diff --git a/apps/extension-host/tests/first_party.rs b/apps/extension-host/tests/first_party.rs
+index 4e4f3ef..36cd216 100644
+--- a/apps/extension-host/tests/first_party.rs
++++ b/apps/extension-host/tests/first_party.rs
+@@ -1,169 +1,39 @@
+ // SPDX-License-Identifier: MPL-2.0
+ #![cfg(windows)]
+ use bareline_extensions_protocol::*;
+-use bareline_macros::process::ProcessLauncher;
+-use bareline_platform_windows::{WindowsProcessLauncher, extension_transport::PipeServer};
++use bareline_platform_windows::{SandboxedProcessLauncher, extension_transport::PipeServer};
+ use sha2::{Digest, Sha256};
+ use std::{
+     io::Write,
+     process::{Command, Stdio},
++    sync::atomic::{AtomicU64, Ordering},
+     time::{Duration, Instant},
+ };
+ 
+-// Run explicitly after scripts/test-first-party.ps1 builds actual WASI components.
+-#[test]
+-#[ignore = "requires wasm32-wasip2 release artifacts; use scripts/test-first-party.ps1"]
+-fn first_party_components_cross_authenticated_process_boundary() {
+-    for (crate_name, command, input, expected) in [
+-        (
+-            "json_tools",
+-            "ext.json.validate",
+-            b"{\"n\":12345678901234567890}".as_slice(),
+-            "Valid JSON",
+-        ),
+-        (
+-            "json_tools",
+-            "ext.json.minify",
+-            b"{ \"n\" : 12345678901234567890 }".as_slice(),
+-            "12345678901234567890",
+-        ),
+-        ("xml_tools", "ext.xml.validate", b"<r><n/></r>".as_slice(), "Valid XML"),
+-        (
+-            "xml_tools",
+-            "ext.xml.format",
+-            b"<r xml:space='preserve'><a/> <b/></r>".as_slice(),
+-            "<r xml:space='preserve'><a/> <b/></r>",
+-        ),
+-        ("hex_view", "ext.hex.open", b"\xff\xfeA\0".as_slice(), "FF FE 41 00"),
+-    ] {
+-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/wasm32-wasip2/release");
+-        let file = root.join(format!("bareline_{crate_name}.wasm"));
+-        let component = std::fs::read(&file).expect("build actual components first");
+-        assert_eq!(
+-            &component[..8],
+-            b"\0asm\x0d\0\x01\0",
+-            "must be a component, not a core module"
+-        );
+-        let server = PipeServer::create().unwrap();
+-        let mut process = Command::new(env!("CARGO_BIN_EXE_bareline-extension-host"));
+-        process
+-            .args([server.name(), &std::process::id().to_string()])
+-            .arg(&file)
+-            .arg(format!("{:x}", Sha256::digest(&component)))
+-            .stdin(Stdio::null())
+-            .stdout(Stdio::null())
+-            .stderr(Stdio::inherit());
+-        let (mut child, mut job) = WindowsProcessLauncher.spawn(&mut process).unwrap();
+-        let mut pipe = server.accept(child.id(), Duration::from_secs(5)).unwrap();
+-        let context = Invocation {
+-            extension_id: format!("org.bareline.{}", crate_name.replace('_', "-")),
+-            command: command.into(),
+-            arguments: String::new(),
+-            document: 1,
+-            revision: 2,
+-            source_generation: 3,
+-            text_length: input.len() as u64,
+-            raw_length: input.len() as u64,
+-            grant_generation: 4,
+-        };
+-        let bytes = encode(&context).unwrap();
+-        pipe.write_all(&(bytes.len() as u32).to_le_bytes()).unwrap();
+-        pipe.write_all(&bytes).unwrap();
+-        let mut panel = None;
+-        let mut staged = Vec::new();
+-        while let Ok(message) = read_frame(&mut pipe) {
+-            assert_eq!(message.extension_id, context.extension_id);
+-            assert_eq!(message.context.grant_generation, 4);
+-            let result = match message.request {
+-                Request::ReadTextRange {
+-                    document,
+-                    revision,
+-                    range,
+-                } => {
+-                    assert_eq!((document, revision), (1, 2));
+-                    assert_ne!(crate_name, "hex_view");
+-                    BrokerValue::Bytes(input[range.start as usize..range.end as usize].to_vec())
+-                }
+-                Request::ReadOriginalBytes {
+-                    document,
+-                    generation,
+-                    range,
+-                } => {
+-                    assert_eq!((document, generation), (1, 3));
+-                    assert_eq!(crate_name, "hex_view");
+-                    BrokerValue::Bytes(input[range.start as usize..range.end as usize].to_vec())
+-                }
+-                Request::BeginEdits { document, revision } => {
+-                    assert_eq!((document, revision), (1, 2));
+-                    BrokerValue::Transaction(9)
+-                }
+-                Request::AppendChunk { transaction, chunk } => {
+-                    assert_eq!(transaction, 9);
+-                    staged.extend(chunk);
+-                    BrokerValue::Acknowledged
+-                }
+-                Request::CommitEdits { transaction, revision } => {
+-                    assert_eq!((transaction, revision), (9, 2));
+-                    let edits: Vec<TextEdit> = decode(&staged).unwrap();
+-                    assert_eq!(edits.len(), 1);
+-                    assert_eq!(
+-                        edits[0].range,
+-                        TextRange {
+-                            start: 0,
+-                            end: input.len() as u64
+-                        }
+-                    );
+-                    panel = Some(edits[0].replacement.clone());
+-                    BrokerValue::Applied { revision: 3 }
+-                }
+-                Request::Panel { text, .. } => {
+-                    panel = Some(text);
+-                    BrokerValue::Acknowledged
+-                }
+-                other => panic!("unexpected request: {other:?}"),
+-            };
+-            let bytes = encode(&BrokerResponse {
+-                request_id: message.request_id,
+-                result: Ok(result),
+-            })
+-            .unwrap();
+-            pipe.write_all(&(bytes.len() as u32).to_le_bytes()).unwrap();
+-            pipe.write_all(&bytes).unwrap();
+-        }
+-        let deadline = Instant::now() + Duration::from_secs(2);
+-        loop {
+-            if let Some(status) = child.try_wait().unwrap() {
+-                assert!(status.success(), "{crate_name}: {status}");
+-                break;
+-            }
+-            if Instant::now() >= deadline {
+-                job.terminate().unwrap();
+-                panic!("host did not terminate");
+-            }
+-            std::thread::sleep(Duration::from_millis(10));
+-        }
+-        assert!(
+-            panel.as_deref().is_some_and(|text| if command == "ext.json.minify" {
+-                text == "{\"n\":12345678901234567890}"
+-            } else if command == "ext.xml.format" {
+-                text == expected
+-            } else {
+-                text.contains(expected)
+-            }),
+-            "{crate_name}: {panel:?}"
+-        );
+-    }
++static NEXT_CASE_ID: AtomicU64 = AtomicU64::new(1);
++const MAX_STAGED_EDIT_BYTES: usize = MEMORY_LIMIT / 2;
++
++fn qualification_case_id(command: &str) -> String {
++    format!(
++        "{}-{}-{}",
++        std::process::id(),
++        NEXT_CASE_ID.fetch_add(1, Ordering::Relaxed),
++        command.replace('.', "_")
++    )
+ }
+ 
+ /// Fixture launch remains below the production signature gate and uses only
+ /// locally built components. Every request crosses the real authenticated pipe.
+ struct CaseDiagnostics<'a> {
++    case_id: &'a str,
++    host_pid: u32,
+     command: &'a str,
+-    child: &'a std::cell::RefCell<std::process::Child>,
++    child: &'a std::cell::RefCell<bareline_platform_windows::SandboxedChild>,
+     started: Instant,
+     complete: bool,
+     requests: u64,
+     requested_text_bytes: u64,
++    requested_original_bytes: u64,
+     last_text_end: u64,
+     completed_replies: u64,
+     completed_response_bytes: u64,
+@@ -177,15 +47,22 @@ impl Drop for CaseDiagnostics<'_> {
+             return;
+         }
+         let status = match self.child.try_borrow_mut() {
+-            Ok(mut child) => format!("{:?}", child.try_wait()),
++            Ok(mut child) => match child.try_wait() {
++                Ok(Some(status)) => status.to_string(),
++                Ok(None) => "running".into(),
++                Err(error) => format!("wait error: {error}"),
++            },
+             Err(_) => "child status borrowed during failure".into(),
+         };
+         eprintln!(
+-            "PR027 failure diagnostic: command={} elapsed_ms={} requests={} requested_text_bytes={} last_text_end={} completed_replies={} completed_response_bytes={} read_wall_ms={} encode_wall_ms={} write_wall_ms={} child_status={}",
++            "PR-T10 failure diagnostic: case_id={} host_pid={} command={} elapsed_ms={} requests={} requested_text_bytes={} requested_original_bytes={} last_text_end={} completed_replies={} completed_response_bytes={} read_wall_ms={} encode_wall_ms={} write_wall_ms={} child_status={}",
++            self.case_id,
++            self.host_pid,
+             self.command,
+             self.started.elapsed().as_millis(),
+             self.requests,
+             self.requested_text_bytes,
++            self.requested_original_bytes,
+             self.last_text_end,
+             self.completed_replies,
+             self.completed_response_bytes,
+@@ -196,6 +73,37 @@ impl Drop for CaseDiagnostics<'_> {
+         );
+     }
+ }
++
++struct CaseResult {
++    output: String,
++    elapsed: Duration,
++    requests: u64,
++    requested_text_bytes: u64,
++    requested_original_bytes: u64,
++    committed_edits: usize,
++}
++
++fn configure_qualification_process(process: &mut Command, executable: &std::path::Path, case_id: &str) {
++    process.env_clear();
++    let system_root = std::env::var_os("SystemRoot").unwrap_or_else(|| r"C:\Windows".into());
++    process
++        .env("SystemRoot", &system_root)
++        .env("windir", &system_root)
++        .env("Path", std::path::Path::new(&system_root).join("System32"))
++        .env("PATHEXT", ".COM;.EXE;.BAT;.CMD")
++        .env("NoDefaultCurrentDirectoryInExePath", "1")
++        .env("BARELINE_QUALIFICATION_TELEMETRY", "1")
++        .env("BARELINE_QUALIFICATION_CASE_ID", case_id);
++    for name in ["SystemDrive", "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE"] {
++        if let Some(value) = std::env::var_os(name) {
++            process.env(name, value);
++        }
++    }
++    if let Some(runtime) = executable.parent() {
++        process.current_dir(runtime);
++    }
++}
++
+ fn component_case(
+     crate_name: &str,
+     command: &str,
+@@ -204,18 +112,23 @@ fn component_case(
+     raw_length: u64,
+     budget: ExecutionBudget,
+     mut broker: impl FnMut(Envelope) -> Result<BrokerValue, String>,
+-) -> (String, Duration) {
++) -> CaseResult {
+     let file = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+         .join("../../target/wasm32-wasip2/release")
+         .join(format!("bareline_{crate_name}.wasm"));
++    let hash_read_started = Instant::now();
+     let component = std::fs::read(&file).expect("build actual components first");
+     assert!(component.starts_with(b"\0asm\x0d\0\x01\0"));
++    let component_hash = format!("{:x}", Sha256::digest(&component));
++    let hash_read = hash_read_started.elapsed();
++    let case_id = qualification_case_id(command);
+     let server = PipeServer::create().unwrap();
+-    let mut process = Command::new(env!("CARGO_BIN_EXE_bareline-extension-host"));
++    let executable = std::path::Path::new(env!("CARGO_BIN_EXE_bareline-extension-host"));
++    let mut process = Command::new(executable);
+     process
+         .args([server.name(), &std::process::id().to_string()])
+         .arg(&file)
+-        .arg(format!("{:x}", Sha256::digest(&component)))
++        .arg(&component_hash)
+         .arg(match budget {
+             ExecutionBudget::Interactive => "interactive",
+             ExecutionBudget::Background => "background",
+@@ -223,16 +136,24 @@ fn component_case(
+         .stdin(Stdio::null())
+         .stdout(Stdio::null())
+         .stderr(Stdio::inherit());
++    configure_qualification_process(&mut process, executable, &case_id);
+     let started = Instant::now();
+-    let (child, mut job) = WindowsProcessLauncher.spawn(&mut process).unwrap();
++    let (child, mut job) = SandboxedProcessLauncher::default()
++        .spawn_host(&mut process, &[executable, &file])
++        .unwrap();
++    let host_pid = child.id();
++    let restricted = child.is_restricted();
+     let child = std::cell::RefCell::new(child);
+     let mut diagnostics = CaseDiagnostics {
++        case_id: &case_id,
++        host_pid,
+         command,
+         child: &child,
+         started,
+         complete: false,
+         requests: 0,
+         requested_text_bytes: 0,
++        requested_original_bytes: 0,
+         last_text_end: 0,
+         completed_replies: 0,
+         completed_response_bytes: 0,
+@@ -241,7 +162,9 @@ fn component_case(
+         write_wall: Duration::ZERO,
+     };
+     let mut pipe = server.accept(child.borrow().id(), Duration::from_secs(5)).unwrap();
+-    pipe.set_timeout(Duration::from_millis(budget.timeout_ms()) + Duration::from_secs(2));
++    let authentication = started.elapsed();
++    let parent_deadline = Duration::from_millis(budget.timeout_ms()) + Duration::from_secs(2);
++    pipe.set_timeout(parent_deadline);
+     let invocation = Invocation {
+         extension_id: format!("org.bareline.{}", crate_name.replace('_', "-")),
+         command: command.into(),
+@@ -257,6 +180,13 @@ fn component_case(
+     pipe.write_all(&(bytes.len() as u32).to_le_bytes()).unwrap();
+     pipe.write_all(&bytes).unwrap();
+     let mut panel = None;
++    let mut result_was_panel = false;
++    let mut staged = Vec::new();
++    let mut transaction_open = false;
++    let mut committed_edits = 0usize;
++    let execute_started = Instant::now();
++    let mut last_response_completed = execute_started;
++    let mut first_broker = None;
+     loop {
+         let read_started = Instant::now();
+         let received = read_frame(&mut pipe);
+@@ -267,21 +197,70 @@ fn component_case(
+             Err(error) => panic!("malformed child frame: {error:?}"),
+         };
+         diagnostics.requests += 1;
++        first_broker.get_or_insert_with(|| execute_started.elapsed());
+         if let Request::ReadTextRange { range, .. } = &message.request {
+             diagnostics.requested_text_bytes += range.end.saturating_sub(range.start);
+             diagnostics.last_text_end = range.end;
+         }
++        if let Request::ReadOriginalBytes { range, .. } = &message.request {
++            diagnostics.requested_original_bytes += range.end.saturating_sub(range.start);
++        }
+         assert_eq!(message.extension_id, invocation.extension_id);
+         assert_eq!(message.context.grant_generation, invocation.grant_generation);
+-        let result = if let Request::Panel { ref text, .. } = message.request {
+-            assert_eq!(message.context.capability, Capability::UiPanel);
+-            assert!(
+-                panel.replace(text.clone()).is_none(),
+-                "expected exactly one result panel"
+-            );
+-            Ok(BrokerValue::Acknowledged)
+-        } else {
+-            broker(message.clone())
++        let result = match &message.request {
++            Request::Panel { text, .. } => {
++                assert_eq!(message.context.capability, Capability::UiPanel);
++                assert_eq!(message.context.scope, Scope::Extension);
++                assert!(text.len() <= 1024 * 1024, "guest bypassed the panel output limit");
++                assert!(panel.replace(text.clone()).is_none(), "expected exactly one result");
++                result_was_panel = true;
++                Ok(BrokerValue::Acknowledged)
++            }
++            Request::BeginEdits { document, revision } => {
++                assert_eq!(message.context.capability, Capability::DocumentEdit);
++                assert_eq!(message.context.scope, Scope::Document(11));
++                assert_eq!((*document, *revision), (11, 23));
++                assert!(!transaction_open, "one invocation opened multiple edit transactions");
++                transaction_open = true;
++                Ok(BrokerValue::Transaction(9))
++            }
++            Request::AppendChunk { transaction, chunk } => {
++                assert_eq!(message.context.capability, Capability::DocumentEdit);
++                assert_eq!(message.context.scope, Scope::Document(11));
++                assert_eq!(*transaction, 9);
++                assert!(transaction_open);
++                assert!(chunk.len() <= MAX_CHUNK_BYTES, "guest exceeded the edit chunk limit");
++                let aggregate = staged
++                    .len()
++                    .checked_add(chunk.len())
++                    .expect("staged edit size overflow");
++                assert!(
++                    aggregate <= MAX_STAGED_EDIT_BYTES,
++                    "guest exceeded the aggregate staged-edit limit"
++                );
++                staged.extend(chunk);
++                Ok(BrokerValue::Acknowledged)
++            }
++            Request::CommitEdits { transaction, revision } => {
++                assert_eq!(message.context.capability, Capability::DocumentEdit);
++                assert_eq!(message.context.scope, Scope::Document(11));
++                assert_eq!((*transaction, *revision), (9, 23));
++                assert!(transaction_open);
++                let edits: Vec<TextEdit> = decode(&staged).unwrap();
++                assert_eq!(edits.len(), 1, "formatting must remain one undo transaction");
++                assert_eq!(
++                    edits[0].range,
++                    TextRange {
++                        start: 0,
++                        end: text_length
++                    }
++                );
++                assert!(panel.replace(edits[0].replacement.clone()).is_none());
++                transaction_open = false;
++                committed_edits += edits.len();
++                Ok(BrokerValue::Applied { revision: 24 })
++            }
++            _ => broker(message.clone()),
+         };
+         let encode_started = Instant::now();
+         let encoded = encode(&BrokerResponse {
+@@ -290,15 +269,22 @@ fn component_case(
+         });
+         diagnostics.encode_wall += encode_started.elapsed();
+         let bytes = encoded.unwrap();
++        assert!(
++            bytes.len() <= MAX_CHUNK_BYTES,
++            "broker response exceeded the host reply limit"
++        );
+         let write_started = Instant::now();
+         let written = pipe
+             .write_all(&(bytes.len() as u32).to_le_bytes())
+             .and_then(|_| pipe.write_all(&bytes));
+         diagnostics.write_wall += write_started.elapsed();
+         written.unwrap();
++        last_response_completed = Instant::now();
+         diagnostics.completed_replies += 1;
+         diagnostics.completed_response_bytes += bytes.len() as u64;
+     }
++    assert!(!transaction_open, "component exited with an open edit transaction");
++    let execution = execute_started.elapsed();
+     let deadline = Instant::now() + Duration::from_secs(2);
+     loop {
+         if let Some(status) = child.borrow_mut().try_wait().unwrap() {
+@@ -311,9 +297,307 @@ fn component_case(
+         }
+         std::thread::sleep(Duration::from_millis(10));
+     }
++    let shutdown = last_response_completed.elapsed();
+     let panel = panel.expect("component result panel");
++    if result_was_panel {
++        assert!(panel.len() <= 1024 * 1024, "component result exceeded the panel limit");
++    }
+     diagnostics.complete = true;
+-    (panel, started.elapsed())
++    let elapsed = started.elapsed();
++    eprintln!(
++        "{{\"schema\":\"bareline.first-party-runtime.v1\",\"event\":\"case\",\"case_id\":\"{case_id}\",\"host_pid\":{host_pid},\"command\":\"{command}\",\"profile\":\"{}\",\"sandbox\":\"{}\",\"sha256\":\"{component_hash}\",\"component_bytes\":{},\"text_bytes\":{text_length},\"original_bytes\":{raw_length},\"output_bytes\":{},\"host_deadline_ms\":{},\"parent_deadline_ms\":{},\"hash_read_us\":{},\"authentication_us\":{},\"first_broker_us\":{},\"execute_us\":{},\"parent_response_write_us\":{},\"shutdown_us\":{},\"requests\":{},\"requested_text_bytes\":{},\"requested_original_bytes\":{},\"response_bytes\":{}}}",
++        if cfg!(debug_assertions) { "debug" } else { "release" },
++        if restricted {
++            "restricted_token"
++        } else {
++            "job_limited_fallback"
++        },
++        component.len(),
++        panel.len(),
++        budget.timeout_ms(),
++        parent_deadline.as_millis(),
++        hash_read.as_micros(),
++        authentication.as_micros(),
++        first_broker.unwrap_or(execution).as_micros(),
++        execution.as_micros(),
++        diagnostics.write_wall.as_micros(),
++        shutdown.as_micros(),
++        diagnostics.requests,
++        diagnostics.requested_text_bytes,
++        diagnostics.requested_original_bytes,
++        diagnostics.completed_response_bytes,
++    );
++    CaseResult {
++        output: panel,
++        elapsed,
++        requests: diagnostics.requests,
++        requested_text_bytes: diagnostics.requested_text_bytes,
++        requested_original_bytes: diagnostics.requested_original_bytes,
++        committed_edits,
++    }
++}
++
++fn text_case(crate_name: &str, command: &str, arguments: &str, input: &[u8]) -> CaseResult {
++    component_case(
++        crate_name,
++        command,
++        arguments,
++        input.len() as u64,
++        0,
++        ExecutionBudget::Interactive,
++        |message| {
++            assert_eq!(message.context.capability, Capability::DocumentRead);
++            assert_eq!(message.context.scope, Scope::Document(11));
++            let Request::ReadTextRange {
++                document,
++                revision,
++                range,
++            } = message.request
++            else {
++                panic!("{command} requested unexpected broker operation");
++            };
++            assert_eq!((document, revision), (11, 23));
++            assert!(range.start <= range.end && range.end <= input.len() as u64);
++            Ok(BrokerValue::Bytes(
++                input[range.start as usize..range.end as usize].to_vec(),
++            ))
++        },
++    )
++}
++
++// The artifacts are an external precondition, so the workspace test remains ignored;
++// scripts/test-first-party.ps1 selects this exact fast release-profile gate in CI.
++#[test]
++#[ignore = "requires current wasm32-wasip2 release artifacts; use scripts/test-first-party.ps1 -Suite Fast"]
++fn fast_release_components_cover_semantics_permissions_and_provenance() {
++    assert!(
++        !cfg!(debug_assertions),
++        "first-party qualification requires the release host profile"
++    );
++
++    let valid = text_case(
++        "json_tools",
++        "ext.json.validate",
++        "",
++        r#"{"number":12345678901234567890,"text":"é🦀"}"#.as_bytes(),
++    );
++    assert_eq!(valid.output, "Valid JSON");
++    assert!(valid.requests > 0);
++
++    let minified = text_case("json_tools", "ext.json.minify", "", b"{ \"n\" : 12345678901234567890 }");
++    assert_eq!(minified.output, "{\"n\":12345678901234567890}");
++    assert_eq!(minified.committed_edits, 1);
++
++    let formatted = text_case(
++        "json_tools",
++        "ext.json.format",
++        "",
++        r#"{"number":12345678901234567890,"text":"é🦀"}"#.as_bytes(),
++    );
++    assert!(formatted.output.contains("12345678901234567890"));
++    assert!(formatted.output.contains("é🦀"));
++    assert_eq!(formatted.committed_edits, 1);
++
++    let tree = text_case("json_tools", "ext.json.tree", "", br#"{"a":[1,2]}"#);
++    assert!(tree.output.contains("object at TextOffset 0"));
++    assert!(tree.requested_text_bytes <= br#"{"a":[1,2]}"#.len() as u64);
++
++    let xml_valid = text_case("xml_tools", "ext.xml.validate", "", b"<r><n/></r>");
++    assert_eq!(xml_valid.output, "Valid XML; external resolution disabled");
++    let preserved = b"<r xml:space='preserve'><a/> <b/></r>";
++    let xml_preserved = text_case("xml_tools", "ext.xml.format", "", preserved);
++    assert_eq!(xml_preserved.output.as_bytes(), preserved);
++    assert_eq!(xml_preserved.committed_edits, 1);
++
++    let xml_source = b"<?xml version='1.0' encoding='UTF-16'?><r xml:space='preserve'><n>\xc3\xa9</n> <b/></r>";
++    let xml_format = text_case("xml_tools", "ext.xml.format", "", xml_source);
++    assert!(xml_format.output.contains("encoding='UTF-16'"));
++    assert!(xml_format.output.contains("xml:space='preserve'"));
++    assert_eq!(xml_format.committed_edits, 1);
++
++    let xml = b"<r xmlns:a='urn:x' id='root'><a:n id='one'>first</a:n><a:n id='two'>second</a:n></r>";
++    for (arguments, expected) in [
++        ("/r/a:n[2]/text()\na=urn:x", "second"),
++        ("/r//@id", "root\none\ntwo"),
++        ("/r/@missing", ""),
++    ] {
++        assert_eq!(text_case("xml_tools", "ext.xml.xpath", arguments, xml).output, expected);
++    }
++    let xml_error = text_case("xml_tools", "ext.xml.validate", "", b"<r><unclosed></r>");
++    assert!(xml_error.output.contains("TextOffset"));
++    let external = text_case(
++        "xml_tools",
++        "ext.xml.validate",
++        "",
++        b"<!DOCTYPE r SYSTEM 'https://example.invalid/forbidden'><r/>",
++    );
++    assert!(external.output.contains("DTD and external entities are disabled"));
++
++    let original = [0xff, 0xfe, 0x41, 0x00];
++    let hex = component_case(
++        "hex_view",
++        "ext.hex.goto",
++        "offset=0\nrows=1",
++        999,
++        original.len() as u64,
++        ExecutionBudget::Interactive,
++        |message| {
++            assert_eq!(message.context.capability, Capability::DocumentRead);
++            let Request::ReadOriginalBytes {
++                document,
++                generation,
++                range,
++            } = message.request
++            else {
++                panic!("Hex must navigate original bytes rather than decoded dirty text");
++            };
++            assert_eq!((document, generation), (11, 37));
++            assert_eq!((range.start, range.end), (0, 4));
++            Ok(BrokerValue::Bytes(original.to_vec()))
++        },
++    );
++    assert!(hex.output.contains("FF FE 41 00"));
++    assert!(hex.output.contains("disk generation 37"));
++    assert!(hex.output.contains("Unsaved text edits are excluded"));
++    assert_eq!(hex.requested_original_bytes, 4);
++    let unavailable = component_case(
++        "hex_view",
++        "ext.hex.goto",
++        "offset=0\nrows=1",
++        999,
++        original.len() as u64,
++        ExecutionBudget::Interactive,
++        |message| {
++            assert!(matches!(message.request, Request::ReadOriginalBytes { .. }));
++            Err("original source generation unavailable".into())
++        },
++    );
++    assert!(unavailable.output.contains("?? ?? ?? ??"));
++    assert!(unavailable.output.contains("disk generation 37"));
++    assert!(unavailable.output.contains("Unsaved text edits are excluded"));
++
++    // This is a simulated broker denial through the actual guest/host transport.
++    // Production authorization policy is covered by extensions-protocol broker tests.
++    let mut denial_observed = false;
++    let denied = component_case(
++        "json_tools",
++        "ext.json.validate",
++        "",
++        2,
++        0,
++        ExecutionBudget::Interactive,
++        |message| {
++            assert_eq!(message.context.capability, Capability::DocumentRead);
++            assert_eq!(message.context.scope, Scope::Document(11));
++            assert!(matches!(message.request, Request::ReadTextRange { .. }));
++            denial_observed = true;
++            Err("permission denied by qualification broker".into())
++        },
++    );
++    assert!(denial_observed);
++    assert!(denied.output.contains("permission denied by qualification broker"));
++}
++
++fn interrupt_actual_component(cancel: bool) -> String {
++    let file = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
++        .join("../../target/wasm32-wasip2/release/bareline_json_tools.wasm");
++    let component = std::fs::read(&file).expect("build actual components first");
++    let executable = std::path::Path::new(env!("CARGO_BIN_EXE_bareline-extension-host"));
++    let case_id = qualification_case_id(if cancel { "cancel" } else { "timeout" });
++    let server = PipeServer::create().unwrap();
++    let mut process = Command::new(executable);
++    process
++        .args([server.name(), &std::process::id().to_string()])
++        .arg(&file)
++        .arg(format!("{:x}", Sha256::digest(&component)))
++        .arg("interactive")
++        .stdin(Stdio::null())
++        .stdout(Stdio::null())
++        .stderr(Stdio::inherit());
++    configure_qualification_process(&mut process, executable, &case_id);
++    let (mut child, mut job) = SandboxedProcessLauncher::default()
++        .spawn_host(&mut process, &[executable, &file])
++        .unwrap();
++    let host_pid = child.id();
++    let sandbox = if child.is_restricted() {
++        "restricted_token"
++    } else {
++        "job_limited_fallback"
++    };
++    let mut pipe = server.accept(child.id(), Duration::from_secs(5)).unwrap();
++    pipe.set_timeout(Duration::from_secs(7));
++    let invocation = Invocation {
++        extension_id: "org.bareline.json-tools".into(),
++        command: "ext.json.validate".into(),
++        arguments: String::new(),
++        document: 11,
++        revision: 23,
++        source_generation: 37,
++        text_length: 2,
++        raw_length: 0,
++        grant_generation: 41,
++    };
++    let bytes = encode(&invocation).unwrap();
++    pipe.write_all(&(bytes.len() as u32).to_le_bytes()).unwrap();
++    pipe.write_all(&bytes).unwrap();
++    let request = read_frame(&mut pipe).expect("actual component must reach its first broker request");
++    assert!(matches!(request.request, Request::ReadTextRange { .. }));
++    if cancel {
++        job.terminate().unwrap();
++    }
++    let deadline = Instant::now() + Duration::from_secs(8);
++    let status = loop {
++        if let Some(status) = child.try_wait().unwrap() {
++            break status;
++        }
++        if Instant::now() >= deadline {
++            job.terminate().unwrap();
++            panic!("interrupted qualification component did not stop");
++        }
++        std::thread::sleep(Duration::from_millis(10));
++    };
++    assert!(!status.success());
++    eprintln!(
++        "{{\"schema\":\"bareline.first-party-runtime.v1\",\"event\":\"interruption\",\"case_id\":\"{case_id}\",\"host_pid\":{host_pid},\"kind\":\"{}\",\"sandbox\":\"{sandbox}\",\"host_deadline_ms\":{},\"outcome\":\"{status}\"}}",
++        if cancel { "cancel" } else { "timeout" },
++        ExecutionBudget::Interactive.timeout_ms()
++    );
++    status.to_string()
++}
++
++#[test]
++#[ignore = "requires current wasm32-wasip2 release artifacts; use scripts/test-first-party.ps1 -Suite Fast"]
++fn fast_release_components_cancel_and_timeout_without_poisoning_the_next_launch() {
++    assert!(
++        !cfg!(debug_assertions),
++        "first-party qualification requires the release host profile"
++    );
++    let cancelled = interrupt_actual_component(true);
++    assert!(!cancelled.is_empty());
++    let timed_out = interrupt_actual_component(false);
++    assert!(
++        timed_out.contains("124"),
++        "watchdog deadline must remain explicit: {timed_out}"
++    );
++    assert_eq!(
++        text_case("json_tools", "ext.json.validate", "", b"{}").output,
++        "Valid JSON"
++    );
++}
++
++#[test]
++#[ignore = "requires current wasm32-wasip2 release artifacts; use scripts/test-first-party.ps1 -Suite Fast"]
++fn fast_release_components_run_under_controlled_concurrency() {
++    assert!(
++        !cfg!(debug_assertions),
++        "first-party qualification requires the release host profile"
++    );
++    std::thread::scope(|scope| {
++        let json = scope.spawn(|| text_case("json_tools", "ext.json.validate", "", b"{\"n\":1}"));
++        let xml = scope.spawn(|| text_case("xml_tools", "ext.xml.xpath", "/r/n/text()", b"<r><n>x</n></r>"));
++        assert_eq!(json.join().unwrap().output, "Valid JSON");
++        assert_eq!(xml.join().unwrap().output, "x");
++    });
+ }
+ 
+ const GIB_JSON_LENGTH: u64 = 1 << 30;
+@@ -339,7 +623,7 @@ fn generated_json_range(start: u64, end: u64) -> Vec<u8> {
+ fn generated_one_gib_json_validates_and_tree_reads_only_one_page() {
+     let mut next = 0u64;
+     let mut requests = 0u64;
+-    let (panel, elapsed) = component_case(
++    let result = component_case(
+         "json_tools",
+         "ext.json.validate",
+         "",
+@@ -364,16 +648,16 @@ fn generated_one_gib_json_validates_and_tree_reads_only_one_page() {
+             Ok(BrokerValue::Bytes(bytes))
+         },
+     );
+-    assert_eq!(panel, "Valid JSON");
++    assert_eq!(result.output, "Valid JSON");
+     assert_eq!(next, GIB_JSON_LENGTH);
+     assert_eq!(requests, GIB_JSON_LENGTH / 65536);
+-    assert!(elapsed < Duration::from_millis(ExecutionBudget::Background.timeout_ms()) + Duration::from_secs(4));
++    assert!(result.elapsed < Duration::from_millis(ExecutionBudget::Background.timeout_ms()) + Duration::from_secs(4));
+     eprintln!(
+-        "PR027 generated JSON: bytes={next}, requests={requests}, max_chunk=65536, elapsed_ms={}",
+-        elapsed.as_millis()
++        "PR-T10 generated JSON: bytes={next}, requests={requests}, max_chunk=65536, synthetic_source=true, elapsed_ms={}",
++        result.elapsed.as_millis()
+     );
+     let mut read = 0;
+-    let (panel, _) = component_case(
++    let result = component_case(
+         "json_tools",
+         "ext.json.tree",
+         "",
+@@ -389,92 +673,9 @@ fn generated_one_gib_json_validates_and_tree_reads_only_one_page() {
+         },
+     );
+     assert_eq!(read, 65536);
+-    assert!(panel.contains("object at TextOffset 0"));
+-    assert!(panel.contains("Next page"));
+-    assert!(panel.contains("mode=2"));
+-}
+-
+-#[test]
+-#[ignore = "coordinated release component gate; requires actual WASI artifacts"]
+-fn xml_xpath_security_and_hex_original_generation_cross_the_host() {
+-    let xml = b"<r xmlns:a='urn:x' id='root'><a:n id='one'>first</a:n><a:n id='two'>second</a:n></r>";
+-    for (arguments, expected) in [
+-        ("/r/a:n[2]/text()\na=urn:x", "second"),
+-        ("/r//@id", "root\none\ntwo"),
+-        ("/r/@missing", ""),
+-    ] {
+-        let (panel, _) = component_case(
+-            "xml_tools",
+-            "ext.xml.xpath",
+-            arguments,
+-            xml.len() as u64,
+-            0,
+-            ExecutionBudget::Interactive,
+-            |message| {
+-                let Request::ReadTextRange {
+-                    document,
+-                    revision,
+-                    range,
+-                } = message.request
+-                else {
+-                    panic!("XPath requested non-read operation");
+-                };
+-                assert_eq!((document, revision), (11, 23));
+-                Ok(BrokerValue::Bytes(
+-                    xml[range.start as usize..range.end as usize].to_vec(),
+-                ))
+-            },
+-        );
+-        assert_eq!(panel, expected);
+-    }
+-    let xml = b"<!DOCTYPE r SYSTEM 'https://example.invalid/forbidden'><r/>";
+-    let (panel, _) = component_case(
+-        "xml_tools",
+-        "ext.xml.validate",
+-        "",
+-        xml.len() as u64,
+-        0,
+-        ExecutionBudget::Interactive,
+-        |message| {
+-            let Request::ReadTextRange { range, .. } = message.request else {
+-                panic!("external XML attempted non-read operation");
+-            };
+-            Ok(BrokerValue::Bytes(
+-                xml[range.start as usize..range.end as usize].to_vec(),
+-            ))
+-        },
+-    );
+-    assert!(panel.contains("DTD and external entities are disabled"));
+-    for unavailable in [false, true] {
+-        let (panel, _) = component_case(
+-            "hex_view",
+-            "ext.hex.goto",
+-            "offset=0\nrows=1",
+-            999,
+-            4,
+-            ExecutionBudget::Interactive,
+-            |message| {
+-                let Request::ReadOriginalBytes {
+-                    document,
+-                    generation,
+-                    range,
+-                } = message.request
+-                else {
+-                    panic!("Hex must never read dirty decoded text");
+-                };
+-                assert_eq!((document, generation), (11, 37));
+-                assert_eq!((range.start, range.end), (0, 4));
+-                if unavailable {
+-                    Err("original source generation unavailable".into())
+-                } else {
+-                    Ok(BrokerValue::Bytes(vec![0xff, 0xfe, 0x41, 0]))
+-                }
+-            },
+-        );
+-        assert!(panel.contains("disk generation 37"));
+-        assert!(panel.contains("Unsaved text edits are excluded"));
+-        assert!(panel.contains(if unavailable { "?? ?? ?? ??" } else { "FF FE 41 00" }));
+-    }
++    assert!(result.output.contains("object at TextOffset 0"));
++    assert!(result.output.contains("Next page"));
++    assert!(result.output.contains("mode=2"));
+ }
+ 
+ #[test]
+@@ -485,7 +686,7 @@ fn hex_five_gib_goto_reads_only_visible_original_range() {
+     let aligned = requested_offset / 16 * 16;
+     let mut calls = 0;
+     let mut bytes_read = 0;
+-    let (panel, _) = component_case(
++    let result = component_case(
+         "hex_view",
+         "ext.hex.goto",
+         &format!("offset={requested_offset}\nrows=32"),
+@@ -515,8 +716,11 @@ fn hex_five_gib_goto_reads_only_visible_original_range() {
+     );
+     assert_eq!(calls, 1);
+     assert_eq!(bytes_read, 36 * 16);
+-    assert!(panel.contains(&format!("{aligned:016X}")));
+-    assert!(panel.contains("disk generation 37"));
+-    assert!(panel.contains("Unsaved text edits are excluded"));
+-    assert!(panel.contains("00 01 02 03 04 05 06 07"));
++    assert!(result.output.contains(&format!("{aligned:016X}")));
++    assert!(result.output.contains("disk generation 37"));
++    assert!(result.output.contains("Unsaved text edits are excluded"));
++    assert!(result.output.contains("00 01 02 03 04 05 06 07"));
++    eprintln!(
++        "PR-T10 synthetic Hex: source_bytes={length}, requested_offset={requested_offset}, broker_calls={calls}, broker_bytes={bytes_read}, synthetic_source=true"
++    );
+ }
+diff --git a/docs/implementation/2026-09-12-audit-implementation/PR-T10.md b/docs/implementation/2026-09-12-audit-implementation/PR-T10.md
+new file mode 100644
+index 0000000..3ccee29
+--- /dev/null
++++ b/docs/implementation/2026-09-12-audit-implementation/PR-T10.md
+@@ -0,0 +1,68 @@
++# PR-T10 — First-party runtime qualification
++
++## Scope and baseline
++
++- Issue: TECH-013.
++- Baseline source: `64ab47fc89a5369d3fbb587da35699d35f6d8b88` (`codex/audit-20260912-t10`).
++- Audit source manifest SHA-256: `a560aae60c4cadcf262568b1b04ca98e8467026a2a313bc01da28358958ffbe3` (the audit report's reviewed working-tree snapshot; this implementation branch is the exact locally reviewed integration commit named above).
++- Dependency: PR-T08 worker launch changes are already included in the baseline; this delta preserves those terminal and cancellation semantics.
++- Contracts read: `AGENTS.md`, the audit implementor contract, PR-T10, TECH-013 in the technical findings, and the first-party entries and limitations in the final audit test report.
++
++## Contract decisions
++
++- The fast qualification will build and execute current `wasm32-wasip2` release components through the authenticated Windows host boundary.
++- Fast semantic coverage includes JSON format/validate/tree, XML format/XPath/error handling, and Hex navigation against original bytes, plus permission rejection and bounded cancellation/timeout behavior.
++- Existing 1 GiB JSON and 5 GiB synthetic Hex checks remain a separate large qualification. Large performance measurements are informational; semantic failures remain test failures.
++- Qualification telemetry will identify authentication, component hash/read, compile, instantiate, first broker request, execution, response, and shutdown timing, together with profile, component hashes, byte counts, and parent/host deadlines.
++- Existing timeout budgets will remain unchanged until the measured failing phase is known. Production trust, sandboxing, permission checks, cancellation, result-size limits, encoding, byte provenance, and one-undo edit semantics remain enforced.
++
++## Evidence
++
++### Audit observations before budget decisions
++
++- The audited release host passed all four prior ignored tests serially in 95.13 s. Its 1 GiB generated JSON validation took 88.588 s, issued 16,384 broker reads, and capped each read at 65,536 bytes.
++- The debug host failed XML before its first broker request, including a serial rerun that exited 124 after 12.97 s. The debug 1 GiB JSON case also exceeded its parent budget. These observations do not prove a release-component defect or that parallel contention was the cause.
++- This change does not alter `INTERACTIVE_TIMEOUT_MS` (5,000), `BACKGROUND_TIMEOUT_MS` (120,000), fuel, memory, process-count, frame, broker reply, panel, or staged-edit limits.
++
++### Implemented qualification
++
++- `scripts/test-first-party.ps1` now defaults to `-Suite Fast`; `-Suite Large` selects only the existing 1 GiB JSON and 5 GiB synthetic Hex cases, and `-Suite All` runs both serially. Every invocation creates a collision-resistant directory under `target/first-party/` and uses T09's non-overwriting evidence wrapper for target setup, component build, a bounded release `--no-run` host/test compile, and each direct test-executable invocation. The 300-second fast watchdog therefore covers execution after compilation. `run.json` binds the run to HEAD plus the dirty-source fingerprint, host/test/component hashes and sizes, raw output receipts, expected/observed test counts, timestamps, and terminal failure. Qualification also fails if any build/test receipt lacks its before/after source identity, changes identity while running, or does not continue the preceding stage's HEAD and source-manifest fingerprint.
++- The fast suite executes actual JSON validate/format/minify/tree, XML validate/format/XPath/parser/DTD errors, and Hex original-generation navigation. It restores exact large-integer minification, successful XML validation, XPath descendant attributes and missing attributes, exact `xml:space` output, and unavailable-original-byte messaging. It checks one full-document edit in one broker transaction, edit capability/scope on every staging request, bounded aggregate staging, Unicode and XML encoding-declaration preservation, simulated broker permission denial, unavailable original bytes, watchdog timeout, parent cancellation, recovery on the next launch, and a controlled two-component concurrent run. Production permission authorization remains covered by the protocol broker tests; the component case proves denial propagation across the authenticated boundary.
++- Qualification processes use the same restricted-token launcher, kill-on-close job, 512 MiB job/process cap, one-process limit, minimal environment, component/runtime file grants, authenticated named pipe, component hash check, WASI authority restrictions, and existing execution budgets as the production path. Local components remain below the production package-signature gate; the test does not add a trust bypass.
++- Opt-in JSON-line telemetry reports the authenticated connection, component hash/read, runtime initialization, compile, instantiate, first broker request, each broker response, execution, and parent-observed shutdown. Every child phase/start and parent case/interruption record carries the same unique case ID and host PID, so concurrent output remains attributable. Case records include component SHA-256/size, release profile, text/original sizes, requested and response bytes, request count, and the host and parent deadlines. Events are emitted as phases complete, so a timeout before the first broker request still identifies the last completed phase.
++- Windows correctness CI runs exactly three selected fast tests in the release profile and retains the unique evidence directory. The opt-in nightly performance workflow runs exactly two selected large tests as informational work and retains its unique evidence directory; zero or unexpected selection counts fail, and the command exits nonzero on any semantic failure even though the performance job does not gate correctness.
++
++### Focused checks performed in the private worktree
++
++- `rustfmt --edition 2024 --check apps/extension-host/src/lib.rs apps/extension-host/src/main.rs apps/extension-host/tests/first_party.rs` — passed after formatting.
++- PowerShell AST parse of `scripts/test-first-party.ps1` — passed.
++- Standalone synthetic-receipt checks of the script's source-identity validator — passed for a stable chain and rejected unavailable, changed-during-stage, and between-stage identities.
++- `python .github/workflows/run_test_evidence.py --self-test` — passed; retained failures, spawn errors, hashes, and no-overwrite behavior remain intact for the reused T09 wrapper.
++- Python/PyYAML parse of `.github/workflows/ci.yml` and `.github/workflows/perf-nightly.yml` — passed.
++- `git diff --check` — passed (Git reported only the repository's Windows line-ending conversion notices).
++- No Cargo command, component build, native host execution, or desktop operation ran in this private worktree, as required by the serialized integration contract. Therefore no new runtime timing or semantic pass is claimed here.
++
++### Focused commands proposed for the root reviewer
++
++Run from the integrated original checkout with its shared incremental cache, serially:
++
++```powershell
++./scripts/test-first-party.ps1 -Suite Fast
++```
++
++This is the release correctness gate. Inspect the printed `target/first-party/<run-id>/run.json` and its retained test stdout/stderr for three selected passing tests and every expected correlated JSON phase/case record, including `profile="release"`, hashes, byte counts, 5,000 ms host deadlines, 7,000 ms parent deadlines, timeout exit 124, cancellation, and the successful post-interruption launch.
++
++Run the large informational qualification separately:
++
++```powershell
++./scripts/test-first-party.ps1 -Suite Large
++```
++
++Inspect the printed unique run manifest and raw logs for two selected passing tests, the 1 GiB JSON request count/chunk bound, the 5 GiB synthetic-source marker and single bounded original-byte request, component hashes, and correlated phase timing. A nonzero result is a semantic failure or explicit non-shipping limitation and must be triaged; timing regression alone remains informational.
++
++If a focused compile/test is needed while correcting integration, use the same commands the scripts select rather than a workspace gate:
++
++```powershell
++cargo build --locked --release --target wasm32-wasip2 -p bareline-json-tools -p bareline-xml-tools -p bareline-hex-view
++cargo test --locked --release -p bareline-extension-host --test first_party fast_release_ -- --ignored --test-threads=1 --nocapture
++```
+diff --git a/scripts/test-first-party.ps1 b/scripts/test-first-party.ps1
+index c0c5a5e..553d441 100644
+--- a/scripts/test-first-party.ps1
++++ b/scripts/test-first-party.ps1
+@@ -1,12 +1,295 @@
+ # SPDX-License-Identifier: MPL-2.0
++[CmdletBinding()]
++param(
++    [ValidateSet('Fast', 'Large', 'All')]
++    [string] $Suite = 'Fast'
++)
+ $ErrorActionPreference = 'Stop'
+-Push-Location (Join-Path $PSScriptRoot '..')
++$repository = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
++$runId = '{0}-{1}-{2}' -f [DateTime]::UtcNow.ToString('yyyyMMddTHHmmss.fffffffZ'), $PID, ([guid]::NewGuid().ToString('N').Substring(0, 8))
++$runDirectory = Join-Path $repository (Join-Path 'target/first-party' $runId)
++New-Item -ItemType Directory -Force $runDirectory | Out-Null
++
++function Invoke-RetainedCommand {
++    param(
++        [Parameter(Mandatory)] [string] $Name,
++        [Parameter(Mandatory)] [int] $TimeoutSeconds,
++        [Parameter(Mandatory)] [string[]] $Command
++    )
++    $receipt = Join-Path $runDirectory "$Name.json"
++    $evidenceArguments = @(
++        '.github/workflows/run_test_evidence.py',
++        '--output', $receipt,
++        '--cwd', $repository,
++        '--timeout', $TimeoutSeconds,
++        '--'
++    ) + $Command
++    & python @evidenceArguments | Out-Host
++    return $LASTEXITCODE
++}
++
++function Get-ArtifactIdentity {
++    param([Parameter(Mandatory)] [string] $Path)
++    if (!(Test-Path -LiteralPath $Path -PathType Leaf)) {
++        return $null
++    }
++    $item = Get-Item -LiteralPath $Path
++    return [ordered]@{
++        path = $item.FullName
++        bytes = $item.Length
++        sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $item.FullName).Hash.ToLowerInvariant()
++    }
++}
++
++function Read-TestCounts {
++    param(
++        [Parameter(Mandatory)] [string] $ReceiptPath,
++        [Parameter(Mandatory)] [int] $Expected
++    )
++    $receipt = Get-Content -Raw -LiteralPath $ReceiptPath | ConvertFrom-Json
++    $raw = @(
++        Get-Content -Raw -LiteralPath $receipt.stdout.path
++        Get-Content -Raw -LiteralPath $receipt.stderr.path
++    ) -join "`n"
++    $matches = [regex]::Matches($raw, 'test result: ok\. (?<passed>\d+) passed; (?<failed>\d+) failed;')
++    if ($matches.Count -ne 1) {
++        throw "Expected exactly one successful test summary, observed $($matches.Count)"
++    }
++    $passed = [int] $matches[0].Groups['passed'].Value
++    $failed = [int] $matches[0].Groups['failed'].Value
++    if ($passed -ne $Expected -or $failed -ne 0) {
++        throw "Expected $Expected selected tests and zero failures; observed $passed passed and $failed failed"
++    }
++    return [ordered]@{ expected = $Expected; passed = $passed; failed = $failed }
++}
++
++function Assert-ReceiptSourceIdentity {
++    param(
++        [Parameter(Mandatory)] [object] $Receipt,
++        [Parameter(Mandatory)] [string] $Stage,
++        [AllowNull()] [object] $PreviousIdentity
++    )
++    $before = $Receipt.source_before
++    $after = $Receipt.source_after
++    if ($before.available -ne $true -or $after.available -ne $true) {
++        throw "$Stage did not record available source identities before and after the command"
++    }
++    foreach ($identity in @($before, $after)) {
++        if ([string]::IsNullOrWhiteSpace([string] $identity.head) -or
++            [string]::IsNullOrWhiteSpace([string] $identity.source_manifest_sha256)) {
++            throw "$Stage recorded an incomplete source identity"
++        }
++    }
++    if ($Receipt.source_changed_during_run -ne $false -or
++        $before.head -ne $after.head -or
++        $before.source_manifest_sha256 -ne $after.source_manifest_sha256) {
++        throw "$Stage source identity changed during the command"
++    }
++    if ($null -ne $PreviousIdentity -and
++        ($PreviousIdentity.head -ne $before.head -or
++         $PreviousIdentity.source_manifest_sha256 -ne $before.source_manifest_sha256)) {
++        throw "$Stage source identity does not continue from the preceding build/test stage"
++    }
++    return [pscustomobject]@{ receipt = $Receipt; before = $before; after = $after }
++}
++
++function Get-CompiledTestExecutable {
++    param([Parameter(Mandatory)] [object] $CompileReceipt)
++    $executables = @(
++        Get-Content -LiteralPath $CompileReceipt.stdout.path |
++            ForEach-Object {
++                $message = $null
++                try { $message = $_ | ConvertFrom-Json } catch {}
++                if ($message.reason -eq 'compiler-artifact' -and
++                    $message.target.name -eq 'first_party' -and
++                    ![string]::IsNullOrWhiteSpace([string] $message.executable)) {
++                    $message.executable
++                }
++            } |
++            Sort-Object -Unique
++    )
++    if ($executables.Count -ne 1 -or !(Test-Path -LiteralPath $executables[0] -PathType Leaf)) {
++        throw "Expected exactly one compiled first_party test executable; observed $($executables.Count)"
++    }
++    return (Resolve-Path -LiteralPath $executables[0]).Path
++}
++
++$startedUtc = [DateTime]::UtcNow.ToString('o')
++$failure = $null
++$observedSuites = @()
++$sourceIdentity = $null
++$lastSourceIdentity = $null
++$sourceIdentityFailure = $null
++$verifiedSourceStages = @()
++$testExecutable = $null
++$plans = @()
++if ($Suite -in @('Fast', 'All')) {
++    $plans += [ordered]@{ name = 'fast'; filter = 'fast_release_'; expected = 3; timeout = 300 }
++}
++if ($Suite -in @('Large', 'All')) {
++    $plans += [ordered]@{ name = 'large'; filter = 'gib'; expected = 2; timeout = 900 }
++}
++Push-Location $repository
+ try {
+-    rustup target add wasm32-wasip2
+-    if ($LASTEXITCODE) { throw 'WASI target installation failed' }
+-    cargo build --locked --release --target wasm32-wasip2 -p bareline-json-tools -p bareline-xml-tools -p bareline-hex-view
+-    if ($LASTEXITCODE) { throw 'Component build failed' }
+-    cargo test --locked --release -p bareline-extension-host --test first_party -- --ignored --nocapture
+-    if ($LASTEXITCODE) { throw 'Isolated component verification failed' }
+-} finally { Pop-Location }
++    $targetExit = Invoke-RetainedCommand -Name 'wasi-target' -TimeoutSeconds 300 -Command @(
++        'rustup', 'target', 'add', 'wasm32-wasip2'
++    )
++    if ($targetExit -ne 0) {
++        $failure = "WASI target installation failed with exit $targetExit"
++    }
++
++    if ($null -eq $failure) {
++        $buildExit = Invoke-RetainedCommand -Name 'component-build' -TimeoutSeconds 900 -Command @(
++            'cargo', 'build', '--locked', '--release', '--target', 'wasm32-wasip2',
++            '-p', 'bareline-json-tools', '-p', 'bareline-xml-tools', '-p', 'bareline-hex-view'
++        )
++        try {
++            $buildReceipt = Get-Content -Raw -LiteralPath (Join-Path $runDirectory 'component-build.json') | ConvertFrom-Json
++            $verified = Assert-ReceiptSourceIdentity -Receipt $buildReceipt -Stage 'component-build' -PreviousIdentity $lastSourceIdentity
++            $sourceIdentity = $verified.before
++            $lastSourceIdentity = $verified.after
++            $verifiedSourceStages += 'component-build'
++        } catch {
++            $sourceIdentityFailure = $_.Exception.Message
++            $failure = "Component build source identity verification failed: $sourceIdentityFailure"
++        }
++        if ($null -eq $failure -and $buildExit -ne 0) {
++            $failure = "Component build failed with exit $buildExit"
++        }
++    }
++
++    if ($null -eq $failure) {
++        $compileExit = Invoke-RetainedCommand -Name 'host-test-compile' -TimeoutSeconds 900 -Command @(
++            'cargo', 'test', '--locked', '--release', '-p', 'bareline-extension-host', '--test', 'first_party',
++            '--no-run', '--message-format=json'
++        )
++        try {
++            $compileReceipt = Get-Content -Raw -LiteralPath (Join-Path $runDirectory 'host-test-compile.json') | ConvertFrom-Json
++            $verified = Assert-ReceiptSourceIdentity -Receipt $compileReceipt -Stage 'host-test-compile' -PreviousIdentity $lastSourceIdentity
++            $lastSourceIdentity = $verified.after
++            $verifiedSourceStages += 'host-test-compile'
++        } catch {
++            $sourceIdentityFailure = $_.Exception.Message
++            $failure = "Host/test compile source identity verification failed: $sourceIdentityFailure"
++        }
++        if ($null -eq $failure -and $compileExit -ne 0) {
++            $failure = "Host/test compile failed with exit $compileExit"
++        }
++        if ($null -eq $failure) {
++            try {
++                $testExecutable = Get-CompiledTestExecutable -CompileReceipt $verified.receipt
++            } catch {
++                $failure = $_.Exception.Message
++            }
++        }
++    }
+ 
++    foreach ($plan in $plans) {
++        if ($null -ne $failure) { break }
++        $testExit = Invoke-RetainedCommand -Name ("test-{0}" -f $plan.name) -TimeoutSeconds $plan.timeout -Command @(
++            $testExecutable, $plan.filter, '--ignored', '--test-threads=1', '--nocapture'
++        )
++        $receiptPath = Join-Path $runDirectory ("test-{0}.json" -f $plan.name)
++        try {
++            $testReceipt = Get-Content -Raw -LiteralPath $receiptPath | ConvertFrom-Json
++            $verified = Assert-ReceiptSourceIdentity -Receipt $testReceipt -Stage ("test-{0}" -f $plan.name) -PreviousIdentity $lastSourceIdentity
++            $lastSourceIdentity = $verified.after
++            $verifiedSourceStages += "test-$($plan.name)"
++        } catch {
++            $sourceIdentityFailure = $_.Exception.Message
++            $failure = "$($plan.name) source identity verification failed: $sourceIdentityFailure"
++            break
++        }
++        if ($testExit -ne 0) {
++            $failure = "$($plan.name) first-party component qualification failed with exit $testExit"
++            break
++        }
++        try {
++            $counts = Read-TestCounts -ReceiptPath $receiptPath -Expected $plan.expected
++            $observedSuites += [ordered]@{
++                suite = $plan.name
++                filter = $plan.filter
++                receipt = $receiptPath
++                expected = $counts.expected
++                passed = $counts.passed
++                failed = $counts.failed
++            }
++        } catch {
++            $failure = "$($plan.name) test-count verification failed: $($_.Exception.Message)"
++            break
++        }
++    }
++    if ($null -eq $failure -and $verifiedSourceStages.Count -ne (2 + $plans.Count)) {
++        $sourceIdentityFailure = "Source identity verification covered $($verifiedSourceStages.Count) of $((2 + $plans.Count)) required build/test stages"
++        $failure = $sourceIdentityFailure
++    }
++} catch {
++    $failure = $_.Exception.Message
++} finally {
++    Pop-Location
++    if ($null -eq $sourceIdentity) {
++        $targetReceiptPath = Join-Path $runDirectory 'wasi-target.json'
++        if (Test-Path -LiteralPath $targetReceiptPath) {
++            $sourceIdentity = (Get-Content -Raw -LiteralPath $targetReceiptPath | ConvertFrom-Json).source_before
++        }
++    }
++    $commandReceipts = @(
++        Get-ChildItem -LiteralPath $runDirectory -Filter '*.json' -File |
++            Sort-Object Name |
++            ForEach-Object {
++                $receipt = Get-Content -Raw -LiteralPath $_.FullName | ConvertFrom-Json
++                [ordered]@{
++                    name = $_.BaseName
++                    path = $_.FullName
++                    command = $receipt.command
++                    status = $receipt.status
++                    exit_code = $receipt.exit_code
++                    elapsed_ms = $receipt.elapsed_ms
++                    source_before = $receipt.source_before
++                    source_after = $receipt.source_after
++                    source_changed_during_run = $receipt.source_changed_during_run
++                    stdout = $receipt.stdout
++                    stderr = $receipt.stderr
++                }
++            }
++    )
++    $artifacts = [ordered]@{
++        host = Get-ArtifactIdentity (Join-Path $repository 'target/release/bareline-extension-host.exe')
++        test_runner = if ($null -eq $testExecutable) { $null } else { Get-ArtifactIdentity $testExecutable }
++        json = Get-ArtifactIdentity (Join-Path $repository 'target/wasm32-wasip2/release/bareline_json_tools.wasm')
++        xml = Get-ArtifactIdentity (Join-Path $repository 'target/wasm32-wasip2/release/bareline_xml_tools.wasm')
++        hex = Get-ArtifactIdentity (Join-Path $repository 'target/wasm32-wasip2/release/bareline_hex_view.wasm')
++    }
++    $manifest = [ordered]@{
++        schema_version = 1
++        run_id = $runId
++        suite = $Suite.ToLowerInvariant()
++        started_utc = $startedUtc
++        completed_utc = [DateTime]::UtcNow.ToString('o')
++        status = if ($null -eq $failure) { 'passed' } else { 'failed' }
++        failure = $failure
++        expected_test_counts = [ordered]@{ fast = 3; large = 2 }
++        observed_suites = $observedSuites
++        source_identity = $sourceIdentity
++        source_identity_after = $lastSourceIdentity
++        source_identity_verified_stages = $verifiedSourceStages
++        source_identity_chain_verified = (
++            $null -eq $sourceIdentityFailure -and
++            $verifiedSourceStages.Count -eq (2 + $plans.Count)
++        )
++        command_receipts = $commandReceipts
++        artifacts = $artifacts
++        artifact_note = 'Hashes identify files observed after the retained commands; a failed compile may leave a pre-existing artifact and does not qualify it.'
++        evidence_directory = $runDirectory
++    }
++    $manifestPath = Join-Path $runDirectory 'run.json'
++    [System.IO.File]::WriteAllText(
++        $manifestPath,
++        (($manifest | ConvertTo-Json -Depth 10) + "`n"),
++        [System.Text.UTF8Encoding]::new($false)
++    )
++    Write-Host "First-party qualification evidence: $manifestPath"
++}
++if ($null -ne $failure) {
++    throw $failure
++}

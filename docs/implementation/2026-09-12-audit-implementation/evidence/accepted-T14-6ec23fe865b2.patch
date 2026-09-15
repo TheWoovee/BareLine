@@ -1,0 +1,1499 @@
+diff --git a/README.md b/README.md
+index 25e636e..097a933 100644
+--- a/README.md
++++ b/README.md
+@@ -2,7 +2,15 @@
+ 
+ Native Windows text editor, implemented locally from the Bareline v1.3 blueprint.
+ 
+-**Current state:** local development preview. Native hardware/software rendering, multiline UTF-8 editing, undo/redo, selection, clipboard commands and background file operations are wired. Open currently supports UTF-8 files up to 1 MiB; save stages and verifies captured content before replacement. Large-file streaming, recovery and several planned features remain unfinished. Visual fidelity and physical input checks await an unlocked desktop.
++**Current state:** local development preview for Windows 10 22H2 build 19045 and
++Windows 11 23H2 build 22631 or later on x64. Those compatibility floors still
++need final clean-machine qualification. Hardware and software rendering,
++resident and paged editing, background file operations, recovery, sessions,
++search, syntax, workspace views and the command surfaces are integrated. The
++[current capability ledger](docs/parity/index.json) records the exact state,
++owner, code, tests, limitation, next step and pending evidence identity for all
++52 parity families. It deliberately does not turn focused or historical results
++into final acceptance.
+ 
+ Development and release builds use Rust 1.98.1, pinned by rust-toolchain.toml.
+ That compiler is the workspace's currently supported Rust version. Older compilers
+@@ -18,6 +26,38 @@ For an already built binary, launch `target/debug/bareline.exe` directly. Do not
+ 
+ Normal launch creates an editable Untitled document after the first frame. Up to 16 file paths can be passed for background opening; use `--` before paths that resemble options. Diagnostic launch modes accept no document paths.
+ 
++The default large-file threshold is 256 MiB. Files at or below it use the
++resident editor; larger files use the paged path with 1 MiB pages, a 64 MiB
++per-document page cache and a 256 MiB aggregate document cache. Undo uses a
++separate 128 MiB aggregate RAM budget and keeps at most 100,000 changes per
++document. Encoding conversion may use up to 20 GiB of temporary storage. These
++are defaults, not file-size claims: the corresponding settings accept a
++resident threshold up to 1 TiB, pages up to 16 MiB, a per-file cache up to
++1 GiB, and aggregate/undo/transcode budgets up to 1 TiB. The file source uses a
++64-bit length and has no separate 1 MiB open limit; success still depends on
++addressable storage, configured budgets, free disk space and the underlying
++filesystem.
++
++Supported text encodings are UTF-8, UTF-16 LE/BE, UTF-32 LE/BE, ISO-8859-1,
++Windows-1250 through Windows-1258, Shift-JIS, GBK, Big5, EUC-JP and EUC-KR.
++Stateful encodings are unsupported. Detection reads at most 64 KiB and ambiguous
++legacy input falls back to Windows-1252. See the
++[codec catalog](crates/file-io/src/codecs/CATALOG.md) for aliases, BOM behavior
++and opaque-byte rules. Unchanged same-encoding saves preserve original byte
++ranges. Changed saves stage captured document content, check destination/source
++identity, flush and verify before replacement. Automatic resident and paged
++recovery uses bounded, checksummed local journals; explicit discard must become
++durable before recovery ownership is retired. Current Recovery Center loading
++presentation is an open PR-U05 defect in the ledger.
++
++Preview builds fail closed for downloads, updates and first-party extension
++execution unless a reviewed public trust configuration is compiled in. They do
++not assume fixture trust, and an unconfigured command inventory must not claim
++dynamic extension commands. PR-T11 owns the configured release handoff. The
++[parity evidence guide](docs/parity/README.md) explains the composed registry
++export and checked T09/native receipt import. Final integrated acceptance and
++comparative performance qualification remain pending.
++
+ The preserved specification, PR briefs and reference images are in [docs/blueprint](docs/blueprint/README.md). Live progress is in [docs/IMPLEMENTATION_STATUS.md](docs/IMPLEMENTATION_STATUS.md). Start a phase by reading its own PR brief and implementation note, then only the linked contracts needed by that work.
+ 
+ Use focused tests for consequential behavior. `cargo xtask perf smoke` uses the existing debug binary for hidden-window checks; `cargo xtask perf launch` measures visible launch and idle behavior in both renderer modes. Debug samples are not controlled release benchmarks. Deferred desktop verification and its resume plan are tracked in [docs/UNLOCK_CHECKLIST.md](docs/UNLOCK_CHECKLIST.md).
+diff --git a/apps/bareline/Cargo.toml b/apps/bareline/Cargo.toml
+index 6ede8d1..6672dea 100644
+--- a/apps/bareline/Cargo.toml
++++ b/apps/bareline/Cargo.toml
+@@ -23,6 +23,7 @@ bareline-ui = { path = "../../crates/ui" }
+ bareline-file-io = { path = "../../crates/file-io" }
+ bareline-document = { path = "../../crates/document" }
+ bareline-syntax = { path = "../../crates/syntax" }
++sha2 = "=0.10.9"
+ 
+ bareline-distribution = { path = "../../crates/distribution" }
+ bareline-editor-surface = { path = "../../crates/editor-surface" }
+diff --git a/apps/bareline/src/windows_app/inventory.rs b/apps/bareline/src/windows_app/inventory.rs
+index 2a28e49..31b6575 100644
+--- a/apps/bareline/src/windows_app/inventory.rs
++++ b/apps/bareline/src/windows_app/inventory.rs
+@@ -3,6 +3,7 @@
+ use super::extensions::{WorkerCompletion, extension_worker};
+ use super::*;
+ use bareline_platform::executor::WorkKind;
++use sha2::{Digest, Sha256};
+ use std::{
+     collections::BTreeSet,
+     ffi::OsString,
+@@ -19,10 +20,15 @@ pub(super) struct Request {
+ pub(super) struct InventoryRuntime {
+     request: Option<Request>,
+     deadline: Option<Instant>,
+-    pending: Option<mpsc::Receiver<Result<(), String>>>,
++    pending: Option<mpsc::Receiver<Result<PublishedInventory, String>>>,
+     cancel: Arc<std::sync::atomic::AtomicBool>,
+ }
+ 
++struct PublishedInventory {
++    path: PathBuf,
++    sha256: String,
++}
++
+ struct StagedInventory {
+     path: PathBuf,
+     published: bool,
+@@ -42,8 +48,43 @@ impl Drop for InventoryRuntime {
+     }
+ }
+ 
+-fn write_inventory(request: Request, json: String, cancel: Arc<std::sync::atomic::AtomicBool>) -> Result<(), String> {
+-    write_inventory_with_before_publish(request, json, cancel, || {})
++fn executable_sha256() -> Result<String, String> {
++    let path = std::env::current_exe().map_err(|error| error.to_string())?;
++    let mut file = std::fs::File::open(path).map_err(|error| error.to_string())?;
++    let mut digest = Sha256::new();
++    let mut block = [0_u8; 64 * 1024];
++    loop {
++        let count = std::io::Read::read(&mut file, &mut block).map_err(|error| error.to_string())?;
++        if count == 0 {
++            break;
++        }
++        digest.update(&block[..count]);
++    }
++    Ok(format!("{:x}", digest.finalize()))
++}
++
++fn inventory_json(request: &Request, ids: &BTreeSet<String>) -> Result<String, String> {
++    Ok(format!(
++        "{{\"schema_version\":2,\"commit\":\"{}\",\"binary_sha256\":\"{}\",\"commands\":[{}]}}\n",
++        request.commit,
++        executable_sha256()?,
++        ids.iter().map(|id| format!("\"{id}\"")).collect::<Vec<_>>().join(",")
++    ))
++}
++
++fn write_inventory(
++    request: Request,
++    ids: BTreeSet<String>,
++    cancel: Arc<std::sync::atomic::AtomicBool>,
++) -> Result<PublishedInventory, String> {
++    if cancel.load(std::sync::atomic::Ordering::Acquire) {
++        return Err("Inventory export cancelled".into());
++    }
++    let json = inventory_json(&request, &ids)?;
++    let sha256 = format!("{:x}", Sha256::digest(json.as_bytes()));
++    let path = request.path.clone();
++    write_inventory_with_before_publish(request, json, cancel, || {})?;
++    Ok(PublishedInventory { path, sha256 })
+ }
+ 
+ fn write_inventory_with_before_publish(
+@@ -92,15 +133,15 @@ fn write_inventory_with_before_publish(
+ fn submit_inventory(
+     executor: &bareline_platform::executor::BoundedExecutor,
+     request: Request,
+-    json: String,
++    ids: BTreeSet<String>,
+     cancel: Arc<std::sync::atomic::AtomicBool>,
+     notify: Arc<dyn Fn() + Send + Sync>,
+-) -> Result<mpsc::Receiver<Result<(), String>>, bareline_platform::executor::SubmitError> {
++) -> Result<mpsc::Receiver<Result<PublishedInventory, String>>, bareline_platform::executor::SubmitError> {
+     let (tx, rx) = mpsc::sync_channel(1);
+     let completion = WorkerCompletion::new(tx, notify, "Inventory worker stopped");
+     executor.submit(
+         WorkKind::Bulk,
+-        Box::new(move || completion.complete(write_inventory(request, json, cancel))),
++        Box::new(move || completion.complete(write_inventory(request, ids, cancel))),
+     )?;
+     Ok(rx)
+ }
+@@ -180,7 +221,9 @@ impl Shell {
+         }
+         if let Some(pending) = &self.inventory.pending {
+             match pending.try_recv() {
+-                Ok(Ok(())) => {
++                Ok(Ok(published)) => {
++                    eprintln!("command inventory published={}", published.path.display());
++                    eprintln!("command inventory sha256={}", published.sha256);
+                     self.inventory.deadline = None;
+                     el.exit();
+                 }
+@@ -255,13 +298,9 @@ impl Shell {
+         let Some(request) = self.inventory.request.take() else {
+             return;
+         };
+-        let json = format!(
+-            "{{\"schema_version\":1,\"commit\":\"{}\",\"commands\":[{}]}}\n",
+-            request.commit,
+-            ids.iter().map(|id| format!("\"{id}\"")).collect::<Vec<_>>().join(",")
+-        );
++        eprintln!("command inventory target: {}", request.path.display());
+         let notify = self.notify.clone();
+-        match submit_inventory(extension_worker(), request, json, self.inventory.cancel.clone(), notify) {
++        match submit_inventory(extension_worker(), request, ids, self.inventory.cancel.clone(), notify) {
+             Ok(rx) => self.inventory.pending = Some(rx),
+             Err(error) => {
+                 eprintln!("Command inventory worker unavailable: {error:?}");
+@@ -278,6 +317,20 @@ mod worker_tests {
+     use super::*;
+     use std::time::Duration;
+ 
++    #[test]
++    fn inventory_identifies_the_running_binary_and_sorted_commands() {
++        let request = Request {
++            path: PathBuf::from("unused.json"),
++            commit: "a".repeat(40),
++        };
++        let ids = BTreeSet::from(["file.save".to_owned(), "file.open".to_owned()]);
++        let document: serde_json::Value = serde_json::from_str(&inventory_json(&request, &ids).unwrap()).unwrap();
++        assert_eq!(document["schema_version"], 2);
++        assert_eq!(document["commit"], "a".repeat(40));
++        assert_eq!(document["binary_sha256"].as_str().unwrap().len(), 64);
++        assert_eq!(document["commands"], serde_json::json!(["file.open", "file.save"]));
++    }
++
+     #[test]
+     fn rejected_inventory_never_creates_stage_and_wakes_once() {
+         let executor = bareline_platform::executor::BoundedExecutor::new(0, 1, "inventory-reject-test");
+@@ -291,7 +344,7 @@ mod worker_tests {
+                 path: target.clone(),
+                 commit: "a".repeat(40),
+             },
+-            "{}".into(),
++            BTreeSet::new(),
+             Arc::new(std::sync::atomic::AtomicBool::new(false)),
+             Arc::new(move || {
+                 let _ = wake_tx.try_send(());
+@@ -339,7 +392,7 @@ mod worker_tests {
+                 path: target.clone(),
+                 commit: "a".repeat(40),
+             },
+-            "{}".into(),
++            BTreeSet::new(),
+             cancel,
+             move || signal.store(true, std::sync::atomic::Ordering::Release),
+         );
+diff --git a/crates/file-io/src/codecs/CATALOG.md b/crates/file-io/src/codecs/CATALOG.md
+index 82326c4..8eced3f 100644
+--- a/crates/file-io/src/codecs/CATALOG.md
++++ b/crates/file-io/src/codecs/CATALOG.md
+@@ -21,4 +21,4 @@ Detection inspects at most 64 KiB: longest BOM first, strict UTF-8 sample (incom
+ 
+ Decoder retains at most four input bytes across pushes and publishes exact raw ranges, including malformed sequences. Genuine replacement/private-use scalars never acquire opaque provenance. Encoder refuses opaque spans and unrepresentable scalars. Streaming encoder retries require resubmitting unconsumed spans unchanged; consumed counts whole spans, while its internal cursor remembers partially written spans. Sink writes must be all-or-error; output errors terminate that stream/staged save.
+ 
+-Byte-identical untouched saves copy original source ranges, including valid legacy aliases/noncanonical mappings; re-encoding alone cannot guarantee bijection. ResidentEncoding retains the immutable baseline snapshot and raw bytes; piece identity locates original ranges through splits, edits and undo. Its private original encoding governs raw-copy compatibility independently of public mutable save policy. Do not use opaque bytes to bypass conversion refusal. Generic resident OpenStreaming/SaveEncoded integrate this behavior; disk-backed paged transcode remains a later slice.
++Byte-identical untouched saves copy original source ranges, including valid legacy aliases/noncanonical mappings; re-encoding alone cannot guarantee bijection. ResidentEncoding retains the immutable baseline snapshot and raw bytes; piece identity locates original ranges through splits, edits and undo. Its private original encoding governs raw-copy compatibility independently of public mutable save policy. Do not use opaque bytes to bypass conversion refusal. Resident and disk-backed paged paths integrate streaming open/save and conversion through the file-io lifecycle; final native exact-byte qualification remains pending.
+diff --git a/docs/IMPLEMENTATION_STATUS.md b/docs/IMPLEMENTATION_STATUS.md
+index 0eef5e4..64ed301 100644
+--- a/docs/IMPLEMENTATION_STATUS.md
++++ b/docs/IMPLEMENTATION_STATUS.md
+@@ -2,6 +2,14 @@
+ 
+ **Implementation underway, 2026-09-12:** the owner authorized parallel Sol medium implementation and root review of the [31 audit PR plans](qa/2026-09-12-local-audit/PR_INDEX.md). Follow the [orchestration record](implementation/2026-09-12-audit-implementation/ORCHESTRATION.md) and its live status. Only contained checks run per fix; full integrated qualification and a fresh independent audit follow implementation.
+ 
++**Current capability authority:** use the 52-row
++[capability ledger](parity/index.json) and its [evidence contract](parity/README.md)
++for present implementation, defect, intentional-limit, deferred and qualification
++state. The older package rows and pass counts below are preserved historical
++receipts. They do not override the current ledger or establish the final source/
++binary identity. PR-T03 owns overwrite/default-save behavior for this audit;
++older PR-004 ownership text remains historical.
++
+ **Current audit, 2026-09-12:** the [local working-tree review](qa/2026-09-12-local-audit/README.md) records newly reproduced data-safety and native usability defects, fresh test results, and [implementor-ready PR plans](qa/2026-09-12-local-audit/PR_INDEX.md). Use that audit to qualify the historical completion statements below; source completion is not current runtime acceptance.
+ 
+ Updated 2026-09-08. The original blueprint is preserved under `blueprint/`; its NOT_STARTED tables describe the supplied specification. This file tracks the implementation.
+diff --git a/docs/UNLOCK_CHECKLIST.md b/docs/UNLOCK_CHECKLIST.md
+index 63ceaa6..76965fb 100644
+--- a/docs/UNLOCK_CHECKLIST.md
++++ b/docs/UNLOCK_CHECKLIST.md
+@@ -4,6 +4,26 @@ Updated 2026-09-06. The owner confirmed the PC is unlocked and authorized native
+ 
+ Native resume evidence: [PR-021 native QA](implementation/PR-021-NATIVE-20260906.md). Two hashed debug checkpoints exercised isolated generated fixtures: editable startup, Unicode multiline entry, Find, Replace All with one undo/redo, Save As, existing-path Save, palette/Settings mutation, clean saved-file restoration and dirty-close decline have scoped results. UIA focus/async refresh, status rendering and visual discrepancies remain open. No broad row is DONE from this partial coverage.
+ 
++## Current audit classification (2026-09-12)
++
++The detailed rows below retain the earlier resume history. Use this classification
++when scheduling the next run; old phrases such as “placeholder”, “unfinished” or
++“existing-target limitation” are not current capability claims.
++
++| Class | Current work / owner | Resume condition |
++|---|---|---|
++| Environment-only qualification | Native visual/input/UIA/IME/dialog, Windows floor, renderer, package and physical assistive checks | Run against the frozen final source and hashed binary when the required unlocked Windows environment/device is available. Record actual PASS/FAIL/NOT_RUN observations. |
++| Ordinary code gap | Typed notification routing (PR-U02) | Integrate and review the correction before its native alert/status journey. |
++| Ordinary code gap | Recovery Center discovery/loading/live refresh (PR-U05) | Implement and review the state model before the crash/recovery-center native journey. |
++| Ordinary code gap | Public release configuration and capability manifest (PR-T11) | Finish review before configured update/extension/package qualification. Preview remains deliberately fail-closed. |
++| Ordinary maintainability work | Paged lifecycle ownership boundary (PR-T16) | Finish review and contained lifecycle checks before final integrated qualification; this is not itself a newly reproduced data-loss defect. |
++| Qualification gap | Comparative performance/resource claims (PR-T15) | Run matched controlled release cohorts; missing comparator/hardware rows remain unavailable, never zero or PASS. |
++| Final integration gap | Workspace suite, composed registry export and native journey matrix | Root freezes the source manifest, exports the real Shell registry, runs final gates, and imports only matching T09/native receipts. |
++
++Re-read the integrated PR-U02, PR-U05 and PR-T11 notes immediately before the
++final frozen run. Their review state may change during integration; this snapshot
++does not convert a pending correction into native qualification.
++
+ ## Resume order
+ 
+ 1. Confirm the owner has unlocked the PC. Read this checklist and current implementation status; do not reread the full blueprint.
+@@ -18,22 +38,22 @@ Native resume evidence: [PR-021 native QA](implementation/PR-021-NATIVE-20260906
+ |---|---|---|
+ | BLOCKED: lock | Main editor visual fidelity — PR-001/003/023 | Compare an actual screenshot with `blueprint/mockups/bareline-main-editor-dark.png` at matching viewport dimensions. Check title/menu chrome, tabs, gutter, editor, status, colors, typography and spacing. Record reference dimensions, actual scale, screenshot paths and discrepancy list. Native menubar styling is a known unresolved item. |
+ | BLOCKED: lock | Scale and renderer interaction — PR-001 | Inspect hardware and software modes at 100%, 150% and 200% scale where supported; resize, minimize/restore and move between available displays. Check clipping, sharpness, caret alignment and recovery. Headless native layout/device recreation tests already cover geometry, but do not establish visual correctness. |
+-| BLOCKED: lock | Keyboard and selection — PR-003 | Type multiline text, combining characters and emoji; exercise arrows, Home/End, Shift selection, mouse caret placement, scroll, undo/redo and focus restoration. Verify caret reveal and status positions visually. Drag selection and advanced navigation remain implementation work, not lock-only blockers. |
++| BLOCKED: lock | Keyboard and selection — PR-003 | Type multiline text, combining characters and emoji; exercise arrows, Home/End, Shift selection, mouse caret placement, drag selection, scroll, undo/redo and focus restoration. Verify caret reveal, advanced navigation and status positions on the final binary. |
+ | BLOCKED: lock | Physical IME — PR-001/003 | With an available IME, compose, change composition, commit and cancel; verify candidate window follows caret at each supported scale, preedit underline and replacement of selection. Check mixed RTL/LTR text. Record unavailable IME configurations rather than treating them as passed. |
+ | BLOCKED: lock | Clipboard — PR-003 | Use scratch content to verify native Copy/Cut/Paste, shortcuts and context menu, Unicode and multiline text, and cut failure preserving source text. Avoid altering personal clipboard content unnecessarily. Native clipboard has not been exercised while locked. |
+-| BLOCKED: lock | Native dialogs and focus — PR-004 | Open a generated UTF-8/BOM fixture via dialog, cancel dialogs, Save to its current path and Save As to a new temporary path. Check keyboard focus returns to the editor, dirty labels and error messages. Existing-target Save As remains an implementation limitation. |
++| BLOCKED: lock | Native dialogs and focus — PR-T03/T04 | Open a generated supported-encoding fixture via dialog; cancel dialogs; Save to its current path; Save As over a new and an approved existing scratch target; exercise Save Copy and Save All. Check focus, exact bytes, dirty labels, conflicts and cleanup. Focused overwrite/default-save fixes are integrated; this row requires final native evidence. |
+ | BLOCKED: lock | Initial document and file arguments — PR-001/004 | Launch normally and verify an editable Untitled tab appears automatically after the first frame. Launch with generated UTF-8 file paths (spaces, Unicode, multiple paths, `--` separator), verify correct tabs and failures. Diagnostic launch modes reject document paths. No shell-open or visible launch was performed while locked. |
+-| BLOCKED: lock | Close protection — PR-004 | Close a dirty scratch document/app, decline discard and confirm text remains; then explicitly discard only scratch data. Verify pending file operations prevent premature exit. Session/recovery support is still outstanding and must not be inferred from this check. |
++| BLOCKED: lock | Close protection — PR-T03/T05 | Close a dirty scratch document/app, decline discard and confirm text remains; then explicitly discard only scratch data. Verify pending file operations prevent premature exit and recovery/session ownership remains correct. Focused source checks do not substitute for this final native run. |
+ | BLOCKED: lock | Individual tab close — PR-004 | Use File → Close and Ctrl+W on clean and dirty scratch tabs; decline discard, then confirm only for scratch data. Close a neighboring tab during a pending save and check the save still belongs to the correct tab. Headless coverage verifies index remapping and busy/dirty refusal; native interaction remains pending. |
+ | BLOCKED: lock | Recoverable operation failure — PR-001/004 | Using a controlled failure in a scratch build, verify an error notice leaves open documents and File commands available instead of exiting the process. Dismiss the notice and save the scratch document. Remove the fault injection after verification. Do not trigger failures against personal files. |
+ | BLOCKED: lock | File cancellation — PR-004 | Invoke File → Cancel File Operations while scratch operations are queued; verify eventual cancellation notice and close availability. A save that has already entered replacement must report its real commit outcome. Native fixture checks cover destination preservation and staging cleanup; menu interaction is pending. |
+-| BLOCKED: lock | Menus, tabs and overlays — PR-001/023 | Verify command routing by keyboard/menu/context menu, active-tab visibility with many scratch tabs and focus after dismissing overlays. The command palette is still a placeholder; full behavior waits for implementation. Compare each finished screen against its own current mock before acceptance. |
++| BLOCKED: lock | Menus, tabs and overlays — PR-U01/U03/U04/U11 | Verify the composed command registry by keyboard/menu/context menu/palette, active-tab visibility with many scratch tabs and focus after dismissing overlays. U04's final focused composed-menu check passed at `acbd4bee`; final native state, theme, scale and accessibility evidence remains pending. |
+ | BLOCKED: lock | Visible idle measurements — PR-001 | After functional checks, run the existing `cargo xtask perf launch` harness only if performance-affecting changes justify a new sample. Record binary hash, build profile, renderer, scale, first frame and idle private bytes. Uncontrolled debug samples are not release benchmark claims. |
+-| BLOCKED: lock | Find bar visual and input — PR-005/023 | Compare the implemented bar against `blueprint/mockups/bareline-find-bar.png` at matching dimensions/scales. Verify Ctrl+F, Unicode/IME query entry, case toggle, Enter/Shift+Enter, F3/Shift+F3 including after closing Find, Tab/Shift+Tab focus, clipboard, mouse buttons and Escape focus return. Check editor/gutter/scrollbar shift together and queries never type into the document. Regex remains an implementation gap. Offscreen review has corrected rounded corners, toggle styling and navigation icons. Full status visibility, all-match decorations, tooltips/accessibility and native-window comparison remain pending. |
+-| IMPLEMENTATION FIRST; then lock check | Replace and Extended-mode controls — PR-005/023 | UI integration is active; backend preparation checks alone do not complete it. Once wired and checked headlessly, compare the applicable find/search-panel mock, enter escaped queries, replace one/all in a scratch document, undo once, and change the document/query while preparation is pending. Verify stale or cancelled preparation does not mutate text, focus/IME routes to the selected field and replacement results/status are clear. Record actual UI evidence before acceptance. |
+-| IMPLEMENTATION FIRST; then lock check | Syntax display — PR-008 | Syntax work is active in parallel, not yet accepted. After its scoped integration checks, compare generated language fixtures against the main-editor mock and inspect scrolling, edits, Unicode text and theme colors at supported scales. Syntax must preserve shaped caret/selection geometry. Semantic language coverage and folding remain implementation requirements, not lock-only blockers. |
+-| IMPLEMENTATION FIRST; then lock check | Form, tree and palette primitives — PR-023 | After the new primitives are composed in their product views, compare Settings/palette controls to `blueprint/mockups/bareline-settings.png` and `bareline-command-palette.png` at 100/125/150/200/250% DPI. Record logical/physical dimensions, paint/hit alignment, focus-ring placement, clipped list/tree content and popup on-screen placement. Traverse with Tab/Shift+Tab/arrows, skip disabled choices, expand a generated lazy tree, drag splitter/slider/scrollbar, cancel deferred dragging by focus loss, and verify nested popup invoker return. Verify Password field grapheme clicks/masking and Decimal field IME cancellation with German AltGr and US-International dead keys where available. The current headless 16-test suite establishes core behavior only; all-view composition, full theme goldens and the accessibility bridge remain ordinary implementation work. |
+-| IMPLEMENTATION FIRST; then lock check | Split/clone views — PR-010 | After real shared-service pane integration, open a generated scratch document in both panes, edit each side, verify both show the same updated bytes while selections/folds/scroll remain independent. Compare each pane's labelled document and splitter at matching dimensions against `blueprint/mockups/bareline-workspace-split.png`. Test horizontal/vertical split, pinned reorder/move, close one dirty clone without closing its peer, last-reference dirty protection, independent and synchronized scrolling at different wrap widths, and restore the saved two-pane session. Compare spacer rows must show no document line number. Core model/session tests do not substitute for these interactions. |
++| BLOCKED: lock | Find bar visual and input — PR-005/U01/U09/U12 | Compare the implemented bar against `blueprint/mockups/bareline-find-bar.png` at matching dimensions/scales. Verify Ctrl+F, Unicode/IME query entry, literal/regex modes, toggles, navigation after closing Find, focus, clipboard, pointer actions, cancellation and Escape return. Check editor/gutter/scrollbar shift together and queries never type into the document. Final status/decorations/tooltips/accessibility/native-window evidence remains pending. |
++| BLOCKED: lock | Replace and Extended-mode controls — PR-005/U09/U12 | Compare the composed UI with the applicable mock, enter escaped queries, replace one/all in scratch data, undo once, and change document/query while preparation is pending. Verify stale/cancelled work cannot mutate text and focus/IME routes to the selected field. Implementation is integrated; final native evidence remains pending. |
++| BLOCKED: lock | Syntax display — PR-008 | Compare generated language fixtures against the main-editor mock and inspect scrolling, edits, Unicode text, fallback and theme colors at supported scales. Verify folding and shaped caret/selection geometry. Implementation is integrated; semantic breadth and final native visual qualification remain explicit. |
++| BLOCKED: lock | Form, tree and palette primitives — PR-023/U01/U07/U08 | Compare composed Settings/palette/tree controls to current mockups at supported DPI. Traverse all input/focus paths, lazy trees and drag controls, and inspect UIA. Headless/provider checks establish structure; final theme, physical input and assistive evidence remain pending. |
++| BLOCKED: lock | Split/clone views — PR-010/U08/U11 | Open a generated document in both panes, edit each side, verify shared bytes with independent view state, then test synchronized scrolling, close/dirty ownership and restored session. Compare against `blueprint/mockups/bareline-workspace-split.png`. Integrated focused tests do not substitute for final native interaction. |
+ 
+ | DONE 2026-09-10 | Journey runner — P5-9 | `cargo xtask journey all` ran on the unlocked desktop: **13/13 passed three consecutive times** (smoke, P0-3, P0-4, P0-5, P0-7, P1-1, P1-2, P1-5, P3-1, P3-6a, P4-1, P4-2, P4-4). Evidence and the harness fixes are in `implementation/PROGRESS-20260910-REVIEW-CLOSURE.md`; the P0-3 run found and fixed a discard-time retired-journal leak (`discard_now` now drains workers and retries the purge). |
+ | BLOCKED: lock | Wave-3 native checks — P3-1/P3-4/P3-5/P3-6a/P3-9/P4-6/P4-8 | Journeys now cover (a) left-dock stacking/toggle, (c) extensions panel is visual-only pending, (d) Settings tab, plus P4-1/P4-2/P4-4. Still to check natively: (b) Recovery Center one-row-per-document, (c) extensions cards under four tabs, (e) editor/tab context menus state-correct, (f) toast stack replacing banners and status pickers responding. Capture screenshots and record actual results. |
+diff --git a/docs/implementation/2026-09-12-audit-implementation/PR-T14.md b/docs/implementation/2026-09-12-audit-implementation/PR-T14.md
+new file mode 100644
+index 0000000..19507d1
+--- /dev/null
++++ b/docs/implementation/2026-09-12-audit-implementation/PR-T14.md
+@@ -0,0 +1,90 @@
++# PR-T14 — Current capability ledger and acceptance evidence
++
++Issue: TECH-017. Baseline: `e7648af1715ecf5a0214377db2f802f7e330a9e4` on
++`codex/audit-20260912-t14-fresh`. This note describes the local PR-T14 worktree;
++it is not a release-readiness claim.
++
++## Dependencies and evidence boundary
++
++- PR-T09 owns evidence capture and source/binary identity. PR-T14 consumes its
++  retained observations through a checked adapter.
++- The capability states describe current implementation and known limits. A row
++  is not `implemented-and-tested` until matching current evidence is imported.
++- Final integrated qualification and native receipts are still pending. Later
++  receipts must be imported and resolved against the exact composed command
++  inventory and matching source/binary identity.
++- Historical blueprint and implementation receipts remain unchanged. The audit
++  status registry and central check log are maintained by the integrator.
++
++## Implemented local changes
++
++- `docs/parity/index.json` now has a one-to-one 52-family `current_ledger`.
++  Every row records one of the five current states plus code/command, tests,
++  limitation, owner, next step and source/binary identity status. Seven v1.1
++  deferrals and four product exclusions also resolve the old nullable parity
++  verdict where repository authority is already sufficient. No implemented
++  row is promoted to tested before final matching evidence exists.
++- The actual Windows Shell inventory export retains full application command
++  registration, route checking and synchronized verified extension
++  contributions. Schema 2 additionally hashes the running executable on its
++  bounded worker before atomically publishing the new file. Unconfigured
++  preview runs continue to omit unavailable extension commands.
++- `tests/e2e/runner.py adapt` consumes actual PR021 native step observations or
++  T09 `cargo xtask journey` status/identity records plus a successful T09
++  wrapper receipt. PR021 claims require an explicit reviewed journey/evidence
++  mapping, all named PASS observations and hashes of retained generated
++  fixtures. The producer's exact result path/SHA-256 must be present in the T09
++  output. Status-only xtask results remain observations and claim no AC. The
++  adapter verifies the executable, result/raw/receipt hashes, full commit,
++  dirty-source manifest, stable source across the run and independent reviewer.
++  It cannot derive PASS from provisional case associations, fixture declarations
++  or nested Cargo summary lines. `resolve` revalidates linked results, mappings,
++  fixture hashes, receipt source identity and binary, and requires an exact
++  published inventory path/SHA-256 from its T09 receipt.
++- The sole current complete mapping, `column_multi_cursor` to `AC-006-01`,
++  explicitly requires observed insertion across tabs, wide glyphs and a short
++  line by display column, followed by restoration with one Undo invocation.
++  This is a planned qualification contract; no native PASS is claimed here.
++- The root README now states the Windows x64 floor, 256 MiB resident threshold,
++  1 MiB page, 64 MiB per-file/256 MiB aggregate cache, 128 MiB undo RAM,
++  100,000-change and 20 GiB transcode defaults, configurable maxima, supported
++  encodings, exact-byte save/recovery policy, and fail-closed preview trust.
++  The active codec catalog's obsolete paged-transcode sentence was reconciled.
++- `docs/IMPLEMENTATION_STATUS.md` points current readers to the ledger while
++  preserving historical package receipts. `docs/UNLOCK_CHECKLIST.md` separates
++  environment-only checks from U02/U05/T11/T16 code work and T15/final
++  qualification, and removes stale implementation-gap wording from resume rows.
++
++## Focused verification
++
++- `python -m unittest discover -s tests/e2e -p test_runner.py` — 13 passed,
++  including unrelated-case, altered-result, failed-result, inventory-mutation
++  and binary-mismatch rejection contracts.
++- `python -m py_compile tests/e2e/runner.py tests/e2e/test_runner.py
++  .github/workflows/run_test_evidence.py` — passed.
++- `python .github/workflows/run_test_evidence.py --self-test` — passed; the
++  retained-failure/nested-summary/no-overwrite contract remains intact.
++- PowerShell `ConvertFrom-Json` parsed the ledger; feature and current-ledger
++  counts are both 52. Current states: 37 awaiting qualification, four open
++  defects, seven deferred and four intentional limits.
++- `rustfmt --edition 2024 --check apps/bareline/src/windows_app/inventory.rs
++  xtask/src/journey.rs` and `git diff --check` — passed
++  after focused formatting.
++
++Cargo tests, the actual inventory export, evidence resolution and final native/
++workspace qualification are intentionally root-owned. Use a new ignored output
++path so publishing a receipt does not change the frozen source fingerprint. The
++minimal final sequence is documented in `docs/parity/README.md`; it must retain:
++
++1. Schema-2 composed inventory plus its successful T09 receipt.
++2. Final native result bundles adapted from actual step observations, with the
++   same commit, dirty-source manifest and binary hash as the inventory.
++3. Explicit command success/disabled/failure and AC outcomes; missing results
++   remain unresolved. Do not count nested fixture summaries as top-level tests.
++4. PR-T15 schema-2 performance report with `claims_eligible:false` until matched
++   owner comparator/hardware cohorts exist.
++
++Current focused receipts (including U11 and U04 on later integration snapshots
++and corrected T10 Fast) are useful history but do not qualify this T14 baseline
++or the eventual final binary. Final qualification must import fresh matching
++receipts rather than relabeling those runs.
+diff --git a/docs/parity/README.md b/docs/parity/README.md
+index 652c0c2..2bfffcf 100644
+--- a/docs/parity/README.md
++++ b/docs/parity/README.md
+@@ -1,39 +1,89 @@
+ # Maintained parity evidence index
+ 
+ `index.json` preserves all 52 capability families from the blueprint matrix.
+-`blueprint_route` is historical intent; nullable `state` is deliberately unresolved
+-until justified by current delivery and independent evidence. No planned route is
+-silently promoted. Add newly discovered manual capabilities before implementation.
+-The current Notepad++ manual audit remains pending; this index preserves the local
+-authority rather than claiming a new external audit.
++`blueprint_route` is historical intent and nullable `state` remains the final
++parity verdict. No planned route is silently promoted. `current_ledger` is the
++current delivery view and covers the same 52 IDs exactly once. Its states are
++`implemented-and-tested`, `implemented-awaiting-qualification`, `open-defect`,
++`intentional-limit` and `deferred`. Every ledger row names its code/command,
++tests or retained evidence family, current limitation, actionable owner/next
++step and source/binary evidence status. The current Notepad++ manual audit
++remains pending; this index preserves the local authority rather than claiming
++a new external audit.
+ 
+ Allowed final states are Implemented, Equivalent Different UX, Excluded With
+ Reason, v1.1 and Extension-provided (first-party). Exclusions and deferrals require
+ reason and a repository authority path. Other states require passing linked cases.
+ An empty evidence array means no independent acceptance evidence has been imported.
+ 
+-`cargo xtask qa resolve --inventory <runtime-inventory.json> --output <new-report.json>`
++`cargo xtask qa resolve --inventory <runtime-inventory.json> --inventory-receipt
++<inventory-receipt.json> --evidence <checked-bundle.json> --output
++<new-report.json>`
+ enumerates every AC identifier in the acceptance authority plus success, disabled
+ and failure cases for every runtime command. Inventory schema is
+-`{"schema_version":1,"commit":"<40 lowercase hex>","commands":["file.open",...]}`.
+-Export from the composed runtime registry including dynamic contributions; source
+-regexes or the shell-only registry are not exhaustive substitutes. Missing inventory,
+-missing outcomes, mismatched commits and unresolved features produce nonzero status.
+-The report is evidence completeness, not release approval. The current runtime
+-inventory export is a host integration handoff, not fabricated by this resolver.
++`{"schema_version":2,"commit":"<40 lowercase hex>","binary_sha256":"<64 lowercase
++hex>","commands":["file.open",...]}`. Export it from the actual Windows Shell
++after first-frame registry composition, route validation and extension discovery:
++
++```powershell
++python .github/workflows/run_test_evidence.py --output <new-receipt.json> --timeout 180 -- cargo run -p bareline --features qa-inventory --locked -- --export-command-inventory <absolute-new-inventory.json> --inventory-commit <full-head-sha>
++```
++
++This mode includes dynamic contributions only when the launched runtime has a
++valid trusted configuration and verified contributions. An ordinary preview
++correctly exports no extension commands. Source regexes, fixtures and the
++shell-only registry are not accepted inventories. The resolver verifies the
++exact published inventory path and SHA-256 captured in T09 raw output, rehashes
++the artifact, verifies the inventory binary hash, consumes the T09 receipt's
++dirty-source manifest and rejects changed source or a commit mismatch. Missing
++inventory, outcomes or identity and unresolved features produce nonzero status.
++The report is evidence completeness, not release approval.
++
++Create AC evidence bundles only from a retained native journey and the T09
++receipt that captured its invocation:
++
++```powershell
++python tests/e2e/runner.py adapt --journey-result <result.json> --test-receipt <receipt.json> --evidence-id AC-006-01 --implementer <name> --reviewer <different-name> --fixture <actual-generated-fixture> --output target/qualification/<new-bundle.json>
++```
++
++The adapter accepts an AC or command outcome only when `journeys.json` has a
++reviewed `qualification_mappings` entry for that exact journey/evidence ID and
++all of its required steps have actual nonempty PASS observations. Journey
++`cases` are provisional traceability hints and cannot qualify a whole AC. The
++adapter hashes actual retained fixture files, verifies retained raw-output
++hashes, requires the producer's exact result path/SHA-256 binding, rejects
++changed source, and binds the journey commit, dirty-source manifest and
++executable hash. It never creates PASS from a fixture declaration or Cargo
++summary text. Command outcomes likewise require explicit reviewed mappings.
++
++The same adapter can retain T09 `cargo xtask journey` evidence. For a
++multi-journey result, add `--journey <exact-result-name> --os-build <exact-build>
++--hardware <exact-description>`. Its own `identity` block must match the T09
++receipt and the selected top-level result must have actually passed once. This
++input contains top-level status only, so the adapter emits an observation bundle
++with no AC or command evidence claims.
+ 
+ Each evidence record has `id` (AC identifier or `command:<id>:success|disabled|failure`),
+ full `commit`, `implementer`, distinct `reviewer`, `fixture_sha256`, exact `os_build`,
+ `hardware`, executed `command`/steps, `observed`, `status` (PASS/FAIL/NOT_RUN), repository
+-`result` path and `result_sha256`. The resolver verifies artifact hashes and rejects
+-duplicate/unknown IDs, escaping paths and incomplete metadata. An exclusion instead
++`result` path and `result_sha256`, checked `source_identity`, `binary_sha256`, and
++the T09 receipt path/hash. The resolver reopens and rehashes the result, receipt,
++fixtures and authoritative mapping; it revalidates the actual observations and
++requires source identity, binary, command and recorded fields to agree. It rejects
++duplicate/unknown IDs, altered artifacts, escaping paths and incomplete metadata. An exclusion instead
+ records `excluded:true`, `reason` and existing repository `authority`. Independent
+ review remains a human accountability assertion, not proof inferred from a file.
+ 
+-Cases provisionally associated with each capability derive from its PR owners;
+-reviewers must narrow/add atomic and command cases as they assess actual parity.
++Cases provisionally associated with each capability derive from its historical PR owners;
++reviewers must add explicit complete mappings as they assess actual parity.
+ No feature row may be deleted silently. Commit/result records are updated when code
+ changes; a stale result does not establish the new runtime inventory's behavior.
+ Performance measurements remain informational and reuse PR019 raw data/table.
++PR-T15 reports use schema 2 `performance_qualification_report` artifacts with
++stable row/coverage IDs, application hashes, T09 source-before/source-after
++identity, `claims_eligible` and explicit ineligibility reasons. No report has
++been generated yet; owner-provided comparator/hardware runs remain pending.
+ Reliability, release artifacts and both-floor assistive native QA remain separate
+-required evidence under PR021 and the existing packaging verifier.
++required evidence under PR021 and the existing packaging verifier. The current
++ledger therefore uses no `implemented-and-tested` rows until final integrated
++qualification imports matching receipts.
+diff --git a/docs/parity/index.json b/docs/parity/index.json
+index dae63d4..7cf4571 100644
+--- a/docs/parity/index.json
++++ b/docs/parity/index.json
+@@ -512,9 +512,9 @@
+       "ownership": "FR-021A",
+       "intended_ux": "",
+       "blueprint_route": "v1.1",
+-      "state": null,
++      "state": "v1.1",
+       "cases": [],
+-      "reason": "",
++      "reason": "Inline and folder compare are deferred beyond v1.",
+       "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md"
+     },
+     {
+@@ -553,9 +553,9 @@
+       "ownership": "FR-022",
+       "intended_ux": "community extensions",
+       "blueprint_route": "v1.1",
+-      "state": null,
++      "state": "v1.1",
+       "cases": [],
+-      "reason": "",
++      "reason": "Community spell, CSV and LSP extensions are deferred beyond v1.",
+       "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md"
+     },
+     {
+@@ -579,13 +579,13 @@
+       "ownership": "FR-024, PR-012",
+       "intended_ux": "English-only v1; community packs planned; language breadth deferred",
+       "blueprint_route": "v1.1",
+-      "state": null,
++      "state": "v1.1",
+       "cases": [
+         "AC-012-01",
+         "AC-012-02",
+         "AC-012-03"
+       ],
+-      "reason": "",
++      "reason": "English is the v1 locale; community language-pack breadth is deferred.",
+       "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md"
+     },
+     {
+@@ -624,7 +624,7 @@
+       "ownership": "FR-026",
+       "intended_ux": "not offered; user sets default app manually",
+       "blueprint_route": "Excluded",
+-      "state": null,
++      "state": "Excluded With Reason",
+       "cases": [],
+       "reason": "not offered; user sets default app manually",
+       "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md"
+@@ -680,9 +680,9 @@
+       "ownership": "",
+       "intended_ux": "",
+       "blueprint_route": "v1.1",
+-      "state": null,
++      "state": "v1.1",
+       "cases": [],
+-      "reason": "",
++      "reason": "Character Panel is deferred beyond v1.",
+       "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md"
+     },
+     {
+@@ -691,9 +691,9 @@
+       "ownership": "FR-013",
+       "intended_ux": "fullscreen/distraction-free covers the use case",
+       "blueprint_route": "v1.1",
+-      "state": null,
++      "state": "v1.1",
+       "cases": [],
+-      "reason": "",
++      "reason": "Post-It/frameless mode is deferred beyond v1.",
+       "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md"
+     },
+     {
+@@ -702,9 +702,9 @@
+       "ownership": "",
+       "intended_ux": "",
+       "blueprint_route": "v1.1",
+-      "state": null,
++      "state": "v1.1",
+       "cases": [],
+-      "reason": "",
++      "reason": "Document Peeker is deferred beyond v1.",
+       "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md"
+     },
+     {
+@@ -713,9 +713,9 @@
+       "ownership": "FR-017",
+       "intended_ux": "planned differentiator",
+       "blueprint_route": "v1.1",
+-      "state": null,
++      "state": "v1.1",
+       "cases": [],
+-      "reason": "",
++      "reason": "Local history beyond undo and recovery is deferred beyond v1.",
+       "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md"
+     },
+     {
+@@ -724,7 +724,7 @@
+       "ownership": "FR 2.2",
+       "intended_ux": "out of scope by design",
+       "blueprint_route": "Excluded",
+-      "state": null,
++      "state": "Excluded With Reason",
+       "cases": [],
+       "reason": "out of scope by design",
+       "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md"
+@@ -735,7 +735,7 @@
+       "ownership": "FR 2.2",
+       "intended_ux": "out of scope by design",
+       "blueprint_route": "Excluded",
+-      "state": null,
++      "state": "Excluded With Reason",
+       "cases": [],
+       "reason": "out of scope by design",
+       "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md"
+@@ -746,11 +746,65 @@
+       "ownership": "FR 2.2",
+       "intended_ux": "none, ever",
+       "blueprint_route": "Excluded",
+-      "state": null,
++      "state": "Excluded With Reason",
+       "cases": [],
+       "reason": "none, ever",
+       "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md"
+     }
+   ],
++  "current_ledger": [
++    {"id":"parity-001","state":"implemented-awaiting-qualification","owner":"PR-T03/T04/T05 + final qualification","code":"apps/bareline/src/windows_app/lifecycle.rs; commands file.new/open/save/save_as/save_all/save_copy","tests":"crates/app/src/workspace.rs tests; central T03/T04/T05 receipts","limitation":"Current integrated source has focused receipts, but no final integrated receipt/inventory identity.","next_step":"Run final resident and paged save/open/overwrite/cancel journeys and import matching AC/command receipts.","source_binary_identity":"pending: schema-2 runtime inventory plus matching T09 receipt"},
++    {"id":"parity-002","state":"implemented-awaiting-qualification","owner":"PR-004 + final qualification","code":"crates/app/src/workspace.rs; commands file.reload/file.read_only","tests":"workspace reload/read-only tests","limitation":"Native external-change and read-only interaction remains unqualified on the final binary.","next_step":"Exercise reload/conflict/read-only paths and import final receipts.","source_binary_identity":"pending: final inventory/T09 receipt"},
++    {"id":"parity-003","state":"implemented-awaiting-qualification","owner":"PR-004/010 + final qualification","code":"crates/app/src/views.rs; apps/bareline/src/windows_app/views.rs","tests":"views/session tests and prior native tab receipts","limitation":"Final integrated tab/pin/sort/document-switcher journey is pending.","next_step":"Qualify the composed tab and document-switcher UI and import receipts.","source_binary_identity":"pending: final inventory/T09 receipt"},
++    {"id":"parity-004","state":"implemented-awaiting-qualification","owner":"PR-004 + final qualification","code":"crates/app/src/workspace.rs; command file.reopen_closed","tests":"workspace undo-close/recovery tests","limitation":"Final native reopen identity/caret/pin evidence is pending.","next_step":"Run reopen-closed lifecycle journey and import matching receipt.","source_binary_identity":"pending: final inventory/T09 receipt"},
++    {"id":"parity-005","state":"implemented-awaiting-qualification","owner":"PR-010/U11 + final qualification","code":"crates/app/src/views.rs; apps/bareline/src/windows_app/views.rs","tests":"view/session and U11 dock/view focused receipts","limitation":"Final native split/clone/synchronized-scroll matrix is pending.","next_step":"Run split/clone/session journey at supported scales and import receipts.","source_binary_identity":"pending: final inventory/T09 receipt"},
++    {"id":"parity-006","state":"implemented-awaiting-qualification","owner":"PR-T18 + final qualification","code":"apps/bareline/src/windows_app/instance.rs; launch request runtime","tests":"T18 IPC/launch/follow focused receipts","limitation":"Native second-instance handoff remains pending on the final binary.","next_step":"Run isolated multi-instance handoff journey and import receipt.","source_binary_identity":"pending: final inventory/T09 receipt"},
++    {"id":"parity-007","state":"implemented-awaiting-qualification","owner":"PR-003/006 + final qualification","code":"crates/editor-surface/src/lib.rs; edit.* commands","tests":"editor-surface transaction/clipboard tests and prior native journey","limitation":"Final physical clipboard/input qualification is pending.","next_step":"Exercise Unicode edit/undo/redo/cut/copy/paste and import receipts.","source_binary_identity":"pending: final inventory/T09 receipt"},
++    {"id":"parity-008","state":"implemented-awaiting-qualification","owner":"PR-006 + final qualification","code":"crates/editor-surface/src/lib.rs; edit paste-special/drop routes","tests":"editor-surface input tests","limitation":"Physical drag/drop and paste-special formats remain unqualified.","next_step":"Run native format and drag/drop cases and retain observations.","source_binary_identity":"pending: final inventory/T09 receipt"},
++    {"id":"parity-009","state":"implemented-awaiting-qualification","owner":"PR-006 + final qualification","code":"crates/editor-surface/src/lib.rs; view.hide_lines","tests":"editor-surface fold/hidden-line tests","limitation":"Final native view-only byte-preservation receipt is pending.","next_step":"Hide/show generated lines, verify unchanged bytes, and import receipt.","source_binary_identity":"pending: final inventory/T09 receipt"},
++    {"id":"parity-010","state":"implemented-awaiting-qualification","owner":"PR-006 + final qualification","code":"crates/editor-surface/src/power.rs; apps/bareline/src/windows_app/power.rs","tests":"clipboard history bounds/privacy tests","limitation":"Feature is opt-in and final native UI/privacy evidence is pending.","next_step":"Enable in isolated profile, verify bounds/clear/off-default, and import receipt.","source_binary_identity":"pending: final inventory/T09 receipt"},
++    {"id":"parity-011","state":"implemented-awaiting-qualification","owner":"PR-003/006 + final qualification","code":"crates/editor-surface/src/lib.rs; column/multi-selection commands","tests":"editor-surface multi-selection transaction tests","limitation":"Physical column selection and Unicode boundary checks are pending.","next_step":"Run column/multi-edit native journey and import receipt.","source_binary_identity":"pending: final inventory/T09 receipt"},
++    {"id":"parity-012","state":"implemented-awaiting-qualification","owner":"PR-006 + final qualification","code":"crates/app/src/utilities.rs; edit.column_editor","tests":"column editor radix/step tests","limitation":"Final modal/input qualification is pending.","next_step":"Exercise bases, padding, negative step and one-undo behavior; import receipt.","source_binary_identity":"pending: final inventory/T09 receipt"},
++    {"id":"parity-013","state":"implemented-awaiting-qualification","owner":"PR-005/U09 + final qualification","code":"crates/search/src; apps/bareline/src/windows_app/search.rs","tests":"search crate plus U09 source/cancellation receipts","limitation":"Final native regex, folder, cancellation and result-switching run is pending.","next_step":"Run resident/paged/folder search matrix and import receipts.","source_binary_identity":"pending: final inventory/T09 receipt"},
++    {"id":"parity-014","state":"implemented-awaiting-qualification","owner":"PR-026 + final qualification","code":"crates/search/src/replace_files.rs; search.replace_in_files","tests":"replace preview/atomic/encoding tests","limitation":"Final disk fixture and native preview workflow evidence is pending.","next_step":"Run preview/apply/conflict/cancel cases on generated files and import receipt.","source_binary_identity":"pending: final inventory/T09 receipt"},
++    {"id":"parity-015","state":"implemented-awaiting-qualification","owner":"PR-005 + final qualification","code":"crates/editor-surface/src/search_marks.rs; search mark commands","tests":"search mark style/bounds tests","limitation":"Final five-style visual and navigation evidence is pending.","next_step":"Qualify all mark styles in both themes/scales and import receipt.","source_binary_identity":"pending: final inventory/T09 receipt"},
++    {"id":"parity-016","state":"implemented-awaiting-qualification","owner":"PR-006/013 + final qualification","code":"apps/bareline/src/windows_app/goto.rs; syntax brace/bookmark routes","tests":"goto, bookmark and syntax tests","limitation":"Final native navigation/focus evidence is pending.","next_step":"Exercise goto/bookmarks/brace match including paged sources and import receipts.","source_binary_identity":"pending: final inventory/T09 receipt"},
++    {"id":"parity-017","state":"implemented-awaiting-qualification","owner":"PR-007/T16 + final qualification","code":"crates/file-io/src/codecs; apps/bareline/src/windows_app/encoding.rs","tests":"codec provenance/streaming tests and paged lifecycle tests","limitation":"Stateful encodings are unsupported; disk-backed paged transcode is integrated but final exact-byte/lifecycle qualification remains pending.","next_step":"Qualify supported catalog exact-byte saves and keep unsupported/stateful cases explicit.","source_binary_identity":"pending: final inventory/T09 receipt"},
++    {"id":"parity-018","state":"implemented-awaiting-qualification","owner":"PR-008 + final qualification","code":"crates/syntax/src; native/lexilla-bridge","tests":"syntax streaming/catalog/folding tests","limitation":"Final native visual/native-fallback matrix is pending.","next_step":"Run language fixtures in renderer modes and import receipts.","source_binary_identity":"pending: final inventory/T09 receipt"},
++    {"id":"parity-019","state":"implemented-awaiting-qualification","owner":"PR-008 + final qualification","code":"crates/syntax/src/folding.rs; fold commands","tests":"syntax folding/index progression tests","limitation":"Unknown folds remain progressive until indexing completes; final UI evidence pending.","next_step":"Qualify fold all/levels during and after indexing and import receipt.","source_binary_identity":"pending: final inventory/T09 receipt"},
++    {"id":"parity-020","state":"implemented-awaiting-qualification","owner":"PR-008 + final qualification","code":"crates/syntax/src/udl.rs; language UDL commands","tests":"UDL schema/import tests","limitation":"Final imported-definition visual behavior is pending.","next_step":"Import generated Notepad++ UDL, render/edit, and retain receipt.","source_binary_identity":"pending: final inventory/T09 receipt"},
++    {"id":"parity-021","state":"implemented-awaiting-qualification","owner":"PR-013 + final qualification","code":"crates/editor-surface/src/completion.rs; crates/syntax/src/outline.rs","tests":"completion/function index bounds tests","limitation":"Final popup/input and large-source qualification is pending.","next_step":"Run completion/function-hint cases with stale/cancelled indexes and import receipt.","source_binary_identity":"pending: final inventory/T09 receipt"},
++    {"id":"parity-022","state":"implemented-awaiting-qualification","owner":"PR-003/012 + final qualification","code":"crates/editor-surface/src; apps/bareline/src/windows_app/views.rs","tests":"render/view/settings tests","limitation":"Final native fullscreen/topmost and multi-scale visual evidence is pending.","next_step":"Exercise every view toggle in both renderer modes and import receipts.","source_binary_identity":"pending: final inventory/T09 receipt"},
++    {"id":"parity-023","state":"implemented-awaiting-qualification","owner":"PR-009/U13 + final qualification","code":"crates/app/src/workspace_panel.rs; document-map command","tests":"workspace panel and U13 sparse-index receipts","limitation":"Final native progressive map interaction is pending.","next_step":"Open a large generated file, navigate partial/exact map states, import receipt.","source_binary_identity":"pending: final inventory/T09 receipt"},
++    {"id":"parity-024","state":"implemented-awaiting-qualification","owner":"PR-009 + final qualification","code":"crates/syntax/src/outline.rs; function-list command","tests":"outline import/stale-result tests","limitation":"Final native progressive/cancellation evidence is pending.","next_step":"Qualify function list on edits/language switches and import receipt.","source_binary_identity":"pending: final inventory/T09 receipt"},
++    {"id":"parity-025","state":"implemented-awaiting-qualification","owner":"PR-009 + final qualification","code":"crates/app/src/workspace_panel.rs; workspace commands","tests":"workspace enumeration/mutation tests","limitation":"Final native filesystem/dialog workflow is pending.","next_step":"Run generated workspace navigation/mutation journey and import receipt.","source_binary_identity":"pending: final inventory/T09 receipt"},
++    {"id":"parity-026","state":"open-defect","owner":"PR-U05 (presentation), PR-T16 (boundary), final qualification","code":"crates/file-io/src/recovery; apps/bareline/src/windows_app/recovery.rs","tests":"T05 recovery receipts; U05 delayed-discovery cases not yet integrated","limitation":"Recovery Center can present an in-flight discovery as empty; final lifecycle qualification is pending.","next_step":"Integrate U05 state model, finish T16 review, then run crash/restart/discard/session journeys.","source_binary_identity":"pending: corrected final inventory/T09 receipt"},
++    {"id":"parity-027","state":"implemented-awaiting-qualification","owner":"PR-015 + final qualification","code":"crates/file-io/src/tail.rs; apps/bareline/src/windows_app/watch.rs","tests":"tail rotation/truncation tests","limitation":"Final native rotation/truncation/follow receipt is pending.","next_step":"Run generated append/rotate/truncate cases and import receipt.","source_binary_identity":"pending: final inventory/T09 receipt"},
++    {"id":"parity-028","state":"implemented-awaiting-qualification","owner":"PR-014/U11 + final qualification","code":"crates/app/src/macros.rs; apps/bareline/src/windows_app/macros.rs","tests":"macro model/playback and U11 output focus receipts","limitation":"Final native record/playback/persistence evidence is pending.","next_step":"Run macro record/replay across focus/output states and import receipt.","source_binary_identity":"pending: final inventory/T09 receipt"},
++    {"id":"parity-029","state":"implemented-awaiting-qualification","owner":"PR-014 + final qualification","code":"crates/app/src/macros.rs; macro replay actions","tests":"macro replay timing/action tests","limitation":"Final visible replay and cancellation evidence is pending.","next_step":"Run bounded replay typing journey and import receipt.","source_binary_identity":"pending: final inventory/T09 receipt"},
++    {"id":"parity-030","state":"implemented-awaiting-qualification","owner":"PR-014/U11 + final qualification","code":"crates/macros/src/process.rs; windows_app/run_prompt.rs","tests":"process capture/cancel plus U11 output tests","limitation":"Shell mode requires explicit permission; final native process-tree/cancellation evidence pending.","next_step":"Run isolated direct/shell/timeout/cancel output cases and import receipts.","source_binary_identity":"pending: final inventory/T09 receipt"},
++    {"id":"parity-031","state":"implemented-awaiting-qualification","owner":"PR-017 + final qualification","code":"crates/app/src/utilities.rs; utility hash commands","tests":"utility streaming/hash tests","limitation":"Final native file/selection workflow evidence is pending.","next_step":"Compare generated fixtures against independent digests and import receipt.","source_binary_identity":"pending: final inventory/T09 receipt"},
++    {"id":"parity-032","state":"implemented-awaiting-qualification","owner":"PR-017 + final qualification","code":"crates/platform/src/printing.rs; apps/bareline/src/windows_app/utilities.rs","tests":"printing/export layout tests","limitation":"Printer availability and final native dialog/output evidence are pending.","next_step":"Qualify export and available printer/PDF path; record unavailable environment explicitly.","source_binary_identity":"pending: final inventory/T09 receipt"},
++    {"id":"parity-033","state":"implemented-awaiting-qualification","owner":"PR-025/017 + final qualification","code":"crates/diff/src; crates/app/src/compare.rs","tests":"diff/compare view and session tests","limitation":"Final native compare/session/undo visual evidence is pending.","next_step":"Run resident/paged compare and restored-session journey; import receipts.","source_binary_identity":"pending: final inventory/T09 receipt"},
++    {"id":"parity-034","state":"deferred","owner":"Product owner (v1.1)","code":"docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md","tests":"none required for deferred v1.1 scope","limitation":"Inline and folder compare are outside v1 scope.","next_step":"Create a v1.1 implementation PR before changing this state.","source_binary_identity":"not applicable until implemented"},
++    {"id":"parity-035","state":"open-defect","owner":"PR-T11 + final qualification","code":"apps/bareline/src/windows_app/extensions.rs; extensions panel commands","tests":"extension manager/isolation tests and T10 release workload","limitation":"Preview builds fail closed without reviewed owner trust/catalog/runtime configuration.","next_step":"Land reviewed public release configuration, export capability manifest, then qualify install/disable/failure routes.","source_binary_identity":"pending: configured final inventory/T09 receipt"},
++    {"id":"parity-036","state":"open-defect","owner":"PR-T11/T10 + final qualification","code":"extensions/json-tools; extensions/xml-tools; extensions/hex-view","tests":"first-party component/host tests; T10 timeout correction pending final","limitation":"Extension commands must not appear in an unconfigured preview inventory; configured release workload is not fully qualified.","next_step":"Build fixture-trusted actual components, correct/review T10 timeout telemetry, export dynamic commands, import receipts.","source_binary_identity":"pending: configured final inventory/T09 receipt"},
++    {"id":"parity-037","state":"deferred","owner":"Product owner/community (v1.1)","code":"docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md","tests":"none required for deferred community scope","limitation":"Spell check, CSV tooling and LSP breadth are outside v1.","next_step":"Define extension contracts and owners in a v1.1 PR.","source_binary_identity":"not applicable until implemented"},
++    {"id":"parity-038","state":"implemented-awaiting-qualification","owner":"PR-011/012 + final qualification","code":"crates/settings/src; crates/commands/src/keymap.rs","tests":"settings persistence/keymap/menu tests","limitation":"Final physical shortcut/IME/high-contrast qualification is pending.","next_step":"Run settings/revert/mapper/theme journey and import receipts.","source_binary_identity":"pending: final inventory/T09 receipt"},
++    {"id":"parity-039","state":"deferred","owner":"Product owner/community (v1.1)","code":"crates/settings/src/localization.rs; blueprint parity authority","tests":"English catalog tests only","limitation":"English is the v1 locale; broader language packs are deferred.","next_step":"Define signed/versioned language-pack delivery for v1.1.","source_binary_identity":"not applicable to deferred packs"},
++    {"id":"parity-040","state":"implemented-awaiting-qualification","owner":"PR-T17/T18 + final qualification","code":"apps/bareline/src/windows_app/launch.rs; instance.rs","tests":"T17 parser/mode and T18 IPC receipts","limitation":"Final subprocess/first-frame/multi-instance matrix is pending.","next_step":"Run help/version/invalid/portable/diagnostic and file-argument journeys; import receipts.","source_binary_identity":"pending: final inventory/T09 receipt"},
++    {"id":"parity-041","state":"implemented-awaiting-qualification","owner":"PR-018 + final qualification","code":"apps/bareline/src/windows_app/shell_integration.rs","tests":"shell integration registry/argument tests","limitation":"Changes require explicit user action and final isolated Windows verification.","next_step":"Qualify register/unregister and quoted Unicode paths in an isolated profile.","source_binary_identity":"pending: final inventory/T09 receipt"},
++    {"id":"parity-042","state":"intentional-limit","owner":"Product owner / FR-026","code":"docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md","tests":"exclusion checked by parity resolver authority validation","limitation":"Replacing Windows Notepad is excluded by product scope.","next_step":"Retain exclusion unless the product authority is explicitly revised.","source_binary_identity":"not applicable by design"},
++    {"id":"parity-043","state":"implemented-awaiting-qualification","owner":"PR-018 + final qualification","code":"apps/bareline/src/windows_app/instance.rs; tray commands","tests":"instance/tray state tests","limitation":"Final native tray lifecycle evidence is pending.","next_step":"Exercise minimize/restore/exit with generated scratch documents and import receipt.","source_binary_identity":"pending: final inventory/T09 receipt"},
++    {"id":"parity-044","state":"open-defect","owner":"PR-T11/020 + final qualification","code":"apps/bareline/src/windows_app/update.rs; diagnostics commands","tests":"distribution verification/update tests and diagnostics tests","limitation":"Preview diagnostics work, but operational update trust/channel configuration is not yet accepted.","next_step":"Land T11 public configuration and qualify valid/invalid/stale/corrupt update fixtures.","source_binary_identity":"pending: configured final inventory/T09 receipt"},
++    {"id":"parity-045","state":"implemented-awaiting-qualification","owner":"PR-T17/T11 + final qualification","code":"apps/bareline/src/windows_app/launch.rs; distribution packaging","tests":"portable mode/isolation tests","limitation":"Unsigned local artifacts are not a released portable package; final package inventory pending.","next_step":"Build final unsigned portable payload, verify isolation/hashes, and import receipt.","source_binary_identity":"pending: final package/inventory/T09 receipt"},
++    {"id":"parity-046","state":"deferred","owner":"Product owner (v1.1)","code":"docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md","tests":"none required for deferred v1.1 scope","limitation":"Character Panel is outside v1 scope.","next_step":"Assign a v1.1 implementation PR and acceptance cases.","source_binary_identity":"not applicable until implemented"},
++    {"id":"parity-047","state":"deferred","owner":"Product owner (v1.1)","code":"docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md","tests":"none required for deferred v1.1 scope","limitation":"Post-It/frameless mode is outside v1 scope.","next_step":"Assign a v1.1 implementation PR and native window acceptance.","source_binary_identity":"not applicable until implemented"},
++    {"id":"parity-048","state":"deferred","owner":"Product owner (v1.1)","code":"docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md","tests":"none required for deferred v1.1 scope","limitation":"Document Peeker is outside v1 scope.","next_step":"Assign a v1.1 implementation PR and bounded preview contract.","source_binary_identity":"not applicable until implemented"},
++    {"id":"parity-049","state":"deferred","owner":"Product owner (v1.1)","code":"docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md","tests":"recovery/history tests do not establish deferred local-history UI","limitation":"Local history beyond recovery/undo is outside v1 scope.","next_step":"Define retention/privacy/storage policy before v1.1 implementation.","source_binary_identity":"not applicable until implemented"},
++    {"id":"parity-050","state":"intentional-limit","owner":"Product owner / FR 2.2","code":"docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md","tests":"exclusion checked by parity resolver authority validation","limitation":"Integrated terminal is excluded by product scope.","next_step":"Retain exclusion unless the product authority is explicitly revised.","source_binary_identity":"not applicable by design"},
++    {"id":"parity-051","state":"intentional-limit","owner":"Product owner / FR 2.2","code":"docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md","tests":"exclusion checked by parity resolver authority validation","limitation":"Source-control panel is excluded by product scope.","next_step":"Retain exclusion unless the product authority is explicitly revised.","source_binary_identity":"not applicable by design"},
++    {"id":"parity-052","state":"intentional-limit","owner":"Product owner / FR 2.2","code":"docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md","tests":"privacy exclusion checked by parity resolver authority validation","limitation":"Telemetry is excluded; Bareline has no telemetry implementation.","next_step":"Retain the no-telemetry product rule and verify releases do not add an upload path.","source_binary_identity":"not applicable by design"}
++  ],
+   "evidence": []
+ }
+diff --git a/tests/e2e/README.md b/tests/e2e/README.md
+index 0fdfb47..7bd23ff 100644
+--- a/tests/e2e/README.md
++++ b/tests/e2e/README.md
+@@ -4,6 +4,10 @@ Source harness only; no native journey result is implied. `journeys.json` define
+ the thirteen required journeys, bounded deadlines, actions and observable checks.
+ `journeys.schema.json` documents the versioned format; `runner.py validate` also
+ enforces exact journey membership, duplicate rejection and step/deadline bounds.
++Each journey's `cases` list is a provisional traceability hint. It cannot qualify
++an acceptance case. Only a reviewed `qualification_mappings` entry can bind a
++complete acceptance outcome to explicit required steps. An unmapped or partially
++covered case remains unresolved.
+ 
+ Run source validation through `cargo xtask qa validate`. The coordinator may add
+ `python -m unittest discover -s tests/e2e -p test_runner.py` to the shared gate.
+@@ -36,6 +40,8 @@ targeted. One journey is capped at 600 seconds and its response at 256 KiB. The
+ xtask wrapper may use a 660-second outer deadline. Adapter stdout is not evidence;
+ the bounded response is. Requests/results are exclusive new UUID directories in
+ `results/`, retaining binary hash, commit, reviewer, OS, hardware, mode and DPI.
++The runner's final JSON line binds the absolute result path to its SHA-256 for
++T09 capture.
+ 
+ Reuse `tests/perf`/`xtask perf` for performance and packaging's existing supply-chain
+ verification for release artifacts. This runner neither duplicates those tools
+diff --git a/tests/e2e/journeys.json b/tests/e2e/journeys.json
+index 45c0fd8..0247603 100644
+--- a/tests/e2e/journeys.json
++++ b/tests/e2e/journeys.json
+@@ -1,5 +1,13 @@
+ {
+   "schema_version": 1,
++  "qualification_mappings": [
++    {
++      "journey": "column_multi_cursor",
++      "evidence_id": "AC-006-01",
++      "required_steps": ["s1", "s2", "s3"],
++      "scope": "The three observed steps exercise complete column insertion across tabs, wide glyphs and short lines by display column, followed by restoration in one undo transaction."
++    }
++  ],
+   "journeys": [
+     {
+       "id": "plain_text",
+@@ -89,18 +97,18 @@
+       "steps": [
+         {
+           "id": "s1",
+-          "action": "Select rectangle across tabs and wide glyphs",
+-          "expected": "Selection uses display columns"
++          "action": "Select a rectangle across tabs, wide glyphs and a line shorter than the target display column",
++          "expected": "Selection and insertion targets follow display columns across all three line shapes"
+         },
+         {
+           "id": "s2",
+-          "action": "Insert numbered column and multi-cursor text",
+-          "expected": "Expected text at every intended selection only"
++          "action": "Perform one column insertion across the selected rectangle",
++          "expected": "Inserted text appears at every intended display column, including on the short line"
+         },
+         {
+           "id": "s3",
+-          "action": "Undo",
+-          "expected": "Original document restored"
++          "action": "Invoke Undo once",
++          "expected": "One undo transaction restores the original document"
+         }
+       ]
+     },
+diff --git a/tests/e2e/journeys.schema.json b/tests/e2e/journeys.schema.json
+index a36caee..cd178ff 100644
+--- a/tests/e2e/journeys.schema.json
++++ b/tests/e2e/journeys.schema.json
+@@ -4,12 +4,33 @@
+   "type": "object",
+   "required": [
+     "schema_version",
++    "qualification_mappings",
+     "journeys"
+   ],
+   "properties": {
+     "schema_version": {
+       "const": 1
+     },
++    "qualification_mappings": {
++      "type": "array",
++      "items": {
++        "type": "object",
++        "required": ["journey", "evidence_id", "required_steps", "scope"],
++        "properties": {
++          "journey": {"type": "string"},
++          "evidence_id": {
++            "type": "string",
++            "pattern": "^(AC-[0-9]{3}-[0-9]{2}|command:[a-zA-Z0-9_.-]{1,160}:(success|disabled|failure))$"
++          },
++          "required_steps": {
++            "type": "array",
++            "minItems": 1,
++            "items": {"type": "string"}
++          },
++          "scope": {"type": "string", "minLength": 1}
++        }
++      }
++    },
+     "journeys": {
+       "type": "array",
+       "minItems": 13,
+diff --git a/tests/e2e/runner.py b/tests/e2e/runner.py
+index c349829..bea2dac 100644
+--- a/tests/e2e/runner.py
++++ b/tests/e2e/runner.py
+@@ -5,6 +5,7 @@ No application is launched by validate/resolve. Run requires an explicit reviewe
+ adapter. Capture/deadlines/output bounds reuse PR019, not a second supervisor.
+ """
+ import argparse
++import hashlib
+ import json
+ import os
+ from pathlib import Path
+@@ -19,7 +20,10 @@ from perf_suite import digest, read_json, write_new
+ 
+ STATES = {"Implemented", "Equivalent Different UX", "Excluded With Reason",
+           "v1.1", "Extension-provided (first-party)"}
++CURRENT_STATES = {"implemented-and-tested", "implemented-awaiting-qualification",
++                  "open-defect", "intentional-limit", "deferred"}
+ COMMIT = re.compile(r"[0-9a-f]{40}")
++SHA256 = re.compile(r"[0-9a-f]{64}")
+ JOURNEYS = ("plain_text", "code_config", "regex_transform", "column_multi_cursor",
+             "huge_log_tail", "workspace", "udl", "macro_external", "split_clone_sync",
+             "crash_recovery", "extension_isolation", "portable", "install_update_rollback")
+@@ -50,9 +54,39 @@ def manifest(path):
+                 "Missing, duplicate or excessive journey steps")
+         require(all(s.get("action") and s.get("expected") for s in steps),
+                 "Each step needs an action and observable expectation")
++    mappings = data.get("qualification_mappings", [])
++    require(len({(row.get("journey"), row.get("evidence_id")) for row in mappings}) == len(mappings),
++            "Duplicate journey/evidence qualification mapping")
++    by_id = {row["id"]: row for row in rows}
++    atomic = set(re.findall(
++        r"AC-\d{3}-\d{2}",
++        (ROOT / "docs/blueprint/10_ACCEPTANCE_AND_TRACEABILITY.md").read_text(encoding="utf-8"),
++    ))
++    for mapping in mappings:
++        journey = by_id.get(mapping.get("journey"))
++        evidence_id = mapping.get("evidence_id", "")
++        require(journey is not None
++                and (evidence_id in journey.get("cases", [])
++                     or re.fullmatch(r"command:[a-zA-Z0-9_.-]{1,160}:(success|disabled|failure)", evidence_id)),
++                "Qualification mapping must use a related case or explicit command outcome")
++        require(not evidence_id.startswith("AC-") or evidence_id in atomic,
++                "Qualification mapping names an unknown acceptance case")
++        steps = mapping.get("required_steps", [])
++        require(steps and len(set(steps)) == len(steps)
++                and set(steps).issubset({step["id"] for step in journey["steps"]})
++                and str(mapping.get("scope", "")).strip(),
++                "Qualification mapping needs reviewed steps and scope")
+     return data
+ 
+ 
++def qualification_mapping(data, journey_id, evidence_id):
++    matches = [row for row in data["qualification_mappings"]
++               if row["journey"] == journey_id and row["evidence_id"] == evidence_id]
++    require(len(matches) == 1,
++            f"No reviewed full-result mapping for {journey_id} -> {evidence_id}")
++    return matches[0]
++
++
+ def observations(response, journey):
+     require(response.get("schema_version") == 1 and response.get("journey") == journey["id"],
+             "Adapter response identity mismatch")
+@@ -67,6 +101,209 @@ def observations(response, journey):
+     return "PASS" if all(s["status"] == "PASS" for s in steps) else "FAIL"
+ 
+ 
++def checked_test_receipt(path):
++    receipt = read_json(path)
++    require(receipt.get("schema_version") == 1, "Unsupported T09 receipt schema")
++    require(receipt.get("status") == "completed" and receipt.get("exit_code") == 0,
++            "T09 receipt did not complete successfully")
++    require(receipt.get("top_level_total") == 1 and receipt.get("top_level_passed") == 1
++            and receipt.get("top_level_failed") == 0,
++            "T09 receipt must describe one successful top-level command")
++    require(receipt.get("summary_lines_are_not_aggregate_counts") is True,
++            "T09 receipt does not preserve nested-summary accounting")
++    require(receipt.get("source_changed_during_run") is False,
++            "Source changed while evidence was collected")
++    before, after = receipt.get("source_before", {}), receipt.get("source_after", {})
++    require(before.get("available") is True and after.get("available") is True,
++            "T09 source identity unavailable")
++    require(COMMIT.fullmatch(before.get("head", "")) and before == after,
++            "T09 before/after source identities differ or are invalid")
++    require(isinstance(before.get("working_tree_dirty"), bool)
++            and isinstance(after.get("working_tree_dirty"), bool),
++            "T09 dirty-source state is invalid")
++    require(SHA256.fullmatch(before.get("source_manifest_sha256", "")),
++            "T09 source manifest is invalid")
++    raw = []
++    for stream in ("stdout", "stderr"):
++        record = receipt.get(stream, {})
++        raw_path = Path(record.get("path", "")).resolve()
++        require(raw_path.is_file() and digest(raw_path) == record.get("sha256"),
++                "T09 raw output hash mismatch: " + stream)
++        raw.append(raw_path.read_bytes())
++    return receipt, b"\n".join(raw)
++
++
++def checked_journey_result(path, requested_journey=None):
++    result = read_json(path)
++    if "identity" in result:
++        identity = result.get("identity", {})
++        require(identity.get("schema_version") == 1
++                and COMMIT.fullmatch(identity.get("head", ""))
++                and isinstance(identity.get("working_tree_dirty"), bool)
++                and SHA256.fullmatch(identity.get("source_manifest_sha256", "")),
++                "Invalid xtask journey source identity")
++        binary = identity.get("executable_sha256", "")
++        executable = Path(identity.get("executable", ""))
++        require(SHA256.fullmatch(binary) and executable.is_file()
++                and digest(executable) == binary,
++                "xtask journey executable hash is unavailable or changed")
++        results = result.get("results", [])
++        require(results and len({row.get("name") for row in results}) == len(results),
++                "xtask journey results are empty or duplicated")
++        passed = sum(row.get("status") == "passed" for row in results)
++        failed = sum(row.get("status") == "failed" for row in results)
++        require(result.get("top_level_total") >= len(results)
++                and result.get("top_level_completed") == len(results)
++                and result.get("top_level_passed") == passed
++                and result.get("top_level_failed") == failed
++                and passed + failed == len(results),
++                "xtask journey top-level accounting is inconsistent")
++        require(requested_journey, "--journey is required for xtask journey evidence")
++        selected = [row for row in results if row.get("name") == requested_journey]
++        require(len(selected) == 1 and selected[0].get("status") == "passed",
++                "Requested xtask journey did not pass exactly once")
++        return ({"commit": identity["head"], "journey": requested_journey,
++                 "request": {"binary_sha256": binary}, "status": "PASS"},
++                binary, json.dumps(selected[0], sort_keys=True), identity)
++    require(result.get("schema_version") == 1, "Unsupported journey result schema")
++    journey_id = result.get("journey")
++    require(journey_id in JOURNEYS, "Unknown journey result")
++    journey = next(row for row in manifest(ROOT / "tests/e2e/journeys.json")["journeys"]
++                   if row["id"] == journey_id)
++    require(observations(result, journey) == "PASS" and result.get("status") == "PASS",
++            "Journey result has a failed or unexecuted observation")
++    request = result.get("request", {})
++    binary = request.get("binary_sha256", "")
++    require(SHA256.fullmatch(binary), "Journey result lacks a binary hash")
++    executable = Path(request.get("executable", ""))
++    require(executable.is_file(), "Journey executable is unavailable for hash verification")
++    require(digest(executable) == binary, "Journey executable hash changed")
++    require(COMMIT.fullmatch(result.get("commit", "")), "Journey result lacks a full commit")
++    observed = "; ".join(f'{step["id"]}: {step["observed"]}' for step in result["steps"])
++    return result, binary, observed, None
++
++
++def require_capture_binding(raw, artifact, artifact_sha256, kind):
++    artifact = artifact.resolve()
++    text = raw.decode("utf-8", "replace")
++    if kind == "journey-result":
++        for line in text.splitlines():
++            try:
++                binding = json.loads(line)
++            except json.JSONDecodeError:
++                continue
++            if (isinstance(binding, dict) and binding.get("sha256") == artifact_sha256
++                    and binding.get("evidence_result")
++                    and Path(binding["evidence_result"]).resolve() == artifact):
++                return
++        path_prefix = "journey: evidence="
++        hash_prefix = "journey: evidence_sha256="
++    elif kind == "inventory":
++        path_prefix = "command inventory published="
++        hash_prefix = "command inventory sha256="
++    else:
++        raise ValueError("Unknown capture binding kind")
++    lines = text.splitlines()
++    paths = [line[len(path_prefix):].strip() for line in lines
++             if line.startswith(path_prefix)]
++    hashes = [line[len(hash_prefix):].strip() for line in lines
++              if line.startswith(hash_prefix)]
++    require(len(paths) == 1 and len(hashes) == 1
++            and Path(paths[0]).resolve() == artifact
++            and hashes[0] == artifact_sha256,
++            f"T09 raw output does not bind the {kind} bytes")
++
++
++def checked_fixtures(paths):
++    require(paths, "Qualifying evidence requires actual generated fixture files")
++    records = []
++    aggregate = hashlib.sha256()
++    for supplied in paths:
++        path = supplied.resolve(strict=True)
++        relative = path.relative_to(ROOT)
++        require(path.is_file()
++                and (relative.parts[:1] == ("target",)
++                     or relative.parts[:3] == ("tests", "e2e", "results")),
++                "Fixture must be an actual generated file in an ignored evidence directory")
++        relative = relative.as_posix()
++        value = digest(path)
++        aggregate.update(relative.encode("utf-8") + b"\0" + bytes.fromhex(value))
++        records.append({"path": relative, "sha256": value})
++    require(len({record["path"] for record in records}) == len(records),
++            "Generated fixture paths must be unique")
++    return records, aggregate.hexdigest()
++
++
++def adapt(args):
++    result_path = args.journey_result.resolve(strict=True)
++    receipt_path = args.test_receipt.resolve(strict=True)
++    output_path = args.output.resolve()
++    require(result_path.is_relative_to(ROOT) and receipt_path.is_relative_to(ROOT),
++            "Adapted evidence must be retained inside the repository")
++    output_relative = output_path.relative_to(ROOT)
++    require(output_relative.parts[:1] == ("target",)
++            or output_relative.parts[:3] == ("tests", "e2e", "results"),
++            "Evidence bundles must use a generated ignored output path")
++    result, binary, observed, journey_identity = checked_journey_result(result_path, args.journey)
++    receipt, raw = checked_test_receipt(receipt_path)
++    require(result["commit"] == receipt["source_before"]["head"],
++            "Journey commit differs from the T09 source identity")
++    if journey_identity:
++        require(journey_identity["head"] == receipt["source_before"]["head"]
++                and journey_identity["source_manifest_sha256"] ==
++                receipt["source_before"]["source_manifest_sha256"],
++                "xtask journey and T09 source identities differ")
++    result_sha256 = digest(result_path)
++    require_capture_binding(raw, result_path, result_sha256, "journey-result")
++    evidence_ids = args.evidence_id or []
++    require(len(set(evidence_ids)) == len(evidence_ids), "Evidence IDs must be unique")
++    require(args.implementer.strip() and args.reviewer.strip()
++            and args.implementer != args.reviewer, "Independent reviewer required")
++    request = result["request"]
++    os_build = request.get("os_build") or args.os_build
++    hardware = request.get("hardware") or args.hardware
++    require(all(str(value or "").strip() for value in (os_build, hardware)),
++            "Journey environment is incomplete")
++    result_name = str(result_path.relative_to(ROOT))
++    receipt_name = str(receipt_path.relative_to(ROOT))
++    records = []
++    if journey_identity:
++        require(not evidence_ids, "xtask status-only journeys have no reviewed full-result mapping")
++        observation = {"journey": result["journey"], "status": result["status"],
++                       "observed": observed, "result": result_name,
++                       "result_sha256": result_sha256, "binary_sha256": binary,
++                       "source_identity": receipt["source_before"],
++                       "test_receipt": receipt_name,
++                       "test_receipt_sha256": digest(receipt_path),
++                       "qualification": "status-only; no AC claimed"}
++        write_new(output_path, {"schema_version": 1, "evidence": [],
++                                "observations": [observation]})
++        print(output_path)
++        return 0
++    require(evidence_ids, "A PR021 result needs at least one reviewed mapped evidence ID")
++    fixtures, fixture_sha256 = checked_fixtures(args.fixture)
++    data = manifest(ROOT / "tests/e2e/journeys.json")
++    for evidence_id in evidence_ids:
++        mapping = qualification_mapping(data, result["journey"], evidence_id)
++        steps = {step["id"]: step for step in result["steps"]}
++        require(all(steps[step]["status"] == "PASS" for step in mapping["required_steps"]),
++                "Mapped journey observations did not all pass")
++        records.append({
++            "id": evidence_id, "commit": result["commit"], "implementer": args.implementer,
++            "reviewer": args.reviewer, "fixture_sha256": fixture_sha256,
++            "fixtures": fixtures, "mapping": mapping,
++            "os_build": os_build, "hardware": hardware,
++            "command": receipt["command"], "observed": observed, "status": "PASS",
++            "result": result_name, "result_sha256": result_sha256,
++            "test_receipt": receipt_name, "test_receipt_sha256": digest(receipt_path),
++            "source_identity": receipt["source_before"], "binary_sha256": binary,
++            "journey": result["journey"],
++        })
++    write_new(output_path, {"schema_version": 1, "evidence": records})
++    print(output_path)
++    return 0
++
++
+ def run(args):
+     require(os.name == "nt", "Native journeys require Windows")
+     from windows_process_metrics import OwnedProcessTree
+@@ -110,8 +347,10 @@ def run(args):
+     finally:
+         if child:
+             child.close()
+-    write_new(directory / "result.json", result)
+-    print(directory / "result.json")
++    result_path = directory / "result.json"
++    write_new(result_path, result)
++    print(json.dumps({"evidence_result": str(result_path.resolve()),
++                      "sha256": digest(result_path)}, separators=(",", ":")))
+     return 0 if result["status"] == "PASS" else 1
+ 
+ 
+@@ -120,21 +359,36 @@ def resolve(args):
+     require(index.get("schema_version") == 1, "Unsupported parity index")
+     atomic = set(re.findall(r"AC-\d{3}-\d{2}",
+                  (ROOT / "docs/blueprint/10_ACCEPTANCE_AND_TRACEABILITY.md").read_text(encoding="utf-8")))
+-    inventory = read_json(args.inventory) if args.inventory else None
++    inventory_path = Path(args.inventory).resolve() if args.inventory else None
++    if inventory_path:
++        require(inventory_path.is_relative_to(ROOT), "Inventory path escapes repository")
++    inventory = read_json(inventory_path) if inventory_path else None
+     unresolved = []
+     required = set(atomic)
++    inventory_receipt = None
+     if inventory is None:
+         unresolved.append("Missing runtime command inventory")
+     else:
+-        require(inventory.get("schema_version") == 1 and COMMIT.fullmatch(inventory.get("commit", "")),
+-                "Runtime inventory needs schema_version 1 and full commit")
++        require(inventory.get("schema_version") == 2 and COMMIT.fullmatch(inventory.get("commit", ""))
++                and SHA256.fullmatch(inventory.get("binary_sha256", "")),
++                "Runtime inventory needs schema_version 2, full commit and binary hash")
++        require(getattr(args, "inventory_receipt", None), "Runtime inventory needs its T09 receipt")
++        inventory_receipt, raw = checked_test_receipt(args.inventory_receipt)
++        require(inventory_receipt["source_before"]["head"] == inventory["commit"],
++                "Inventory commit differs from its T09 source identity")
++        require_capture_binding(raw, inventory_path, digest(inventory_path), "inventory")
+         commands = inventory.get("commands", [])
+         require(commands and len(commands) <= 10000 and len(set(commands)) == len(commands),
+                 "Runtime inventory empty, duplicated or too large")
+         for command in commands:
+             require(re.fullmatch(r"[a-zA-Z0-9_.-]{1,160}", command), "Invalid command ID")
+             required.update(f"command:{command}:{kind}" for kind in ("success", "disabled", "failure"))
+-    records = index.get("evidence", [])
++    records = list(index.get("evidence", []))
++    for evidence_path in getattr(args, "evidence", []) or []:
++        bundle = read_json(evidence_path)
++        require(bundle.get("schema_version") == 1 and isinstance(bundle.get("evidence"), list),
++                "Unsupported evidence bundle")
++        records.extend(bundle["evidence"])
+     require(len(records) <= 40000, "Too many evidence records")
+     resolved = {}
+     for record in records:
+@@ -156,8 +410,45 @@ def resolve(args):
+         artifact = local_path(record["result"])
+         require(digest(artifact) == record.get("result_sha256"), "Result hash mismatch: " + key)
+         require(record.get("status") in {"PASS", "FAIL", "NOT_RUN"}, "Invalid status")
++        source = record.get("source_identity", {})
++        require(source.get("available") is True and COMMIT.fullmatch(source.get("head", ""))
++                and isinstance(source.get("working_tree_dirty"), bool)
++                and SHA256.fullmatch(source.get("source_manifest_sha256", "")),
++                "Missing checked source identity: " + key)
++        require(source["head"] == record["commit"], "Evidence source/commit mismatch: " + key)
++        require(SHA256.fullmatch(record.get("binary_sha256", "")),
++                "Missing binary hash: " + key)
++        receipt = local_path(record["test_receipt"])
++        require(digest(receipt) == record.get("test_receipt_sha256"),
++                "T09 receipt hash mismatch: " + key)
++        checked, raw = checked_test_receipt(receipt)
++        require(checked["source_before"] == source, "Evidence/T09 source identity mismatch: " + key)
++        require_capture_binding(raw, artifact, record["result_sha256"], "journey-result")
++        actual, actual_binary, actual_observed, xtask_identity = checked_journey_result(
++            artifact, record.get("journey"))
++        require(xtask_identity is None, "Status-only xtask observations cannot qualify an AC")
++        mapping = qualification_mapping(manifest(ROOT / "tests/e2e/journeys.json"),
++                                        actual["journey"], key)
++        require(record.get("mapping") == mapping, "Evidence mapping differs from authority: " + key)
++        fixture_records = record.get("fixtures", [])
++        fixtures, fixture_sha256 = checked_fixtures(
++            [local_path(item.get("path", "")) for item in fixture_records])
++        require(fixtures == fixture_records and fixture_sha256 == record["fixture_sha256"],
++                "Fixture bytes or aggregate identity changed: " + key)
++        require(record["journey"] == actual["journey"]
++                and record["commit"] == actual["commit"]
++                and record["binary_sha256"] == actual_binary
++                and record["observed"] == actual_observed
++                and record["command"] == checked["command"]
++                and record["status"] == "PASS",
++                "Evidence fields do not match the revalidated journey: " + key)
+         if inventory and record["commit"] != inventory["commit"]:
+             unresolved.append(key + ": result commit differs from inventory")
++        if inventory and record["binary_sha256"] != inventory["binary_sha256"]:
++            unresolved.append(key + ": result binary differs from inventory")
++        if inventory_receipt and source["source_manifest_sha256"] != \
++                inventory_receipt["source_before"]["source_manifest_sha256"]:
++            unresolved.append(key + ": result source manifest differs from inventory")
+         resolved[key] = record["status"]
+     unresolved.extend(key for key in sorted(required) if resolved.get(key) not in {"PASS", "EXCLUDED"})
+     rows = index.get("features", [])
+@@ -167,7 +458,17 @@ def resolve(args):
+     families = {line.split("|")[1].strip() for line in table.splitlines()
+                 if line.startswith("|") and not line.startswith(("|---", "| Notepad++ capability"))}
+     require(families.issubset({r["capability"] for r in rows}), "Parity index silently omits blueprint rows")
++    ledger_rows = index.get("current_ledger", [])
++    require(len(ledger_rows) == len(rows)
++            and {row["id"] for row in ledger_rows} == {row["id"] for row in rows},
++            "Current ledger must cover every parity family exactly once")
++    ledger = {row["id"]: row for row in ledger_rows}
+     for row in rows:
++        delivery = ledger[row["id"]]
++        if delivery.get("state") not in CURRENT_STATES or not all(
++                delivery.get(field) for field in
++                ("owner", "next_step", "code", "tests", "limitation", "source_binary_identity")):
++            unresolved.append(row["id"] + ": current ledger metadata incomplete")
+         if row.get("state") not in STATES:
+             unresolved.append(row["id"] + ": delivery state unresolved")
+         elif row["state"] in {"Excluded With Reason", "v1.1"}:
+@@ -177,7 +478,9 @@ def resolve(args):
+             unresolved.append(row["id"] + ": independent parity evidence missing")
+     report = {"schema_version": 1, "required_count": len(required), "resolved": resolved,
+               "inventory_commit": inventory["commit"] if inventory else None,
+-              "inventory_sha256": digest(args.inventory) if inventory else None,
++              "inventory_sha256": digest(inventory_path) if inventory else None,
++              "inventory_binary_sha256": inventory["binary_sha256"] if inventory else None,
++              "source_identity": inventory_receipt["source_before"] if inventory_receipt else None,
+               "index_sha256": digest(args.index),
+               "unresolved": sorted(set(unresolved)), "evidence_complete": not unresolved,
+               "performance": "Reuse PR019 comparison/raw data; no timing release gate",
+@@ -197,7 +500,20 @@ def main():
+     resolve_parser = sub.add_parser("resolve")
+     resolve_parser.add_argument("--index", type=Path, default=ROOT / "docs/parity/index.json")
+     resolve_parser.add_argument("--inventory", type=Path)
++    resolve_parser.add_argument("--inventory-receipt", type=Path)
++    resolve_parser.add_argument("--evidence", type=Path, action="append", default=[])
+     resolve_parser.add_argument("--output", type=Path)
++    adapt_parser = sub.add_parser("adapt")
++    adapt_parser.add_argument("--journey-result", type=Path, required=True)
++    adapt_parser.add_argument("--test-receipt", type=Path, required=True)
++    adapt_parser.add_argument("--journey")
++    adapt_parser.add_argument("--os-build")
++    adapt_parser.add_argument("--hardware")
++    adapt_parser.add_argument("--evidence-id", action="append", default=[])
++    adapt_parser.add_argument("--implementer", required=True)
++    adapt_parser.add_argument("--reviewer", required=True)
++    adapt_parser.add_argument("--fixture", type=Path, action="append", default=[])
++    adapt_parser.add_argument("--output", type=Path, required=True)
+     execute = sub.add_parser("run")
+     execute.add_argument("journey", choices=JOURNEYS)
+     execute.add_argument("--manifest", type=Path, default=ROOT / "tests/e2e/journeys.json")
+@@ -212,7 +528,11 @@ def main():
+             manifest(args.manifest)
+             print("Journey source manifest valid; no journey executed")
+             return 0
+-        return resolve(args) if args.operation == "resolve" else run(args)
++        if args.operation == "resolve":
++            return resolve(args)
++        if args.operation == "adapt":
++            return adapt(args)
++        return run(args)
+     except (ValueError, KeyError, TypeError, OSError) as error:
+         print(str(error), file=sys.stderr)
+         return 2
+diff --git a/tests/e2e/test_runner.py b/tests/e2e/test_runner.py
+index df7edbc..153f8d1 100644
+--- a/tests/e2e/test_runner.py
++++ b/tests/e2e/test_runner.py
+@@ -1,6 +1,7 @@
+ # SPDX-License-Identifier: MPL-2.0
+ """Source-only invariants; these tests never launch an application."""
+ import copy
++import json
+ from pathlib import Path
+ import tempfile
+ from types import SimpleNamespace
+@@ -9,6 +10,68 @@ import runner
+ 
+ 
+ class RunnerTests(unittest.TestCase):
++    def _write_receipt(self, root, name, raw, identity, command=None):
++        stdout = root / f"{name}.stdout.log"
++        stderr = root / f"{name}.stderr.log"
++        stdout.write_text(raw, encoding="utf-8")
++        stderr.write_bytes(b"")
++        receipt = root / f"{name}.json"
++        document = {
++            "schema_version": 1, "status": "completed", "exit_code": 0,
++            "top_level_total": 1, "top_level_passed": 1, "top_level_failed": 0,
++            "summary_lines_are_not_aggregate_counts": True,
++            "source_changed_during_run": False,
++            "source_before": identity, "source_after": copy.deepcopy(identity),
++            "command": command or ["synthetic-parser-fixture"],
++            "stdout": {"path": str(stdout), "sha256": runner.digest(stdout)},
++            "stderr": {"path": str(stderr), "sha256": runner.digest(stderr)},
++        }
++        runner.write_new(receipt, document)
++        return receipt
++
++    def _qualification_fixture(self, root):
++        binary = root / "bareline.exe"
++        binary.write_bytes(b"synthetic parser-only binary")
++        fixture = root / "column-input.txt"
++        fixture.write_text("a\tb\n界\n", encoding="utf-8")
++        manifest = runner.manifest(runner.ROOT / "tests/e2e/journeys.json")
++        journey = next(row for row in manifest["journeys"]
++                       if row["id"] == "column_multi_cursor")
++        result = root / "result.json"
++        runner.write_new(result, {
++            "schema_version": 1, "journey": journey["id"], "commit": "a" * 40,
++            "reviewer": "reviewer", "status": "PASS", "adapter": ["fixture"],
++            "request": {"executable": str(binary), "binary_sha256": runner.digest(binary),
++                        "os_build": "synthetic-os", "hardware": "synthetic-hardware"},
++            "steps": [{"id": step["id"], "status": "PASS",
++                       "observed": "synthetic parser observation " + step["id"]}
++                      for step in journey["steps"]],
++        })
++        binding = json.dumps({"evidence_result": str(result.resolve()),
++                              "sha256": runner.digest(result)}, separators=(",", ":")) + "\n"
++        identity = {"available": True, "head": "a" * 40, "working_tree_dirty": True,
++                    "source_manifest_sha256": "b" * 64}
++        receipt = self._write_receipt(root, "journey-receipt", binding, identity)
++        bundle = root / "bundle.json"
++        args = SimpleNamespace(journey_result=result, test_receipt=receipt,
++                               output=bundle, journey=None,
++                               evidence_id=["AC-006-01"], implementer="implementer",
++                               reviewer="reviewer", os_build=None, hardware=None,
++                               fixture=[fixture])
++        return args, identity, binary
++
++    def test_current_ledger_covers_all_families_with_actionable_metadata(self):
++        data = runner.read_json(runner.ROOT / "docs/parity/index.json")
++        families = {row["id"] for row in data["features"]}
++        ledger = data["current_ledger"]
++        self.assertEqual({row["id"] for row in ledger}, families)
++        self.assertEqual(len(ledger), len(families))
++        for row in ledger:
++            self.assertIn(row["state"], runner.CURRENT_STATES)
++            for field in ("owner", "next_step", "code", "tests", "limitation",
++                          "source_binary_identity"):
++                self.assertTrue(row[field].strip(), f'{row["id"]}: {field}')
++
+     def test_empty_evidence_reports_missing_cases_and_inventory(self):
+         with tempfile.TemporaryDirectory() as temporary:
+             report = Path(temporary) / "report.json"
+@@ -58,6 +121,147 @@ class RunnerTests(unittest.TestCase):
+             with self.assertRaises(ValueError):
+                 runner.manifest(path)
+ 
++    def test_t09_receipt_rejects_nested_counts_as_top_level(self):
++        with tempfile.TemporaryDirectory() as temporary:
++            root = Path(temporary)
++            stdout = root / "stdout.log"
++            stderr = root / "stderr.log"
++            stdout.write_text("test result: ok. 1 passed\n", encoding="utf-8")
++            stderr.write_bytes(b"")
++            identity = {"available": True, "head": "a" * 40,
++                        "working_tree_dirty": True,
++                        "source_manifest_sha256": "b" * 64}
++            receipt = root / "receipt.json"
++            runner.write_new(receipt, {
++                "schema_version": 1, "status": "completed", "exit_code": 0,
++                "top_level_total": 2, "top_level_passed": 2, "top_level_failed": 0,
++                "summary_lines_are_not_aggregate_counts": True,
++                "source_changed_during_run": False,
++                "source_before": identity, "source_after": identity,
++                "stdout": {"path": str(stdout), "sha256": runner.digest(stdout)},
++                "stderr": {"path": str(stderr), "sha256": runner.digest(stderr)},
++            })
++            with self.assertRaisesRegex(ValueError, "one successful top-level"):
++                runner.checked_test_receipt(receipt)
++
++    def test_xtask_journey_identity_is_checked_without_counting_fixture_summaries(self):
++        with tempfile.TemporaryDirectory() as temporary:
++            root = Path(temporary)
++            executable = root / "bareline.exe"
++            executable.write_bytes(b"actual binary")
++            result_path = root / "journey.json"
++            runner.write_new(result_path, {
++                "identity": {"schema_version": 1, "run_id": "run-1", "retry_of": None,
++                             "head": "a" * 40, "working_tree_dirty": True,
++                             "source_manifest_sha256": "b" * 64,
++                             "executable": str(executable),
++                             "executable_sha256": runner.digest(executable)},
++                "top_level_total": 1, "top_level_completed": 1,
++                "top_level_passed": 1, "top_level_failed": 0,
++                "results": [{"name": "p0-3", "status": "passed"}],
++            })
++            result, binary, observed, identity = runner.checked_journey_result(
++                result_path, "p0-3")
++            self.assertEqual(result["commit"], "a" * 40)
++            self.assertEqual(binary, runner.digest(executable))
++            self.assertIn('"status": "passed"', observed)
++            self.assertEqual(identity["source_manifest_sha256"], "b" * 64)
++
++    def test_checked_adapter_and_resolver_accept_only_the_reviewed_mapping(self):
++        (runner.ROOT / "target").mkdir(exist_ok=True)
++        with tempfile.TemporaryDirectory(dir=runner.ROOT / "target") as temporary:
++            root = Path(temporary)
++            args, identity, binary = self._qualification_fixture(root)
++            self.assertEqual(runner.adapt(args), 0)
++            inventory = root / "inventory.json"
++            runner.write_new(inventory, {"schema_version": 2, "commit": "a" * 40,
++                                         "binary_sha256": runner.digest(binary),
++                                         "commands": ["edit.column"]})
++            raw = (f"command inventory published={inventory.resolve()}\n"
++                   f"command inventory sha256={runner.digest(inventory)}\n")
++            inventory_receipt = self._write_receipt(
++                root, "inventory-receipt", raw, identity, [str(binary)])
++            report = root / "report.json"
++            status = runner.resolve(SimpleNamespace(
++                index=runner.ROOT / "docs/parity/index.json", inventory=inventory,
++                inventory_receipt=inventory_receipt, evidence=[args.output], output=report))
++            self.assertEqual(status, 1)
++            self.assertEqual(runner.read_json(report)["resolved"]["AC-006-01"], "PASS")
++
++    def test_adapter_rejects_unrelated_case_and_altered_result(self):
++        (runner.ROOT / "target").mkdir(exist_ok=True)
++        with tempfile.TemporaryDirectory(dir=runner.ROOT / "target") as temporary:
++            root = Path(temporary)
++            args, _, _ = self._qualification_fixture(root)
++            args.evidence_id = ["AC-005-01"]
++            with self.assertRaisesRegex(ValueError, "No reviewed full-result mapping"):
++                runner.adapt(args)
++            args.evidence_id = ["AC-006-01"]
++            args.fixture = []
++            with self.assertRaisesRegex(ValueError, "actual generated fixture"):
++                runner.adapt(args)
++            args.fixture = [root / "column-input.txt"]
++            result = runner.read_json(args.journey_result)
++            result["extra"] = "mutated after capture"
++            args.journey_result.write_text(json.dumps(result), encoding="utf-8")
++            with self.assertRaisesRegex(ValueError, "does not bind"):
++                runner.adapt(args)
++
++    def test_resolver_rejects_failed_result_claimed_as_pass_and_binary_mismatch(self):
++        (runner.ROOT / "target").mkdir(exist_ok=True)
++        with tempfile.TemporaryDirectory(dir=runner.ROOT / "target") as temporary:
++            root = Path(temporary)
++            args, _, _ = self._qualification_fixture(root)
++            runner.adapt(args)
++            bundle = runner.read_json(args.output)
++            mismatch = root / "binary-mismatch.json"
++            changed = copy.deepcopy(bundle)
++            changed["evidence"][0]["binary_sha256"] = "c" * 64
++            runner.write_new(mismatch, changed)
++            with self.assertRaisesRegex(ValueError, "revalidated journey"):
++                runner.resolve(SimpleNamespace(index=runner.ROOT / "docs/parity/index.json",
++                                                inventory=None, evidence=[mismatch], output=None))
++
++            result = runner.read_json(args.journey_result)
++            result["status"] = "FAIL"
++            args.journey_result.write_text(json.dumps(result), encoding="utf-8")
++            stdout = Path(runner.read_json(args.test_receipt)["stdout"]["path"])
++            stdout.write_text(json.dumps({"evidence_result": str(args.journey_result.resolve()),
++                                          "sha256": runner.digest(args.journey_result)}) + "\n",
++                              encoding="utf-8")
++            receipt = runner.read_json(args.test_receipt)
++            receipt["stdout"]["sha256"] = runner.digest(stdout)
++            args.test_receipt.write_text(json.dumps(receipt), encoding="utf-8")
++            forged = copy.deepcopy(bundle)
++            forged["evidence"][0]["result_sha256"] = runner.digest(args.journey_result)
++            forged["evidence"][0]["test_receipt_sha256"] = runner.digest(args.test_receipt)
++            forged_path = root / "failed-as-pass.json"
++            runner.write_new(forged_path, forged)
++            with self.assertRaisesRegex(ValueError, "failed or unexecuted"):
++                runner.resolve(SimpleNamespace(index=runner.ROOT / "docs/parity/index.json",
++                                                inventory=None, evidence=[forged_path], output=None))
++
++    def test_resolver_rejects_inventory_mutation_after_capture(self):
++        (runner.ROOT / "target").mkdir(exist_ok=True)
++        with tempfile.TemporaryDirectory(dir=runner.ROOT / "target") as temporary:
++            root = Path(temporary)
++            _, identity, binary = self._qualification_fixture(root)
++            inventory = root / "inventory.json"
++            runner.write_new(inventory, {"schema_version": 2, "commit": "a" * 40,
++                                         "binary_sha256": runner.digest(binary),
++                                         "commands": ["file.open"]})
++            raw = (f"command inventory published={inventory.resolve()}\n"
++                   f"command inventory sha256={runner.digest(inventory)}\n")
++            receipt = self._write_receipt(root, "inventory-receipt", raw, identity)
++            document = runner.read_json(inventory)
++            document["commands"].append("file.save")
++            inventory.write_text(json.dumps(document), encoding="utf-8")
++            with self.assertRaisesRegex(ValueError, "does not bind"):
++                runner.resolve(SimpleNamespace(index=runner.ROOT / "docs/parity/index.json",
++                                                inventory=inventory,
++                                                inventory_receipt=receipt,
++                                                evidence=[], output=None))
++
+ 
+ if __name__ == "__main__":
+     unittest.main()
+diff --git a/xtask/src/journey.rs b/xtask/src/journey.rs
+index 9c8b8dc..25ea2b7 100644
+--- a/xtask/src/journey.rs
++++ b/xtask/src/journey.rs
+@@ -213,6 +213,7 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+         selected.len()
+     );
+     eprintln!("journey: evidence={}", evidence_path.display());
++    eprintln!("journey: evidence_sha256={}", hash_file(&evidence_path)?);
+     if failures.is_empty() {
+         Ok(())
+     } else {

@@ -4,13 +4,17 @@
 use super::*;
 use bareline_platform::accessibility::{AccessibilityAction, AccessibilityNode, AccessibilityRole};
 use bareline_renderer::{DrawOp, Rect};
-use bareline_ui::{ACCENT, BORDER, CHROME, ELEVATED, MUTED, TEXT, rect, text_field::TextField};
+use bareline_ui::{rect, text_field::TextField};
 const ROOT: u64 = 60000;
 const FIELD: u64 = 61000;
 // Catalogs contain at most 4096 entries. Keep both dynamic ranges separate from
 // the manager's fixed controls and other panels (Language starts at 70000).
 const PACKAGE_ROW_BASE: u64 = 8_000_000;
 const PACKAGE_ACTION_BASE: u64 = 8_010_000;
+// The enable/disable switch on each installed card needs its own stable identity,
+// kept clear of the row-select and per-row action ranges above (catalogs hold at
+// most 4096 entries, so each base has room for the full index span).
+const PACKAGE_TOGGLE_BASE: u64 = 8_020_000;
 #[derive(Clone)]
 struct Control {
     id: u64,
@@ -21,7 +25,43 @@ struct Control {
     selected: bool,
     role: AccessibilityRole,
 }
+/// Guest panel output is untrusted and may be a single megabyte-long line. Rendering
+/// and the accessibility tree both take a bounded excerpt (SEC-10).
+const PANEL_LINE_LIMIT: usize = 4096;
+const PANEL_OUTPUT_EXCERPT: usize = 64 * 1024;
+fn panel_excerpt(value: &str, limit: usize) -> &str {
+    if value.len() <= limit {
+        return value;
+    }
+    let mut end = limit;
+    while end > 0 && !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    &value[..end]
+}
+/// Turn a package identifier (e.g. `bareline.json-tools`) into a plain-language
+/// name for the card heading. The manifest carries no separate display name, so
+/// the identifier's words are capitalised and joined with spaces.
+fn friendly_name(id: &str) -> String {
+    let mut name = String::with_capacity(id.len());
+    for word in id.split(['.', '_', '-', ' ']) {
+        if word.is_empty() {
+            continue;
+        }
+        if !name.is_empty() {
+            name.push(' ');
+        }
+        let mut chars = word.chars();
+        if let Some(first) = chars.next() {
+            name.extend(first.to_uppercase());
+            name.push_str(chars.as_str());
+        }
+    }
+    if name.is_empty() { id.to_string() } else { name }
+}
+
 pub(super) struct ManagerUi {
+    pub(super) theme: bareline_ui::theme::UiTheme,
     fields: Vec<TextField>,
     controls: Vec<Control>,
     focus: u64,
@@ -35,6 +75,7 @@ pub(super) struct ManagerUi {
 impl Default for ManagerUi {
     fn default() -> Self {
         Self {
+            theme: Default::default(),
             fields: (0..65).map(|_| TextField::default()).collect(),
             controls: vec![],
             focus: ROOT,
@@ -77,10 +118,10 @@ impl ExtensionsRuntime {
                         .enumerate()
                         .filter(|(_, entry)| {
                             self.tab != 2
-                                || self.installed.iter().any(|row| {
-                                    row.package.id == entry.id
-                                        && row.package.version != entry.version
-                                })
+                                || self
+                                    .installed
+                                    .iter()
+                                    .any(|row| row.package.id == entry.id && row.package.version != entry.version)
                         })
                         .map(|(index, entry)| (index, format!("{} {}", entry.id, entry.version)))
                         .collect()
@@ -109,15 +150,19 @@ impl ExtensionsRuntime {
         let label = label.into();
         ops.push(DrawOp::FillRounded(
             bounds,
-            if selected { ELEVATED } else { CHROME },
+            if selected {
+                self.ui.theme.elevated
+            } else {
+                self.ui.theme.chrome
+            },
             4.0,
         ));
         ops.push(DrawOp::StrokeRounded(
             bounds,
             if self.ui.focus == id || selected {
-                ACCENT
+                self.ui.theme.focus
             } else {
-                BORDER
+                self.ui.theme.border
             },
             1.0,
             4.0,
@@ -128,7 +173,11 @@ impl ExtensionsRuntime {
             bounds.y + 9.0,
             &label,
             13.0,
-            if disabled { MUTED } else { TEXT },
+            if disabled {
+                self.ui.theme.muted
+            } else {
+                self.ui.theme.text
+            },
         ));
         ops.push(DrawOp::PopClip);
         self.ui.controls.push(Control {
@@ -154,22 +203,22 @@ impl ExtensionsRuntime {
         self.bounds = rect(0.0, 82.0, width, (height - 112.0).max(0.0));
         self.ui.controls.clear();
         self.ui.caret = None;
-        ops.push(DrawOp::Fill(self.bounds, CHROME));
+        // Full-panel background so no editor text shows through behind the
+        // Extensions manager (UX-52: "no editor sliver behind it").
+        ops.push(DrawOp::Fill(rect(0.0, 0.0, width, height), self.ui.theme.chrome));
+        ops.push(DrawOp::Fill(self.bounds, self.ui.theme.chrome));
         let sidebar = (width * 0.186).clamp(140.0, 296.0);
         let x = sidebar + 24.0;
         let w = (width - x - 24.0).max(120.0);
-        ops.push(text(20.0, 106.0, "Extensions", 16.0, ACCENT));
+        ops.push(text(20.0, 106.0, "Extensions", 16.0, self.ui.theme.focus));
         ops.push(DrawOp::FillRounded(
             rect(10.0, 136.0, sidebar - 20.0, 48.0),
-            ELEVATED,
+            self.ui.theme.elevated,
             6.0,
         ));
-        ops.push(text(30.0, 152.0, "Extensions", 16.0, TEXT));
-        ops.push(text(x, 102.0, "Extensions", 22.0, TEXT));
-        for (index, label) in ["Installed", "Discover", "Updates", "Disabled"]
-            .iter()
-            .enumerate()
-        {
+        ops.push(text(30.0, 152.0, "Extensions", 16.0, self.ui.theme.text));
+        ops.push(text(x, 102.0, "Extensions", 22.0, self.ui.theme.text));
+        for (index, label) in ["Installed", "Discover", "Updates", "Disabled"].iter().enumerate() {
             self.control(
                 ops,
                 ROOT + 1 + index as u64,
@@ -191,9 +240,21 @@ impl ExtensionsRuntime {
             false,
             AccessibilityRole::Button,
         );
+        // Honest status when this build carries no owner trust pin
+        // (UX-52/ARCH-01). Drawn inline (not an early return) so the panel's
+        // controls and accessibility tree stay intact.
+        if !super::trust_available() {
+            ops.push(text(
+                x,
+                166.0,
+                "Extensions require a signed runtime; not available in this build.",
+                13.0,
+                self.ui.theme.muted,
+            ));
+        }
         ops.push(DrawOp::StrokeRounded(
             rect(x, 192.0, w, 54.0),
-            BORDER,
+            self.ui.theme.border,
             1.0,
             8.0,
         ));
@@ -202,10 +263,14 @@ impl ExtensionsRuntime {
             210.0,
             "Extensions run isolated in a separate process.",
             16.0,
-            TEXT,
+            self.ui.theme.text,
         ));
-        ops.push(text(x, 266.0, "Runtime", 16.0, TEXT));
-        ops.push(DrawOp::FillRounded(rect(x, 292.0, w, 76.0), ELEVATED, 8.0));
+        ops.push(text(x, 266.0, "Runtime", 16.0, self.ui.theme.text));
+        ops.push(DrawOp::FillRounded(
+            rect(x, 292.0, w, 76.0),
+            self.ui.theme.elevated,
+            8.0,
+        ));
         ops.push(text(
             x + 20.0,
             310.0,
@@ -217,14 +282,14 @@ impl ExtensionsRuntime {
                 "Runtime not installed"
             },
             16.0,
-            TEXT,
+            self.ui.theme.text,
         ));
         ops.push(text(
             x + 20.0,
             337.0,
             "Bareline project · verified offline runtime",
             13.0,
-            MUTED,
+            self.ui.theme.muted,
         ));
         let busy = self.manager_pending.is_some();
         self.control(
@@ -289,20 +354,15 @@ impl ExtensionsRuntime {
         if self.ui.results_open {
             let lines = ((body_bottom - 450.0) / 20.0).floor().max(1.0) as usize;
             let start = self.ui.result_page;
-            ops.push(DrawOp::PushClip(rect(
-                x,
-                430.0,
-                w,
-                (body_bottom - 438.0).max(0.0),
-            )));
-            for (index, line) in self
-                .panel_output
-                .lines()
-                .skip(start)
-                .take(lines)
-                .enumerate()
-            {
-                ops.push(text(x, 434.0 + index as f32 * 20.0, line, 13.0, TEXT));
+            ops.push(DrawOp::PushClip(rect(x, 430.0, w, (body_bottom - 438.0).max(0.0))));
+            for (index, line) in self.panel_output.lines().skip(start).take(lines).enumerate() {
+                ops.push(text(
+                    x,
+                    434.0 + index as f32 * 20.0,
+                    panel_excerpt(line, PANEL_LINE_LIMIT),
+                    13.0,
+                    self.ui.theme.text,
+                ));
             }
             ops.push(DrawOp::PopClip);
             self.control(
@@ -321,11 +381,7 @@ impl ExtensionsRuntime {
                 "Next results",
                 "results_next",
                 rect(x + 150.0, body_bottom, 130.0, 32.0),
-                self.panel_output
-                    .lines()
-                    .skip(start + lines)
-                    .next()
-                    .is_none(),
+                self.panel_output.lines().skip(start + lines).next().is_none(),
                 false,
                 AccessibilityRole::Button,
             );
@@ -345,26 +401,21 @@ impl ExtensionsRuntime {
                 432.0,
                 "Arguments: XPath query then prefix=URI; JSON/Hex key=value per line.",
                 13.0,
-                MUTED,
+                self.ui.theme.muted,
             ));
             let count = ((body_bottom - 484.0) / 38.0).floor().clamp(1.0, 8.0) as usize;
             let start = self.ui.field_page.min(64);
             for index in start..(start + count).min(65) {
-                let bounds = rect(
-                    x + 70.0,
-                    458.0 + (index - start) as f32 * 38.0,
-                    w - 70.0,
-                    32.0,
-                );
+                let bounds = rect(x + 70.0, 458.0 + (index - start) as f32 * 38.0, w - 70.0, 32.0);
                 ops.push(text(
                     x,
                     bounds.y + 8.0,
                     format!("Line {}", index + 1),
                     13.0,
-                    MUTED,
+                    self.ui.theme.muted,
                 ));
                 let focused = self.ui.focus == FIELD + index as u64;
-                match self.ui.fields[index].draw(renderer, bounds, focused, ops) {
+                match self.ui.fields[index].draw_with_theme(renderer, bounds, focused, self.ui.theme, ops) {
                     Ok(caret) if focused => self.ui.caret = Some(caret),
                     Ok(_) => {}
                     Err(error) => self.message = Some(format!("Argument layout: {error:?}")),
@@ -401,82 +452,219 @@ impl ExtensionsRuntime {
             );
         } else {
             let rows = self.visible_rows();
-            let selected = rows
-                .iter()
-                .position(|(index, _)| *index == self.selected)
-                .unwrap_or(0);
+            let selected = rows.iter().position(|(index, _)| *index == self.selected).unwrap_or(0);
             let page = selected / 3 * 3;
             let cw = (w - 24.0) / 3.0;
+            let catalog = matches!(self.tab, 1 | 2);
+            ops.push(text(
+                x,
+                410.0,
+                if catalog {
+                    "Available extensions"
+                } else {
+                    "Installed extensions"
+                },
+                14.0,
+                self.ui.theme.muted,
+            ));
+            // A selected installed extension keeps its command controls docked at
+            // the foot of the panel; leave room for them so cards never overlap.
+            let has_command_row = !catalog && self.installed.get(self.selected).is_some();
+            let card_top = 432.0;
+            let card_bottom = if has_command_row {
+                (body_bottom - 64.0).max(card_top + 150.0)
+            } else {
+                (body_bottom - 8.0).max(card_top + 150.0)
+            };
+            let card_h = card_bottom - card_top;
             for (position, (index, label)) in rows.iter().skip(page).take(3).enumerate() {
                 let cx = x + position as f32 * (cw + 12.0);
-                ops.push(DrawOp::FillRounded(
-                    rect(cx, 432.0, cw, (body_bottom - 440.0).max(160.0)),
-                    ELEVATED,
+                let card = rect(cx, card_top, cw, card_h);
+                let is_selected = *index == self.selected;
+                ops.push(DrawOp::FillRounded(card, self.ui.theme.elevated, 8.0));
+                ops.push(DrawOp::StrokeRounded(
+                    card,
+                    if is_selected {
+                        self.ui.theme.focus
+                    } else {
+                        self.ui.theme.border
+                    },
+                    1.0,
                     8.0,
                 ));
-                self.control(
-                    ops,
-                    PACKAGE_ROW_BASE + *index as u64,
-                    label,
-                    format!("select:{index}"),
-                    rect(cx + 8.0, 442.0, cw - 16.0, 36.0),
-                    false,
-                    *index == self.selected,
-                    AccessibilityRole::ListItem,
-                );
-                let catalog = matches!(self.tab, 1 | 2);
+                // Owned copies so the immutable borrow of `installed` ends before
+                // the `&mut self` control calls below.
+                let (name, subtitle, enabled, caps) = if catalog {
+                    let (id, version) = label.rsplit_once(' ').unwrap_or((label.as_str(), ""));
+                    (friendly_name(id), format!("Version {version}"), None, Vec::new())
+                } else if let Some(row) = self.installed.get(*index) {
+                    (
+                        friendly_name(&row.package.id),
+                        format!("{} · Version {}", row.package.manifest.publisher, row.package.version),
+                        Some(row.state.enabled),
+                        row.package
+                            .manifest
+                            .capabilities
+                            .iter()
+                            .map(|cap| cap.name().to_string())
+                            .collect::<Vec<_>>(),
+                    )
+                } else {
+                    (label.clone(), String::new(), None, Vec::new())
+                };
+                let badge: String = name
+                    .split_whitespace()
+                    .filter_map(|word| word.chars().next())
+                    .take(2)
+                    .collect::<String>()
+                    .to_uppercase();
+                ops.push(DrawOp::PushClip(card));
+                let icon = rect(cx + 16.0, card_top + 14.0, 42.0, 42.0);
+                ops.push(DrawOp::FillRounded(icon, self.ui.theme.chrome, 8.0));
+                ops.push(DrawOp::StrokeRounded(icon, self.ui.theme.border, 1.0, 8.0));
+                ops.push(text(icon.x + 11.0, icon.y + 14.0, badge, 14.0, self.ui.theme.focus));
+                ops.push(text(
+                    cx + 70.0,
+                    card_top + 20.0,
+                    name.as_str(),
+                    15.0,
+                    self.ui.theme.text,
+                ));
+                ops.push(text(
+                    cx + 70.0,
+                    card_top + 40.0,
+                    subtitle.as_str(),
+                    12.0,
+                    self.ui.theme.muted,
+                ));
+                // Whole header selects the card (no button chrome over the name).
+                self.ui.controls.push(Control {
+                    id: PACKAGE_ROW_BASE + *index as u64,
+                    label: if subtitle.is_empty() {
+                        name.clone()
+                    } else {
+                        format!("{name}, {subtitle}")
+                    },
+                    action: format!("select:{index}"),
+                    bounds: rect(cx + 8.0, card_top + 8.0, cw - 16.0, 56.0),
+                    disabled: false,
+                    selected: is_selected,
+                    role: AccessibilityRole::ListItem,
+                });
                 if catalog {
+                    ops.push(DrawOp::PopClip);
                     self.control(
                         ops,
                         PACKAGE_ACTION_BASE + *index as u64,
-                        "Install / update",
+                        "Install or update",
                         format!("install:{index}"),
-                        rect(cx + 8.0, 488.0, cw - 16.0, 34.0),
+                        rect(cx + 16.0, card_top + 74.0, cw - 32.0, 34.0),
                         busy || self.running() || !self.enabled,
                         false,
                         AccessibilityRole::Button,
                     );
-                } else if let Some(row) = self.installed.get(*index) {
-                    let enabled = row.state.enabled;
-                    let caps = row
-                        .package
-                        .manifest
-                        .capabilities
-                        .iter()
-                        .map(|cap| cap.name())
-                        .collect::<Vec<_>>()
-                        .join(" · ");
-                    ops.push(text(cx + 12.0, 530.0, caps, 12.0, MUTED));
+                } else if let Some(enabled) = enabled {
+                    let toggle_y = card_top + 70.0;
+                    ops.push(text(
+                        cx + 16.0,
+                        toggle_y + 5.0,
+                        if enabled { "Enabled" } else { "Disabled" },
+                        13.0,
+                        self.ui.theme.text,
+                    ));
+                    let toggle = rect(cx + 96.0, toggle_y, 44.0, 22.0);
+                    ops.push(DrawOp::FillRounded(
+                        toggle,
+                        if enabled {
+                            self.ui.theme.focus
+                        } else {
+                            self.ui.theme.border
+                        },
+                        11.0,
+                    ));
+                    let knob = rect(toggle.x + if enabled { 25.0 } else { 3.0 }, toggle.y + 3.0, 16.0, 16.0);
+                    ops.push(DrawOp::FillRounded(knob, self.ui.theme.text, 8.0));
+                    self.ui.controls.push(Control {
+                        id: PACKAGE_TOGGLE_BASE + *index as u64,
+                        label: if enabled {
+                            "Disable extension".into()
+                        } else {
+                            "Enable extension".into()
+                        },
+                        action: format!("permission:{index}"),
+                        bounds: toggle,
+                        disabled: busy || !self.enabled,
+                        selected: enabled,
+                        role: AccessibilityRole::Checkbox,
+                    });
+                    // Capabilities as labelled chips; the first names the format.
+                    ops.push(text(
+                        cx + 16.0,
+                        card_top + 122.0,
+                        "Capabilities",
+                        12.0,
+                        self.ui.theme.muted,
+                    ));
+                    let mut chip_x = cx + 16.0;
+                    let mut chip_y = card_top + 140.0;
+                    for (ci, cap) in caps.iter().enumerate() {
+                        let chip_w = cap.chars().count() as f32 * 7.0 + 18.0;
+                        if chip_x + chip_w > cx + cw - 12.0 && chip_x > cx + 16.0 {
+                            chip_x = cx + 16.0;
+                            chip_y += 26.0;
+                        }
+                        let chip = rect(chip_x, chip_y, chip_w, 22.0);
+                        ops.push(DrawOp::FillRounded(
+                            chip,
+                            if ci == 0 {
+                                self.ui.theme.selection
+                            } else {
+                                self.ui.theme.chrome
+                            },
+                            4.0,
+                        ));
+                        ops.push(text(
+                            chip_x + 9.0,
+                            chip_y + 5.0,
+                            cap.as_str(),
+                            12.0,
+                            if ci == 0 {
+                                self.ui.theme.focus
+                            } else {
+                                self.ui.theme.text
+                            },
+                        ));
+                        chip_x += chip_w + 8.0;
+                    }
+                    ops.push(DrawOp::PopClip);
                     self.control(
                         ops,
                         PACKAGE_ACTION_BASE + *index as u64,
-                        if enabled {
-                            "Enabled · Disable"
-                        } else {
-                            "Review permissions"
-                        },
-                        format!("permission:{index}"),
-                        rect(cx + 8.0, 488.0, cw - 16.0, 34.0),
+                        "Permissions",
+                        format!("review:{index}"),
+                        rect(cx + cw - 126.0, toggle_y - 5.0, 110.0, 32.0),
                         busy || !self.enabled,
                         false,
                         AccessibilityRole::Button,
                     );
+                } else {
+                    ops.push(DrawOp::PopClip);
                 }
             }
             if rows.is_empty() {
                 ops.push(text(
                     x,
                     444.0,
-                    if matches!(self.tab, 1 | 2) {
+                    if catalog {
                         "Open a signed offline catalog to view available packages."
                     } else {
                         "No extensions in this view."
                     },
                     15.0,
-                    MUTED,
+                    self.ui.theme.muted,
                 ));
             }
-            if !matches!(self.tab, 1 | 2) && self.installed.get(self.selected).is_some() {
+            if has_command_row {
                 let command = self.installed[self.selected]
                     .package
                     .manifest
@@ -486,10 +674,10 @@ impl ExtensionsRuntime {
                     .unwrap_or_default();
                 ops.push(text(
                     x,
-                    body_bottom - 72.0,
+                    body_bottom - 52.0,
                     format!("Command: {command}"),
                     13.0,
-                    TEXT,
+                    self.ui.theme.text,
                 ));
                 for (i, (label, action)) in [
                     ("Next command", "extensions.next_command"),
@@ -506,50 +694,24 @@ impl ExtensionsRuntime {
                         60020 + i as u64,
                         *label,
                         *action,
-                        rect(
-                            x + i as f32 * (w / 5.0),
-                            body_bottom - 44.0,
-                            w / 5.0 - 6.0,
-                            34.0,
-                        ),
+                        rect(x + i as f32 * (w / 5.0), body_bottom - 34.0, w / 5.0 - 6.0, 30.0),
                         busy || !self.enabled
-                            || (*action == "extensions.approve"
-                                && self.permission_review != Some(self.selected)),
+                            || (*action == "extensions.approve" && self.permission_review != Some(self.selected)),
                         false,
                         AccessibilityRole::Button,
                     );
                 }
             }
-            self.control(
-                ops,
-                60016,
-                "Previous extension",
-                "previous",
-                rect(x, body_bottom, 160.0, 32.0),
-                rows.len() < 2,
-                false,
-                AccessibilityRole::Button,
-            );
-            self.control(
-                ops,
-                60017,
-                "Next extension",
-                "next",
-                rect(x + 170.0, body_bottom, 150.0, 32.0),
-                rows.len() < 2,
-                false,
-                AccessibilityRole::Button,
-            );
         }
         if let Some(message) = &self.message {
-            ops.push(text(x, height - 85.0, message, 13.0, TEXT));
+            ops.push(text(x, height - 85.0, message, 13.0, self.ui.theme.text));
         }
         ops.push(text(
             x,
             height - 55.0,
             "Disabling extensions stops the host. Removing the runtime frees disk space.",
             13.0,
-            MUTED,
+            self.ui.theme.muted,
         ));
     }
 }
@@ -605,6 +767,12 @@ impl super::super::Shell {
                     "extensions.permissions"
                 },
             );
+        } else if let Some(index) = action
+            .strip_prefix("review:")
+            .and_then(|value| value.parse::<usize>().ok())
+        {
+            self.extensions.selected = index;
+            self.extensions_dispatch(el, "extensions.permissions");
         } else {
             match action {
                 "arguments" => {
@@ -615,28 +783,17 @@ impl super::super::Shell {
                     self.extensions.ui.results_open = !self.extensions.ui.results_open;
                     self.extensions.ui.arguments_open = false;
                 }
-                "results_prev" => {
-                    self.extensions.ui.result_page =
-                        self.extensions.ui.result_page.saturating_sub(4)
-                }
-                "results_next" => {
-                    self.extensions.ui.result_page =
-                        self.extensions.ui.result_page.saturating_add(4)
-                }
+                "results_prev" => self.extensions.ui.result_page = self.extensions.ui.result_page.saturating_sub(4),
+                "results_next" => self.extensions.ui.result_page = self.extensions.ui.result_page.saturating_add(4),
                 "results_copy" => {
                     if let Some(platform) = &self.platform
-                        && let Err(error) =
-                            platform.set_clipboard_text(&self.extensions.panel_output)
+                        && let Err(error) = platform.set_clipboard_text(&self.extensions.panel_output)
                     {
                         self.extensions.message = Some(error.to_string());
                     }
                 }
-                "args_prev" => {
-                    self.extensions.ui.field_page = self.extensions.ui.field_page.saturating_sub(4)
-                }
-                "args_next" => {
-                    self.extensions.ui.field_page = (self.extensions.ui.field_page + 4).min(64)
-                }
+                "args_prev" => self.extensions.ui.field_page = self.extensions.ui.field_page.saturating_sub(4),
+                "args_next" => self.extensions.ui.field_page = (self.extensions.ui.field_page + 4).min(64),
                 "previous" => self.extensions.move_selection(-1),
                 "next" => self.extensions.move_selection(1),
                 "" => {}
@@ -688,9 +845,7 @@ impl super::super::Shell {
                     if let Some(id) = hit {
                         self.extensions.ui.focus = id;
                     }
-                    if let Some(index) = hit
-                        .and_then(|id| id.checked_sub(FIELD))
-                        .filter(|index| *index < 65)
+                    if let Some(index) = hit.and_then(|id| id.checked_sub(FIELD)).filter(|index| *index < 65)
                         && let Some(renderer) = &self.renderer
                     {
                         let _ = self.extensions.ui.fields[index as usize].click(
@@ -699,13 +854,7 @@ impl super::super::Shell {
                             self.modifiers.shift_key(),
                         );
                     }
-                } else if let Some(id) = self
-                    .extensions
-                    .ui
-                    .pressed
-                    .take()
-                    .filter(|id| Some(*id) == hit)
-                {
+                } else if let Some(id) = self.extensions.ui.pressed.take().filter(|id| Some(*id) == hit) {
                     self.extension_control(el, id);
                 }
             }
@@ -749,9 +898,8 @@ impl super::super::Shell {
                                 .iter()
                                 .position(|id| *id == self.extensions.ui.focus)
                                 .unwrap_or(0);
-                            self.extensions.ui.focus = controls[(old as isize
-                                + if shift { -1 } else { 1 })
-                            .rem_euclid(controls.len() as isize)
+                            self.extensions.ui.focus = controls[(old as isize + if shift { -1 } else { 1 })
+                                .rem_euclid(controls.len() as isize)
                                 as usize];
                         }
                     }
@@ -774,9 +922,7 @@ impl super::super::Shell {
                                         "a" => field.select_all(),
                                         "c" | "x" => {
                                             if let Some(platform) = &self.platform
-                                                && platform
-                                                    .set_clipboard_text(field.selected())
-                                                    .is_ok()
+                                                && platform.set_clipboard_text(field.selected()).is_ok()
                                                 && key.eq_ignore_ascii_case("x")
                                             {
                                                 field.insert("");
@@ -809,7 +955,8 @@ impl super::super::Shell {
                     _ => {}
                 }
             }
-            _ => return self.extensions.bounds.contains(self.pointer),
+            // Lifecycle/redraw events must reach the shell regardless of pointer position.
+            _ => return false,
         }
         if let Some(window) = &self.window {
             window.request_redraw();
@@ -845,6 +992,16 @@ impl super::super::Shell {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn untrusted_panel_output_is_capped_on_char_boundaries() {
+        let long = "é".repeat(4096);
+        let capped = panel_excerpt(&long, PANEL_LINE_LIMIT);
+        assert!(capped.len() <= PANEL_LINE_LIMIT);
+        assert!(long.starts_with(capped));
+        assert_eq!(panel_excerpt("short", PANEL_LINE_LIMIT), "short");
+        let huge = "x".repeat(1024 * 1024);
+        assert_eq!(panel_excerpt(&huge, PANEL_OUTPUT_EXCERPT).len(), PANEL_OUTPUT_EXCERPT);
+    }
     #[test]
     fn structured_arguments_are_separate_bounded_committed_fields() {
         let mut runtime = ExtensionsRuntime::default();
@@ -926,7 +1083,7 @@ impl ExtensionsRuntime {
                 parent: ROOT,
                 role: AccessibilityRole::Group,
                 name: "Extension result".into(),
-                value: Some(self.panel_output.clone()),
+                value: Some(panel_excerpt(&self.panel_output, PANEL_OUTPUT_EXCERPT).to_owned()),
                 bounds: [bounds.x as f64, bounds.y as f64, bounds.width as f64, 0.0],
                 disabled: false,
                 selected: false,
@@ -994,8 +1151,7 @@ impl ExtensionsRuntime {
 /// Real manager layout/projection fixtures. The package is signed with the same
 /// deterministic TEST-ONLY seed used by protocol fixtures and is never executed.
 #[cfg(test)]
-pub(super) fn accessibility_test_cases() -> Vec<(&'static str, Vec<AccessibilityNode>, Option<u64>)>
-{
+pub(super) fn accessibility_test_cases() -> Vec<(&'static str, Vec<AccessibilityNode>, Option<u64>)> {
     use bareline_extensions_protocol::{
         Catalog, CatalogPolicy, OfflinePackageSource, PackageRequest, VerifiedPackageSource,
     };
@@ -1007,11 +1163,7 @@ pub(super) fn accessibility_test_cases() -> Vec<(&'static str, Vec<Accessibility
         let mut ops = vec![];
         runtime.draw_manager(&mut backend, 1000.0, 800.0, &mut ops);
         backend.render(&ops).unwrap();
-        (
-            name,
-            runtime.accessibility_nodes(),
-            runtime.accessibility_focus(),
-        )
+        (name, runtime.accessibility_nodes(), runtime.accessibility_focus())
     };
     let mut runtime = ExtensionsRuntime::default();
     let mut cases = vec![capture("extensions-closed", &mut runtime)];
@@ -1066,10 +1218,7 @@ pub(super) fn accessibility_test_cases() -> Vec<(&'static str, Vec<Accessibility
         },
         package,
     });
-    cases.push(capture(
-        "extensions-installed-package-runtime-absent",
-        &mut runtime,
-    ));
+    cases.push(capture("extensions-installed-package-runtime-absent", &mut runtime));
     runtime.installed[0].state.enabled = false;
     runtime.tab = 3;
     cases.push(capture("extensions-disabled-package", &mut runtime));
@@ -1107,13 +1256,7 @@ pub(super) fn accessibility_test_cases() -> Vec<(&'static str, Vec<Accessibility
     runtime.ui.arguments_open = false;
     runtime.panel_output = "fixture.result\nValidated fixture".into();
     cases.push(capture("extensions-result", &mut runtime));
-    runtime
-        .installed
-        .pop()
-        .unwrap()
-        .package
-        .remove_cached()
-        .unwrap();
+    runtime.installed.pop().unwrap().package.remove_cached().unwrap();
     std::fs::remove_dir(root).unwrap();
     cases
 }

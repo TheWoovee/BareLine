@@ -1,0 +1,1778 @@
+diff --git a/apps/bareline/src/windows_app.rs b/apps/bareline/src/windows_app.rs
+index 087ea40..e6b1445 100644
+--- a/apps/bareline/src/windows_app.rs
++++ b/apps/bareline/src/windows_app.rs
+@@ -2150,7 +2150,7 @@ impl ApplicationHandler for Shell {
+             bareline_platform_windows::WindowsAccessibility::new(handle.hwnd.get(), initial, self.notify.clone())
+         } {
+             Ok(mut provider) => {
+-                provider.set_text_source(self.accessibility_text_source());
++                provider.set_text_sources(self.accessibility_text_sources());
+                 self.accessibility = Some(provider);
+             }
+             Err(error) => {
+@@ -3729,9 +3729,9 @@ impl Shell {
+             (size.height as f32 / scale) as f64,
+             scale as f64,
+         );
+-        let text_source = self.accessibility_text_source();
++        let text_sources = self.accessibility_text_sources();
+         if let Some(provider) = &mut self.accessibility {
+-            provider.set_text_source(text_source);
++            provider.set_text_sources(text_sources);
+             provider.update(accessible);
+         }
+     }
+diff --git a/apps/bareline/src/windows_app/accessibility.rs b/apps/bareline/src/windows_app/accessibility.rs
+index 6f06a4e..5bcdb16 100644
+--- a/apps/bareline/src/windows_app/accessibility.rs
++++ b/apps/bareline/src/windows_app/accessibility.rs
+@@ -4,6 +4,54 @@ use bareline_platform::accessibility::{AccessibilityNode, AccessibilityRole, Acc
+ 
+ const MODAL_TEXT_NAMESPACE: u64 = u64::MAX;
+ const SEARCH_TEXT_NAMESPACE: u64 = u64::MAX - 1;
++const EDITOR_VIEW_NAMESPACE: u64 = 0x4000_0000_0000_0000;
++const EDITOR_VIEW_STRIDE: u64 = 1 << 18;
++
++pub(super) fn editor_provider_id(tab: u64) -> u64 {
++    assert!(tab <= bareline_app::views::MAX_VIEW_TAB_ID);
++    EDITOR_VIEW_NAMESPACE + tab * EDITOR_VIEW_STRIDE
++}
++
++fn editor_run_id(tab: u64) -> u64 {
++    editor_provider_id(tab) + EDITOR_VIEW_STRIDE - 1
++}
++
++fn is_editor_provider_id(id: u64) -> bool {
++    (EDITOR_VIEW_NAMESPACE..0x8000_0000_0000_0000).contains(&id)
++        && (id - EDITOR_VIEW_NAMESPACE) % EDITOR_VIEW_STRIDE == 0
++}
++
++pub(super) fn editor_provider_name(
++    workspace: &bareline_app::workspace::Workspace,
++    pane: usize,
++    index: usize,
++) -> String {
++    let title = workspace
++        .titles()
++        .get(index)
++        .cloned()
++        .unwrap_or_else(|| "Untitled".into());
++    workspace.path(index).map_or_else(
++        || format!("Pane {}, {title}", pane + 1),
++        |path| format!("Pane {}, {title}, {}", pane + 1, path.display()),
++    )
++}
++
++struct EditorViewTextSource {
++    identity: (u64, u64),
++    inner: std::sync::Arc<dyn bareline_platform::accessibility::AccessibilityTextSource>,
++}
++impl bareline_platform::accessibility::AccessibilityTextSource for EditorViewTextSource {
++    fn identity(&self) -> (u64, u64) {
++        self.identity
++    }
++    fn len(&self) -> usize {
++        self.inner.len()
++    }
++    fn read(&self, start: usize, limit: usize) -> bareline_platform::accessibility::AccessibleRead {
++        self.inner.read(start, limit)
++    }
++}
+ 
+ struct ModalTextSource {
+     identity: (u64, u64),
+@@ -107,6 +155,92 @@ fn compose_snapshot(
+     apply_modal_layer(&mut snapshot, active_layer);
+     snapshot
+ }
++
++fn split_text_view(
++    editor: &bareline_app::workspace::WorkspaceEditor,
++    renderer: Option<&bareline_platform_windows::WindowsRenderer>,
++    bounds: bareline_renderer::Rect,
++    scale: f64,
++    tab: u64,
++    identity: (u64, u64),
++) -> bareline_platform::accessibility::AccessibilityTextView {
++    let provider = editor_provider_id(tab);
++    let mut base = bareline_app::accessibility::snapshot(
++        "Bareline split view",
++        bounds.width as f64,
++        bounds.height as f64,
++        Some(editor.viewport()),
++        Vec::new(),
++        bareline_app::accessibility::EDITOR_ID,
++    );
++    let mut text = base.text.take();
++    if let Some(text) = &mut text {
++        text.editor_id = provider;
++        text.run_id = editor_run_id(tab);
++    }
++    let mut context = base.text_context.take().expect("editor text context");
++    context.source_identity = identity;
++    let mut geometry = renderer.map_or_else(Vec::new, |renderer| {
++        editor
++            .accessibility_geometry(renderer, bounds.width, bounds.height + 24.0)
++            .into_iter()
++            .filter_map(|(range, rect)| {
++                let x = rect.x.max(0.0);
++                let y = rect.y.max(0.0);
++                let right = (rect.x + rect.width).min(bounds.width);
++                let bottom = (rect.y + rect.height).min(bounds.height);
++                (right > x && bottom > y).then_some(bareline_platform::accessibility::AccessibilityTextBox {
++                    start: range.start,
++                    end: range.end,
++                    bounds: [
++                        (x as f64 + bounds.x as f64) * scale,
++                        (y as f64 + bounds.y as f64) * scale,
++                        (right - x) as f64 * scale,
++                        (bottom - y) as f64 * scale,
++                    ],
++                })
++            })
++            .collect()
++    });
++    if let bareline_app::workspace::WorkspaceEditor::Paged(paged) = editor {
++        use bareline_document::TextOffset;
++        use bareline_editor_surface::paged_view::SourceAffinity;
++        text = text.and_then(|text| {
++            let local_start = text.start_byte;
++            let local_end = local_start.checked_add(text.value.len())?;
++            let piece = paged
++                .source_segments()
++                .iter()
++                .find(|piece| piece.local.end.0 > local_start && piece.local.start.0 < local_end);
++            let (start, end) = piece.map_or((local_start, local_end), |piece| {
++                (local_start.max(piece.local.start.0), local_end.min(piece.local.end.0))
++            });
++            let source = paged.source_offset(TextOffset(start), SourceAffinity::After)?;
++            let value = text.value.get(start - local_start..end - local_start)?.to_owned();
++            let (anchor, caret) = paged.global_selection();
++            let mut text = bareline_app::accessibility::bounded_text(value, source.0, anchor.0, caret.0)?;
++            text.editor_id = provider;
++            text.run_id = editor_run_id(tab);
++            Some(text)
++        });
++        map_paged_geometry(paged, &mut geometry);
++        let (anchor, caret) = paged.global_selection();
++        context.selection = (anchor.0, caret.0);
++        context.selections = paged
++            .global_selection_set()
++            .selections
++            .iter()
++            .take(1024)
++            .map(|selection| (selection.anchor, selection.caret))
++            .collect();
++    }
++    bareline_platform::accessibility::AccessibilityTextView {
++        editor_id: provider,
++        text,
++        context,
++        geometry,
++    }
++}
+ // Shared by native publication and complete headless semantic fixtures.
+ fn apply_modal_layer(snapshot: &mut AccessibilitySnapshot, active_layer: Option<u64>) {
+     if let Some(layer) = active_layer {
+@@ -277,6 +411,38 @@ impl Shell {
+         false
+     }
+ 
++    fn accessibility_editor_mut(
++        &mut self,
++        source_identity: (u64, u64),
++    ) -> Option<&mut bareline_app::workspace::WorkspaceEditor> {
++        if self.views.open() && is_editor_provider_id(source_identity.0) {
++            let pane = (0..2).find(|pane| {
++                self.views
++                    .pane_token(*pane)
++                    .is_some_and(|tab| editor_provider_id(tab) == source_identity.0)
++            })?;
++            let tab = self.views.pane_token(pane)?;
++            let current = {
++                let workspace = self.workspace.as_ref()?;
++                let editor = self.views.pane_workspace_editor(workspace, self.app.active, pane)?;
++                self.views.accessibility_source_identity(pane, editor)?
++            };
++            if current != source_identity {
++                return None;
++            }
++            let workspace = self.workspace.as_mut()?;
++            let editor = self.views.pane_workspace_editor_mut(workspace, self.app.active, pane)?;
++            debug_assert_eq!(editor_provider_id(tab), source_identity.0);
++            return Some(editor);
++        }
++        let editor = self
++            .workspace
++            .as_mut()
++            .and_then(|workspace| self.views.active_workspace_editor_mut(workspace, self.app.active))?;
++        editor_text_selection_matches(bareline_app::accessibility::source_identity(editor), source_identity)
++            .then_some(editor)
++    }
++
+     pub(super) fn accessibility_text_source(
+         &self,
+     ) -> Option<std::sync::Arc<dyn bareline_platform::accessibility::AccessibilityTextSource>> {
+@@ -297,6 +463,42 @@ impl Shell {
+             .and_then(|w| self.views.active_workspace_editor(w, self.app.active))
+             .map(|editor| bareline_app::accessibility::text_source(editor, self.notify.clone()))
+     }
++
++    pub(super) fn accessibility_text_sources(
++        &self,
++    ) -> Vec<(
++        u64,
++        std::sync::Arc<dyn bareline_platform::accessibility::AccessibilityTextSource>,
++    )> {
++        if self.views.open()
++            && self.modal.is_none()
++            && !self.search_accessibility_active()
++            && self.active_accessibility_layer().is_none()
++        {
++            let Some(workspace) = &self.workspace else {
++                return Vec::new();
++            };
++            return (0..2)
++                .filter_map(|pane| {
++                    let tab = self.views.pane_token(pane)?;
++                    let editor = self.views.pane_workspace_editor(workspace, self.app.active, pane)?;
++                    let identity = self.views.accessibility_source_identity(pane, editor)?;
++                    let inner = bareline_app::accessibility::text_source(editor, self.notify.clone());
++                    Some((
++                        editor_provider_id(tab),
++                        std::sync::Arc::new(EditorViewTextSource { identity, inner })
++                            as std::sync::Arc<dyn bareline_platform::accessibility::AccessibilityTextSource>,
++                    ))
++                })
++                .collect();
++        }
++        let owner = self
++            .owned_accessibility_text_field()
++            .map_or(bareline_app::accessibility::EDITOR_ID, |field| field.0);
++        self.accessibility_text_source()
++            .map(|source| vec![(owner, source)])
++            .unwrap_or_default()
++    }
+     pub(super) fn accessibility_snapshot(&self, width: f64, height: f64, scale: f64) -> AccessibilitySnapshot {
+         self.accessibility_snapshot_with_editor_bounds(width, height, scale, self.editor_bounds())
+     }
+@@ -647,12 +849,53 @@ impl Shell {
+                 .map(|node| bareline_app::accessibility::semantic_node(node, 1))
+                 .collect(),
+         );
++        let split = self.views.open();
++        if split && let Some(workspace) = &self.workspace {
++            for pane in 0..2 {
++                let Some(tab) = self.views.pane_token(pane) else {
++                    continue;
++                };
++                let Some(editor) = self.views.pane_workspace_editor(workspace, self.app.active, pane) else {
++                    continue;
++                };
++                let pane_bounds = self.views.bounds[pane].unwrap_or(editor_bounds);
++                let document_index = self.views.pane_document_index(workspace, pane);
++                let name = document_index.map_or_else(
++                    || format!("Pane {}, Untitled", pane + 1),
++                    |index| editor_provider_name(workspace, pane, index),
++                );
++                chrome.push(AccessibilityNode {
++                    id: editor_provider_id(tab),
++                    parent: 1,
++                    role: AccessibilityRole::Editor,
++                    name,
++                    value: None,
++                    bounds: [
++                        (editor_bounds.x + pane_bounds.x) as f64,
++                        (editor_bounds.y + pane_bounds.y + editor.viewport().top_inset) as f64,
++                        pane_bounds.width as f64,
++                        (pane_bounds.height - editor.viewport().top_inset).max(0.0) as f64,
++                    ],
++                    disabled: false,
++                    selected: pane == self.views.pane() as usize,
++                    expanded: None,
++                    focusable: true,
++                    invokable: false,
++                });
++            }
++            if focus == bareline_app::accessibility::EDITOR_ID
++                && let Some(tab) = self.views.pane_token(self.views.pane() as usize)
++            {
++                focus = editor_provider_id(tab);
++            }
++        }
+         let active_layer = self.active_accessibility_layer();
++
+         let mut snapshot = compose_snapshot(
+             "Bareline",
+             width,
+             height,
+-            editor.map(|v| v.viewport()),
++            (!split).then(|| editor.map(|v| v.viewport())).flatten(),
+             chrome,
+             if let Some(modal) = self.modal {
+                 if modal.surface == super::modal::ModalSurface::Recovery {
+@@ -693,6 +936,38 @@ impl Shell {
+             snapshot.text_context = None;
+             snapshot.text_geometry.clear();
+         }
++        if split
++            && self.modal.is_none()
++            && !self.search_accessibility_active()
++            && active_layer.is_none()
++            && let Some(workspace) = &self.workspace
++        {
++            snapshot.text = None;
++            snapshot.text_context = None;
++            snapshot.text_geometry.clear();
++            snapshot.text_views = (0..2)
++                .filter_map(|pane| {
++                    let tab = self.views.pane_token(pane)?;
++                    let editor = self.views.pane_workspace_editor(workspace, self.app.active, pane)?;
++                    let pane_bounds = self.views.bounds[pane].unwrap_or(editor_bounds);
++                    let bounds = bareline_ui::rect(
++                        editor_bounds.x + pane_bounds.x,
++                        editor_bounds.y + pane_bounds.y,
++                        pane_bounds.width,
++                        pane_bounds.height,
++                    );
++                    let identity = self.views.accessibility_source_identity(pane, editor)?;
++                    Some(split_text_view(
++                        editor,
++                        self.renderer.as_ref(),
++                        bounds,
++                        scale,
++                        tab,
++                        identity,
++                    ))
++                })
++                .collect();
++        }
+         let pane_bounds = if self.views.open() {
+             self.views.bounds[self.views.pane() as usize]
+         } else {
+@@ -711,7 +986,8 @@ impl Shell {
+         } else {
+             text_bounds.height
+         };
+-        if self.modal.is_none()
++        if !split
++            && self.modal.is_none()
+             && let (Some(editor), Some(renderer)) = (editor, self.renderer.as_ref())
+         {
+             snapshot.text_geometry = editor
+@@ -735,7 +1011,8 @@ impl Shell {
+                 })
+                 .collect();
+         }
+-        if self.modal.is_none()
++        if !split
++            && self.modal.is_none()
+             && let Some(bareline_app::workspace::WorkspaceEditor::Paged(editor)) = editor
+         {
+             use bareline_document::TextOffset;
+@@ -1060,13 +1337,10 @@ impl Shell {
+                     end,
+                     add,
+                 } => {
+-                    let Some(workspace) = &mut self.workspace else {
+-                        continue;
+-                    };
+-                    let Some(editor) = self.views.active_workspace_editor_mut(workspace, self.app.active) else {
++                    let Some(editor) = self.accessibility_editor_mut(source_identity) else {
+                         continue;
+                     };
+-                    if bareline_app::accessibility::source_identity(editor) != source_identity || editor.busy() {
++                    if editor.busy() {
+                         continue;
+                     }
+                     let mut selections = match &*editor {
+@@ -1121,13 +1395,16 @@ impl Shell {
+                     source_identity,
+                     offset,
+                 } => {
+-                    let height = self.editor_bounds().height;
+-                    if let Some(editor) = self
+-                        .workspace
+-                        .as_mut()
+-                        .and_then(|w| self.views.active_workspace_editor_mut(w, self.app.active))
+-                    {
+-                        if bareline_app::accessibility::source_identity(editor) != source_identity || editor.busy() {
++                    let height = (0..2)
++                        .find(|pane| {
++                            self.views
++                                .pane_token(*pane)
++                                .is_some_and(|tab| editor_provider_id(tab) == source_identity.0)
++                        })
++                        .and_then(|pane| self.views.bounds[pane])
++                        .map_or_else(|| self.editor_bounds().height, |bounds| bounds.height);
++                    if let Some(editor) = self.accessibility_editor_mut(source_identity) {
++                        if editor.busy() {
+                             continue;
+                         }
+                         match editor {
+@@ -1147,16 +1424,8 @@ impl Shell {
+                     anchor,
+                     caret,
+                 } => {
+-                    if let Some(editor) = self
+-                        .workspace
+-                        .as_mut()
+-                        .and_then(|w| self.views.active_workspace_editor_mut(w, self.app.active))
+-                    {
+-                        if !editor_text_selection_matches(
+-                            bareline_app::accessibility::source_identity(editor),
+-                            source_identity,
+-                        ) || editor.busy()
+-                        {
++                    if let Some(editor) = self.accessibility_editor_mut(source_identity) {
++                        if editor.busy() {
+                             continue;
+                         }
+                         match editor {
+@@ -1188,6 +1457,19 @@ impl Shell {
+                         self.set_search_accessibility_value(id, &value);
+                     }
+                 }
++                AccessibilityAction::Focus(id) if is_editor_provider_id(id) => {
++                    let pane = (0..2).find(|pane| {
++                        self.views
++                            .pane_token(*pane)
++                            .is_some_and(|tab| editor_provider_id(tab) == id)
++                    });
++                    if let (Some(pane), Some(workspace)) = (pane, &mut self.workspace) {
++                        workspace.find.blur();
++                        workspace.search_focus = false;
++                        self.views
++                            .accessibility_activate_editor(workspace, &mut self.app, pane as u32);
++                    }
++                }
+                 AccessibilityAction::Focus(id) if id == EDITOR_ID => {
+                     self.palette.dismiss();
+                     self.app.palette = false;
+@@ -1468,6 +1750,120 @@ pub(super) mod tests {
+         );
+     }
+ 
++    #[test]
++    fn split_panes_publish_independent_text_owners_and_retire_closed_provider() {
++        for scenario in ["split_vertical", "split_horizontal"] {
++            let mut shell = headless_shell();
++            views::accessibility_test_setup(&mut shell, scenario);
++            let snapshot = shell_snapshot(&shell);
++            snapshot.validate().unwrap();
++            let editors: Vec<_> = snapshot
++                .nodes
++                .iter()
++                .filter(|node| node.role == AccessibilityRole::Editor)
++                .collect();
++            assert_eq!(editors.len(), 2, "{scenario}");
++            assert_ne!(editors[0].id, editors[1].id, "{scenario}");
++            assert!(editors[0].name.starts_with("Pane 1,"), "{scenario}");
++            assert!(editors[1].name.starts_with("Pane 2,"), "{scenario}");
++            assert_eq!(editors.iter().filter(|node| node.id == snapshot.focus).count(), 1);
++            assert_eq!(snapshot.text_views.len(), 2, "{scenario}");
++            assert_ne!(
++                snapshot.text_views[0].context.source_identity, snapshot.text_views[1].context.source_identity,
++                "clones sharing document bytes still require distinct providers"
++            );
++            let sources = shell.accessibility_text_sources();
++            assert_eq!(sources.len(), 2);
++            assert_eq!(sources[0].1.identity(), snapshot.text_views[0].context.source_identity);
++            assert_eq!(sources[1].1.identity(), snapshot.text_views[1].context.source_identity);
++
++            let first = snapshot.text_views[0].context.source_identity;
++            let second_selection = snapshot.text_views[1].context.selection;
++            let first_editor = shell.accessibility_editor_mut(first).unwrap();
++            first_editor.enqueue(Input::SetCaret(0, false));
++            while shell.views.busy(shell.workspace.as_ref().unwrap()) {
++                shell.workspace.as_mut().unwrap().pump();
++                shell.views.pump(shell.workspace.as_mut().unwrap());
++            }
++            let updated = shell_snapshot(&shell);
++            assert_eq!(updated.text_views[0].context.selection, (0, 0));
++            assert_eq!(updated.text_views[1].context.selection, second_selection);
++
++            shell
++                .accessibility_editor_mut(updated.text_views[0].context.source_identity)
++                .unwrap()
++                .enqueue(Input::Insert("shared".into()));
++            while shell.views.busy(shell.workspace.as_ref().unwrap()) {
++                shell.workspace.as_mut().unwrap().pump();
++                shell.views.pump(shell.workspace.as_mut().unwrap());
++            }
++            assert!(
++                shell
++                    .accessibility_editor_mut(updated.text_views[0].context.source_identity)
++                    .is_none(),
++                "an edit must retire actions qualified by the old pane generation"
++            );
++            let post_edit = shell_snapshot(&shell);
++            assert_ne!(
++                post_edit.text_views[0].context.source_identity,
++                updated.text_views[0].context.source_identity
++            );
++            let shared_sources = shell.accessibility_text_sources();
++            let reads: Vec<_> = shared_sources
++                .iter()
++                .map(|(_, source)| source.read(0, 64 * 1024))
++                .collect();
++            assert_eq!(reads[0], reads[1], "shared edits must reach both pane providers");
++
++            let retired = shell_snapshot(&shell).text_views[0].context.source_identity;
++            assert!(shell.tabs_dispatch("view.close_split"));
++            assert!(!shell.views.open());
++            assert!(shell.accessibility_editor_mut(retired).is_none());
++        }
++    }
++
++    #[test]
++    fn provider_identity_follows_tab_move_clone_and_session_restore() {
++        use bareline_app::views::{SessionTab, ViewController, ViewState};
++        let tab = SessionTab {
++            id: 41,
++            document_id: 9,
++            pinned: false,
++            view: ViewState::default(),
++        };
++        let mut controller = ViewController::new(vec![tab], Some(41)).unwrap();
++        let moved = editor_provider_id(41);
++        controller.move_to_other(41).unwrap();
++        assert_eq!(editor_provider_id(controller.tabs()[0].id), moved);
++
++        let clone = controller.clone_to_other(41).unwrap();
++        assert_ne!(editor_provider_id(clone), moved);
++        let manifest = bareline_file_io::session::SessionManifest {
++            documents: vec![bareline_file_io::session::SessionDocument {
++                id: 9,
++                path: None,
++                title: "Restored".into(),
++            }],
++            tabs: controller.tabs().to_vec(),
++            active_tab: Some(clone),
++            layout: bareline_file_io::session::SessionLayout {
++                split: true,
++                active_pane: controller.active_pane(),
++                active_tabs: [controller.active_tab(0), controller.active_tab(1)],
++                ..Default::default()
++            },
++            ..Default::default()
++        };
++        let restored = ViewController::from_session(&manifest).unwrap();
++        assert!(restored.tabs().iter().any(|tab| editor_provider_id(tab.id) == moved));
++        assert!(
++            restored
++                .tabs()
++                .iter()
++                .any(|tab| editor_provider_id(tab.id) == editor_provider_id(clone))
++        );
++    }
++
+     #[test]
+     fn prompt_and_compare_modals_own_focus_text_and_background_actions() {
+         use bareline_platform::accessibility::AccessibleRead;
+diff --git a/apps/bareline/src/windows_app/views.rs b/apps/bareline/src/windows_app/views.rs
+index 8f9d67a..d46d6a7 100644
+--- a/apps/bareline/src/windows_app/views.rs
++++ b/apps/bareline/src/windows_app/views.rs
+@@ -8,7 +8,10 @@ use bareline_app::workspace::WorkspaceEditor;
+ use bareline_commands::{CommandId, CommandPresentation, CommandRegistry, CommandSpec};
+ use bareline_renderer::{DrawOp, LayoutError, Rect, TextBackend};
+ use bareline_ui::{ACCENT, BORDER, CHROME, MUTED, TAB_HEIGHT, TEXT, rect, text};
+-use std::collections::VecDeque;
++use std::{
++    cell::{Cell, RefCell},
++    collections::{BTreeMap, VecDeque},
++};
+ 
+ /// Populate the production tab controller and retained hit geometry for the host
+ /// accessibility golden. No native window, renderer, dialog or synthetic IDs.
+@@ -24,7 +27,14 @@ pub(super) fn accessibility_test_setup(shell: &mut Shell, scenario: &str) {
+     assert!(
+         matches!(
+             scenario,
+-            "open" | "populated" | "focus_close" | "focus_overflow" | "mru" | "vertical"
++            "open"
++                | "populated"
++                | "focus_close"
++                | "focus_overflow"
++                | "mru"
++                | "vertical"
++                | "split_vertical"
++                | "split_horizontal"
+         ),
+         "unknown views accessibility fixture"
+     );
+@@ -46,6 +56,26 @@ pub(super) fn accessibility_test_setup(shell: &mut Shell, scenario: &str) {
+         controller.activate(first).unwrap();
+     }
+     shell.views.install_views(&mut workspace);
++    if scenario.starts_with("split_") {
++        let orientation = if scenario == "split_horizontal" {
++            Orientation::Horizontal
++        } else {
++            Orientation::Vertical
++        };
++        shell.views.split(&mut workspace, 0, orientation);
++        shell.views.bounds = if orientation == Orientation::Vertical {
++            [
++                Some(rect(0.0, 24.0, 496.0, 752.0)),
++                Some(rect(504.0, 24.0, 496.0, 752.0)),
++            ]
++        } else {
++            [
++                Some(rect(0.0, 24.0, 1000.0, 372.0)),
++                Some(rect(0.0, 404.0, 1000.0, 372.0)),
++            ]
++        };
++        shell.views.activate(&workspace, &mut shell.app, 1);
++    }
+     shell.app.tabs = workspace.titles();
+     shell.workspace = Some(workspace);
+     if scenario == "vertical" {
+@@ -253,25 +283,40 @@ mod tests {
+         assert_eq!(footer.start, suffix);
+         assert!(boxes.iter().any(|rect| rect.start == 0));
+         assert!(boxes.iter().all(|rect| rect.end <= 7 || rect.start >= suffix));
+-        let identity = peer.snapshot().identity_token();
+-        let source =
+-            bareline_app::accessibility::text_source(views.secondary.as_ref().unwrap(), std::sync::Arc::new(|| {}));
+-        assert_eq!(source.len(), body.len());
+-        assert_eq!(source.identity(), identity);
+-        loop {
+-            match source.read(suffix, 7) {
+-                bareline_platform::accessibility::AccessibleRead::Ready { start, text } => {
+-                    assert_eq!(start, suffix);
+-                    assert_eq!(text, "suffix\n");
+-                    break;
+-                }
+-                bareline_platform::accessibility::AccessibleRead::Pending => {
+-                    assert!(Instant::now() < deadline);
+-                    std::thread::yield_now();
++        let sources = [
++            bareline_app::accessibility::text_source(&workspace.editors[0], std::sync::Arc::new(|| {})),
++            bareline_app::accessibility::text_source(views.secondary.as_ref().unwrap(), std::sync::Arc::new(|| {})),
++        ];
++        for source in &sources {
++            assert_eq!(source.len(), body.len());
++            loop {
++                match source.read(suffix, 7) {
++                    bareline_platform::accessibility::AccessibleRead::Ready { start, text } => {
++                        assert_eq!(start, suffix);
++                        assert_eq!(text, "suffix\n");
++                        break;
++                    }
++                    bareline_platform::accessibility::AccessibleRead::Pending => {
++                        assert!(Instant::now() < deadline);
++                        std::thread::yield_now();
++                    }
++                    _ => panic!("Visible footer unavailable through pane text reader"),
+                 }
+-                _ => panic!("Visible footer unavailable through canonical text reader"),
+             }
+         }
++        let provider_before = views
++            .accessibility_source_identity(1, views.secondary.as_ref().unwrap())
++            .unwrap();
++        assert_eq!(views.pane_document_index(&workspace, 0), Some(0));
++        assert_eq!(views.pane_document_index(&workspace, 1), Some(0));
++        let announced = super::super::accessibility::editor_provider_name(&workspace, 1, 0);
++        assert!(announced.contains(path.file_name().unwrap().to_string_lossy().as_ref()));
++        assert!(announced.contains(path.display().to_string().as_str()));
++        let WorkspaceEditor::Paged(primary) = &workspace.editors[0] else {
++            unreachable!()
++        };
++        let primary_selection = primary.global_selection();
++        let primary_viewport = primary.viewport_start();
+         let WorkspaceEditor::Paged(peer) = views.secondary.as_mut().unwrap() else {
+             unreachable!()
+         };
+@@ -290,6 +335,11 @@ mod tests {
+             std::thread::yield_now();
+         }
+         assert_eq!(peer.global_selection().1.0, suffix);
++        let WorkspaceEditor::Paged(primary) = &workspace.editors[0] else {
++            unreachable!()
++        };
++        assert_eq!(primary.global_selection(), primary_selection);
++        assert_eq!(primary.viewport_start(), primary_viewport);
+         let prior = peer.global_selection();
+         peer.request_viewport(TextOffset(0)).unwrap();
+         peer.click(
+@@ -302,11 +352,44 @@ mod tests {
+         )
+         .unwrap();
+         assert_eq!(peer.global_selection(), prior);
++        while peer.busy() {
++            assert!(Instant::now() < deadline);
++            peer.pump();
++            std::thread::yield_now();
++        }
++        assert_eq!(
++            views
++                .accessibility_source_identity(1, views.secondary.as_ref().unwrap())
++                .unwrap(),
++            provider_before,
++            "viewport movement must retain the pane source generation"
++        );
++        let viewport_revision = views.secondary.as_ref().unwrap().viewport().snapshot().revision;
++        views.secondary.as_mut().unwrap().enqueue(Input::Insert("x".into()));
++        while views.busy(&workspace) {
++            assert!(Instant::now() < deadline);
++            workspace.pump();
++            views.pump(&mut workspace);
++            std::thread::yield_now();
++        }
++        assert_ne!(
++            views
++                .accessibility_source_identity(1, views.secondary.as_ref().unwrap())
++                .unwrap(),
++            provider_before,
++            "a full paged document edit must retire the old pane reader"
++        );
++        assert_eq!(
++            views.secondary.as_ref().unwrap().viewport().snapshot().revision,
++            viewport_revision,
++            "the bounded viewport revision is deliberately reused and cannot qualify the full source"
++        );
+         let WorkspaceEditor::Paged(primary) = &workspace.editors[0] else {
+             unreachable!()
+         };
+         assert!(primary.source_segments().is_empty());
+-        assert_ne!(primary.global_selection(), prior);
++        assert_eq!(primary.global_selection(), primary_selection);
++        assert_eq!(primary.viewport_start(), primary_viewport);
+         drop(views);
+         drop(workspace);
+         let _ = std::fs::remove_file(path);
+@@ -435,6 +518,18 @@ mod tests {
+         let expected = workspace_view_state(views.secondary.as_ref().unwrap());
+         assert_eq!(expected.scroll_byte, Some(saved_byte.0 as u64));
+         assert_eq!(expected.folds, vec![8004..8011]);
++        let provider_ids =
++            [0, 1].map(|pane| super::super::accessibility::editor_provider_id(views.pane_token(pane).unwrap()));
++        let provider_sources = [
++            views
++                .accessibility_source_identity(0, views.pane_workspace_editor(&workspace, 0, 0).unwrap())
++                .unwrap(),
++            views
++                .accessibility_source_identity(1, views.pane_workspace_editor(&workspace, 0, 1).unwrap())
++                .unwrap(),
++        ];
++        assert_ne!(provider_ids[0], provider_ids[1]);
++        assert_ne!(provider_sources[0], provider_sources[1]);
+         let mut manifest = bareline_file_io::session::SessionManifest {
+             documents: vec![bareline_file_io::session::SessionDocument {
+                 id: 1,
+@@ -469,6 +564,11 @@ mod tests {
+             std::thread::yield_now();
+         }
+         let actual = workspace_view_state(restored.secondary.as_ref().unwrap());
++        assert_eq!(
++            [0, 1].map(|pane| super::super::accessibility::editor_provider_id(restored.pane_token(pane).unwrap())),
++            provider_ids,
++            "session restore must retain both paged provider identities"
++        );
+         assert_eq!(
+             (
+                 actual.scroll_byte,
+@@ -892,6 +992,72 @@ mod tests {
+         assert!(!views.open());
+         assert_eq!(workspace.editors[0].snapshot().revision, primary.revision);
+     }
++
++    #[test]
++    fn pane_source_generation_tracks_full_document_replacement_and_revision() {
++        let mut workspace = Workspace::new(
++            std::sync::Arc::new(|| {}),
++            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
++        )
++        .unwrap();
++        workspace.new_document().unwrap();
++        workspace.new_document().unwrap();
++        let mut views = ViewsRuntime::default();
++        views.sync_documents(&workspace);
++        views.install_views(&mut workspace);
++        let tab = views.pane_token(0).unwrap();
++        let initial = views.accessibility_source_identity(0, &workspace.editors[0]).unwrap();
++        workspace.editors[0].viewport_mut().scroll_y = 40.0;
++        assert_eq!(
++            views.accessibility_source_identity(0, &workspace.editors[0]),
++            Some(initial),
++            "selection and viewport state are not document-source revisions"
++        );
++
++        workspace.editors[0].enqueue(Input::Insert("changed".into()));
++        while workspace.editors[0].busy() {
++            workspace.pump();
++        }
++        let edited = views.accessibility_source_identity(0, &workspace.editors[0]).unwrap();
++        assert_ne!(edited, initial);
++        assert_eq!(edited.0, super::super::accessibility::editor_provider_id(tab));
++
++        let replacement = views.accessibility_source_identity(0, &workspace.editors[1]).unwrap();
++        assert_ne!(
++            replacement, edited,
++            "a replacement document with reset revision retires the reader"
++        );
++        assert_eq!(
++            replacement.0, edited.0,
++            "the stable view node survives document replacement"
++        );
++    }
++
++    #[test]
++    fn closed_view_retires_its_source_generation_without_recycling_the_survivor() {
++        let mut workspace = Workspace::new(
++            std::sync::Arc::new(|| {}),
++            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
++        )
++        .unwrap();
++        workspace.new_document().unwrap();
++        let mut views = ViewsRuntime::default();
++        views.split(&mut workspace, 0, Orientation::Vertical);
++        let closed = views.pane_token(0).unwrap();
++        let survivor = views.pane_token(1).unwrap();
++        for pane in 0..2 {
++            let editor = views.pane_workspace_editor(&workspace, 0, pane).unwrap();
++            views.accessibility_source_identity(pane, editor).unwrap();
++        }
++        assert_eq!(views.accessibility_sources.borrow().len(), 2);
++
++        let mut app = App::default();
++        views.close_tab(&mut workspace, &mut app, closed);
++
++        let sources = views.accessibility_sources.borrow();
++        assert!(!sources.contains_key(&closed));
++        assert!(sources.contains_key(&survivor));
++    }
+ }
+ 
+ /// Fixed pool of Window-menu slots, each bound to one open document. Surplus
+@@ -1060,6 +1226,8 @@ pub(super) struct ViewsRuntime {
+     tab_drag: Option<TabDrag>,
+     mru_popup: Option<MruPopup>,
+     accessibility_focus: Option<u64>,
++    accessibility_sources: RefCell<BTreeMap<u64, ((u64, u64), u64)>>,
++    accessibility_generation: Cell<u64>,
+     pending_close: Option<usize>,
+     controller: Option<ViewController>,
+     primary: Option<ViewSnapshot>,
+@@ -1393,6 +1561,10 @@ impl ViewsRuntime {
+         let live: Vec<_> = self.documents.iter().map(DocumentBinding::id).collect();
+         if let Some(controller) = &mut self.controller {
+             controller.retain_documents(&live);
++            let live_tabs: std::collections::BTreeSet<_> = controller.tabs().iter().map(|tab| tab.id).collect();
++            self.accessibility_sources
++                .borrow_mut()
++                .retain(|tab, _| live_tabs.contains(tab));
+         }
+         self.documents.sort_by_key(|binding| {
+             workspace
+@@ -1549,6 +1721,21 @@ impl ViewsRuntime {
+             workspace.editors.get(fallback)
+         }
+     }
++    pub(super) fn pane_workspace_editor<'a>(
++        &'a self,
++        workspace: &'a Workspace,
++        fallback: usize,
++        pane: usize,
++    ) -> Option<&'a WorkspaceEditor> {
++        match pane {
++            0 => self
++                .primary_index(workspace)
++                .or(Some(fallback))
++                .and_then(|index| workspace.editors.get(index)),
++            1 if self.open() => self.secondary.as_ref(),
++            _ => None,
++        }
++    }
+     pub(super) fn prepare_fold_target(&mut self, workspace: &mut Workspace) {
+         self.sync_documents(workspace);
+         self.install_views(workspace);
+@@ -1611,6 +1798,21 @@ impl ViewsRuntime {
+             workspace.editors.get_mut(fallback)
+         }
+     }
++    pub(super) fn pane_workspace_editor_mut<'a>(
++        &'a mut self,
++        workspace: &'a mut Workspace,
++        fallback: usize,
++        pane: usize,
++    ) -> Option<&'a mut WorkspaceEditor> {
++        match pane {
++            0 => {
++                let index = self.primary_index(workspace).unwrap_or(fallback);
++                workspace.editors.get_mut(index)
++            }
++            1 if self.open() => self.secondary.as_mut(),
++            _ => None,
++        }
++    }
+     pub(super) fn active_editor_mut<'a>(
+         &'a mut self,
+         workspace: &'a mut Workspace,
+@@ -1861,6 +2063,9 @@ impl ViewsRuntime {
+         }
+         self.next_document = manifest.documents.iter().map(|document| document.id).max().unwrap_or(0);
+         self.controller = Some(controller);
++        // A restore can reuse persisted tab IDs for different document actors.
++        // Retire every qualified reader while preserving the monotonic serial.
++        self.accessibility_sources.borrow_mut().clear();
+         self.loaded_tabs = [None, None];
+         self.install_views(workspace);
+         if let Some(id) = manifest.active_tab.and_then(|id| self.tab_index(workspace, id)) {
+@@ -1971,6 +2176,30 @@ impl ViewsRuntime {
+     pub(super) fn pane_token(&self, pane: usize) -> Option<u64> {
+         self.loaded_tabs.get(pane).copied().flatten()
+     }
++
++    pub(super) fn accessibility_source_identity(&self, pane: usize, editor: &WorkspaceEditor) -> Option<(u64, u64)> {
++        let tab = self.pane_token(pane)?;
++        let source = bareline_app::accessibility::source_identity(editor);
++        let mut sources = self.accessibility_sources.borrow_mut();
++        let generation = if let Some((current, generation)) = sources.get(&tab)
++            && *current == source
++        {
++            *generation
++        } else {
++            let generation = self
++                .accessibility_generation
++                .get()
++                .checked_add(1)
++                .expect("editor accessibility generation exhausted");
++            self.accessibility_generation.set(generation);
++            sources.insert(tab, (source, generation));
++            generation
++        };
++        Some((super::accessibility::editor_provider_id(tab), generation))
++    }
++    pub(super) fn pane_document_index(&self, workspace: &Workspace, pane: usize) -> Option<usize> {
++        self.pane_token(pane).and_then(|tab| self.tab_index(workspace, tab))
++    }
+     pub(super) fn pane(&self) -> u32 {
+         self.controller.as_ref().map_or(0, ViewController::active_pane)
+     }
+@@ -1989,7 +2218,7 @@ impl ViewsRuntime {
+     fn secondary_index(&self, workspace: &Workspace) -> Option<usize> {
+         self.loaded_tabs[1].and_then(|id| self.tab_index(workspace, id))
+     }
+-    fn busy(&self, workspace: &Workspace) -> bool {
++    pub(super) fn busy(&self, workspace: &Workspace) -> bool {
+         !self.queued.is_empty()
+             || self.secondary.as_ref().is_some_and(WorkspaceEditor::busy)
+             || self
+@@ -2259,6 +2488,10 @@ impl ViewsRuntime {
+             app.active = index;
+         }
+     }
++    pub(super) fn accessibility_activate_editor(&mut self, workspace: &Workspace, app: &mut App, pane: u32) {
++        self.accessibility_focus = None;
++        self.activate(workspace, app, pane);
++    }
+     fn close_tab(&mut self, workspace: &mut Workspace, app: &mut App, id: u64) {
+         if self.busy(workspace) {
+             workspace.message = Some("Wait for pending edits before closing a view.".into());
+@@ -2286,6 +2519,7 @@ impl ViewsRuntime {
+             .as_mut()
+             .unwrap()
+             .close(id, workspace.editors[index].dirty(), false);
++        self.accessibility_sources.borrow_mut().remove(&id);
+         self.loaded_tabs = [None, None];
+         self.install_views(workspace);
+         if let Some(index) = self
+diff --git a/crates/app/src/accessibility.rs b/crates/app/src/accessibility.rs
+index bceddd1..31bdbbc 100644
+--- a/crates/app/src/accessibility.rs
++++ b/crates/app/src/accessibility.rs
+@@ -479,6 +479,7 @@ pub fn snapshot(
+         nodes,
+         text,
+         text_geometry: Vec::new(),
++        text_views: Vec::new(),
+         text_context: editor.map(|e| AccessibilityTextContext {
+             source_identity: e.snapshot().identity_token(),
+             selection: (e.selection.anchor, e.selection.caret),
+diff --git a/crates/app/src/views.rs b/crates/app/src/views.rs
+index be52806..9a6790a 100644
+--- a/crates/app/src/views.rs
++++ b/crates/app/src/views.rs
+@@ -8,6 +8,10 @@ use bareline_renderer::Rect;
+ use bareline_ui::rect;
+ use std::ops::Range;
+ 
++/// Maximum persisted tab id accepted by native view/provider projections.
++/// Each id owns a collision-free 256 KiB semantic/text-run block.
++pub const MAX_VIEW_TAB_ID: u64 = (1 << 44) - 1;
++
+ #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+ pub enum Orientation {
+     #[default]
+@@ -113,7 +117,8 @@ impl ViewController {
+         let mut ids = std::collections::HashSet::new();
+         let mut unpinned = false;
+         for tab in &tabs {
+-            if !ids.insert(tab.id)
++            if tab.id > MAX_VIEW_TAB_ID
++                || !ids.insert(tab.id)
+                 || tab.view.split > 1
+                 || tab.view.folds.len() > 100_000
+                 || tab.view.folds.iter().any(|r| r.start >= r.end)
+@@ -254,6 +259,9 @@ impl ViewController {
+             return Err(ViewError::InvalidState);
+         }
+         let id = self.next_id;
++        if id > MAX_VIEW_TAB_ID {
++            return Err(ViewError::IdentityExhausted);
++        }
+         self.next_id = id.checked_add(1).ok_or(ViewError::IdentityExhausted)?;
+         self.tabs.push(SessionTab {
+             id,
+@@ -326,6 +334,9 @@ impl ViewController {
+         }
+         let mut tab = self.tab(id).ok_or(ViewError::Missing)?.clone();
+         let new_id = self.next_id;
++        if new_id > MAX_VIEW_TAB_ID {
++            return Err(ViewError::IdentityExhausted);
++        }
+         self.next_id = new_id.checked_add(1).ok_or(ViewError::IdentityExhausted)?;
+         tab.id = new_id;
+         tab.view.split = 1 - tab.view.split;
+@@ -628,6 +639,19 @@ mod tests {
+         assert!(views.tab(1).is_some());
+         assert!(!views.split);
+     }
++
++    #[test]
++    fn restored_tab_ids_must_fit_the_native_provider_block_contract() {
++        let mut valid = tab(MAX_VIEW_TAB_ID, false);
++        valid.document_id = 1;
++        assert!(ViewController::new(vec![valid], Some(MAX_VIEW_TAB_ID)).is_ok());
++        let mut invalid = tab(MAX_VIEW_TAB_ID + 1, false);
++        invalid.document_id = 1;
++        assert!(matches!(
++            ViewController::new(vec![invalid], None),
++            Err(ViewError::InvalidState)
++        ));
++    }
+     #[test]
+     fn five_hundred_tabs_pin_reorder_and_layout_roundtrip() {
+         let tabs: Vec<_> = (1..=500).map(|id| tab(id, id <= 10)).collect();
+diff --git a/crates/platform-windows/src/accessibility.rs b/crates/platform-windows/src/accessibility.rs
+index e93911e..4612bc8 100644
+--- a/crates/platform-windows/src/accessibility.rs
++++ b/crates/platform-windows/src/accessibility.rs
+@@ -82,7 +82,18 @@ fn tree(snapshot: &AccessibilitySnapshot) -> TreeUpdate {
+             .filter(|n| n.id != item.id && n.parent == item.id)
+             .map(|n| NodeId(n.id))
+             .collect();
+-        if let Some(text) = snapshot.text.as_ref().filter(|t| t.editor_id == item.id) {
++        let text = snapshot
++            .text
++            .as_ref()
++            .filter(|text| text.editor_id == item.id)
++            .or_else(|| {
++                snapshot
++                    .text_views
++                    .iter()
++                    .find(|view| view.editor_id == item.id)
++                    .and_then(|view| view.text.as_ref())
++            });
++        if let Some(text) = text {
+             children.extend(text_runs(text).iter().map(|r| r.id));
+             if let Some((anchor, focus)) = text.selection {
+                 node.set_text_selection(TextSelection {
+@@ -95,7 +106,11 @@ fn tree(snapshot: &AccessibilitySnapshot) -> TreeUpdate {
+         node.set_children(children);
+         nodes.push((NodeId(item.id), node));
+     }
+-    if let Some(text) = &snapshot.text {
++    for text in snapshot
++        .text
++        .iter()
++        .chain(snapshot.text_views.iter().filter_map(|view| view.text.as_ref()))
++    {
+         for line in text_runs(text) {
+             let mut run = Node::new(Role::TextRun);
+             run.set_value(line.value.to_owned());
+@@ -169,8 +184,12 @@ fn text_position(text: &AccessibilityText, index: usize) -> TextPosition {
+ }
+ fn validate(snapshot: &AccessibilitySnapshot) -> Result<(), &'static str> {
+     snapshot.validate()?;
+-    if let Some(text) = &snapshot.text {
+-        let mut ids: std::collections::BTreeSet<_> = snapshot.nodes.iter().map(|n| NodeId(n.id)).collect();
++    let mut ids: std::collections::BTreeSet<_> = snapshot.nodes.iter().map(|n| NodeId(n.id)).collect();
++    for text in snapshot
++        .text
++        .iter()
++        .chain(snapshot.text_views.iter().filter_map(|view| view.text.as_ref()))
++    {
+         for run in text_runs(text) {
+             if !ids.insert(run.id) {
+                 return Err("text run ID collides with chrome");
+@@ -223,8 +242,8 @@ impl ActionHandler for Actions {
+             Action::SetTextSelection
+                 if matches!(target.role, AccessibilityRole::Editor | AccessibilityRole::TextField) =>
+             {
+-                if let (Some(text), Some(ActionData::SetTextSelection(selection))) =
+-                    (&state.snapshot.text, request.data)
++                if let (Some((Some(text), context, _)), Some(ActionData::SetTextSelection(selection))) =
++                    (state.snapshot.text_view(target.id), request.data)
+                 {
+                     let offset = |position: TextPosition| {
+                         let runs = text_runs(text);
+@@ -240,8 +259,7 @@ impl ActionHandler for Actions {
+                     };
+                     offset(selection.anchor)
+                         .zip(offset(selection.focus))
+-                        .zip(state.snapshot.text_context.as_ref())
+-                        .map(|((anchor, caret), context)| AccessibilityAction::SetSelection {
++                        .map(|(anchor, caret)| AccessibilityAction::SetSelection {
+                             source_identity: context.source_identity,
+                             anchor,
+                             caret,
+@@ -302,7 +320,19 @@ impl WindowsAccessibility {
+         })
+     }
+     pub fn set_text_source(&mut self, source: Option<Arc<dyn AccessibilityTextSource>>) {
+-        self.text_provider.set_source(source);
++        let owner = self
++            .shared
++            .lock()
++            .unwrap_or_else(|e| e.into_inner())
++            .snapshot
++            .text
++            .as_ref()
++            .map_or(2, |text| text.editor_id);
++        self.text_provider
++            .set_sources(source.into_iter().map(|source| (owner, source)).collect());
++    }
++    pub fn set_text_sources(&mut self, sources: Vec<(u64, Arc<dyn AccessibilityTextSource>)>) {
++        self.text_provider.set_sources(sources);
+     }
+     pub fn update(&mut self, snapshot: AccessibilitySnapshot) {
+         if let Err(reason) = validate(&snapshot) {
+@@ -362,6 +392,7 @@ mod tests {
+             root: 1,
+             focus: 2,
+             text_geometry: Vec::new(),
++            text_views: Vec::new(),
+             text_context: Some(AccessibilityTextContext {
+                 source_identity: (7, 3),
+                 selection: (5_000_000_001, 5_000_000_003),
+diff --git a/crates/platform-windows/src/accessibility/text_provider.rs b/crates/platform-windows/src/accessibility/text_provider.rs
+index 2cd465f..7d51ed0 100644
+--- a/crates/platform-windows/src/accessibility/text_provider.rs
++++ b/crates/platform-windows/src/accessibility/text_provider.rs
+@@ -5,6 +5,7 @@
+ #![allow(non_snake_case, non_upper_case_globals)]
+ use super::Shared;
+ use bareline_platform::accessibility::*;
++use std::collections::BTreeMap;
+ use std::sync::{Arc, Mutex, RwLock, Weak};
+ use unicode_segmentation::UnicodeSegmentation;
+ use windows::{
+@@ -66,7 +67,7 @@ pub(super) struct Factory {
+     life: Arc<Life>,
+ }
+ struct Life {
+-    source: RwLock<Option<Arc<dyn AccessibilityTextSource>>>,
++    sources: RwLock<BTreeMap<u64, Arc<dyn AccessibilityTextSource>>>,
+     shared: Arc<Mutex<Shared>>,
+     notify: Arc<dyn Fn() + Send + Sync>,
+ }
+@@ -74,18 +75,26 @@ impl Factory {
+     pub(super) fn new(shared: Arc<Mutex<Shared>>, notify: Arc<dyn Fn() + Send + Sync>) -> Self {
+         Self {
+             life: Arc::new(Life {
+-                source: RwLock::new(None),
++                sources: RwLock::new(BTreeMap::new()),
+                 shared,
+                 notify,
+             }),
+         }
+     }
+-    pub(super) fn set_source(&self, source: Option<Arc<dyn AccessibilityTextSource>>) {
+-        let mut current = self.life.source.write().unwrap_or_else(|e| e.into_inner());
+-        // Retain the bounded page cache across layouts of the same revision.
+-        if current.as_ref().map(|v| v.identity()) != source.as_ref().map(|v| v.identity()) {
+-            *current = source;
+-        }
++    pub(super) fn set_sources(&self, sources: Vec<(u64, Arc<dyn AccessibilityTextSource>)>) {
++        let mut current = self.life.sources.write().unwrap_or_else(|e| e.into_inner());
++        let next = sources
++            .into_iter()
++            .map(|(id, source)| {
++                let source = current
++                    .get(&id)
++                    .filter(|active| active.identity() == source.identity())
++                    .cloned()
++                    .unwrap_or(source);
++                (id, source)
++            })
++            .collect();
++        *current = next;
+     }
+ }
+ impl accesskit_windows::PatternOverride for Factory {
+@@ -96,14 +105,18 @@ impl accesskit_windows::PatternOverride for Factory {
+         property: UIA_PROPERTY_ID,
+     ) -> Option<Result<VARIANT>> {
+         if tree == accesskit::TreeId::ROOT
+-            && node.0 == 2
++            && self
++                .life
++                .sources
++                .read()
++                .unwrap_or_else(|e| e.into_inner())
++                .contains_key(&node.0)
+             && matches!(
+                 property,
+                 UIA_IsTextPatternAvailablePropertyId
+                     | UIA_IsTextPattern2AvailablePropertyId
+                     | UIA_IsTextEditPatternAvailablePropertyId
+             )
+-            && self.life.source.read().unwrap_or_else(|e| e.into_inner()).is_some()
+         {
+             Some(Ok(true.into()))
+         } else {
+@@ -118,18 +131,20 @@ impl accesskit_windows::PatternOverride for Factory {
+         enclosing: IRawElementProviderSimple,
+     ) -> Option<Result<IUnknown>> {
+         if tree != accesskit::TreeId::ROOT
+-            || node.0 != 2
++            || !self
++                .life
++                .sources
++                .read()
++                .unwrap_or_else(|e| e.into_inner())
++                .contains_key(&node.0)
+             || !matches!(pattern, UIA_TextPatternId | UIA_TextPattern2Id | UIA_TextEditPatternId)
+         {
+             return None;
+         }
+-        // No source means the ordinary AccessKit viewport provider remains valid.
+-        if self.life.source.read().unwrap_or_else(|e| e.into_inner()).is_none() {
+-            return None;
+-        }
+         let provider: ITextEditProvider = Provider {
+             life: Arc::downgrade(&self.life),
+             enclosing,
++            owner: node.0,
+         }
+         .into();
+         Some(match pattern {
+@@ -154,19 +169,25 @@ struct View {
+     page: usize,
+ }
+ impl Life {
+-    fn geometry(&self, view: &View, enclosing: &IRawElementProviderSimple) -> Result<Vec<AccessibilityTextBox>> {
++    fn geometry(
++        &self,
++        owner: u64,
++        view: &View,
++        enclosing: &IRawElementProviderSimple,
++    ) -> Result<Vec<AccessibilityTextBox>> {
+         let (mut boxes, origin) = {
+             let shared = self.shared.lock().unwrap_or_else(|e| e.into_inner());
+-            if shared.snapshot.text_context.as_ref().map(|c| c.source_identity) != Some(view.source.identity()) {
++            let (_, context, geometry) = shared.snapshot.text_view(owner).ok_or_else(unavailable)?;
++            if context.source_identity != view.source.identity() {
+                 return Err(unavailable());
+             }
+             let node = shared
+                 .snapshot
+                 .nodes
+                 .iter()
+-                .find(|n| n.id == 2)
++                .find(|n| n.id == owner)
+                 .ok_or_else(unavailable)?;
+-            (shared.snapshot.text_geometry.clone(), (node.bounds[0], node.bounds[1]))
++            (geometry.to_vec(), (node.bounds[0], node.bounds[1]))
+         };
+         let fragment: IRawElementProviderFragment = enclosing.cast()?;
+         let screen = unsafe { fragment.BoundingRectangle()? };
+@@ -176,16 +197,22 @@ impl Life {
+         }
+         Ok(boxes)
+     }
+-    fn view(&self) -> Result<View> {
++    fn view(&self, owner: u64) -> Result<View> {
+         let source = self
+-            .source
++            .sources
+             .read()
+             .unwrap_or_else(|e| e.into_inner())
+-            .clone()
++            .get(&owner)
++            .cloned()
+             .ok_or_else(unavailable)?;
+         let shared = self.shared.lock().unwrap_or_else(|e| e.into_inner());
+-        let context = shared.snapshot.text_context.as_ref().ok_or_else(unavailable)?;
+-        if shared.snapshot.nodes.iter().any(|node| node.id == 2 && node.disabled) {
++        let (text, context, geometry) = shared.snapshot.text_view(owner).ok_or_else(unavailable)?;
++        if shared
++            .snapshot
++            .nodes
++            .iter()
++            .any(|node| node.id == owner && node.disabled)
++        {
+             return Err(unavailable());
+         }
+         // Source and tree publication can straddle a UIA call. A mixed pair is
+@@ -204,25 +231,22 @@ impl Life {
+             end: c,
+             text: text.clone(),
+         });
+-        let visible = shared
+-            .snapshot
+-            .text
+-            .as_ref()
++        let visible = text
+             .map(|t| (t.start_byte, t.start_byte + t.value.len()))
+             .unwrap_or((c, c));
+         // Geometry is already in the source-mapped virtual byte domain. Capture
+         // it with selection/composition under this same coherent publication.
+         // A folded header and footer are distinct visible ranges even though
+         // the bounded text cache contains only the header's contiguous window.
+-        if shared.snapshot.text_geometry.len() > 4096 {
++        if geometry.len() > 4096 {
+             return Err(unavailable());
+         }
+         let length = source
+             .len()
+             .checked_add(overlay.as_ref().map_or(0, |o| o.text.len()))
+             .ok_or_else(unavailable)?;
+-        let mut spans = Vec::with_capacity(shared.snapshot.text_geometry.len());
+-        for rect in &shared.snapshot.text_geometry {
++        let mut spans = Vec::with_capacity(geometry.len());
++        for rect in geometry {
+             if rect.start > rect.end || rect.end > length {
+                 return Err(unavailable());
+             }
+@@ -348,6 +372,7 @@ impl View {
+ struct Provider {
+     life: Weak<Life>,
+     enclosing: IRawElementProviderSimple,
++    owner: u64,
+ }
+ impl Provider {
+     fn range(&self, start: usize, end: usize, view: &View) -> Result<ITextRangeProvider> {
+@@ -360,6 +385,7 @@ impl Provider {
+         Ok(TextRange {
+             life: self.life.clone(),
+             enclosing: self.enclosing.clone(),
++            owner: self.owner,
+             source_token: view.source.identity(),
+             overlay: view.overlay.clone(),
+             endpoints: Mutex::new((start, end)),
+@@ -370,10 +396,10 @@ impl Provider {
+ impl ITextProvider_Impl for Provider_Impl {
+     fn GetSelection(&self) -> Result<*mut SAFEARRAY> {
+         let life = self.life.upgrade().ok_or_else(unavailable)?;
+-        let view = life.view()?;
++        let view = life.view(self.owner)?;
+         let selections = {
+             let shared = life.shared.lock().unwrap_or_else(|error| error.into_inner());
+-            let context = shared.snapshot.text_context.as_ref().ok_or_else(unavailable)?;
++            let (_, context, _) = shared.snapshot.text_view(self.owner).ok_or_else(unavailable)?;
+             if context.source_identity != view.source.identity() || context.selection != view.selection {
+                 return Err(unavailable());
+             }
+@@ -403,7 +429,7 @@ impl ITextProvider_Impl for Provider_Impl {
+         array(&ranges)
+     }
+     fn GetVisibleRanges(&self) -> Result<*mut SAFEARRAY> {
+-        let view = self.life.upgrade().ok_or_else(unavailable)?.view()?;
++        let view = self.life.upgrade().ok_or_else(unavailable)?.view(self.owner)?;
+         let spans = if view.visible_ranges.is_empty() {
+             vec![(
+                 view.virtual_offset(view.visible.0),
+@@ -426,11 +452,11 @@ impl ITextProvider_Impl for Provider_Impl {
+             return Err(invalid());
+         }
+         let life = self.life.upgrade().ok_or_else(unavailable)?;
+-        let view = life.view()?;
++        let view = life.view(self.owner)?;
+         if view.len() == 0 {
+             return self.range(0, 0, &view);
+         }
+-        let boxes = life.geometry(&view, &self.enclosing)?;
++        let boxes = life.geometry(self.owner, &view, &self.enclosing)?;
+         let closest = boxes
+             .iter()
+             .min_by(|a, b| {
+@@ -446,7 +472,7 @@ impl ITextProvider_Impl for Provider_Impl {
+         self.range(closest.start, closest.start, &view)
+     }
+     fn DocumentRange(&self) -> Result<ITextRangeProvider> {
+-        let view = self.life.upgrade().ok_or_else(unavailable)?.view()?;
++        let view = self.life.upgrade().ok_or_else(unavailable)?.view(self.owner)?;
+         self.range(0, view.len(), &view)
+     }
+     fn SupportedTextSelection(&self) -> Result<SupportedTextSelection> {
+@@ -462,8 +488,8 @@ impl ITextProvider2_Impl for Provider_Impl {
+             return Err(invalid());
+         }
+         let life = self.life.upgrade().ok_or_else(unavailable)?;
+-        let view = life.view()?;
+-        let focused = life.shared.lock().unwrap_or_else(|e| e.into_inner()).snapshot.focus == 2;
++        let view = life.view(self.owner)?;
++        let focused = life.shared.lock().unwrap_or_else(|e| e.into_inner()).snapshot.focus == self.owner;
+         // SAFETY: COM out pointer was checked and is valid for this call.
+         unsafe {
+             *active = focused.into();
+@@ -477,7 +503,7 @@ impl ITextProvider2_Impl for Provider_Impl {
+ }
+ impl ITextEditProvider_Impl for Provider_Impl {
+     fn GetActiveComposition(&self) -> Result<ITextRangeProvider> {
+-        let view = self.life.upgrade().ok_or_else(unavailable)?.view()?;
++        let view = self.life.upgrade().ok_or_else(unavailable)?.view(self.owner)?;
+         let Some(o) = &view.overlay else {
+             return Err(Error::empty());
+         };
+@@ -486,7 +512,7 @@ impl ITextEditProvider_Impl for Provider_Impl {
+     fn GetConversionTarget(&self) -> Result<ITextRangeProvider> {
+         // A preedit cursor is not a conversion target. winit does not expose the
+         // IME's target clause; UIA specifies a null result when none is available.
+-        self.life.upgrade().ok_or_else(unavailable)?.view()?;
++        self.life.upgrade().ok_or_else(unavailable)?.view(self.owner)?;
+         Err(Error::empty())
+     }
+ }
+@@ -494,13 +520,14 @@ impl ITextEditProvider_Impl for Provider_Impl {
+ struct TextRange {
+     life: Weak<Life>,
+     enclosing: IRawElementProviderSimple,
++    owner: u64,
+     source_token: (u64, u64),
+     overlay: Option<Overlay>,
+     endpoints: Mutex<(usize, usize)>,
+ }
+ impl TextRange {
+     fn view(&self) -> Result<View> {
+-        let view = self.life.upgrade().ok_or_else(unavailable)?.view()?;
++        let view = self.life.upgrade().ok_or_else(unavailable)?.view(self.owner)?;
+         if view.source.identity() != self.source_token || view.overlay != self.overlay {
+             return Err(unavailable());
+         }
+@@ -525,6 +552,7 @@ impl TextRange {
+         TextRange {
+             life: self.life.clone(),
+             enclosing: self.enclosing.clone(),
++            owner: self.owner,
+             source_token: self.source_token,
+             overlay: self.overlay.clone(),
+             endpoints: Mutex::new((start, end)),
+@@ -784,7 +812,7 @@ impl ITextRangeProvider_Impl for TextRange_Impl {
+         let view = self.view()?;
+         let (start, end) = self.endpoints();
+         let life = self.life.upgrade().ok_or_else(unavailable)?;
+-        let boxes = life.geometry(&view, &self.enclosing)?;
++        let boxes = life.geometry(self.owner, &view, &self.enclosing)?;
+         let mut result = Vec::new();
+         for rect in boxes {
+             if rect.start < end && rect.end > start {
+@@ -949,7 +977,7 @@ mod identity_tests {
+     }
+     fn provider(text: &'static str, composition: Option<&str>) -> (Arc<Life>, ITextEditProvider) {
+         let life = Arc::new(life());
+-        *life.source.write().unwrap() = Some(Arc::new(Text(text)));
++        life.sources.write().unwrap().insert(2, Arc::new(Text(text)));
+         *life.shared.lock().unwrap().snapshot.text_context.as_mut().unwrap() = AccessibilityTextContext {
+             source_identity: (90, 1),
+             selection: (1, 1),
+@@ -959,6 +987,7 @@ mod identity_tests {
+         let provider = Provider {
+             life: Arc::downgrade(&life),
+             enclosing: Enclosing.into(),
++            owner: 2,
+         }
+         .into();
+         (life, provider)
+@@ -989,7 +1018,7 @@ mod identity_tests {
+         let (_other, other_provider) = provider_fixture("other");
+         let foreign = unsafe { other_provider.DocumentRange() }.unwrap();
+         assert!(unsafe { range.Compare(&foreign) }.is_err());
+-        *life.source.write().unwrap() = Some(Arc::new(Source((90, 2))));
++        life.sources.write().unwrap().insert(2, Arc::new(Source((90, 2))));
+         assert!(unsafe { range.GetText(-1) }.is_err());
+         drop(life);
+         assert!(unsafe { clone.GetText(-1) }.is_err());
+@@ -1242,7 +1271,10 @@ mod identity_tests {
+     }
+     fn life() -> Life {
+         Life {
+-            source: RwLock::new(Some(Arc::new(Source((10, 1))))),
++            sources: RwLock::new(BTreeMap::from([(
++                2,
++                Arc::new(Source((10, 1))) as Arc<dyn AccessibilityTextSource>,
++            )])),
+             shared: Arc::new(Mutex::new(Shared {
+                 snapshot: AccessibilitySnapshot {
+                     root: 1,
+@@ -1250,6 +1282,7 @@ mod identity_tests {
+                     nodes: vec![],
+                     text: None,
+                     text_geometry: vec![],
++                    text_views: vec![],
+                     text_context: Some(AccessibilityTextContext {
+                         source_identity: (10, 1),
+                         selection: (2, 4),
+@@ -1265,9 +1298,9 @@ mod identity_tests {
+     #[test]
+     fn mixed_source_and_selection_publication_is_unavailable() {
+         let life = life();
+-        assert!(life.view().is_ok());
+-        *life.source.write().unwrap() = Some(Arc::new(Source((11, 0))));
+-        assert_eq!(life.view().err().unwrap().code(), unavailable().code());
++        assert!(life.view(2).is_ok());
++        life.sources.write().unwrap().insert(2, Arc::new(Source((11, 0))));
++        assert_eq!(life.view(2).err().unwrap().code(), unavailable().code());
+         life.shared
+             .lock()
+             .unwrap()
+@@ -1276,15 +1309,78 @@ mod identity_tests {
+             .as_mut()
+             .unwrap()
+             .source_identity = (11, 0);
+-        assert!(life.view().is_ok());
++        assert!(life.view(2).is_ok());
+         // An edit of the same source also invalidates the pair.
+-        *life.source.write().unwrap() = Some(Arc::new(Source((11, 1))));
+-        assert!(life.view().is_err());
++        life.sources.write().unwrap().insert(2, Arc::new(Source((11, 1))));
++        assert!(life.view(2).is_err());
++    }
++
++    #[test]
++    fn legacy_virtual_source_remains_available_without_a_bounded_text_run() {
++        let life = life();
++        assert!(life.shared.lock().unwrap().snapshot.text.is_none());
++        let view = life.view(2).unwrap();
++        assert_eq!(view.selection, (2, 4));
++        assert_eq!(view.visible, (4, 4));
++    }
++
++    #[test]
++    fn pane_sources_keep_independent_selection_and_retire_by_owner() {
++        let life = life();
++        {
++            let mut shared = life.shared.lock().unwrap();
++            shared.snapshot.text_context = None;
++            shared.snapshot.text_views = vec![
++                AccessibilityTextView {
++                    editor_id: 40,
++                    text: None,
++                    context: AccessibilityTextContext {
++                        source_identity: (40, 1),
++                        selection: (1, 2),
++                        selections: Vec::new(),
++                        composition: None,
++                    },
++                    geometry: Vec::new(),
++                },
++                AccessibilityTextView {
++                    editor_id: 41,
++                    text: None,
++                    context: AccessibilityTextContext {
++                        source_identity: (41, 1),
++                        selection: (3, 4),
++                        selections: Vec::new(),
++                        composition: None,
++                    },
++                    geometry: Vec::new(),
++                },
++            ];
++        }
++        *life.sources.write().unwrap() = BTreeMap::from([
++            (40, Arc::new(Source((40, 1))) as Arc<dyn AccessibilityTextSource>),
++            (41, Arc::new(Source((41, 1))) as Arc<dyn AccessibilityTextSource>),
++        ]);
++        assert_eq!(life.view(40).unwrap().selection, (1, 2));
++        assert_eq!(life.view(41).unwrap().selection, (3, 4));
++
++        life.sources
++            .write()
++            .unwrap()
++            .insert(40, Arc::new(Source((40, 2))) as Arc<dyn AccessibilityTextSource>);
++        assert_eq!(life.view(40).err().unwrap().code(), unavailable().code());
++        assert_eq!(life.view(41).unwrap().selection, (3, 4));
++        life.shared.lock().unwrap().snapshot.text_views[0]
++            .context
++            .source_identity = (40, 2);
++        assert_eq!(life.view(40).unwrap().selection, (1, 2));
++
++        life.sources.write().unwrap().remove(&40);
++        assert_eq!(life.view(40).err().unwrap().code(), unavailable().code());
++        assert_eq!(life.view(41).unwrap().selection, (3, 4));
+     }
+     #[test]
+     fn queued_text_actions_retain_the_validated_revision() {
+         let life = life();
+-        let view = life.view().unwrap();
++        let view = life.view(2).unwrap();
+         life.action(AccessibilityAction::SetSelection {
+             source_identity: view.source.identity(),
+             anchor: 2,
+@@ -1296,7 +1392,7 @@ mod identity_tests {
+             offset: 4,
+         })
+         .unwrap();
+-        *life.source.write().unwrap() = Some(Arc::new(Source((20, 0))));
++        life.sources.write().unwrap().insert(2, Arc::new(Source((20, 0))));
+         let shared = life.shared.lock().unwrap();
+         assert_eq!(
+             shared.actions,
+diff --git a/crates/platform/src/accessibility.rs b/crates/platform/src/accessibility.rs
+index 6104e74..9868460 100644
+--- a/crates/platform/src/accessibility.rs
++++ b/crates/platform/src/accessibility.rs
+@@ -56,6 +56,17 @@ pub struct AccessibilitySnapshot {
+     pub text_context: Option<AccessibilityTextContext>,
+     /// Visible grapheme boxes from actual shaped layouts, in physical client px.
+     pub text_geometry: Vec<AccessibilityTextBox>,
++    /// Additional independently owned editor text views. The legacy fields
++    /// above remain the active single-view publication for non-split clients.
++    #[serde(default, skip_serializing_if = "Vec::is_empty")]
++    pub text_views: Vec<AccessibilityTextView>,
++}
++#[derive(Clone, Debug, PartialEq, serde::Serialize)]
++pub struct AccessibilityTextView {
++    pub editor_id: u64,
++    pub text: Option<AccessibilityText>,
++    pub context: AccessibilityTextContext,
++    pub geometry: Vec<AccessibilityTextBox>,
+ }
+ #[derive(Clone, Debug, PartialEq, serde::Serialize)]
+ pub struct AccessibilityTextBox {
+@@ -121,6 +132,32 @@ pub trait AccessibilityTextSource: Send + Sync {
+     fn read(&self, start: usize, limit: usize) -> AccessibleRead;
+ }
+ impl AccessibilitySnapshot {
++    pub fn text_view(
++        &self,
++        editor_id: u64,
++    ) -> Option<(
++        Option<&AccessibilityText>,
++        &AccessibilityTextContext,
++        &[AccessibilityTextBox],
++    )> {
++        if self.text.as_ref().is_some_and(|text| text.editor_id == editor_id) {
++            return self
++                .text_context
++                .as_ref()
++                .map(|context| (self.text.as_ref(), context, self.text_geometry.as_slice()));
++        }
++        if self.text.is_none() && self.text_views.is_empty() && editor_id == 2 {
++            return self
++                .text_context
++                .as_ref()
++                .map(|context| (None, context, self.text_geometry.as_slice()));
++        }
++        self.text_views
++            .iter()
++            .find(|view| view.editor_id == editor_id)
++            .map(|view| (view.text.as_ref(), &view.context, view.geometry.as_slice()))
++    }
++
+     /// Validate before passing an external tree to the native provider.
+     pub fn validate(&self) -> Result<(), &'static str> {
+         if self.text_geometry.len() > 4096
+@@ -154,10 +191,16 @@ impl AccessibilitySnapshot {
+                     .parent;
+             }
+         }
+-        if let Some(text) = &self.text {
++        let mut text_ids = std::collections::BTreeSet::new();
++        let texts = self
++            .text
++            .iter()
++            .chain(self.text_views.iter().filter_map(|view| view.text.as_ref()));
++        for text in texts {
+             if text.value.len() > 65536
+                 || !ids.contains(&text.editor_id)
+                 || ids.contains(&text.run_id)
++                || !text_ids.insert(text.editor_id)
+                 || text.character_lengths.iter().map(|n| usize::from(*n)).sum::<usize>() != text.value.len()
+             {
+                 return Err("invalid bounded text run");
+@@ -176,6 +219,24 @@ impl AccessibilitySnapshot {
+                 return Err("selection outside text run");
+             }
+         }
++        let view_ids: std::collections::BTreeSet<_> = self.text_views.iter().map(|view| view.editor_id).collect();
++        if self.text_views.len() > 2
++            || view_ids.len() != self.text_views.len()
++            || self.text_views.iter().any(|view| {
++                !ids.contains(&view.editor_id)
++                    || view.geometry.len() > 4096
++                    || view.geometry.iter().any(|rect| {
++                        rect.start > rect.end
++                            || rect.bounds.iter().any(|value| !value.is_finite())
++                            || rect.bounds[2] < 0.0
++                            || rect.bounds[3] < 0.0
++                    })
++                    || view.context.source_identity.0 != view.editor_id
++                    || view.text.as_ref().is_some_and(|text| text.editor_id != view.editor_id)
++            })
++        {
++            return Err("invalid editor text view");
++        }
+         Ok(())
+     }
+ }
+diff --git a/docs/implementation/2026-09-12-audit-implementation/PR-U08.md b/docs/implementation/2026-09-12-audit-implementation/PR-U08.md
+new file mode 100644
+index 0000000..3936ef9
+--- /dev/null
++++ b/docs/implementation/2026-09-12-audit-implementation/PR-U08.md
+@@ -0,0 +1,47 @@
++# PR-U08 — Stable editor providers for split panes
++
++## Baseline
++
++- Base commit: `7a17953c07961d2d8ea03f9933ae0845b2657581`
++- Worktree: `audit-implementation-worktrees/modal`
++- Dependencies: integrated PR-U01 modal ownership and PR-U07 Search/Recovery ownership.
++
++## Scope
++
++Expose one stable, independently focused accessibility editor provider for each visible split view while retaining shared resident or paged document bytes. Cover provider retirement and view identity through move, clone, close, session restore, and both split orientations. Dock composition remains assigned to PR-U11.
++
++## Decisions
++
++- Use each persisted view-tab id for the stable editor node/provider id. Moving a tab therefore retains the provider; cloning receives the controller's new tab id; session restore reconstructs the same ids. The view model rejects tab ids outside the checked 44-bit provider-block contract, so provider and bounded-run ids cannot alias.
++- Publish pane text as bounded `AccessibilityTextView` records. Each record carries its own selection, visible geometry, composition and provider-qualified source identity while its reader delegates to the shared resident or paged document.
++- Qualify each stable provider with a shell-wide generation derived from the full document source identity. Viewport-only movement retains the generation; document edits, replacements and session restoration retire stale readers and actions.
++- Key the Windows TextPattern override and every retained COM range by editor owner id. Removing one owner retires only that provider; source/context mismatches return element unavailable. Legacy virtual editor context remains available when its bounded viewport run is empty.
++- Keep the existing single-text snapshot fields for unsplit editors and U01/U07 fields. Split records use a separate `0x4...` owner namespace, leaving modal and Search namespaces unchanged.
++
++## Changed files
++
++- `apps/bareline/src/windows_app.rs`
++- `apps/bareline/src/windows_app/accessibility.rs`
++- `apps/bareline/src/windows_app/views.rs`
++- `crates/app/src/accessibility.rs`
++- `crates/platform/src/accessibility.rs`
++- `crates/platform-windows/src/accessibility.rs`
++- `crates/platform-windows/src/accessibility/text_provider.rs`
++- This implementation note.
++
++## Focused checks
++
++- `cargo test -p bareline --bin bareline split_panes_publish_independent_text_owners_and_retire_closed_provider`
++- `cargo test -p bareline folded_large_gap_keeps_independent_pane_source_layout_and_click`
++- `cargo test -p bareline pane_source_generation_tracks_full_document_replacement_and_revision`
++- `cargo test -p bareline closed_view_retires_its_source_generation_without_recycling_the_survivor`
++- `cargo test -p bareline-platform-windows pane_sources_keep_independent_selection_and_retire_by_owner`
++- `cargo test -p bareline-platform-windows legacy_virtual_source_remains_available_without_a_bounded_text_run`
++- `cargo test -p bareline-app restored_tab_ids_must_fit_the_native_provider_block_contract`
++- Existing view-model coverage: `cargo test -p bareline-app views::tests::clones_share_document_identity_with_independent_state_and_last_reference_close_guard`
++- Cargo and native desktop qualification are owned by root integration; no Cargo or desktop run was made in this isolated worktree.
++
++## Unresolved qualifications
++
++- Native UIA journeys remain for root after integration: horizontal/vertical split, pointer and keyboard pane focus, provider retirement, restored session, and resident/paged TextPattern operations.
++- Dock composition remains assigned to PR-U11.

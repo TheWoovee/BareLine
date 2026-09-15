@@ -1,0 +1,18 @@
+{
+  "arguments": [
+    "test",
+    "-p",
+    "bareline-app",
+    "--lib",
+    "paged_recovery_restart_preserves_opaque_undo_and_recovers_stale_pointer",
+    "--offline",
+    "--locked",
+    "--",
+    "--nocapture"
+  ],
+  "completed_utc": "2026-09-12T12:28:49.2600476Z",
+  "integration_snapshot": "537b0534e208a97ebf3a4828d58bfb4286dfcfb6",
+  "exit_code": 0,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\T16-workspace-recovery-central.log"
+}

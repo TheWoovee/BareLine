@@ -1,0 +1,427 @@
+diff --git a/apps/bareline/src/windows_app.rs b/apps/bareline/src/windows_app.rs
+index ed9714b..333ee02 100644
+--- a/apps/bareline/src/windows_app.rs
++++ b/apps/bareline/src/windows_app.rs
+@@ -4347,6 +4347,9 @@ mod deferred_close_tests {
+         fn guard_directory(&self, path: &Path) -> std::io::Result<Arc<dyn Send + Sync>> {
+             LocalFileSystem::guard_directory(&bareline_platform_windows::WindowsFileSystem, path)
+         }
++        fn available_space(&self, path: &Path) -> std::io::Result<u64> {
++            LocalFileSystem::available_space(&bareline_platform_windows::WindowsFileSystem, path)
++        }
+         fn identity(&self, file: &std::fs::File) -> std::io::Result<bareline_platform::FileIdentity> {
+             LocalFileSystem::identity(&bareline_platform_windows::WindowsFileSystem, file)
+         }
+@@ -4417,7 +4420,15 @@ mod deferred_close_tests {
+         let deadline = Instant::now() + Duration::from_secs(10);
+         while !workspace.editors[0].recovery_status().complete {
+             workspace.pump();
+-            assert!(Instant::now() < deadline, "{:?}", workspace.message);
++            assert!(
++                Instant::now() < deadline,
++                "message={:?}; recovery={:?}; editor_busy={}; io_busy={}; recovery_root={:?}",
++                workspace.message,
++                workspace.editors[0].recovery_status(),
++                workspace.editors[0].busy(),
++                workspace.io_busy(),
++                workspace.recovery_root
++            );
+             std::thread::yield_now();
+         }
+         let mut shell = headless_shell();
+@@ -4484,7 +4495,15 @@ mod deferred_close_tests {
+         let deadline = Instant::now() + Duration::from_secs(10);
+         while !workspace.editors[0].recovery_status().complete {
+             workspace.pump();
+-            assert!(Instant::now() < deadline, "{:?}", workspace.message);
++            assert!(
++                Instant::now() < deadline,
++                "message={:?}; recovery={:?}; editor_busy={}; io_busy={}; recovery_root={:?}",
++                workspace.message,
++                workspace.editors[0].recovery_status(),
++                workspace.editors[0].busy(),
++                workspace.io_busy(),
++                workspace.recovery_root
++            );
+             std::thread::yield_now();
+         }
+         let identity = workspace.editors[0].document_identity();
+diff --git a/crates/editor-surface/src/paged_view.rs b/crates/editor-surface/src/paged_view.rs
+index 1e20e3e..0475c1f 100644
+--- a/crates/editor-surface/src/paged_view.rs
++++ b/crates/editor-surface/src/paged_view.rs
+@@ -245,6 +245,7 @@ pub struct PagedReadHandle {
+     _generation: Arc<()>,
+     retired: Arc<Mutex<Vec<RetiredGeneration>>>,
+     _views: Arc<()>,
++    _recovery_cleanup_hold: Arc<Mutex<Option<bareline_file_io::recovery_retirement::CleanupHold>>>,
+     path: PathBuf,
+     fingerprint: Fingerprint,
+     tail: Arc<Mutex<Option<bareline_file_io::tail::TailSession>>>,
+@@ -467,6 +468,7 @@ pub struct PagedEditorSurface {
+     can_redo: bool,
+     recovery: Arc<Mutex<Option<bareline_file_io::paged_recovery::PagedRecovery>>>,
+     recovery_discard: Arc<Mutex<Option<bareline_file_io::recovery_retirement::DiscardTicket>>>,
++    recovery_cleanup_hold: Arc<Mutex<Option<bareline_file_io::recovery_retirement::CleanupHold>>>,
+     recovery_status: Arc<Mutex<bareline_file_io::paged_recovery::PagedRecoveryStatus>>,
+     failed_retirements: Arc<Mutex<Vec<PathBuf>>>,
+     budget: Budget,
+@@ -550,6 +552,7 @@ impl PagedEditorSurface {
+             _generation: self.view_generation.clone(),
+             retired: self.retired.clone(),
+             _views: self.views.clone(),
++            _recovery_cleanup_hold: self.recovery_cleanup_hold.clone(),
+             path: self.path.clone(),
+             fingerprint: self.fingerprint.clone(),
+             actor: self.actor.clone(),
+@@ -657,6 +660,7 @@ impl PagedEditorSurface {
+             tracked_acknowledged: Default::default(),
+             recovery: Arc::new(Mutex::new(None)),
+             recovery_discard: Arc::new(Mutex::new(None)),
++            recovery_cleanup_hold: Arc::new(Mutex::new(None)),
+             recovery_status: Arc::new(Mutex::new(Default::default())),
+             failed_retirements: Arc::new(Mutex::new(Vec::new())),
+             snapshot,
+@@ -798,6 +802,7 @@ impl PagedEditorSurface {
+             can_redo: self.can_redo,
+             recovery: self.recovery.clone(),
+             recovery_discard: self.recovery_discard.clone(),
++            recovery_cleanup_hold: self.recovery_cleanup_hold.clone(),
+             recovery_status: self.recovery_status.clone(),
+             failed_retirements: self.failed_retirements.clone(),
+             budget: self.budget.clone(),
+@@ -874,14 +879,26 @@ impl PagedEditorSurface {
+                 .as_ref()
+                 .map_or_else(|| self.recovery_platform.clone(), |recovery| recovery.platform());
+             let notify = self.notify.clone();
+-            *discard = Some(bareline_file_io::recovery_retirement::DiscardTicket::request(
+-                bareline_file_io::recovery_retirement::RecoveryOwnership {
+-                    recoveries: recovery.into_iter().collect(),
+-                    paths: origin.into_iter().collect(),
+-                    platform,
+-                },
+-                notify,
+-            ));
++            let hold = {
++                let mut current = self
++                    .recovery_cleanup_hold
++                    .lock()
++                    .unwrap_or_else(|error| error.into_inner());
++                current
++                    .get_or_insert_with(bareline_file_io::recovery_retirement::CleanupHold::new)
++                    .clone()
++            };
++            *discard = Some(
++                bareline_file_io::recovery_retirement::DiscardTicket::request_with_cleanup_hold(
++                    bareline_file_io::recovery_retirement::RecoveryOwnership {
++                        recoveries: recovery.into_iter().collect(),
++                        paths: origin.into_iter().collect(),
++                        platform,
++                    },
++                    &hold,
++                    notify,
++                ),
++            );
+         }
+         let outcome = discard.as_ref().unwrap().poll();
+         if matches!(
+diff --git a/crates/file-io/src/recovery_retirement.rs b/crates/file-io/src/recovery_retirement.rs
+index 7815d0c..9072a1c 100644
+--- a/crates/file-io/src/recovery_retirement.rs
++++ b/crates/file-io/src/recovery_retirement.rs
+@@ -14,6 +14,30 @@ use std::{
+ 
+ type Drain = Box<dyn FnOnce() -> RecoveryAddition + Send + 'static>;
+ 
++struct CleanupHoldInner;
++
++impl Drop for CleanupHoldInner {
++    fn drop(&mut self) {
++        retry_pending_cleanup();
++    }
++}
++
++/// Keeps a tombstoned source available to a live in-process document owner.
++#[derive(Clone)]
++pub struct CleanupHold(Arc<CleanupHoldInner>);
++
++impl CleanupHold {
++    pub fn new() -> Self {
++        Self(Arc::new(CleanupHoldInner))
++    }
++}
++
++impl Default for CleanupHold {
++    fn default() -> Self {
++        Self::new()
++    }
++}
++
+ pub struct RecoveryOwnership {
+     pub recoveries: Vec<PagedRecovery>,
+     pub paths: Vec<PathBuf>,
+@@ -47,6 +71,7 @@ struct State {
+     phase: Phase,
+     drain: Option<Drain>,
+     ownership: Option<RecoveryOwnership>,
++    cleanup_holds: Vec<std::sync::Weak<CleanupHoldInner>>,
+     running: bool,
+ }
+ 
+@@ -75,6 +100,7 @@ impl Drop for RunGuard<'_> {
+ 
+ struct RetainedCleanup {
+     receipts: Vec<crate::paged_recovery::CleanupReceipt>,
++    holds: Vec<std::sync::Weak<CleanupHoldInner>>,
+     platform: Arc<dyn LocalFileSystem>,
+     notify: Arc<dyn Fn() + Send + Sync>,
+ }
+@@ -106,7 +132,15 @@ fn retain_cleanup(mut cleanup: RetainedCleanup) {
+     cleanup.receipts.dedup_by(|left, right| left.same_owner(right));
+     let mut retained = retained().lock().unwrap_or_else(|error| error.into_inner());
+     if let Some(existing) = retained.iter_mut().find(|existing| {
+-        Arc::ptr_eq(&existing.platform, &cleanup.platform) && Arc::ptr_eq(&existing.notify, &cleanup.notify)
++        (existing.holds.is_empty() && cleanup.holds.is_empty()
++            || existing.holds.len() == cleanup.holds.len()
++                && existing
++                    .holds
++                    .iter()
++                    .zip(&cleanup.holds)
++                    .all(|(left, right)| left.ptr_eq(right)))
++            && Arc::ptr_eq(&existing.platform, &cleanup.platform)
++            && Arc::ptr_eq(&existing.notify, &cleanup.notify)
+     }) {
+         existing.receipts.extend(cleanup.receipts);
+         existing
+@@ -118,6 +152,51 @@ fn retain_cleanup(mut cleanup: RetainedCleanup) {
+     }
+ }
+ 
++#[cfg(test)]
++struct CleanupRegistrationHook {
++    hold: std::sync::Weak<CleanupHoldInner>,
++    entered: std::sync::mpsc::SyncSender<()>,
++    release: Mutex<std::sync::mpsc::Receiver<()>>,
++}
++
++#[cfg(test)]
++fn cleanup_registration_hook() -> &'static Mutex<Option<Arc<CleanupRegistrationHook>>> {
++    static HOOK: OnceLock<Mutex<Option<Arc<CleanupRegistrationHook>>>> = OnceLock::new();
++    HOOK.get_or_init(|| Mutex::new(None))
++}
++
++#[cfg(test)]
++fn pause_before_cleanup_registration(holds: &[std::sync::Weak<CleanupHoldInner>]) {
++    let hook = cleanup_registration_hook()
++        .lock()
++        .unwrap_or_else(|error| error.into_inner())
++        .clone();
++    if let Some(hook) = hook
++        && holds.iter().any(|hold| hold.ptr_eq(&hook.hold))
++        && hook.entered.try_send(()).is_ok()
++    {
++        let _ = hook
++            .release
++            .lock()
++            .unwrap_or_else(|error| error.into_inner())
++            .recv_timeout(Duration::from_secs(5));
++    }
++}
++
++#[cfg(not(test))]
++fn pause_before_cleanup_registration(_: &[std::sync::Weak<CleanupHoldInner>]) {}
++
++fn defer_held_cleanup(cleanup: RetainedCleanup) {
++    let holds = cleanup.holds.clone();
++    pause_before_cleanup_registration(&holds);
++    retain_cleanup(cleanup);
++    // Registration precedes this second observation. A final owner drop either
++    // sees the receipt itself or happens first and is recovered by this requeue.
++    if holds.iter().all(|hold| hold.strong_count() == 0) {
++        retry_pending_cleanup();
++    }
++}
++
+ fn warn(message: String) {
+     const MAX_WARNINGS: usize = 32;
+     let mut warnings = warnings().lock().unwrap_or_else(|error| error.into_inner());
+@@ -177,7 +256,17 @@ fn executor() -> &'static BoundedExecutor {
+ 
+ impl DiscardTicket {
+     pub fn request(ownership: RecoveryOwnership, notify: Arc<dyn Fn() + Send + Sync>) -> Self {
+-        Self::request_inner(ownership, None, notify)
++        Self::request_inner(ownership, None, Vec::new(), notify)
++    }
++
++    /// Publish discard intent while an in-process owner such as Undo Close Tab
++    /// still needs the tombstoned generation's source bytes.
++    pub fn request_with_cleanup_hold(
++        ownership: RecoveryOwnership,
++        hold: &CleanupHold,
++        notify: Arc<dyn Fn() + Send + Sync>,
++    ) -> Self {
++        Self::request_inner(ownership, None, vec![Arc::downgrade(&hold.0)], notify)
+     }
+ 
+     pub(crate) fn request_after_drain(
+@@ -185,15 +274,21 @@ impl DiscardTicket {
+         drain: impl FnOnce() -> RecoveryAddition + Send + 'static,
+         notify: Arc<dyn Fn() + Send + Sync>,
+     ) -> Self {
+-        Self::request_inner(ownership, Some(Box::new(drain)), notify)
++        Self::request_inner(ownership, Some(Box::new(drain)), Vec::new(), notify)
+     }
+ 
+-    fn request_inner(ownership: RecoveryOwnership, drain: Option<Drain>, notify: Arc<dyn Fn() + Send + Sync>) -> Self {
++    fn request_inner(
++        ownership: RecoveryOwnership,
++        drain: Option<Drain>,
++        cleanup_holds: Vec<std::sync::Weak<CleanupHoldInner>>,
++        notify: Arc<dyn Fn() + Send + Sync>,
++    ) -> Self {
+         let ticket = Self {
+             state: Arc::new(Mutex::new(State {
+                 phase: Phase::DiscardRequested,
+                 drain,
+                 ownership: Some(ownership),
++                cleanup_holds,
+                 running: false,
+             })),
+             notify,
+@@ -364,6 +459,27 @@ fn run(state: Arc<Mutex<State>>, notify: Arc<dyn Fn() + Send + Sync>) {
+         ownership.recoveries.clear();
+         ownership.platform.clone()
+     };
++    let holds = state
++        .lock()
++        .unwrap_or_else(|error| error.into_inner())
++        .cleanup_holds
++        .clone();
++    if holds.iter().any(|hold| hold.strong_count() != 0) {
++        defer_held_cleanup(RetainedCleanup {
++            receipts,
++            holds,
++            platform,
++            notify: notify.clone(),
++        });
++        let mut current = state.lock().unwrap_or_else(|error| error.into_inner());
++        current.running = false;
++        current.phase = Phase::Complete;
++        drop(current);
++        guard.finished = true;
++        prune_retained_discard(&state);
++        notify();
++        return;
++    }
+     let mut failure = None;
+     let mut unresolved = Vec::new();
+     for receipt in receipts {
+@@ -401,6 +517,7 @@ fn run(state: Arc<Mutex<State>>, notify: Arc<dyn Fn() + Send + Sync>) {
+         warn(error.clone());
+         retain_cleanup(RetainedCleanup {
+             receipts: unresolved,
++            holds: Vec::new(),
+             platform,
+             notify: notify.clone(),
+         });
+@@ -431,6 +548,10 @@ fn prune_retained_discard(state: &Arc<Mutex<State>>) {
+ }
+ 
+ fn schedule_cleanup(cleanup: RetainedCleanup) {
++    if cleanup.holds.iter().any(|hold| hold.strong_count() != 0) {
++        defer_held_cleanup(cleanup);
++        return;
++    }
+     let retained_cleanup = Arc::new(Mutex::new(Some(cleanup)));
+     let job_cleanup = retained_cleanup.clone();
+     let submitted = executor().submit(
+@@ -653,8 +774,67 @@ mod tests {
+         }
+     }
+ 
++    fn registry_test_lock() -> &'static Mutex<()> {
++        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
++        LOCK.get_or_init(|| Mutex::new(()))
++    }
++
++    #[test]
++    fn final_cleanup_hold_drop_cannot_miss_receipt_registration() {
++        let _registry = registry_test_lock().lock().unwrap_or_else(|error| error.into_inner());
++        retained().lock().unwrap().clear();
++        retained_discards().lock().unwrap().clear();
++        warnings().lock().unwrap().clear();
++        let platform = Arc::new(Platform::default());
++        let root = scratch("discard-cleanup-hold");
++        let path = root.join("journal");
++        journal(&path, platform.as_ref());
++        let source = path.join("source.bin");
++        fs::write(&source, b"exact undo source").unwrap();
++
++        let (entered_tx, entered_rx) = mpsc::sync_channel(1);
++        let (release_tx, release_rx) = mpsc::sync_channel(1);
++        let hold = CleanupHold::new();
++        *cleanup_registration_hook().lock().unwrap() = Some(Arc::new(CleanupRegistrationHook {
++            hold: Arc::downgrade(&hold.0),
++            entered: entered_tx,
++            release: Mutex::new(release_rx),
++        }));
++        let ticket = DiscardTicket::request_with_cleanup_hold(
++            RecoveryOwnership {
++                recoveries: Vec::new(),
++                paths: vec![path.clone()],
++                platform,
++            },
++            &hold,
++            Arc::new(|| {}),
++        );
++
++        entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
++        assert_eq!(ticket.poll(), DiscardPoll::Durable);
++        assert_eq!(
++            crate::recovery::inspect(&path, &Default::default()).unwrap().status,
++            RecoveryStatus::Discarded
++        );
++        assert_eq!(fs::read(&source).unwrap(), b"exact undo source");
++
++        // Force the former lost-wake order: the final owner retries while the
++        // receipt has not yet entered the retained registry.
++        *cleanup_registration_hook().lock().unwrap() = None;
++        drop(hold);
++        release_tx.send(()).unwrap();
++        let deadline = Instant::now() + Duration::from_secs(5);
++        while path.exists() {
++            assert!(Instant::now() < deadline, "final hold release left cleanup dormant");
++            std::thread::yield_now();
++        }
++        assert_eq!(ticket.poll(), DiscardPoll::Durable);
++        fs::remove_dir(root).unwrap();
++    }
++
+     #[test]
+     fn delayed_drain_failed_tombstone_and_retained_cleanup_are_truthful() {
++        let _registry = registry_test_lock().lock().unwrap_or_else(|error| error.into_inner());
+         retained().lock().unwrap().clear();
+         retained_discards().lock().unwrap().clear();
+         warnings().lock().unwrap().clear();
+diff --git a/docs/implementation/2026-09-12-audit-implementation/PR-T05.md b/docs/implementation/2026-09-12-audit-implementation/PR-T05.md
+index de92704..46c5c38 100644
+--- a/docs/implementation/2026-09-12-audit-implementation/PR-T05.md
++++ b/docs/implementation/2026-09-12-audit-implementation/PR-T05.md
+@@ -12,6 +12,9 @@
+ - `retired.json` and a content-free cleanup proof are published before close is allowed. Cleanup captures the guarded root/candidate identities and a bounded no-follow proof read in a retained receipt, so a retry does not depend on `manifest.json` surviving a partial purge. Cleanup delegates to T01's proof-preserving Windows removal primitive with 4,096-entry and 250 ms limits. Unsupported or uncertain deletion fails closed and retains the exact receipt for retry; no recursive path fallback remains. A focused Windows boundary regression removes `manifest.json` before invoking the retained-proof cleanup.
+ - `IoRequest::RestorePagedRecovery` now performs recovery inspection and bounded full-text materialization on the existing I/O worker. Cancellation and inspection/materialization failures reach a failed terminal outcome; only the legitimate size-limit `Ok(None)` keeps the paged fallback. `Workspace::adopt_recovered_resident` only consumes prepared text.
+ - Undo Close Tab clears the completed discard ticket and creates a fresh resident slot, status, cancellation generation, and recovery root ownership. The restart regression gates the old purge, restores and edits the closed buffer, requires a different durable recovery directory, then proves the old cleanup cannot delete the new checkpoint. The shell regression exercises the deferred close entrypoint across a tab reorder and verifies the original read-only state is restored.
++- Paged Undo Close Tab retains an explicit shared cleanup hold after durable tombstone publication. Physical removal waits while any view or the closed-editor owner can still read the recovered store; dropping the final view releases the hold and submits the exact retained cleanup receipt. This prevents neutral filesystems from unlinking the old source before a reopened editor establishes its next baseline.
++- Held cleanup registration is linearized against final-owner release: the receipt enters the registry before the worker rechecks its weak owner. A final drop either takes that registered receipt or is observed by the post-registration requeue, without sleeps or submitting while the registry lock is held. The focused, hold-qualified barrier regression forces the former lost-wake ordering, verifies the tombstone is already durable and source bytes remain exact, then proves final release purges the journal. Tests that clear the process registry share one serialization guard; the hook uses bounded waits and cannot capture unrelated cleanup.
++- Central correction evidence retained: the initial paged restart reported `Retain paged baseline .../source-1: Io OS3 NotFound`, proving that the reopened actor still depended on the retired generation. The initial shell fixtures also timed out before checkpoint completion because their gating filesystem did not delegate the required free-space query; the fixture now delegates that production primitive and reports recovery, actor, I/O and root state on any future timeout.
+ - Static evidence run in the private worktree: direct `rustfmt --edition 2024` on all changed Rust files and `git diff --check`. Cargo and native checks remain central by policy.
+ 
+ ## Proposed contained integration commands
+@@ -25,6 +28,7 @@ Run centrally with the shared target, `--offline --locked`, stopping on the firs
+ 5. `cargo test -p bareline-app workspace::tests::paged_recovery_restart_preserves_opaque_undo_and_recovers_stale_pointer --offline --locked`
+ 6. `cargo test -p bareline deferred_close_tests --offline --locked`
+ 7. `cargo test -p bareline-platform-windows owned_cache::tests::retained_cleanup_receipt_removes_candidate_after_manifest_is_gone --offline --locked`
++8. `cargo test -p bareline-file-io recovery_retirement::tests::final_cleanup_hold_drop_cannot_miss_receipt_registration --offline --locked`
+ 
+ ## Deferred qualification
+ 

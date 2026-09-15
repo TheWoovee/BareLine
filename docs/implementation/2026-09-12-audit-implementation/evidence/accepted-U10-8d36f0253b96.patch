@@ -1,0 +1,1626 @@
+diff --git a/apps/bareline/src/windows_app.rs b/apps/bareline/src/windows_app.rs
+index 6002ca8..c5b457e 100644
+--- a/apps/bareline/src/windows_app.rs
++++ b/apps/bareline/src/windows_app.rs
+@@ -1420,6 +1420,28 @@ impl Shell {
+                 );
+             }
+         }
++        for id in ["settings.external_reload", "settings.external_keep"] {
++            if !self.settings.controller.open || !self.settings.controller.has_external_change() {
++                context.states.insert(
++                    bareline_commands::CommandId(id),
++                    CommandState::disabled(if self.settings.controller.open {
++                        "No external settings change needs a decision"
++                    } else {
++                        "Open Settings first"
++                    }),
++                );
++            }
++        }
++        if !self.settings.controller.open || !self.settings.controller.can_revert() {
++            context.states.insert(
++                bareline_commands::CommandId("settings.revert"),
++                CommandState::disabled(if self.settings.controller.open {
++                    "Settings match the opening-session values"
++                } else {
++                    "Open Settings first"
++                }),
++            );
++        }
+         for id in [
+             "settings.keymap_import",
+             "settings.keymap_export",
+diff --git a/apps/bareline/src/windows_app/settings.rs b/apps/bareline/src/windows_app/settings.rs
+index d5afc7c..5f310ae 100644
+--- a/apps/bareline/src/windows_app/settings.rs
++++ b/apps/bareline/src/windows_app/settings.rs
+@@ -511,7 +511,19 @@ impl Shell {
+             }
+             "settings.close" => self.settings.controller.dismiss(),
+             "settings.retry" => self.settings.controller.retry_save(),
+-            "settings.revert" => self.settings.controller.revert_changes(),
++            "settings.revert" => {
++                if self.settings.controller.revert_changes() {
++                    self.settings_effect(el, Some(SettingsEffect::PreviewChanged));
++                }
++            }
++            "settings.external_reload" => {
++                if self.settings.controller.reload_external_change() {
++                    self.settings_effect(el, Some(SettingsEffect::PreviewChanged));
++                }
++            }
++            "settings.external_keep" => {
++                self.settings.controller.keep_after_external_change();
++            }
+             "settings.reset_section" => self.settings.controller.request_reset(),
+             "settings.copy_key" => {
+                 if let Some(key) = self.settings.controller.copy_selected_key()
+diff --git a/crates/app/src/settings.rs b/crates/app/src/settings.rs
+index 2525672..bfc1cf0 100644
+--- a/crates/app/src/settings.rs
++++ b/crates/app/src/settings.rs
+@@ -130,13 +130,28 @@ impl SettingsController {
+ }
+ struct SaveJob {
+     scope: Scope,
++    owner_epoch: u64,
++    generation: u64,
+     snapshot: SettingsDocument,
+     path: PathBuf,
++    expected: DiskVersion,
++}
++#[derive(Clone, Debug, PartialEq, Eq)]
++enum DiskVersion {
++    Absent,
++    Bytes(Vec<u8>),
++}
++#[derive(Debug)]
++enum SaveFailure {
++    Io(String),
++    ExternalChange(DiskVersion),
+ }
+ struct SaveCompletion {
+     scope: Scope,
++    owner_epoch: u64,
++    generation: u64,
+     snapshot: SettingsDocument,
+-    error: Option<String>,
++    error: Option<SaveFailure>,
+     path: PathBuf,
+ }
+ struct Storage {
+@@ -144,8 +159,36 @@ struct Storage {
+     workspace: Option<PathBuf>,
+     sender: SyncSender<SaveJob>,
+     receiver: Receiver<SaveCompletion>,
+-    active: bool,
++    active: Option<SaveOwner>,
+     pending: VecDeque<SaveJob>,
++    user_disk: DiskVersion,
++    workspace_disk: Option<DiskVersion>,
++    user_epoch: u64,
++    workspace_epoch: u64,
++}
++#[derive(Clone, Debug, PartialEq, Eq)]
++struct SaveOwner {
++    scope: Scope,
++    owner_epoch: u64,
++    path: PathBuf,
++}
++struct DeferredWorkspace {
++    awaited: SaveOwner,
++    path: PathBuf,
++    requested: SettingsDocument,
++}
++struct ExternalChange {
++    scope: Scope,
++    owner_epoch: u64,
++    path: PathBuf,
++    disk: DiskVersion,
++}
++fn read_disk_version(path: &std::path::Path) -> std::io::Result<DiskVersion> {
++    match config::read_config(path) {
++        Ok(bytes) => Ok(DiskVersion::Bytes(bytes)),
++        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(DiskVersion::Absent),
++        Err(error) => Err(error),
++    }
+ }
+ struct Choice {
+     key: &'static str,
+@@ -324,6 +367,10 @@ pub struct SettingsController {
+     reset: Rect,
+     retry: Rect,
+     revert: Rect,
++    external_reload: Rect,
++    external_keep: Rect,
++    external_change: Option<ExternalChange>,
++    deferred_workspace: Option<DeferredWorkspace>,
+ }
+ /// Sentinel appended to a picker so a value outside the list can still be typed.
+ const CUSTOM_ENTRY: &str = "Custom…";
+@@ -411,6 +458,10 @@ impl SettingsController {
+             reset: Rect::default(),
+             retry: Rect::default(),
+             revert: Rect::default(),
++            external_reload: Rect::default(),
++            external_keep: Rect::default(),
++            external_change: None,
++            deferred_workspace: None,
+         }
+     }
+     pub fn configure_storage(
+@@ -420,24 +471,37 @@ impl SettingsController {
+         platform: Arc<dyn LocalFileSystem>,
+         wake: Arc<dyn Fn() + Send + Sync>,
+     ) -> std::io::Result<()> {
++        let user_disk = read_disk_version(&user)?;
++        let workspace_disk = workspace
++            .as_ref()
++            .zip(self.workspace.as_ref())
++            .map(|(path, _)| read_disk_version(path))
++            .transpose()?;
+         let (sender, jobs) = mpsc::sync_channel::<SaveJob>(1);
+         let (completed, receiver) = mpsc::sync_channel(1);
+         std::thread::Builder::new()
+             .name("bareline-settings-save".into())
+             .spawn(move || {
+                 while let Ok(job) = jobs.recv() {
++                    let current = read_disk_version(&job.path);
+                     let prepare = if job.scope == Scope::Workspace {
+                         job.path.parent().map_or(Ok(()), std::fs::create_dir_all)
+                     } else {
+                         Ok(())
+                     };
+-                    let error = prepare
+-                        .and_then(|_| job.snapshot.save(&job.path, platform.as_ref()))
+-                        .err()
+-                        .map(|e| e.to_string());
++                    let error = match current {
++                        Ok(current) if current != job.expected => Some(SaveFailure::ExternalChange(current)),
++                        Ok(_) => prepare
++                            .and_then(|_| job.snapshot.save(&job.path, platform.as_ref()))
++                            .err()
++                            .map(|error| SaveFailure::Io(error.to_string())),
++                        Err(error) => Some(SaveFailure::Io(error.to_string())),
++                    };
+                     if completed
+                         .send(SaveCompletion {
+                             scope: job.scope,
++                            owner_epoch: job.owner_epoch,
++                            generation: job.generation,
+                             snapshot: job.snapshot,
+                             error,
+                             path: job.path,
+@@ -454,8 +518,12 @@ impl SettingsController {
+             workspace,
+             sender,
+             receiver,
+-            active: false,
++            active: None,
+             pending: VecDeque::new(),
++            user_disk,
++            workspace_disk,
++            user_epoch: 1,
++            workspace_epoch: 1,
+         });
+         Ok(())
+     }
+@@ -469,29 +537,104 @@ impl SettingsController {
+         .values
+     }
+     pub fn set_workspace_document(&mut self, path: PathBuf, document: SettingsDocument) {
++        let active = self
++            .storage
++            .as_ref()
++            .and_then(|storage| storage.active.as_ref())
++            .filter(|owner| owner.scope == Scope::Workspace && owner.path == path)
++            .cloned();
++        if let Some(awaited) = active {
++            self.deferred_workspace = Some(DeferredWorkspace {
++                awaited,
++                path,
++                requested: document,
++            });
++            self.error = Some("Workspace settings are waiting for the current save to finish".into());
++            return;
++        }
++        self.deferred_workspace = None;
++        self.error = None;
++        self.install_workspace_document(path, document);
++    }
++    fn install_workspace_document(&mut self, path: PathBuf, document: SettingsDocument) {
+         self.revision = self.revision.wrapping_add(1);
+         if let Some(storage) = &mut self.storage {
++            storage.workspace_epoch = storage.workspace_epoch.wrapping_add(1);
++            storage.workspace_disk =
++                Some(read_disk_version(&path).unwrap_or_else(|_| DiskVersion::Bytes(document.to_toml().into_bytes())));
+             storage.workspace = Some(path);
+             storage.pending.retain(|job| job.scope != Scope::Workspace);
+         }
+-        self.workspace = Some(SettingsEditor::new(document));
++        if self
++            .external_change
++            .as_ref()
++            .is_some_and(|change| change.scope == Scope::Workspace)
++        {
++            self.external_change = None;
++        }
++        let mut editor = SettingsEditor::new(document);
++        if self.open {
++            editor.begin_session();
++        }
++        self.workspace = Some(editor);
+         self.popup = None;
+         if let Some(edit) = self.value_edit.take() {
+             self.retired_fields.push(edit.field);
+             self.focus.close_layer();
+         }
+     }
++    fn apply_deferred_workspace(&mut self, owner: &SaveOwner, settled: SettingsDocument) -> bool {
++        let matches = self.deferred_workspace.as_ref().is_some_and(|deferred| {
++            deferred.awaited == *owner
++                && !self.storage.as_ref().is_some_and(|storage| {
++                    storage.pending.iter().any(|job| {
++                        job.scope == owner.scope && job.owner_epoch == owner.owner_epoch && job.path == owner.path
++                    })
++                })
++        });
++        if !matches {
++            return false;
++        }
++        let deferred = self.deferred_workspace.take().unwrap();
++        debug_assert_eq!(deferred.path, owner.path);
++        let _requested = deferred.requested;
++        self.error = None;
++        self.install_workspace_document(deferred.path, settled);
++        true
++    }
+     /// Install a newly available user document without replacing the live tab,
+     /// its search/navigation state, workspace settings, or storage worker.
+     pub fn reconcile_user_document(&mut self, document: SettingsDocument, expected_revision: u64) -> bool {
+         if self.revision != expected_revision || self.editing_value() {
+             return false;
+         }
++        if self.storage.as_ref().is_some_and(|storage| {
++            storage.active.as_ref().is_some_and(|owner| owner.scope == Scope::User)
++                || storage.pending.iter().any(|job| job.scope == Scope::User)
++        }) {
++            return false;
++        }
+         self.revision = self.revision.wrapping_add(1);
+         self.workspace_opted_in = config::resolve(&document, None, false, None)
+             .values
+             .workspace_preferences_enabled;
+-        self.user = SettingsEditor::new(document);
++        if let Some(storage) = &mut self.storage {
++            storage.user_epoch = storage.user_epoch.wrapping_add(1);
++            storage.user_disk = read_disk_version(&storage.user)
++                .unwrap_or_else(|_| DiskVersion::Bytes(document.to_toml().into_bytes()));
++        }
++        if self
++            .external_change
++            .as_ref()
++            .is_some_and(|change| change.scope == Scope::User)
++        {
++            self.external_change = None;
++        }
++        let mut editor = SettingsEditor::new(document);
++        if self.open {
++            editor.begin_session();
++        }
++        self.user = editor;
+         self.popup = None;
+         if let Some(edit) = self.value_edit.take() {
+             self.retired_fields.push(edit.field);
+@@ -504,10 +647,21 @@ impl SettingsController {
+         self.workspace = None;
+         self.scope = Scope::User;
+         self.popup = None;
++        self.deferred_workspace = None;
++        self.error = None;
+         if let Some(storage) = &mut self.storage {
++            storage.workspace_epoch = storage.workspace_epoch.wrapping_add(1);
+             storage.workspace = None;
++            storage.workspace_disk = None;
+             storage.pending.retain(|job| job.scope != Scope::Workspace);
+         }
++        if self
++            .external_change
++            .as_ref()
++            .is_some_and(|change| change.scope == Scope::Workspace)
++        {
++            self.external_change = None;
++        }
+         if let Some(edit) = self.value_edit.take() {
+             self.retired_fields.push(edit.field);
+             self.focus.close_layer();
+@@ -537,15 +691,32 @@ impl SettingsController {
+             &mut self.user
+         }
+     }
++    fn editor_for_scope(&self, scope: Scope) -> Option<&SettingsEditor> {
++        match scope {
++            Scope::User => Some(&self.user),
++            Scope::Workspace => self.workspace.as_ref(),
++            Scope::Session => None,
++        }
++    }
++    fn editor_for_scope_mut(&mut self, scope: Scope) -> Option<&mut SettingsEditor> {
++        match scope {
++            Scope::User => Some(&mut self.user),
++            Scope::Workspace => self.workspace.as_mut(),
++            Scope::Session => None,
++        }
++    }
+     pub fn saving(&self) -> bool {
+         self.storage
+             .as_ref()
+-            .is_some_and(|storage| storage.active || !storage.pending.is_empty())
++            .is_some_and(|storage| storage.active.is_some() || !storage.pending.is_empty())
+     }
+     pub fn edit(&mut self, key: &str, value: SettingValue) -> Result<(), String> {
+         if self.scope == Scope::Workspace && self.workspace.is_none() {
+             return Err("No workspace is open".into());
+         }
++        if self.scope == Scope::Workspace && self.deferred_workspace.is_some() {
++            return Err("Wait for the current workspace settings save to finish".into());
++        }
+         let previous = self.current().clone();
+         self.current_mut().set(key, value)?;
+         let effective = self.effective();
+@@ -590,6 +761,12 @@ impl SettingsController {
+         self.popup = None;
+     }
+     pub fn show(&mut self) {
++        if !self.open {
++            self.user.begin_session();
++            if let Some(workspace) = &mut self.workspace {
++                workspace.begin_session();
++            }
++        }
+         self.open = true;
+         self.query_focused = true;
+     }
+@@ -602,13 +779,35 @@ impl SettingsController {
+             self.focus.close_layer();
+         }
+         self.query.cancel();
++        self.user.end_session();
++        if let Some(workspace) = &mut self.workspace {
++            workspace.end_session();
++        }
+     }
+-    pub fn revert_changes(&mut self) {
++    pub fn can_revert(&self) -> bool {
++        self.current().changed_from_opening()
++    }
++    pub fn has_external_change(&self) -> bool {
++        self.external_change.is_some()
++    }
++    pub fn revert_changes(&mut self) -> bool {
++        if !self.can_revert() {
++            return false;
++        }
++        let scope = self.scope;
+         self.revision = self.revision.wrapping_add(1);
+-        self.current_mut().revert();
++        if !self.current_mut().revert() {
++            return false;
++        }
+         self.error = None;
+         self.popup = None;
++        if scope == Scope::User {
++            self.workspace_opted_in = config::resolve(&self.user.document, None, false, None)
++                .values
++                .workspace_preferences_enabled;
++        }
+         self.queue_save();
++        true
+     }
+     pub fn request_reset(&mut self) {
+         if self.reset_pending {
+@@ -643,11 +842,18 @@ impl SettingsController {
+         self.queue_save();
+     }
+     fn queue_save(&mut self) {
+-        self.current_mut().status = SaveStatus::Pending;
+-        let scope = self.scope;
+-        let snapshot = self.current().document.clone();
+-        let Some(storage) = self.storage.as_mut() else {
+-            self.current_mut().status = SaveStatus::Failed("Settings storage is not configured".into());
++        self.queue_scope(self.scope);
++    }
++    fn queue_scope(&mut self, scope: Scope) {
++        let Some(editor) = self.editor_for_scope_mut(scope) else {
++            return;
++        };
++        editor.status = SaveStatus::Pending;
++        let snapshot = editor.document.clone();
++        let generation = editor.generation();
++        let Some(storage) = self.storage.as_ref() else {
++            self.editor_for_scope_mut(scope).unwrap().status =
++                SaveStatus::Failed("Settings storage is not configured".into());
+             return;
+         };
+         let path = if scope == Scope::Workspace {
+@@ -656,26 +862,148 @@ impl SettingsController {
+             Some(storage.user.clone())
+         };
+         let Some(path) = path else {
+-            self.current_mut().status = SaveStatus::Failed("Workspace settings path is unavailable".into());
++            self.editor_for_scope_mut(scope).unwrap().status =
++                SaveStatus::Failed("Workspace settings path is unavailable".into());
+             return;
+         };
++        let expected = if scope == Scope::Workspace {
++            storage.workspace_disk.clone().unwrap_or(DiskVersion::Absent)
++        } else {
++            storage.user_disk.clone()
++        };
++        let owner_epoch = if scope == Scope::Workspace {
++            storage.workspace_epoch
++        } else {
++            storage.user_epoch
++        };
++        let storage = self.storage.as_mut().unwrap();
+         storage.pending.retain(|job| job.scope != scope);
+-        storage.pending.push_back(SaveJob { scope, snapshot, path });
++        storage.pending.push_back(SaveJob {
++            scope,
++            owner_epoch,
++            generation,
++            snapshot,
++            path,
++            expected,
++        });
+         self.start_save();
+     }
+     fn start_save(&mut self) {
++        // Preserve the pending decision owner. Starting another scope here could
++        // discover a second conflict and replace the first actionable choice.
++        if self.external_change.is_some() {
++            return;
++        }
+         if let Some(storage) = self.storage.as_mut() {
+-            if !storage.active {
+-                if let Some(job) = storage.pending.pop_front() {
++            if storage.active.is_none() {
++                while let Some(job) = storage.pending.pop_front() {
++                    let current = if job.scope == Scope::Workspace {
++                        storage.workspace.as_ref() == Some(&job.path) && storage.workspace_epoch == job.owner_epoch
++                    } else {
++                        storage.user == job.path && storage.user_epoch == job.owner_epoch
++                    };
++                    if !current {
++                        continue;
++                    }
++                    let owner = SaveOwner {
++                        scope: job.scope,
++                        owner_epoch: job.owner_epoch,
++                        path: job.path.clone(),
++                    };
+                     match storage.sender.try_send(job) {
+-                        Ok(()) => storage.active = true,
++                        Ok(()) => storage.active = Some(owner),
+                         Err(error) => {
+                             self.error = Some(format!("Settings worker unavailable: {error}"));
+                         }
+                     }
++                    break;
++                }
++            }
++        }
++    }
++    fn owns_external_change(&self, change: &ExternalChange) -> bool {
++        self.storage.as_ref().is_some_and(|storage| {
++            if change.scope == Scope::Workspace {
++                storage.workspace.as_ref() == Some(&change.path) && storage.workspace_epoch == change.owner_epoch
++            } else {
++                storage.user == change.path && storage.user_epoch == change.owner_epoch
++            }
++        }) && self.editor_for_scope(change.scope).is_some()
++    }
++    pub fn reload_external_change(&mut self) -> bool {
++        let Some(change) = self.external_change.take() else {
++            return false;
++        };
++        if !self.owns_external_change(&change) {
++            self.error = Some("The settings file awaiting a decision is no longer open".into());
++            self.start_save();
++            return false;
++        }
++        let document = match &change.disk {
++            DiskVersion::Absent => SettingsDocument::empty(change.scope),
++            DiskVersion::Bytes(bytes) => match SettingsDocument::parse(bytes, change.scope) {
++                Ok(document) => document,
++                Err(error) => {
++                    self.error = Some(format!("Cannot reload changed settings: {error}"));
++                    self.external_change = Some(change);
++                    return false;
+                 }
++            },
++        };
++        let settled = document.clone();
++        let Some(editor) = self.editor_for_scope_mut(change.scope) else {
++            self.error = Some("The changed settings scope is no longer available".into());
++            return false;
++        };
++        editor.replace_from_disk(document);
++        if let Some(storage) = &mut self.storage {
++            storage.pending.retain(|job| job.scope != change.scope);
++            if change.scope == Scope::Workspace {
++                storage.workspace_disk = Some(change.disk);
++            } else {
++                storage.user_disk = change.disk;
++            }
++        }
++        if change.scope == Scope::User {
++            self.workspace_opted_in = config::resolve(&self.user.document, None, false, None)
++                .values
++                .workspace_preferences_enabled;
++        }
++        if change.scope == Scope::Workspace {
++            self.apply_deferred_workspace(
++                &SaveOwner {
++                    scope: change.scope,
++                    owner_epoch: change.owner_epoch,
++                    path: change.path.clone(),
++                },
++                settled,
++            );
++        }
++        self.revision = self.revision.wrapping_add(1);
++        self.error = None;
++        self.start_save();
++        true
++    }
++    pub fn keep_after_external_change(&mut self) -> bool {
++        let Some(change) = self.external_change.take() else {
++            return false;
++        };
++        if !self.owns_external_change(&change) {
++            self.error = Some("The settings file awaiting a decision is no longer open".into());
++            self.start_save();
++            return false;
++        }
++        if let Some(storage) = &mut self.storage {
++            storage.pending.retain(|job| job.scope != change.scope);
++            if change.scope == Scope::Workspace {
++                storage.workspace_disk = Some(change.disk);
++            } else {
++                storage.user_disk = change.disk;
+             }
+         }
++        self.error = None;
++        self.queue_scope(change.scope);
++        true
+     }
+     pub fn poll(&mut self) -> bool {
+         let completion = self
+@@ -685,35 +1013,82 @@ impl SettingsController {
+         let Some(completion) = completion else {
+             return false;
+         };
++        let SaveCompletion {
++            scope,
++            owner_epoch,
++            generation,
++            snapshot,
++            error,
++            path,
++        } = completion;
+         if let Some(storage) = self.storage.as_mut() {
+-            storage.active = false;
++            storage.active = None;
+         }
+         let same_destination = self.storage.as_ref().is_some_and(|storage| {
+-            if completion.scope == Scope::Workspace {
+-                storage.workspace.as_ref() == Some(&completion.path)
++            if scope == Scope::Workspace {
++                storage.workspace.as_ref() == Some(&path) && storage.workspace_epoch == owner_epoch
+             } else {
+-                storage.user == completion.path
++                storage.user == path && storage.user_epoch == owner_epoch
+             }
+         });
+         if !same_destination {
+             self.start_save();
+             return true;
+         }
+-        let editor = if completion.scope == Scope::Workspace {
+-            self.workspace.as_mut()
+-        } else {
+-            Some(&mut self.user)
++        let completed_owner = SaveOwner {
++            scope,
++            owner_epoch,
++            path: path.clone(),
+         };
+-        if let Some(editor) = editor {
+-            match completion.error {
+-                None => editor.acknowledge_saved(completion.snapshot),
+-                Some(error) => {
+-                    if editor.document.to_toml() == completion.snapshot.to_toml() {
+-                        editor.status = SaveStatus::Failed(error);
++        let mut successful_snapshot = None;
++        match error {
++            None => {
++                let disk = DiskVersion::Bytes(snapshot.to_toml().into_bytes());
++                if let Some(storage) = &mut self.storage {
++                    if scope == Scope::Workspace {
++                        storage.workspace_disk = Some(disk.clone());
++                    } else {
++                        storage.user_disk = disk.clone();
++                    }
++                    for queued in storage
++                        .pending
++                        .iter_mut()
++                        .filter(|job| job.scope == scope && job.owner_epoch == owner_epoch)
++                    {
++                        queued.expected = disk.clone();
+                     }
+                 }
++                if let Some(editor) = self.editor_for_scope_mut(scope) {
++                    editor.acknowledge_saved(generation, snapshot.clone());
++                }
++                successful_snapshot = Some(snapshot);
++            }
++            Some(SaveFailure::Io(error)) => {
++                if let Some(editor) = self.editor_for_scope_mut(scope)
++                    && editor.generation() == generation
++                    && editor.document.to_toml() == snapshot.to_toml()
++                {
++                    editor.status = SaveStatus::Failed(error);
++                    self.error = None;
++                }
++            }
++            Some(SaveFailure::ExternalChange(disk)) => {
++                if let Some(editor) = self.editor_for_scope_mut(scope) {
++                    editor.status =
++                        SaveStatus::Failed("Settings changed on disk; choose Reload disk or Keep my settings".into());
++                    self.external_change = Some(ExternalChange {
++                        scope,
++                        owner_epoch,
++                        path,
++                        disk,
++                    });
++                    self.error = None;
++                }
+             }
+         }
++        if let Some(snapshot) = successful_snapshot {
++            self.apply_deferred_workspace(&completed_owner, snapshot);
++        }
+         self.start_save();
+         true
+     }
+@@ -1289,6 +1664,13 @@ impl SettingsController {
+                     }
+                     return Some(SettingsEffect::PreviewChanged);
+                 }
++                if self.external_change.is_some() && self.external_reload.contains(point) {
++                    return self.reload_external_change().then_some(SettingsEffect::PreviewChanged);
++                }
++                if self.external_change.is_some() && self.external_keep.contains(point) {
++                    self.keep_after_external_change();
++                    return None;
++                }
+                 if point.x < self.bounds.x + 164.0 {
+                     let index = ((point.y - self.bounds.y) / 38.0) as usize;
+                     if let Some(category) = CATEGORIES.get(index) {
+@@ -1306,7 +1688,7 @@ impl SettingsController {
+                     self.retry_save();
+                     return None;
+                 }
+-                if self.revert.contains(point) {
++                if self.revert.contains(point) && self.can_revert() {
+                     self.revert_changes();
+                     return Some(SettingsEffect::PreviewChanged);
+                 }
+@@ -1629,7 +2011,8 @@ impl SettingsController {
+             self.theme_cards = [Rect::default(); 3];
+         }
+         let top = header + 30.0 + card_band;
+-        let count = ((bounds.y + bounds.height - 60.0 - top) / row_height).max(0.0) as usize;
++        let footer_height = if self.external_change.is_some() { 98.0 } else { 60.0 };
++        let count = ((bounds.y + bounds.height - footer_height - top) / row_height).max(0.0) as usize;
+         let definitions = self.definitions();
+         self.first = self.first.min(definitions.len().saturating_sub(1));
+         let old = std::mem::take(&mut self.rows);
+@@ -1843,6 +2226,30 @@ impl SettingsController {
+         self.reset = rect(x + width - 132.0, bottom, 132.0, 30.0);
+         self.retry = rect(x + width - 204.0, bottom, 64.0, 30.0);
+         self.revert = rect(x + width - 278.0, bottom, 68.0, 30.0);
++        self.external_reload = Rect::default();
++        self.external_keep = Rect::default();
++        if let Some(change) = &self.external_change {
++            let conflict_y = bottom - 38.0;
++            self.external_reload = rect(x + width - 212.0, conflict_y, 96.0, 30.0);
++            self.external_keep = rect(x + width - 108.0, conflict_y, 108.0, 30.0);
++            let scope = if change.scope == Scope::Workspace {
++                "Workspace"
++            } else {
++                "User"
++            };
++            text(
++                ops,
++                x,
++                conflict_y + 8.0,
++                &format!("{scope} settings changed on disk"),
++                13.0,
++                color("danger"),
++            );
++            for (bounds, label) in [(self.external_reload, "Reload disk"), (self.external_keep, "Keep mine")] {
++                ops.push(DrawOp::StrokeRounded(bounds, color("border.interactive"), 3.0, 1.0));
++                text(ops, bounds.x + 10.0, bounds.y + 8.0, label, 12.0, foreground);
++            }
++        }
+         let status = self.status_description();
+         ops.push(DrawOp::PushClip(rect(x, bottom, (width - 290.0).max(0.0), 36.0)));
+         text(
+@@ -1864,7 +2271,7 @@ impl SettingsController {
+             self.revert.y + 8.0,
+             self.label("settings.revert", "Revert"),
+             12.0,
+-            foreground,
++            if self.can_revert() { foreground } else { muted },
+         );
+         if matches!(self.current().status, SaveStatus::Failed(_)) {
+             text(
+@@ -2395,19 +2802,72 @@ impl SettingsController {
+             (8003, "Reset section", "settings.reset_section", self.reset),
+             (8004, "Revert changes", "settings.revert", self.revert),
+         ] {
++            let revert = id == 8004;
++            let disabled = revert && !self.can_revert();
++            let label = if revert {
++                let scope = if self.scope == Scope::Workspace {
++                    "Workspace"
++                } else {
++                    "User"
++                };
++                if disabled {
++                    format!("Revert unavailable: {scope} settings match the values from when Settings opened")
++                } else {
++                    format!("Revert {scope} settings to the values from when Settings opened")
++                }
++            } else {
++                self.label(command, label)
++            };
+             nodes.push(
+                 Semantics::new(
+                     ViewId(id),
+                     SemanticRole::Button,
+-                    &self.label(command, label),
++                    &label,
+                     command,
+                     bounds,
+-                    ControlState::default(),
++                    ControlState {
++                        disabled,
++                        ..Default::default()
++                    },
+                 )
+                 .action(SemanticAction::Focus)
+                 .action(SemanticAction::Invoke),
+             );
+         }
++        if let Some(change) = &self.external_change {
++            let scope = if change.scope == Scope::Workspace {
++                "Workspace"
++            } else {
++                "User"
++            };
++            for (id, label, command, bounds) in [
++                (
++                    8013,
++                    format!("Reload {scope} settings from disk and discard my current changes"),
++                    "settings.external_reload",
++                    self.external_reload,
++                ),
++                (
++                    8014,
++                    format!("Keep my {scope} settings and replace the changed disk file"),
++                    "settings.external_keep",
++                    self.external_keep,
++                ),
++            ] {
++                nodes.push(
++                    Semantics::new(
++                        ViewId(id),
++                        SemanticRole::Button,
++                        &label,
++                        command,
++                        bounds,
++                        ControlState::default(),
++                    )
++                    .action(SemanticAction::Focus)
++                    .action(SemanticAction::Invoke),
++                );
++            }
++        }
+         if matches!(self.current().status, SaveStatus::Failed(_)) {
+             nodes.push(
+                 Semantics::new(
+@@ -2814,11 +3274,8 @@ mod visual_contract_tests {
+     }
+     #[test]
+     fn migration_reconciliation_retains_an_uncommitted_value_draft() {
+-        let mut controller = SettingsController::new(
+-            SettingsDocument::empty(Scope::User),
+-            None,
+-            SystemAppearance::default(),
+-        );
++        let mut controller =
++            SettingsController::new(SettingsDocument::empty(Scope::User), None, SystemAppearance::default());
+         controller.show();
+         controller
+             .draw(
+@@ -2903,3 +3360,594 @@ mod visual_contract_tests {
+         assert!(bareline_renderer::balanced_clips(&ops));
+     }
+ }
++
++#[cfg(test)]
++mod revert_contract_tests {
++    use super::*;
++    use bareline_platform::FileIdentity;
++    use bareline_renderer_recording::RecordingBackend;
++    use std::{
++        fs, io,
++        path::Path,
++        sync::{
++            Arc,
++            atomic::{AtomicBool, Ordering},
++            mpsc,
++        },
++        time::{Duration, Instant},
++    };
++
++    struct Fixture(PathBuf);
++    impl Fixture {
++        fn new() -> Self {
++            static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
++            let path = std::env::temp_dir().join(format!(
++                "bareline-settings-revert-{}-{}",
++                std::process::id(),
++                NEXT.fetch_add(1, Ordering::Relaxed)
++            ));
++            fs::create_dir(&path).unwrap();
++            Self(path)
++        }
++    }
++    impl Drop for Fixture {
++        fn drop(&mut self) {
++            let _ = fs::remove_dir_all(&self.0);
++        }
++    }
++    struct TestPlatform {
++        fail: AtomicBool,
++    }
++    impl LocalFileSystem for TestPlatform {
++        fn identity(&self, _: &fs::File) -> io::Result<FileIdentity> {
++            Err(io::ErrorKind::Unsupported.into())
++        }
++        fn validate_target(&self, _: &Path) -> io::Result<()> {
++            Ok(())
++        }
++        fn commit(&self, staged: &Path, target: &Path, _: bool) -> io::Result<()> {
++            if self.fail.load(Ordering::SeqCst) {
++                return Err(io::Error::other("injected settings write failure"));
++            }
++            match fs::remove_file(target) {
++                Ok(()) => {}
++                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
++                Err(error) => return Err(error),
++            }
++            fs::rename(staged, target)
++        }
++    }
++    struct GatedPlatform {
++        entered: mpsc::SyncSender<()>,
++        release: std::sync::Mutex<mpsc::Receiver<()>>,
++        fail: AtomicBool,
++    }
++    impl LocalFileSystem for GatedPlatform {
++        fn identity(&self, _: &fs::File) -> io::Result<FileIdentity> {
++            Err(io::ErrorKind::Unsupported.into())
++        }
++        fn validate_target(&self, _: &Path) -> io::Result<()> {
++            Ok(())
++        }
++        fn commit(&self, staged: &Path, target: &Path, _: bool) -> io::Result<()> {
++            self.entered.send(()).unwrap();
++            self.release.lock().unwrap().recv().unwrap();
++            if self.fail.load(Ordering::SeqCst) {
++                return Err(io::Error::other("injected gated write failure"));
++            }
++            match fs::remove_file(target) {
++                Ok(()) => {}
++                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
++                Err(error) => return Err(error),
++            }
++            fs::rename(staged, target)
++        }
++    }
++
++    fn settle(controller: &mut SettingsController, done: impl Fn(&SettingsController) -> bool) {
++        let deadline = Instant::now() + Duration::from_secs(3);
++        while !done(controller) {
++            controller.poll();
++            assert!(
++                Instant::now() < deadline,
++                "settings worker did not reach the expected state"
++            );
++            std::thread::yield_now();
++        }
++    }
++    fn wait_for_gate(controller: &mut SettingsController, entered: &mpsc::Receiver<()>) {
++        let deadline = Instant::now() + Duration::from_secs(3);
++        loop {
++            controller.poll();
++            match entered.try_recv() {
++                Ok(()) => return,
++                Err(mpsc::TryRecvError::Empty) => {}
++                Err(error) => panic!("settings gate disconnected: {error}"),
++            }
++            assert!(
++                Instant::now() < deadline,
++                "settings worker did not enter the commit gate"
++            );
++            std::thread::yield_now();
++        }
++    }
++
++    fn document(scope: Scope, size: f64) -> SettingsDocument {
++        let mut document = SettingsDocument::empty(scope);
++        document.set("editor.font.size", SettingValue::Number(size)).unwrap();
++        document
++    }
++
++    fn font_size(controller: &SettingsController, scope: Scope) -> f64 {
++        let editor = controller.editor_for_scope(scope).unwrap();
++        config::resolve(&editor.document, None, false, None)
++            .values
++            .editor_font_size_pt
++    }
++
++    fn attach_storage(
++        controller: &mut SettingsController,
++        path: PathBuf,
++    ) -> (mpsc::Receiver<SaveJob>, mpsc::SyncSender<SaveCompletion>) {
++        let (jobs, job_receiver) = mpsc::sync_channel(4);
++        let (completed, completions) = mpsc::sync_channel(4);
++        controller.storage = Some(Storage {
++            user: path,
++            workspace: None,
++            sender: jobs,
++            receiver: completions,
++            active: None,
++            pending: VecDeque::new(),
++            user_disk: DiskVersion::Absent,
++            workspace_disk: None,
++            user_epoch: 1,
++            workspace_epoch: 1,
++        });
++        (job_receiver, completed)
++    }
++
++    fn complete(completed: &mpsc::SyncSender<SaveCompletion>, job: SaveJob, error: Option<SaveFailure>) {
++        completed
++            .send(SaveCompletion {
++                scope: job.scope,
++                owner_epoch: job.owner_epoch,
++                generation: job.generation,
++                snapshot: job.snapshot,
++                error,
++                path: job.path,
++            })
++            .unwrap();
++    }
++
++    #[test]
++    fn autosave_then_revert_restores_opening_value_and_fences_late_acknowledgement() {
++        let mut controller = SettingsController::new(document(Scope::User, 11.0), None, SystemAppearance::default());
++        let (jobs, completed) = attach_storage(&mut controller, PathBuf::from("user-settings.toml"));
++        controller.show();
++        controller.edit("editor.font.size", SettingValue::Number(12.0)).unwrap();
++        let first = jobs.recv().unwrap();
++        let revision = controller.revision;
++        assert!(
++            !controller.reconcile_user_document(document(Scope::User, 14.0), revision),
++            "an active User write must defer migration reconciliation"
++        );
++        complete(&completed, first, None);
++        assert!(controller.poll());
++        assert_eq!(controller.user.status, SaveStatus::Saved);
++        assert!(controller.can_revert());
++        controller.revert_changes();
++        let autosave_revert = jobs.recv().unwrap();
++        complete(
++            &completed,
++            autosave_revert,
++            Some(SaveFailure::Io("injected disk full".into())),
++        );
++        assert!(controller.poll());
++        assert!(matches!(controller.user.status, SaveStatus::Failed(_)));
++        controller.retry_save();
++        let autosave_revert_retry = jobs.recv().unwrap();
++        complete(&completed, autosave_revert_retry, None);
++        assert!(controller.poll());
++        assert_eq!(font_size(&controller, Scope::User), 11.0);
++        assert!(!controller.can_revert());
++
++        controller.edit("editor.font.size", SettingValue::Number(20.0)).unwrap();
++        let superseded = jobs.recv().unwrap();
++        controller.revert_changes();
++        assert_eq!(font_size(&controller, Scope::User), 11.0);
++
++        complete(&completed, superseded, None);
++        assert!(controller.poll());
++        assert!(matches!(controller.user.status, SaveStatus::Pending));
++        assert!(controller.user.changed_from_saved());
++        assert_eq!(font_size(&controller, Scope::User), 11.0);
++        let reverted = jobs.recv().unwrap();
++        assert_eq!(
++            config::resolve(&reverted.snapshot, None, false, None)
++                .values
++                .editor_font_size_pt,
++            11.0
++        );
++        complete(&completed, reverted, None);
++        assert!(controller.poll());
++        assert_eq!(controller.user.status, SaveStatus::Saved);
++        assert!(!controller.user.changed_from_saved());
++        assert!(!controller.can_revert());
++    }
++
++    #[test]
++    fn reset_scope_switch_and_reopen_keep_independent_opening_baselines() {
++        let user = document(Scope::User, 11.0);
++        let workspace = document(Scope::Workspace, 13.0);
++        let mut controller = SettingsController::new(user, Some(workspace), SystemAppearance::default());
++        controller.show();
++        controller.set_workspace_opt_in(true).unwrap();
++        assert_eq!(controller.effective().editor_font_size_pt, 13.0);
++        controller.revert_changes();
++        assert!(!controller.workspace_opted_in);
++        assert_eq!(controller.effective().editor_font_size_pt, 11.0);
++        controller.request_reset();
++        controller.confirm_reset(true);
++        assert!(controller.can_revert());
++        controller.revert_changes();
++        assert_eq!(font_size(&controller, Scope::User), 11.0);
++
++        controller.scope = Scope::Workspace;
++        controller.edit("editor.font.size", SettingValue::Number(18.0)).unwrap();
++        assert!(controller.can_revert());
++        controller.scope = Scope::User;
++        assert!(!controller.can_revert());
++        controller.scope = Scope::Workspace;
++        controller.dismiss();
++        controller.show();
++        assert!(
++            !controller.can_revert(),
++            "reopening must capture a fresh workspace baseline"
++        );
++        controller.scope = Scope::User;
++        assert!(!controller.can_revert(), "the user baseline remains independent");
++    }
++
++    #[test]
++    fn external_change_requires_reload_or_keep_and_preserves_opening_revert() {
++        let mut controller = SettingsController::new(document(Scope::User, 11.0), None, SystemAppearance::default());
++        let (jobs, completed) = attach_storage(&mut controller, PathBuf::from("user-settings.toml"));
++        controller.show();
++        controller.edit("editor.font.size", SettingValue::Number(12.0)).unwrap();
++        let conflicting = jobs.recv().unwrap();
++        let disk = document(Scope::User, 14.0);
++        complete(
++            &completed,
++            conflicting,
++            Some(SaveFailure::ExternalChange(DiskVersion::Bytes(
++                disk.to_toml().into_bytes(),
++            ))),
++        );
++        assert!(controller.poll());
++        assert!(controller.external_change.is_some());
++        controller
++            .draw(
++                rect(0.0, 34.0, 520.0, 420.0),
++                &mut RecordingBackend::default(),
++                &mut Vec::new(),
++            )
++            .unwrap();
++        assert!(
++            controller
++                .rows
++                .iter()
++                .all(|row| { row.value.bounds.y + row.value.bounds.height <= controller.external_reload.y })
++        );
++        let decisions = controller.semantics();
++        assert!(
++            decisions
++                .iter()
++                .any(|node| node.id == ViewId(8013) && node.name.contains("Reload User settings"))
++        );
++        assert!(
++            decisions
++                .iter()
++                .any(|node| node.id == ViewId(8014) && node.name.contains("Keep my User settings"))
++        );
++        controller.query_focused = false;
++        controller.refresh_focus();
++        controller.focus.focus(ViewId(8013));
++        assert_eq!(
++            controller.event(UiEvent::Key(Key::Enter)),
++            Some(SettingsEffect::PreviewChanged)
++        );
++        assert_eq!(font_size(&controller, Scope::User), 14.0);
++        assert!(controller.can_revert(), "reload must not redefine the opening baseline");
++        controller.revert_changes();
++        let reverted = jobs.recv().unwrap();
++        assert_eq!(reverted.expected, DiskVersion::Bytes(disk.to_toml().into_bytes()));
++        assert_eq!(
++            config::resolve(&reverted.snapshot, None, false, None)
++                .values
++                .editor_font_size_pt,
++            11.0
++        );
++
++        complete(&completed, reverted, None);
++        assert!(controller.poll());
++        controller.edit("editor.font.size", SettingValue::Number(16.0)).unwrap();
++        let conflicting = jobs.recv().unwrap();
++        let later_disk = document(Scope::User, 15.0);
++        complete(
++            &completed,
++            conflicting,
++            Some(SaveFailure::ExternalChange(DiskVersion::Bytes(
++                later_disk.to_toml().into_bytes(),
++            ))),
++        );
++        assert!(controller.poll());
++        assert!(controller.keep_after_external_change());
++        let kept = jobs.recv().unwrap();
++        assert_eq!(kept.expected, DiskVersion::Bytes(later_disk.to_toml().into_bytes()));
++        assert_eq!(
++            config::resolve(&kept.snapshot, None, false, None)
++                .values
++                .editor_font_size_pt,
++            16.0
++        );
++    }
++
++    #[test]
++    fn real_worker_refreshes_queued_authority_for_rapid_edit_and_revert() {
++        let fixture = Fixture::new();
++        let path = fixture.0.join("settings.toml");
++        let opening = document(Scope::User, 11.0);
++        fs::write(&path, opening.to_toml()).unwrap();
++        let platform = Arc::new(TestPlatform {
++            fail: AtomicBool::new(false),
++        });
++        let mut controller = SettingsController::new(opening, None, SystemAppearance::default());
++        controller
++            .configure_storage(path.clone(), None, platform, Arc::new(|| {}))
++            .unwrap();
++        controller.show();
++        controller.edit("editor.font.size", SettingValue::Number(12.0)).unwrap();
++        controller.edit("editor.font.size", SettingValue::Number(20.0)).unwrap();
++        controller.revert_changes();
++        settle(&mut controller, |controller| {
++            !controller.saving() && controller.user.status == SaveStatus::Saved
++        });
++        assert!(!controller.has_external_change());
++        let saved = SettingsDocument::load(&path, Scope::User).unwrap();
++        assert_eq!(
++            config::resolve(&saved, None, false, None).values.editor_font_size_pt,
++            11.0
++        );
++    }
++
++    #[test]
++    fn real_worker_failure_retry_and_external_edit_keep_truthful_ownership() {
++        let fixture = Fixture::new();
++        let path = fixture.0.join("settings.toml");
++        let opening = document(Scope::User, 11.0);
++        fs::write(&path, opening.to_toml()).unwrap();
++        let platform = Arc::new(TestPlatform {
++            fail: AtomicBool::new(true),
++        });
++        let mut controller = SettingsController::new(opening, None, SystemAppearance::default());
++        controller
++            .configure_storage(path.clone(), None, platform.clone(), Arc::new(|| {}))
++            .unwrap();
++        controller.show();
++        controller.edit("editor.font.size", SettingValue::Number(12.0)).unwrap();
++        settle(&mut controller, |controller| {
++            matches!(controller.user.status, SaveStatus::Failed(_))
++        });
++        assert!(controller.can_revert());
++        platform.fail.store(false, Ordering::SeqCst);
++        controller.retry_save();
++        settle(&mut controller, |controller| {
++            controller.user.status == SaveStatus::Saved
++        });
++
++        let external = document(Scope::User, 14.0);
++        fs::write(&path, external.to_toml()).unwrap();
++        controller.edit("editor.font.size", SettingValue::Number(16.0)).unwrap();
++        settle(&mut controller, SettingsController::has_external_change);
++        assert_eq!(font_size(&controller, Scope::User), 16.0);
++        assert!(controller.reload_external_change());
++        assert_eq!(font_size(&controller, Scope::User), 14.0);
++        assert!(
++            controller.can_revert(),
++            "external reload must retain the opening baseline"
++        );
++    }
++
++    #[test]
++    fn workspace_replacement_invalidates_the_old_path_decision() {
++        let workspace = document(Scope::Workspace, 12.0);
++        let mut controller = SettingsController::new(
++            document(Scope::User, 11.0),
++            Some(workspace),
++            SystemAppearance::default(),
++        );
++        let old_path = PathBuf::from("workspace-a/settings.toml");
++        let (jobs, completed) = attach_storage(&mut controller, PathBuf::from("user-settings.toml"));
++        let storage = controller.storage.as_mut().unwrap();
++        storage.workspace = Some(old_path.clone());
++        storage.workspace_disk = Some(DiskVersion::Absent);
++        controller.show();
++        controller.scope = Scope::Workspace;
++        controller.edit("editor.font.size", SettingValue::Number(18.0)).unwrap();
++        let old_job = jobs.recv().unwrap();
++        complete(
++            &completed,
++            old_job,
++            Some(SaveFailure::ExternalChange(DiskVersion::Bytes(
++                document(Scope::Workspace, 15.0).to_toml().into_bytes(),
++            ))),
++        );
++        assert!(controller.poll());
++        assert!(controller.has_external_change());
++
++        let new_path = PathBuf::from("workspace-b/settings.toml");
++        controller.set_workspace_document(new_path, document(Scope::Workspace, 13.0));
++        assert!(!controller.has_external_change());
++        assert!(!controller.reload_external_change());
++        assert_eq!(font_size(&controller, Scope::Workspace), 13.0);
++    }
++
++    #[test]
++    fn same_path_workspace_handoff_waits_for_the_accepted_commit() {
++        let fixture = Fixture::new();
++        let user_path = fixture.0.join("user.toml");
++        let workspace_path = fixture.0.join("workspace.toml");
++        let user = document(Scope::User, 11.0);
++        let workspace = document(Scope::Workspace, 12.0);
++        fs::write(&user_path, user.to_toml()).unwrap();
++        fs::write(&workspace_path, workspace.to_toml()).unwrap();
++        let (entered, entered_rx) = mpsc::sync_channel(1);
++        let (release, release_rx) = mpsc::sync_channel(1);
++        let platform = Arc::new(GatedPlatform {
++            entered,
++            release: std::sync::Mutex::new(release_rx),
++            fail: AtomicBool::new(false),
++        });
++        let mut controller = SettingsController::new(user, Some(workspace), SystemAppearance::default());
++        controller
++            .configure_storage(user_path, Some(workspace_path.clone()), platform, Arc::new(|| {}))
++            .unwrap();
++        controller.show();
++        controller.scope = Scope::Workspace;
++        controller.edit("editor.font.size", SettingValue::Number(18.0)).unwrap();
++        entered_rx.recv_timeout(Duration::from_secs(3)).unwrap();
++        controller.edit("editor.font.size", SettingValue::Number(20.0)).unwrap();
++
++        controller.set_workspace_document(workspace_path.clone(), document(Scope::Workspace, 13.0));
++        assert!(controller.deferred_workspace.is_some());
++        assert!(controller.edit("editor.font.size", SettingValue::Number(21.0)).is_err());
++        assert_eq!(font_size(&controller, Scope::Workspace), 20.0);
++        release.send(()).unwrap();
++        wait_for_gate(&mut controller, &entered_rx);
++        assert!(controller.deferred_workspace.is_some());
++        release.send(()).unwrap();
++        settle(&mut controller, |controller| {
++            !controller.saving() && controller.deferred_workspace.is_none()
++        });
++        assert_eq!(font_size(&controller, Scope::Workspace), 20.0);
++        let disk = SettingsDocument::load(&workspace_path, Scope::Workspace).unwrap();
++        assert_eq!(
++            config::resolve(&disk, None, false, None).values.editor_font_size_pt,
++            20.0
++        );
++    }
++
++    #[test]
++    fn newer_workspace_owner_cancels_an_older_deferred_handoff() {
++        let fixture = Fixture::new();
++        let user_path = fixture.0.join("user.toml");
++        let path_a = fixture.0.join("workspace-a.toml");
++        let path_b = fixture.0.join("workspace-b.toml");
++        let user = document(Scope::User, 11.0);
++        let workspace = document(Scope::Workspace, 12.0);
++        fs::write(&user_path, user.to_toml()).unwrap();
++        fs::write(&path_a, workspace.to_toml()).unwrap();
++        fs::write(&path_b, document(Scope::Workspace, 14.0).to_toml()).unwrap();
++        let (entered, entered_rx) = mpsc::sync_channel(1);
++        let (release, release_rx) = mpsc::sync_channel(1);
++        let platform = Arc::new(GatedPlatform {
++            entered,
++            release: std::sync::Mutex::new(release_rx),
++            fail: AtomicBool::new(false),
++        });
++        let mut controller = SettingsController::new(user, Some(workspace), SystemAppearance::default());
++        controller
++            .configure_storage(user_path, Some(path_a.clone()), platform, Arc::new(|| {}))
++            .unwrap();
++        controller.show();
++        controller.scope = Scope::Workspace;
++        controller.edit("editor.font.size", SettingValue::Number(18.0)).unwrap();
++        entered_rx.recv_timeout(Duration::from_secs(3)).unwrap();
++        controller.set_workspace_document(path_a.clone(), document(Scope::Workspace, 13.0));
++        assert!(controller.deferred_workspace.is_some());
++        controller.set_workspace_document(path_b.clone(), document(Scope::Workspace, 14.0));
++        assert!(controller.deferred_workspace.is_none());
++        release.send(()).unwrap();
++        settle(&mut controller, |controller| !controller.saving());
++        assert_eq!(controller.storage.as_ref().unwrap().workspace.as_ref(), Some(&path_b));
++        assert_eq!(font_size(&controller, Scope::Workspace), 14.0);
++
++        controller.edit("editor.font.size", SettingValue::Number(16.0)).unwrap();
++        entered_rx.recv_timeout(Duration::from_secs(3)).unwrap();
++        release.send(()).unwrap();
++        settle(&mut controller, |controller| {
++            !controller.saving() && controller.current().status == SaveStatus::Saved
++        });
++        assert_eq!(font_size(&controller, Scope::Workspace), 16.0);
++        assert_eq!(
++            config::resolve(
++                &SettingsDocument::load(&path_b, Scope::Workspace).unwrap(),
++                None,
++                false,
++                None,
++            )
++            .values
++            .editor_font_size_pt,
++            16.0
++        );
++    }
++
++    #[test]
++    fn failed_handoff_keeps_error_and_retries_before_installing_new_owner() {
++        let fixture = Fixture::new();
++        let user_path = fixture.0.join("user.toml");
++        let workspace_path = fixture.0.join("workspace.toml");
++        let user = document(Scope::User, 11.0);
++        let workspace = document(Scope::Workspace, 12.0);
++        fs::write(&user_path, user.to_toml()).unwrap();
++        fs::write(&workspace_path, workspace.to_toml()).unwrap();
++        let (entered, entered_rx) = mpsc::sync_channel(1);
++        let (release, release_rx) = mpsc::sync_channel(1);
++        let platform = Arc::new(GatedPlatform {
++            entered,
++            release: std::sync::Mutex::new(release_rx),
++            fail: AtomicBool::new(true),
++        });
++        let mut controller = SettingsController::new(user, Some(workspace), SystemAppearance::default());
++        controller
++            .configure_storage(
++                user_path,
++                Some(workspace_path.clone()),
++                platform.clone(),
++                Arc::new(|| {}),
++            )
++            .unwrap();
++        controller.show();
++        controller.scope = Scope::Workspace;
++        controller.edit("editor.font.size", SettingValue::Number(18.0)).unwrap();
++        entered_rx.recv_timeout(Duration::from_secs(3)).unwrap();
++        controller.set_workspace_document(workspace_path.clone(), document(Scope::Workspace, 13.0));
++        release.send(()).unwrap();
++        settle(&mut controller, |controller| {
++            matches!(controller.current().status, SaveStatus::Failed(_))
++        });
++        assert!(controller.deferred_workspace.is_some());
++        assert_eq!(font_size(&controller, Scope::Workspace), 18.0);
++        assert_eq!(
++            config::resolve(
++                &SettingsDocument::load(&workspace_path, Scope::Workspace).unwrap(),
++                None,
++                false,
++                None,
++            )
++            .values
++            .editor_font_size_pt,
++            12.0
++        );
++
++        platform.fail.store(false, Ordering::SeqCst);
++        controller.retry_save();
++        entered_rx.recv_timeout(Duration::from_secs(3)).unwrap();
++        release.send(()).unwrap();
++        settle(&mut controller, |controller| {
++            !controller.saving() && controller.deferred_workspace.is_none()
++        });
++        assert_eq!(font_size(&controller, Scope::Workspace), 18.0);
++        assert_eq!(controller.current().status, SaveStatus::Saved);
++    }
++}
+diff --git a/crates/settings/src/behavior_tests.rs b/crates/settings/src/behavior_tests.rs
+index a6096c3..08f0ef3 100644
+--- a/crates/settings/src/behavior_tests.rs
++++ b/crates/settings/src/behavior_tests.rs
+@@ -19,6 +19,8 @@ fn only_the_settings_page_opener_is_user_facing() {
+         "settings.close",
+         "settings.retry",
+         "settings.revert",
++        "settings.external_reload",
++        "settings.external_keep",
+         "settings.reset_section",
+         "settings.copy_key",
+         "settings.change",
+@@ -309,6 +311,7 @@ fn failed_atomic_commit_preserves_file_and_allows_retry() {
+     let path = fixture.0.join("settings.toml");
+     fs::write(&path, "# existing\n[editor]\nfont_size_pt=11\n").unwrap();
+     let mut editor = SettingsEditor::new(SettingsDocument::load(&path, Scope::User).unwrap());
++    editor.begin_session();
+     editor.set("editor.font_size_pt", SettingValue::Number(12.0)).unwrap();
+     assert!(editor.save(&path, &TestFs { reject: true }).is_err());
+     assert!(matches!(editor.status, SaveStatus::Failed(_)));
+@@ -326,7 +329,7 @@ fn failed_atomic_commit_preserves_file_and_allows_retry() {
+     editor.revert();
+     assert_eq!(
+         resolve(&editor.document, None, false, None).values.editor_font_size_pt,
+-        12.0
++        11.0
+     );
+ }
+ #[test]
+diff --git a/crates/settings/src/lib.rs b/crates/settings/src/lib.rs
+index 1405845..1b2a864 100644
+--- a/crates/settings/src/lib.rs
++++ b/crates/settings/src/lib.rs
+@@ -93,6 +93,8 @@ pub fn register_commands(
+         ("settings.close", "Close Settings"),
+         ("settings.retry", "Retry Settings Save"),
+         ("settings.revert", "Revert Settings Changes"),
++        ("settings.external_reload", "Reload Changed Settings"),
++        ("settings.external_keep", "Keep My Settings"),
+         ("settings.reset_section", "Reset Settings Section"),
+         ("settings.copy_key", "Copy Setting TOML Key"),
+         ("settings.change", "Change Setting"),
+diff --git a/crates/settings/src/persistence.rs b/crates/settings/src/persistence.rs
+index caed070..975501f 100644
+--- a/crates/settings/src/persistence.rs
++++ b/crates/settings/src/persistence.rs
+@@ -93,17 +93,20 @@ impl SaveStatus {
+         }
+     }
+ }
+-/// Holds a revert snapshot independently of live preview. Invalid edits never change the document.
++/// Holds persisted and opening-session snapshots independently of live preview.
++/// Autosave acknowledgements advance `saved`, while Revert always uses `opening`.
+ #[derive(Clone, Debug)]
+ pub struct SettingsEditor {
+     pub document: SettingsDocument,
+     saved: SettingsDocument,
++    opening: Option<SettingsDocument>,
++    generation: u64,
+     pub status: SaveStatus,
+ }
+ impl SettingsEditor {
+     /// A background save may finish after a newer edit; never overwrite that live edit.
+-    pub fn acknowledge_saved(&mut self, snapshot: SettingsDocument) {
+-        let current = self.document.to_toml() == snapshot.to_toml();
++    pub fn acknowledge_saved(&mut self, generation: u64, snapshot: SettingsDocument) {
++        let current = self.generation == generation && self.document.to_toml() == snapshot.to_toml();
+         self.saved = snapshot;
+         self.status = if current {
+             SaveStatus::Saved
+@@ -115,30 +118,65 @@ impl SettingsEditor {
+         Self {
+             saved: document.clone(),
+             document,
++            opening: None,
++            generation: 0,
+             status: SaveStatus::Saved,
+         }
+     }
++    pub fn begin_session(&mut self) {
++        self.opening = Some(self.document.clone());
++    }
++    pub fn end_session(&mut self) {
++        self.opening = None;
++    }
++    pub fn changed_from_opening(&self) -> bool {
++        self.opening
++            .as_ref()
++            .is_some_and(|opening| opening.to_toml() != self.document.to_toml())
++    }
++    pub fn changed_from_saved(&self) -> bool {
++        self.saved.to_toml() != self.document.to_toml()
++    }
++    pub fn generation(&self) -> u64 {
++        self.generation
++    }
++    /// Apply an explicit external-reload decision without changing the opening baseline.
++    pub fn replace_from_disk(&mut self, document: SettingsDocument) {
++        self.generation = self.generation.wrapping_add(1);
++        self.saved = document.clone();
++        self.document = document;
++        self.status = SaveStatus::Saved;
++    }
+     pub fn set(&mut self, key: &str, value: SettingValue) -> Result<(), String> {
+         self.document.set(key, value)?;
++        self.generation = self.generation.wrapping_add(1);
+         self.status = SaveStatus::Pending;
+         Ok(())
+     }
+     pub fn reset_section(&mut self, category: &str) -> Vec<&'static str> {
+         let keys = self.document.reset_section(category);
+         if !keys.is_empty() {
++            self.generation = self.generation.wrapping_add(1);
+             self.status = SaveStatus::Pending;
+         }
+         keys
+     }
+-    pub fn revert(&mut self) {
+-        self.document = self.saved.clone();
+-        self.status = SaveStatus::Saved;
++    pub fn revert(&mut self) -> bool {
++        let Some(opening) = self.opening.as_ref() else {
++            return false;
++        };
++        if opening.to_toml() == self.document.to_toml() {
++            return false;
++        }
++        self.document = opening.clone();
++        self.generation = self.generation.wrapping_add(1);
++        self.status = SaveStatus::Pending;
++        true
+     }
+     pub fn save(&mut self, path: &Path, platform: &dyn LocalFileSystem) -> io::Result<()> {
+         match self.document.save(path, platform) {
+             Ok(()) => {
+-                self.saved = self.document.clone();
+-                self.status = SaveStatus::Saved;
++                self.acknowledge_saved(self.generation, self.document.clone());
+                 Ok(())
+             }
+             Err(error) => {
+diff --git a/docs/implementation/2026-09-12-audit-implementation/PR-U10.md b/docs/implementation/2026-09-12-audit-implementation/PR-U10.md
+new file mode 100644
+index 0000000..5a765a7
+--- /dev/null
++++ b/docs/implementation/2026-09-12-audit-implementation/PR-U10.md
+@@ -0,0 +1,24 @@
++# PR-U10 — Settings Revert opening-session baseline
++
++Baseline: `91cc150ceb2e72c61208bbc7c155e5f231ee246c`.
++
++## Scope
++
++Make Revert restore the selected scope to the state captured when Settings opened, even after successful autosaves. User and Workspace keep independent baselines. Reset Section remains a confirmed override removal and can be undone by Revert.
++
++## Required behavior
++
++- A successful write advances persistence state without advancing the opening-session baseline.
++- Revert is enabled only when the current effective scope differs from its opening baseline. It applies that baseline to live consumers and queues one generation-fenced save.
++- A late save acknowledgement cannot replace reverted values. Write failure keeps Revert retryable and reports one truthful failure state.
++- External file changes require an explicit conflict or reload decision and never silently redefine the session baseline.
++- Closing and reopening Settings captures fresh per-scope baselines. Scope switches preserve each scope's own baseline.
++- Help and accessibility state describe the opening-session scope of Revert.
++
++## Visual contract
++
++Preserve the current Settings tab, visible User/Workspace scope, category list, setting rows, saved/error status, and separate Reset Section action from `bareline-settings.png`. U10 changes state and explanatory text without redesigning the page.
++
++## Evidence plan
++
++Focused deterministic tests will cover autosave then Revert across UI/runtime/disk, Reset Section then Revert, delayed/failing generations, independent scope switching, close/reopen, and external-edit conflict handling. Root owns contained Cargo and native qualification.

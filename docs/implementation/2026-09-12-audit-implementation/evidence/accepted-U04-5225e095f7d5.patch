@@ -1,0 +1,1130 @@
+diff --git a/apps/bareline/src/windows_app.rs b/apps/bareline/src/windows_app.rs
+index adb60a3..10e6418 100644
+--- a/apps/bareline/src/windows_app.rs
++++ b/apps/bareline/src/windows_app.rs
+@@ -1456,6 +1456,7 @@ impl Shell {
+         );
+         self.watch_annotate_context(context);
+         self.views.annotate_context(context, &self.app.tabs, self.app.active);
++        self.search_annotate_context(context);
+         // Open-document search now includes paged documents
+         // (search_panel.rs submit_mixed_open_documents), so it is no longer gated off.
+         for id in [
+@@ -2030,6 +2031,9 @@ impl Shell {
+                 "search.open_documents" => {
+                     workspace.find.blur();
+                     workspace.search_panel.show();
++                    workspace
++                        .search_panel
++                        .set_scope(bareline_app::search_panel::SearchScope::OpenDocuments);
+                     workspace.search_focus = true;
+                 }
+                 "search.cancel_panel" => {
+@@ -2379,6 +2383,12 @@ impl Shell {
+                 if let Some(workspace) = &mut self.workspace {
+                     match action {
+                         Action::Find => {
++                            let scope = if workspace.find.query().selection.is_some() {
++                                bareline_app::search_panel::SearchScope::Selection
++                            } else {
++                                bareline_app::search_panel::SearchScope::CurrentDocument
++                            };
++                            workspace.search_panel.set_scope(scope);
+                             if let Some(editor) = workspace.editors.get_mut(self.app.active) {
+                                 editor.cancel_composition();
+                                 workspace.find.show();
+@@ -2386,6 +2396,12 @@ impl Shell {
+                         }
+                         Action::FindClose => workspace.find.hide(),
+                         Action::Replace => {
++                            let scope = if workspace.find.query().selection.is_some() {
++                                bareline_app::search_panel::SearchScope::Selection
++                            } else {
++                                bareline_app::search_panel::SearchScope::CurrentDocument
++                            };
++                            workspace.search_panel.set_scope(scope);
+                             if let Some(editor) = workspace.editors.get_mut(self.app.active) {
+                                 editor.cancel_composition();
+                                 workspace.find.show_replace();
+@@ -3919,6 +3935,7 @@ impl Shell {
+     ) -> Result<(), ()> {
+         let window = self.window.as_ref().unwrap();
+         self.search.draw(
++            self.workspace.as_ref(),
+             renderer,
+             self.settings.ui_theme(),
+             size.width as f32 / scale,
+diff --git a/apps/bareline/src/windows_app/lifecycle.rs b/apps/bareline/src/windows_app/lifecycle.rs
+index d12a572..259b319 100644
+--- a/apps/bareline/src/windows_app/lifecycle.rs
++++ b/apps/bareline/src/windows_app/lifecycle.rs
+@@ -163,6 +163,13 @@ impl LifecycleRuntime {
+         }
+     }
+     pub(super) fn annotate_context(&self, context: &mut CommandContext, workspace: Option<&Workspace>, active: usize) {
++        let save_all_targets = workspace.map_or(0, |workspace| workspace.save_all_targets().len());
++        for id in ["file.save_all", "file.cancel_save_all"] {
++            context.states.insert(
++                CommandId(id),
++                save_all_command_state(id, self.running, save_all_targets),
++            );
++        }
+         context.states.insert(
+             CommandId("file.read_only"),
+             CommandState {
+@@ -177,11 +184,6 @@ impl LifecycleRuntime {
+                 "file.restore_closed",
+                 !workspace.is_some_and(|w| w.can_restore_closed()),
+             ),
+-            ("file.cancel_save_all", !self.running),
+-            (
+-                "file.save_all",
+-                self.running || !workspace.is_some_and(|w| !w.save_all_targets().is_empty()),
+-            ),
+             (
+                 "file.save_conflict_compare",
+                 self.conflict_action.is_some()
+@@ -224,6 +226,15 @@ impl LifecycleRuntime {
+     }
+ }
+ 
++fn save_all_command_state(id: &str, running: bool, targets: usize) -> CommandState {
++    match id {
++        "file.save_all" if running => CommandState::disabled("Save All is already running"),
++        "file.save_all" if targets == 0 => CommandState::disabled("No modified documents to save"),
++        "file.cancel_save_all" if !running => CommandState::disabled("Save All is not running"),
++        _ => CommandState::default(),
++    }
++}
++
+ fn advance_existing_save_all(runtime: &mut LifecycleRuntime, workspace: &mut Workspace) -> SaveAllStep {
+     if let Some(identity) = &runtime.pending {
+         if let Some(index) = workspace.editors.iter().position(|editor| identity.matches(editor)) {
+@@ -935,7 +946,10 @@ impl Shell {
+ 
+ #[cfg(test)]
+ mod tests {
+-    use super::{Identity, LifecycleRuntime, PendingConflictAction, SaveAllStep, advance_existing_save_all};
++    use super::{
++        Identity, LifecycleRuntime, PendingConflictAction, SaveAllStep, advance_existing_save_all,
++        save_all_command_state,
++    };
+     use bareline_app::workspace::{Input, Workspace};
+     use bareline_file_io::lifecycle::SaveConflict;
+     use std::sync::Arc;
+@@ -976,6 +990,15 @@ mod tests {
+         }
+     }
+ 
++    #[test]
++    fn save_all_menu_state_covers_idle_ready_and_running() {
++        assert!(!save_all_command_state("file.save_all", false, 0).enabled);
++        assert!(save_all_command_state("file.save_all", false, 2).enabled);
++        assert!(!save_all_command_state("file.save_all", true, 2).enabled);
++        assert!(save_all_command_state("file.cancel_save_all", true, 2).enabled);
++        assert!(!save_all_command_state("file.cancel_save_all", false, 2).enabled);
++    }
++
+     #[test]
+     fn tracked_conflict_compare_starts_the_exact_open_pair() {
+         let root = std::env::temp_dir().join(format!(
+diff --git a/apps/bareline/src/windows_app/search.rs b/apps/bareline/src/windows_app/search.rs
+index 22ae906..28d21b1 100644
+--- a/apps/bareline/src/windows_app/search.rs
++++ b/apps/bareline/src/windows_app/search.rs
+@@ -17,6 +17,9 @@ pub(super) fn select_panel_tab(
+     match tab {
+         bareline_app::search_panel::SearchTab::Find | bareline_app::search_panel::SearchTab::Replace => {
+             let query = workspace.search_panel.query();
++            workspace
++                .search_panel
++                .set_scope(bareline_app::search_panel::SearchScope::CurrentDocument);
+             workspace.search_panel.hide();
+             workspace.search_focus = false;
+             let _ = workspace.find.set_query(&query);
+@@ -30,6 +33,9 @@ pub(super) fn select_panel_tab(
+             let query = workspace.find.query();
+             workspace.find.blur();
+             workspace.search_panel.show();
++            workspace
++                .search_panel
++                .set_scope(bareline_app::search_panel::SearchScope::OpenDocuments);
+             workspace.search_panel.field.select_all();
+             workspace.search_panel.field.insert(&query.pattern);
+             workspace.search_focus = true;
+@@ -61,6 +67,9 @@ pub(super) struct SearchRuntime {
+ pub(super) fn register(registry: &mut CommandRegistry) {
+     replace::register(registry);
+     let commands = [
++        ("search.mode.literal", "Literal Search Mode"),
++        ("search.mode.extended", "Extended Search Mode"),
++        ("search.mode.regex", "Regular Expression Search Mode"),
+         ("search.folder", "Find in Folder…"),
+         ("search.scope.selection", "Find in Selection"),
+         ("search.scope.current", "Find in Current Document"),
+@@ -104,13 +113,14 @@ impl SearchRuntime {
+     }
+     pub(super) fn draw(
+         &mut self,
++        workspace: Option<&bareline_app::workspace::Workspace>,
+         renderer: &mut WindowsRenderer,
+         theme: bareline_ui::theme::UiTheme,
+         width: f32,
+         height: f32,
+         ops: &mut Vec<bareline_renderer::DrawOp>,
+     ) {
+-        self.replace.draw(width, height, ops);
++        self.replace.draw(workspace, width, height, ops);
+         self.folder.draw(renderer, theme, width, height, ops);
+     }
+ }
+@@ -129,6 +139,25 @@ impl Shell {
+         if self.search_replace_command(id) {
+             return true;
+         }
++        if let Some(mode) = match id {
++            "search.mode.literal" => Some(bareline_search::SearchMode::Literal),
++            "search.mode.extended" => Some(bareline_search::SearchMode::Extended),
++            "search.mode.regex" => Some(bareline_search::SearchMode::Regex),
++            _ => None,
++        } {
++            if let Some(workspace) = &mut self.workspace {
++                let mut query = workspace.find.query();
++                query.mode = mode;
++                let _ = workspace.find.set_query(&query);
++                workspace.search_panel.set_scope(if query.selection.is_some() {
++                    bareline_app::search_panel::SearchScope::Selection
++                } else {
++                    bareline_app::search_panel::SearchScope::CurrentDocument
++                });
++                workspace.find.show();
++            }
++            return true;
++        }
+         if id == "search.folder" {
+             let selected = self.platform.as_ref().map(|platform| platform.pick_folder());
+             match selected {
+@@ -137,6 +166,9 @@ impl Shell {
+                         let query = workspace.find.query();
+                         workspace.find.blur();
+                         workspace.search_focus = false;
++                        workspace
++                            .search_panel
++                            .set_scope(bareline_app::search_panel::SearchScope::Folder);
+                         self.search.folder.show(root, query);
+                     }
+                 }
+@@ -161,6 +193,11 @@ impl Shell {
+                     None
+                 };
+                 workspace.find.set_selection_scope(scope);
++                workspace.search_panel.set_scope(if id.ends_with("selection") {
++                    bareline_app::search_panel::SearchScope::Selection
++                } else {
++                    bareline_app::search_panel::SearchScope::CurrentDocument
++                });
+                 workspace.find.show();
+             }
+             return true;
+@@ -197,6 +234,157 @@ impl Shell {
+         }
+         false
+     }
++
++    pub(super) fn search_annotate_context(&self, context: &mut bareline_commands::CommandContext) {
++        use bareline_commands::{CommandId, CommandState};
++        let Some(workspace) = self.workspace.as_ref() else {
++            for id in [
++                "search.mode.literal",
++                "search.mode.extended",
++                "search.mode.regex",
++                "search.mode",
++                "search.match_case",
++                "search.whole_word",
++                "search.scope.current",
++                "search.scope.selection",
++                "search.open_documents",
++                "search.folder",
++                "search.cancel",
++                "search.close_find",
++                "search.cancel_panel",
++                "search.close_panel",
++            ] {
++                context
++                    .states
++                    .insert(CommandId(id), CommandState::disabled("Open a document first"));
++            }
++            context.states.insert(
++                CommandId("search.folder"),
++                CommandState {
++                    enabled: false,
++                    radio: true,
++                    disabled_reason: Some("Open a document first".into()),
++                    ..Default::default()
++                },
++            );
++            self.search.replace.annotate_context(context, None);
++            return;
++        };
++
++        let query = workspace.find.query();
++        for (id, mode) in [
++            ("search.mode.literal", bareline_search::SearchMode::Literal),
++            ("search.mode.extended", bareline_search::SearchMode::Extended),
++            ("search.mode.regex", bareline_search::SearchMode::Regex),
++        ] {
++            context.states.insert(
++                CommandId(id),
++                CommandState {
++                    checked: query.mode == mode,
++                    radio: true,
++                    ..Default::default()
++                },
++            );
++        }
++        context.states.insert(
++            CommandId("search.mode"),
++            CommandState {
++                label: Some(format!("Next Search Mode (current: {:?})", query.mode)),
++                ..Default::default()
++            },
++        );
++
++        let scope = match workspace.search_panel.scope() {
++            bareline_app::search_panel::SearchScope::Folder => bareline_app::search_panel::SearchScope::Folder,
++            bareline_app::search_panel::SearchScope::OpenDocuments => {
++                bareline_app::search_panel::SearchScope::OpenDocuments
++            }
++            bareline_app::search_panel::SearchScope::CurrentDocument
++            | bareline_app::search_panel::SearchScope::Selection => {
++                if query.selection.is_some() {
++                    bareline_app::search_panel::SearchScope::Selection
++                } else {
++                    bareline_app::search_panel::SearchScope::CurrentDocument
++                }
++            }
++        };
++        for (id, checked) in [
++            (
++                "search.scope.current",
++                scope == bareline_app::search_panel::SearchScope::CurrentDocument,
++            ),
++            (
++                "search.scope.selection",
++                scope == bareline_app::search_panel::SearchScope::Selection,
++            ),
++            (
++                "search.open_documents",
++                scope == bareline_app::search_panel::SearchScope::OpenDocuments,
++            ),
++            (
++                "search.folder",
++                scope == bareline_app::search_panel::SearchScope::Folder,
++            ),
++        ] {
++            context.states.insert(
++                CommandId(id),
++                CommandState {
++                    checked,
++                    radio: true,
++                    ..Default::default()
++                },
++            );
++        }
++        if self
++            .views
++            .active_selection(workspace, self.app.active)
++            .is_none_or(|selection| selection.is_empty())
++        {
++            context.states.insert(
++                CommandId("search.scope.selection"),
++                CommandState {
++                    enabled: false,
++                    checked: scope == bareline_app::search_panel::SearchScope::Selection,
++                    radio: true,
++                    disabled_reason: Some("Select text in the active document first".into()),
++                    ..Default::default()
++                },
++            );
++        }
++        context.states.insert(
++            CommandId("search.cancel"),
++            if workspace.find.searching() {
++                CommandState::default()
++            } else {
++                CommandState::disabled("No current-document search is running")
++            },
++        );
++        context.states.insert(
++            CommandId("search.close_find"),
++            if workspace.find.open {
++                CommandState::default()
++            } else {
++                CommandState::disabled("The Find bar is closed")
++            },
++        );
++        context.states.insert(
++            CommandId("search.cancel_panel"),
++            if workspace.search_panel.searching() {
++                CommandState::default()
++            } else {
++                CommandState::disabled("No open-document or folder search is running")
++            },
++        );
++        context.states.insert(
++            CommandId("search.close_panel"),
++            if workspace.search_panel.open {
++                CommandState::default()
++            } else {
++                CommandState::disabled("The Search Results panel is closed")
++            },
++        );
++        self.search.replace.annotate_context(context, Some(workspace));
++    }
+     pub(super) fn search_pump(&mut self) -> bool {
+         let mut replacement_changed = self.search_replace_pump();
+         if let Some(index) = self
+@@ -258,3 +446,124 @@ impl Shell {
+         true
+     }
+ }
++
++#[cfg(test)]
++mod menu_projection_tests {
++    use super::*;
++    use bareline_app::workspace::Input;
++    use bareline_commands::{CommandContext, MenuItem};
++
++    fn checked(context: &CommandContext, id: &'static str) -> bool {
++        context.states.get(&CommandId(id)).is_some_and(|state| state.checked)
++    }
++
++    fn settle(workspace: &mut bareline_app::workspace::Workspace) {
++        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
++        while workspace.editors.iter().any(WorkspaceEditor::busy) {
++            workspace.pump();
++            assert!(std::time::Instant::now() < deadline);
++            std::thread::yield_now();
++        }
++    }
++
++    #[test]
++    fn scope_mode_and_options_follow_current_intent_after_panel_cancellation() {
++        let mut shell = crate::windows_app::accessibility::tests::headless_shell();
++        let mut workspace = bareline_app::workspace::Workspace::new(
++            Arc::new(|| {}),
++            Arc::new(bareline_platform_windows::WindowsFileSystem),
++        )
++        .unwrap();
++        for _ in 0..2 {
++            workspace.new_document().unwrap();
++        }
++        workspace.editors[0].enqueue(Input::Insert("needle".into()));
++        settle(&mut workspace);
++        workspace.bind_find_to(0);
++        let mut query = workspace.find.query();
++        query.mode = bareline_search::SearchMode::Regex;
++        query.case = bareline_search::Case::Sensitive;
++        query.whole_word = true;
++        workspace.find.set_query(&query).unwrap();
++        workspace
++            .search_panel
++            .set_scope(bareline_app::search_panel::SearchScope::Folder);
++        workspace.search_panel.show();
++        workspace.search_panel.cancel();
++        shell.workspace = Some(workspace);
++
++        let context = shell.command_context();
++        assert!(checked(&context, "search.folder"));
++        assert!(checked(&context, "search.mode.regex"));
++        assert!(checked(&context, "search.match_case"));
++        assert!(checked(&context, "search.whole_word"));
++
++        assert!(shell.search_command("search.mode.extended"));
++        let context = shell.command_context();
++        assert!(checked(&context, "search.scope.current"));
++        assert!(!checked(&context, "search.folder"));
++        assert!(checked(&context, "search.mode.extended"));
++
++        shell.workspace.as_mut().unwrap().editors[0].enqueue(Input::SetCaret(0, false));
++        shell.workspace.as_mut().unwrap().editors[0].enqueue(Input::SetCaret(3, true));
++        settle(shell.workspace.as_mut().unwrap());
++        assert!(shell.search_command("search.scope.selection"));
++        let context = shell.command_context();
++        assert!(checked(&context, "search.scope.selection"));
++        assert!(shell.workspace.as_ref().unwrap().find.query().selection.is_some());
++
++        shell.app.active = 1;
++        shell.workspace.as_mut().unwrap().bind_find_to(1);
++        assert!(shell.workspace.as_ref().unwrap().find.query().selection.is_none());
++        let context = shell.command_context();
++        assert!(checked(&context, "search.scope.current"));
++        assert!(!checked(&context, "search.scope.selection"));
++
++        assert!(shell.search_command("search.scope.current"));
++        let context = shell.command_context();
++        assert!(checked(&context, "search.scope.current"));
++
++        select_panel_tab(
++            shell.workspace.as_mut().unwrap(),
++            bareline_app::search_panel::SearchTab::Files,
++        );
++        let context = shell.command_context();
++        assert!(checked(&context, "search.open_documents"));
++    }
++
++    fn top_level<'a>(model: &'a bareline_commands::MenuModel, title: &str) -> &'a [MenuItem] {
++        model
++            .items
++            .iter()
++            .find_map(|item| match item {
++                MenuItem::Submenu {
++                    title: candidate,
++                    items,
++                } if candidate == title => Some(items.as_slice()),
++                _ => None,
++            })
++            .expect("composed top-level menu")
++    }
++
++    #[test]
++    fn composed_shell_file_and_search_popups_fit_supported_heights() {
++        let mut app = bareline_app::App::default();
++        super::super::register_all_commands(&mut app.commands);
++        let model = bareline_app::menus::curated_model(&app.commands);
++        for title in ["File", "Search"] {
++            let items = top_level(&model, title);
++            let estimated_height = items.len() * 28 + 8;
++            for viewport in [600, 768, 800] {
++                assert!(
++                    estimated_height <= viewport,
++                    "composed {title} popup {estimated_height}px exceeds {viewport}px"
++                );
++            }
++            assert!(
++                items.len() <= 14,
++                "composed {title} has {} first-level rows",
++                items.len()
++            );
++        }
++    }
++}
+diff --git a/apps/bareline/src/windows_app/search/replace.rs b/apps/bareline/src/windows_app/search/replace.rs
+index a3a58fb..54c2f7d 100644
+--- a/apps/bareline/src/windows_app/search/replace.rs
++++ b/apps/bareline/src/windows_app/search/replace.rs
+@@ -96,6 +96,38 @@ impl Preview {
+                 .map(|file| file.changes.iter().filter(|change| change.included).count())
+                 .sum::<usize>()
+     }
++    fn selected_sources_current(&self, workspace: &bareline_app::workspace::Workspace) -> bool {
++        let resident_current = self.open.as_ref().is_none_or(|open| {
++            open.documents()
++                .iter()
++                .filter(|document| document.included && document.changes.iter().any(|change| change.included))
++                .all(|document| {
++                    workspace.editors.iter().any(|editor| {
++                        matches!(editor, WorkspaceEditor::Resident(surface)
++                            if !surface.read_only()
++                                && !surface.busy()
++                                && surface.snapshot().same_document(&document.snapshot)
++                                && surface.snapshot().revision == document.snapshot.revision
++                                && surface.snapshot().content_state == document.snapshot.content_state)
++                    })
++                })
++        });
++        let paged_current = self
++            .paged
++            .iter()
++            .filter(|document| document.included && document.changes.iter().any(|change| change.included))
++            .all(|document| {
++                workspace.editors.iter().any(|editor| {
++                    matches!(editor, WorkspaceEditor::Paged(surface)
++                        if !surface.user_read_only()
++                            && !surface.busy()
++                            && surface.snapshot().same_document(&document.source)
++                            && surface.snapshot().revision == document.source.revision
++                            && surface.snapshot().content_state == document.source.content_state)
++                })
++            });
++        resident_current && paged_current
++    }
+     fn toggle_all(&mut self, included: bool) {
+         if let Some(open) = &mut self.open {
+             open.toggle_all(included);
+@@ -218,6 +250,51 @@ enum Hit {
+     Row(usize),
+     Command(&'static str),
+ }
++
++#[derive(Clone, Copy)]
++struct ReplacementMenuFacts {
++    open: bool,
++    busy: bool,
++    selected: Option<usize>,
++    current: bool,
++    has_receipt: bool,
++}
++
++fn replacement_command_state(id: &str, facts: ReplacementMenuFacts) -> bareline_commands::CommandState {
++    use bareline_commands::CommandState;
++    match id {
++        "search.replacePreview.apply" if facts.busy => CommandState::disabled("Wait for replacement work to stop"),
++        "search.replacePreview.apply" if facts.selected.is_none() => {
++            CommandState::disabled("Create and review a replacement preview first")
++        }
++        "search.replacePreview.apply" if facts.selected == Some(0) => {
++            CommandState::disabled("Select at least one reviewed replacement")
++        }
++        "search.replacePreview.apply" if !facts.current => {
++            CommandState::disabled("Reviewed replacements are stale; refresh the preview")
++        }
++        "search.replacePreview.apply" => CommandState::default(),
++        "search.replacePreview.toggleAll" if !facts.busy && facts.selected.is_some() => CommandState::default(),
++        "search.replacePreview.toggleAll" => CommandState::disabled("Create and review a replacement preview first"),
++        "search.replacePreview.refresh" if facts.open && !facts.busy => CommandState::default(),
++        "search.replacePreview.refresh" => CommandState::disabled(if facts.open {
++            "Wait for replacement work to stop"
++        } else {
++            "Open Replacement Preview first"
++        }),
++        "search.replacePreview.cancel" if facts.busy => CommandState::default(),
++        "search.replacePreview.cancel" => CommandState::disabled("No workspace replacement is running"),
++        "search.replacePreview.rollback" if !facts.busy && facts.has_receipt => CommandState::default(),
++        "search.replacePreview.rollback" => CommandState::disabled("No completed replacement backup is available"),
++        "search.replacePreview.close" if facts.open && !facts.busy => CommandState::default(),
++        "search.replacePreview.close" => CommandState::disabled(if facts.open {
++            "Cancel or finish replacement work before closing"
++        } else {
++            "Replacement Preview is closed"
++        }),
++        _ => CommandState::default(),
++    }
++}
+ #[derive(Default)]
+ pub(super) struct ReplaceRuntime {
+     open: bool,
+@@ -323,7 +400,86 @@ impl ReplaceRuntime {
+             || !self.paged_queue.is_empty()
+             || self.disk_queue.is_some()
+     }
+-    pub(super) fn draw(&mut self, width: f32, height: f32, ops: &mut Vec<DrawOp>) {
++
++    fn command_state(
++        &self,
++        id: &str,
++        workspace: Option<&bareline_app::workspace::Workspace>,
++    ) -> bareline_commands::CommandState {
++        let facts = ReplacementMenuFacts {
++            open: self.open,
++            busy: self.busy(),
++            selected: self.preview.as_ref().map(Preview::selected),
++            current: self
++                .preview
++                .as_ref()
++                .zip(workspace)
++                .is_some_and(|(preview, workspace)| preview.selected_sources_current(workspace)),
++            has_receipt: self.receipt.is_some(),
++        };
++        replacement_command_state(id, facts)
++    }
++
++    pub(super) fn annotate_context(
++        &self,
++        context: &mut bareline_commands::CommandContext,
++        workspace: Option<&bareline_app::workspace::Workspace>,
++    ) {
++        use bareline_commands::{CommandId, CommandState};
++        let available = workspace.is_some();
++        for id in ["search.replaceInFiles", "search.replaceInWorkspace"] {
++            if !available {
++                context
++                    .states
++                    .insert(CommandId(id), CommandState::disabled("Open a document first"));
++            }
++        }
++        for (id, checked) in [
++            (
++                "search.replacePreview.preserveCase",
++                self.replacement_options.preserve_case,
++            ),
++            (
++                "search.replacePreview.includeBinary",
++                self.replacement_options.include_binary,
++            ),
++            ("search.replacePreview.backups", !self.disable_backup),
++        ] {
++            context.states.insert(
++                CommandId(id),
++                CommandState {
++                    enabled: self.open && !self.busy(),
++                    checked,
++                    disabled_reason: (!self.open || self.busy()).then(|| {
++                        if self.open {
++                            "Wait for replacement work to stop".into()
++                        } else {
++                            "Open Replacement Preview first".into()
++                        }
++                    }),
++                    ..Default::default()
++                },
++            );
++        }
++
++        for id in [
++            "search.replacePreview.apply",
++            "search.replacePreview.toggleAll",
++            "search.replacePreview.refresh",
++            "search.replacePreview.cancel",
++            "search.replacePreview.rollback",
++            "search.replacePreview.close",
++        ] {
++            context.states.insert(CommandId(id), self.command_state(id, workspace));
++        }
++    }
++    pub(super) fn draw(
++        &mut self,
++        workspace: Option<&bareline_app::workspace::Workspace>,
++        width: f32,
++        height: f32,
++        ops: &mut Vec<DrawOp>,
++    ) {
+         if !self.open {
+             return;
+         }
+@@ -408,7 +564,7 @@ impl ReplaceRuntime {
+             12.0,
+             MUTED,
+         );
+-        let selected = self.preview.as_ref().map_or(0, Preview::selected);
++        let apply_enabled = self.command_state("search.replacePreview.apply", workspace).enabled;
+         let mut x = 24.0;
+         for (label, id, enabled, w) in [
+             ("Refresh", "search.replacePreview.refresh", !self.busy(), 80.0),
+@@ -418,12 +574,7 @@ impl ReplaceRuntime {
+                 !self.busy() && self.preview.is_some(),
+                 100.0,
+             ),
+-            (
+-                "Apply",
+-                "search.replacePreview.apply",
+-                !self.busy() && selected > 0,
+-                76.0,
+-            ),
++            ("Apply", "search.replacePreview.apply", apply_enabled, 76.0),
+             ("Cancel", "search.replacePreview.cancel", self.busy(), 76.0),
+             (
+                 "Rollback",
+@@ -531,6 +682,13 @@ impl Shell {
+             return true;
+         }
+         if id == "search.replacePreview.apply" {
++            let state = self.search.replace.command_state(id, self.workspace.as_ref());
++            if !state.enabled {
++                self.search.replace.status = state
++                    .disabled_reason
++                    .unwrap_or_else(|| "Reviewed replacements cannot be applied yet".into());
++                return true;
++            }
+             self.search_apply_preview();
+             return true;
+         }
+@@ -1314,3 +1472,119 @@ impl Shell {
+         true
+     }
+ }
++
++#[cfg(test)]
++mod menu_state_tests {
++    use super::*;
++    use bareline_app::workspace::{Input, Workspace};
++
++    fn facts(open: bool, busy: bool, selected: Option<usize>, current: bool) -> ReplacementMenuFacts {
++        ReplacementMenuFacts {
++            open,
++            busy,
++            selected,
++            current,
++            has_receipt: false,
++        }
++    }
++
++    #[test]
++    fn replacement_menu_state_covers_idle_running_cancelling_complete_and_stale() {
++        let idle = facts(false, false, None, false);
++        assert!(!replacement_command_state("search.replacePreview.apply", idle).enabled);
++        assert!(!replacement_command_state("search.replacePreview.cancel", idle).enabled);
++
++        let running = facts(true, true, None, false);
++        assert!(!replacement_command_state("search.replacePreview.apply", running).enabled);
++        assert!(replacement_command_state("search.replacePreview.cancel", running).enabled);
++
++        // Cancellation remains an in-flight/busy state until the worker acknowledges it.
++        let cancelling = facts(true, true, Some(3), true);
++        assert!(replacement_command_state("search.replacePreview.cancel", cancelling).enabled);
++        assert!(!replacement_command_state("search.replacePreview.close", cancelling).enabled);
++
++        let complete = facts(true, false, Some(3), true);
++        assert!(replacement_command_state("search.replacePreview.apply", complete).enabled);
++
++        let stale = facts(true, false, Some(3), false);
++        let stale_apply = replacement_command_state("search.replacePreview.apply", stale);
++        assert!(!stale_apply.enabled);
++        assert_eq!(
++            stale_apply.disabled_reason.as_deref(),
++            Some("Reviewed replacements are stale; refresh the preview")
++        );
++    }
++
++    fn settle(workspace: &mut Workspace) {
++        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
++        while workspace.editors.iter().any(WorkspaceEditor::busy) {
++            workspace.pump();
++            assert!(std::time::Instant::now() < deadline);
++            std::thread::yield_now();
++        }
++    }
++
++    #[test]
++    fn apply_route_preserves_preview_when_a_selected_source_changed() {
++        let mut workspace =
++            Workspace::new(Arc::new(|| {}), Arc::new(bareline_platform_windows::WindowsFileSystem)).unwrap();
++        for _ in 0..2 {
++            workspace.new_document().unwrap();
++        }
++        for editor in &mut workspace.editors {
++            editor.enqueue(Input::Insert("needle".into()));
++        }
++        settle(&mut workspace);
++
++        let query = bareline_search::SearchQuery::literal("needle");
++        let targets = workspace.editors.iter().map(|editor| match editor {
++            WorkspaceEditor::Resident(surface) => (surface.document_service().unwrap(), surface.snapshot().clone()),
++            WorkspaceEditor::Paged(_) => unreachable!(),
++        });
++        let mut open = preview_open_documents_options(
++            targets,
++            &query,
++            "replacement",
++            &SearchJob::default(),
++            MAX_RESULT_BYTES,
++            Default::default(),
++        )
++        .unwrap();
++        assert!(open.set_document_included(1, false));
++        let disk = bareline_search::replace_disk::preview_disk_files(
++            Vec::<PathBuf>::new(),
++            &query,
++            "replacement",
++            &SearchJob::default(),
++            &bareline_platform_windows::WindowsPathTrustProvider,
++            &bareline_platform_windows::WindowsFileSystem,
++            MAX_RESULT_BYTES,
++        )
++        .unwrap();
++        let preview = Preview {
++            open: Some(open),
++            labels: vec!["selected".into(), "deselected".into()],
++            paged: Vec::new(),
++            disk,
++            skipped: 0,
++            skip_reasons: String::new(),
++            open_skips: Vec::new(),
++        };
++
++        workspace.editors[1].enqueue(Input::Insert(" changed".into()));
++        settle(&mut workspace);
++        assert!(preview.selected_sources_current(&workspace));
++
++        workspace.editors[0].enqueue(Input::Insert(" changed".into()));
++        settle(&mut workspace);
++        assert!(!preview.selected_sources_current(&workspace));
++
++        let mut shell = crate::windows_app::accessibility::tests::headless_shell();
++        shell.workspace = Some(workspace);
++        shell.search.replace.open = true;
++        shell.search.replace.preview = Some(preview);
++        assert!(shell.search_replace_command("search.replacePreview.apply"));
++        assert!(shell.search.replace.preview.is_some());
++        assert!(shell.search.replace.status.contains("stale"));
++    }
++}
+diff --git a/crates/app/src/menus.rs b/crates/app/src/menus.rs
+index 9d5e1f9..cb9ab6f 100644
+--- a/crates/app/src/menus.rs
++++ b/crates/app/src/menus.rs
+@@ -50,42 +50,66 @@ pub const TREE: &[MenuTemplate] = &[
+             Sep,
+             C("file.save"),
+             C("file.save_as"),
+-            C("file.save_copy"),
+-            C("file.save_all"),
+-            Sep,
+-            C("file.external.reload"),
+-            C("workspace.rename"),
+-            C("file.close"),
+-            C("file.restore_closed"),
+-            Sep,
+-            C("utilities.print"),
+-            Sep,
+             Sub(
+-                "Recovery",
+-                &[
+-                    C("recovery.open"),
+-                    C("recovery.open_folder"),
+-                    C("recovery.restore_latest"),
+-                    C("recovery.retry"),
+-                    C("recovery.save_as"),
+-                ],
++                "Output",
++                &[C("file.save_copy"), C("file.save_all"), C("utilities.print")],
+             ),
++            Sep,
++            C("file.close"),
+             Sub(
+-                "Tail",
++                "Document and Disk",
+                 &[
+-                    C("file.monitor.start"),
+-                    C("file.monitor.pause"),
+-                    C("file.monitor.resume"),
+-                    C("file.monitor.reopen"),
+-                    C("file.monitor.unlock"),
++                    C("workspace.rename"),
++                    C("file.restore_closed"),
++                    C("file.read_only"),
++                    C("file.reveal"),
++                    C("file.terminal"),
+                     Sep,
+-                    C("file.remote.open"),
+-                    C("file.remote.follow"),
+-                    C("file.remote.reload"),
++                    C("file.external.reload"),
++                    C("file.cancel_operations"),
++                    C("file.transcode.resume"),
++                    C("file.transcode.cancel"),
++                    C("file.cancel_save_all"),
+                     Sep,
+-                    C("file.external.check"),
+-                    C("file.external.auto_reload"),
+-                    C("file.external.keep"),
++                    Sub(
++                        "Save Conflict",
++                        &[
++                            C("file.save_conflict_compare"),
++                            C("file.save_conflict_save_elsewhere"),
++                            C("file.save_conflict_retain_other"),
++                            C("file.save_conflict_next"),
++                        ],
++                    ),
++                    Sub(
++                        "Recovery",
++                        &[
++                            C("recovery.open"),
++                            C("recovery.open_folder"),
++                            C("recovery.restore_latest"),
++                            C("recovery.retry"),
++                            C("recovery.save_as"),
++                            C("file.retry_save_cleanup"),
++                            C("file.retry_save_recovery"),
++                        ],
++                    ),
++                    Sub(
++                        "Monitoring and Remote",
++                        &[
++                            C("file.monitor.start"),
++                            C("file.monitor.pause"),
++                            C("file.monitor.resume"),
++                            C("file.monitor.reopen"),
++                            C("file.monitor.unlock"),
++                            Sep,
++                            C("file.remote.open"),
++                            C("file.remote.follow"),
++                            C("file.remote.reload"),
++                            Sep,
++                            C("file.external.check"),
++                            C("file.external.auto_reload"),
++                            C("file.external.keep"),
++                        ],
++                    ),
+                 ],
+             ),
+             Sub("Tray", &[C("tray.toggle"), C("tray.hide"), C("tray.restore")]),
+@@ -212,12 +236,32 @@ pub const TREE: &[MenuTemplate] = &[
+             C("search.find_next"),
+             C("search.find_previous"),
+             C("search.replace"),
+-            Sep,
+-            C("search.folder"),
+-            C("search.open_documents"),
+-            C("search.scope.selection"),
+-            C("search.scope.current"),
++            C("search.goto"),
+             Sep,
++            Sub(
++                "Scope",
++                &[
++                    C("search.scope.current"),
++                    C("search.scope.selection"),
++                    C("search.open_documents"),
++                    C("search.folder"),
++                ],
++            ),
++            Sub(
++                "Mode",
++                &[
++                    C("search.mode.literal"),
++                    C("search.mode.extended"),
++                    C("search.mode.regex"),
++                    Sep,
++                    C("search.mode"),
++                ],
++            ),
++            Sub("Options", &[C("search.match_case"), C("search.whole_word")]),
++            Sub(
++                "Current Document Replacement",
++                &[C("search.replace_one"), C("search.replace_all"), C("search.close_find")],
++            ),
+             Sub(
+                 "Mark",
+                 &[
+@@ -235,8 +279,28 @@ pub const TREE: &[MenuTemplate] = &[
+                     C("search.mark.clearAll"),
+                 ],
+             ),
+-            Sep,
+-            C("search.cancel"),
++            Sub(
++                "Workspace Replacement",
++                &[
++                    C("search.replaceInFiles"),
++                    C("search.replaceInWorkspace"),
++                    C("search.replacePreview.refresh"),
++                    C("search.replacePreview.apply"),
++                    C("search.replacePreview.toggleAll"),
++                    Sep,
++                    C("search.replacePreview.preserveCase"),
++                    C("search.replacePreview.includeBinary"),
++                    C("search.replacePreview.backups"),
++                    Sep,
++                    C("search.replacePreview.cancel"),
++                    C("search.replacePreview.rollback"),
++                    C("search.replacePreview.close"),
++                ],
++            ),
++            Sub(
++                "Active Search",
++                &[C("search.cancel"), C("search.cancel_panel"), C("search.close_panel")],
++            ),
+         ],
+     ),
+     Sub(
+diff --git a/crates/app/src/search_panel.rs b/crates/app/src/search_panel.rs
+index 10b3a11..32e23b7 100644
+--- a/crates/app/src/search_panel.rs
++++ b/crates/app/src/search_panel.rs
+@@ -31,6 +31,14 @@ pub enum SearchTab {
+     Replace,
+     Files,
+ }
++#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
++pub enum SearchScope {
++    #[default]
++    CurrentDocument,
++    Selection,
++    OpenDocuments,
++    Folder,
++}
+ pub fn register_commands(
+     registry: &mut bareline_commands::CommandRegistry,
+ ) -> Result<(), bareline_commands::CommandId> {
+@@ -56,6 +64,7 @@ pub struct SearchPanel {
+     pub open: bool,
+     pub focused: bool,
+     pub field: TextField,
++    scope: SearchScope,
+     worker: Option<SearchWorker>,
+     pending: Option<OpenDocumentTicket>,
+     folder_pending: Option<bareline_search::service::FolderSearchTicket>,
+@@ -90,6 +99,12 @@ pub struct SearchPanel {
+     visible_names: Vec<(usize, String)>,
+ }
+ impl SearchPanel {
++    pub fn scope(&self) -> SearchScope {
++        self.scope
++    }
++    pub fn set_scope(&mut self, scope: SearchScope) {
++        self.scope = scope;
++    }
+     pub fn owns_accessibility_id(&self, id: u64) -> bool {
+         self.semantics().iter().any(|node| node.id.0 == id)
+     }
+@@ -99,6 +114,9 @@ impl SearchPanel {
+     pub fn folder_searching(&self) -> bool {
+         self.folder_pending.is_some()
+     }
++    pub fn searching(&self) -> bool {
++        self.pending.is_some() || self.folder_pending.is_some()
++    }
+     pub fn folder_job(&self) -> Option<bareline_search::SearchJob> {
+         self.folder_pending.as_ref().map(|ticket| ticket.job.clone())
+     }
+@@ -385,6 +403,7 @@ impl SearchPanel {
+         mut query: SearchQuery,
+         notify: Arc<dyn Fn() + Send + Sync>,
+     ) {
++        self.scope = SearchScope::OpenDocuments;
+         self.accessibility_revision.set(
+             self.accessibility_revision
+                 .get()
+@@ -439,6 +458,7 @@ impl SearchPanel {
+         platform: Arc<dyn bareline_platform::LocalFileSystem>,
+         notify: Arc<dyn Fn() + Send + Sync>,
+     ) {
++        self.scope = SearchScope::Folder;
+         self.accessibility_revision.set(
+             self.accessibility_revision
+                 .get()
+diff --git a/docs/implementation/2026-09-12-audit-implementation/PR-U04.md b/docs/implementation/2026-09-12-audit-implementation/PR-U04.md
+new file mode 100644
+index 0000000..5b19418
+--- /dev/null
++++ b/docs/implementation/2026-09-12-audit-implementation/PR-U04.md
+@@ -0,0 +1,37 @@
++# PR-U04 — Menu information architecture and live state
++
++## Scope
++
++- Audit finding: UX-05
++- Baseline: PR-U03 tip `dae79ee41020ec762240c0b809a047aea9430495`, rooted at reviewed snapshot `8d8a17afa739b235a0bc634e8aa461a8212f87e8`
++- Branch: `codex/audit-20260912-u03`
++- Dependencies: PR-U03 checked/radio native projection; integrated search result/document-state fixes; existing command registry and palette
++
++## Intended change
++
++Shorten the first-level File and Search menus with stable, meaningful submenus while preserving command IDs, shortcuts, and exhaustive command-palette reachability. Recompute real command applicability and search mode/scope/toggle check state in the shared command context immediately before native popup synchronization. Keep cancellation enabled through the cancelling state and require a current reviewed replacement set before enabling apply. Add structural viewport-fit and state-table coverage.
++
++## Evidence
++
++- `rustfmt --edition 2024` completed for the six changed Rust files.
++- `git diff --check` passed.
++- Added structural coverage for File/Search first-level item counts and conservative 600/768/800 logical-pixel height estimates.
++- Added state-table coverage for replacement idle/running/cancelling/complete/stale states and Save All idle/ready/running states. These tests are authored but intentionally not run in this worktree.
++- R1 replaces inferred scope state with an explicit current owner that changes on Current Document, Selection, Open Documents, Folder, and panel-tab transitions; cancellation and retained results do not change that intent.
++- R1 shares the reviewed-apply predicate between menus, replacement-panel paint/hit state, keyboard/pointer dispatch, and preview consumption. Only selected resident/paged sources participate in the freshness check, and a rejected direct Apply retains the preview unchanged.
++- R1 moves the viewport assertion to the fully registered Shell command model so automatically appended commands are included.
++- R2 keeps Folder/Open Documents as explicit owners, while Current/Selection projection follows the bound Find query so switching documents immediately retires a document-specific selection scope. Its regression uses the Selection command path and a real `bind_find_to` source switch.
++
++The shell now computes mode/scope/toggle, cancellation, replacement-review, and Save All states from the current runtime snapshot whenever it refreshes native menus, and dispatch rechecks the same shared context. Async search/save transitions already request redraws, so acknowledged state changes trigger another native projection.
++
++Root-owned verification remains pending:
++
++- `cargo test -p bareline-app menus::tests`
++- `cargo test -p bareline menu_state_tests`
++- `cargo test -p bareline menu_projection_tests`
++- `cargo test -p bareline save_all_menu_state_covers_idle_ready_and_running`
++- `cargo check -p bareline`
++- `cargo clippy -p bareline-app -p bareline --all-targets -- -D warnings`
++- Native File/Search popup journey at 600, 768, and 800 logical-pixel heights, plus keyboard checked/radio updates and stale-preview disabled-reason inspection.
++
++Disk replacement applies retain their existing commit-time fingerprint revalidation. The menu can pre-detect stale resident and paged document snapshots; an external disk change that happens after preview remains a commit-time rejection because synchronously rereading every disk target while opening a menu would block the UI.

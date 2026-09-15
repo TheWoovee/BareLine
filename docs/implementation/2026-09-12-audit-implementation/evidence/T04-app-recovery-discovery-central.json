@@ -1,0 +1,14 @@
+{
+  "arguments": [
+    "test",
+    "-p",
+    "bareline-app",
+    "--lib",
+    "recovery_discovery_is_async_deduplicated_and_worker_owned"
+  ],
+  "completed_utc": "2026-09-12T09:17:32.3288408Z",
+  "integration_snapshot": "a323466b931b77f09771a49dab77a883fd1fe164",
+  "exit_code": 0,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\T04-app-recovery-discovery-central.log"
+}

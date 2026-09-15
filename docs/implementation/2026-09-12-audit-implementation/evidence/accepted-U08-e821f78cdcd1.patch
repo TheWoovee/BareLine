@@ -1,0 +1,96 @@
+diff --git a/apps/bareline/src/windows_app/views.rs b/apps/bareline/src/windows_app/views.rs
+index c392284..cef8444 100644
+--- a/apps/bareline/src/windows_app/views.rs
++++ b/apps/bareline/src/windows_app/views.rs
+@@ -1272,6 +1272,61 @@ mod tests {
+         }
+     }
+ 
++    #[test]
++    fn close_compare_waits_for_secondary_history_to_settle() {
++        let mut workspace = Workspace::new(
++            std::sync::Arc::new(|| {}),
++            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
++        )
++        .unwrap();
++        workspace.new_document().unwrap();
++        workspace.new_document().unwrap();
++        let mut views = ViewsRuntime::default();
++        assert!(views.compare_pair(&mut workspace, 0, 1));
++        views.input(&mut workspace, 1, Input::Insert("Z".into()));
++        assert!(views.busy(&workspace));
++
++        views.close_compare(&mut workspace);
++        assert!(views.compare);
++        assert!(views.open());
++        assert!(views.secondary.is_some());
++        assert_eq!(
++            workspace.message.as_deref(),
++            Some("Wait for pending edits before closing the comparison.")
++        );
++
++        let deadline = Instant::now() + Duration::from_secs(5);
++        while views.busy(&workspace) {
++            assert!(Instant::now() < deadline, "compare edit timed out");
++            workspace.pump();
++            views.pump(&mut workspace);
++            std::thread::yield_now();
++        }
++        views.close_compare(&mut workspace);
++        assert!(!views.compare);
++        assert!(!views.open());
++        assert!(workspace.editors[1].can_undo());
++
++        for (input, expected) in [(Input::Undo, ""), (Input::Redo, "Z")] {
++            workspace.editors[1].enqueue(input);
++            while workspace.editors[1].busy() {
++                assert!(Instant::now() < deadline, "compare history timed out");
++                workspace.pump();
++                std::thread::yield_now();
++            }
++            let snapshot = workspace.editors[1].snapshot();
++            assert_eq!(
++                snapshot
++                    .read(
++                        bareline_document::TextOffset(0)..bareline_document::TextOffset(snapshot.len()),
++                        10
++                    )
++                    .unwrap(),
++                expected
++            );
++        }
++    }
++
+     #[test]
+     fn split_pane_activation_retires_the_previous_documents_find_results() {
+         let (notifier, notified) = std::sync::mpsc::channel();
+@@ -2266,6 +2321,10 @@ impl ViewsRuntime {
+         true
+     }
+     pub(super) fn close_compare(&mut self, workspace: &mut Workspace) {
++        if self.busy(workspace) {
++            workspace.message = Some("Wait for pending edits before closing the comparison.".into());
++            return;
++        }
+         self.compare = false;
+         self.alignment = None;
+         self.collapse(workspace, false);
+diff --git a/docs/implementation/2026-09-12-audit-implementation/reviews/PR-U08-R7.md b/docs/implementation/2026-09-12-audit-implementation/reviews/PR-U08-R7.md
+index 1b9fe9e..38e3e01 100644
+--- a/docs/implementation/2026-09-12-audit-implementation/reviews/PR-U08-R7.md
++++ b/docs/implementation/2026-09-12-audit-implementation/reviews/PR-U08-R7.md
+@@ -16,7 +16,7 @@ The retained focus observation therefore establishes a native accessibility disc
+ 
+ Resident undo/redo selection history is view local even though split panes share one document service. `EditorSurface::clone_view` previously started with empty history, and `refresh_peer` cleared the other pane's history after a shared revision arrived. `ViewsRuntime::collapse` then retired one view. The document bytes survived, but the only cursor for the shared document history could be discarded regardless of which pane remained active.
+ 
+-The correction keeps one owner for the shared resident undo/redo cursor and moves its existing `Vec` allocations to the pane receiving focus or input, then back to the workspace editor before collapse or secondary-view replacement. The move is constant time; it does not clone as many as the configured 1,000,000 retained history entries on every linked revision. Identity, exact revision, and idle checks fence the transfer, and the workspace editor retains recovery and file ownership. Linked snapshot refresh now rejects a busy publisher before advancing or clearing the target. A direct regression holds the publisher busy and proves the target bytes, revision, and history remain unchanged until safe transfer; split regressions cover both writer/focus directions and closing the secondary tab, then verify exact bytes and undo/redo state.
++The correction keeps one owner for the shared resident undo/redo cursor and moves its existing `Vec` allocations to the pane receiving focus or input, then back to the workspace editor before collapse or secondary-view replacement. The move is constant time; it does not clone as many as the configured 1,000,000 retained history entries on every linked revision. Identity, exact revision, and idle checks fence the transfer, and the workspace editor retains recovery and file ownership. Linked snapshot refresh now rejects a busy publisher before advancing or clearing the target. Compare close now preserves the live secondary until its edit and history settle and reports the pending work through a nonmodal workspace message. A direct regression holds the publisher busy and proves the target bytes, revision, and history remain unchanged until safe transfer; split regressions cover both writer/focus directions, closing the secondary tab, and closing compare during an in-flight secondary edit, then verify exact bytes and undo/redo state.
+ 
+ ## Allowed remaining diagnostics
+ 
+@@ -28,4 +28,4 @@ The existing headless provider test remains the contained guard for distinct pro
+ 
+ ## Validation
+ 
+-`git diff --check` and direct `rustfmt --check` passed. Per integration ownership, no Cargo, build, native, or UI command was run. The focused checks for the integrator are `cargo test -p bareline closing_split_preserves_shared_undo_redo_from_either_writer`, `cargo test -p bareline closing_secondary_tab_returns_its_document_history`, and `cargo test -p bareline-editor-surface linked_peer_waits_for_history_before_advancing_snapshot`.
++`git diff --check` and direct `rustfmt --check` passed. Per integration ownership, no Cargo, build, native, or UI command was run. The focused checks for the integrator are `cargo test -p bareline closing_split_preserves_shared_undo_redo_from_either_writer`, `cargo test -p bareline closing_secondary_tab_returns_its_document_history`, `cargo test -p bareline close_compare_waits_for_secondary_history_to_settle`, and `cargo test -p bareline-editor-surface linked_peer_waits_for_history_before_advancing_snapshot`.

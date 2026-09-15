@@ -1,0 +1,13 @@
+diff --git a/apps/bareline/src/windows_app/watch.rs b/apps/bareline/src/windows_app/watch.rs
+index cea8e27..74beb41 100644
+--- a/apps/bareline/src/windows_app/watch.rs
++++ b/apps/bareline/src/windows_app/watch.rs
+@@ -1019,7 +1019,7 @@ impl Shell {
+ fn should_auto_reload(enabled: bool, dirty: bool, read_only: bool, busy: bool, changed: bool, remote: bool) -> bool {
+     enabled && !dirty && !read_only && !busy && changed && !remote
+ }
+-fn conflict_notification_id(path: &Path) -> toast::NotificationId {
++fn conflict_notification_id(path: &std::path::Path) -> toast::NotificationId {
+     let encoded = bareline_platform::SerializedPath::from_native(path);
+     toast::NotificationId(format!("watch-conflict:{}", encoded.data))
+ }

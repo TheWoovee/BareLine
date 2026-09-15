@@ -1,0 +1,74 @@
+diff --git a/apps/bareline/src/windows_app/accessibility.rs b/apps/bareline/src/windows_app/accessibility.rs
+index 042aa80..c793e87 100644
+--- a/apps/bareline/src/windows_app/accessibility.rs
++++ b/apps/bareline/src/windows_app/accessibility.rs
+@@ -1301,7 +1301,7 @@ pub(super) mod tests {
+         assert_eq!(source.read(0, 64 * 1024 + 1), AccessibleRead::Unavailable);
+     }
+ 
+-    pub(crate) fn headless_shell() -> Shell {
++    pub(in crate::windows_app) fn headless_shell() -> Shell {
+         let launch = launch::LaunchConfig {
+             mode: launch::LaunchMode::Installed,
+             performance: None,
+diff --git a/crates/app/src/workspace/encoding.rs b/crates/app/src/workspace/encoding.rs
+index 852c592..a35f5de 100644
+--- a/crates/app/src/workspace/encoding.rs
++++ b/crates/app/src/workspace/encoding.rs
+@@ -128,6 +128,7 @@ impl Workspace {
+                 save: None,
+                 copy_only: false,
+                 open_path: Some(path),
++                launch_request: None,
+                 preview: None,
+                 reload: None,
+             });
+@@ -162,6 +163,7 @@ impl Workspace {
+             save: None,
+             copy_only: false,
+             open_path: Some(path),
++            launch_request: None,
+             preview: None,
+             reload: Some(captured),
+         });
+diff --git a/crates/app/src/workspace/remote.rs b/crates/app/src/workspace/remote.rs
+index ed17d06..eaa7024 100644
+--- a/crates/app/src/workspace/remote.rs
++++ b/crates/app/src/workspace/remote.rs
+@@ -40,6 +40,7 @@ impl Workspace {
+             save: None,
+             copy_only: false,
+             open_path: Some(path),
++            launch_request: None,
+             preview: None,
+             reload: None,
+         });
+@@ -81,6 +82,7 @@ impl Workspace {
+             save: None,
+             copy_only: false,
+             open_path: Some(path),
++            launch_request: None,
+             preview: None,
+             reload: Some(captured),
+         });
+@@ -131,6 +133,7 @@ impl Workspace {
+             save: None,
+             copy_only: false,
+             open_path: Some(path),
++            launch_request: None,
+             preview: None,
+             reload: Some(captured),
+         });
+diff --git a/docs/implementation/2026-09-12-audit-implementation/PR-T18.md b/docs/implementation/2026-09-12-audit-implementation/PR-T18.md
+index a1e135c..c0bb43f 100644
+--- a/docs/implementation/2026-09-12-audit-implementation/PR-T18.md
++++ b/docs/implementation/2026-09-12-audit-implementation/PR-T18.md
+@@ -20,7 +20,7 @@ Static checks run in the worker checkout:
+ 
+ - `rustfmt --edition 2024 --check` for all five changed Rust sources: pass.
+ - `git diff --check`: pass.
+-- Caller/constructor census: `LaunchRuntime::queue` has startup, IPC, and focused-test callers; `PendingOpen::accept` has the IPC consumer and two platform tests; all six `PendingIo` constructors explicitly set `launch_request`.
++- Caller/constructor census: `LaunchRuntime::queue` has startup, IPC, and focused-test callers; `PendingOpen::accept` has the IPC consumer and two platform tests. A literal recursive census across `crates/app/src` finds eleven `PendingIo` constructors: two open-pipeline constructors propagate the optional launch ID and all nine non-launch constructors explicitly set `launch_request: None`.
+ 
+ Requested contained integration commands:
+ 

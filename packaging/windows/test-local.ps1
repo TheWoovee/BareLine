@@ -15,7 +15,7 @@ try {
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $archive = [IO.Compression.ZipFile]::OpenRead((Join-Path $one $zipName))
     try {
-        if ($archive.Entries.Count -ne 6 -or -not $archive.GetEntry('bareline.portable')) { throw 'Portable marker/inventory missing' }
+        if ($archive.Entries.Count -ne 6 -or -not $archive.GetEntry('bareline.portable') -or $archive.GetEntry('bareline.portable').Length -ne 0) { throw 'Portable marker/inventory missing or nonempty' }
         foreach ($entry in $archive.Entries) {
             if ($entry.Name -eq 'bareline.portable') { continue }
             $reader = [IO.StreamReader]::new($entry.Open())
@@ -25,6 +25,16 @@ try {
     $refused = $false
     try { & (Join-Path $PSScriptRoot 'build.ps1') -PayloadDir $payload -Version 0.1.0 -OutputDir $one } catch { $refused = $true }
     if (-not $refused) { throw 'Existing artifact overwritten' }
+    $noCompiler = Join-Path $taskRoot 'no-compiler'
+    $refused = $false
+    try { & (Join-Path $PSScriptRoot 'build.ps1') -PayloadDir $payload -Version 0.1.0 -OutputDir $noCompiler -Installer } catch { $refused = $true }
+    if (-not $refused -or (Test-Path -LiteralPath (Join-Path $noCompiler $zipName))) { throw 'Missing compiler must fail before assembling ZIP' }
+    $signed = Join-Path $taskRoot 'signed'
+    [IO.Directory]::CreateDirectory($signed) | Out-Null
+    [IO.File]::WriteAllText((Join-Path $signed 'SHA-256SUMS.minisig'), 'retained signature')
+    $refused = $false
+    try { & (Join-Path $PSScriptRoot 'build.ps1') -PayloadDir $payload -Version 0.1.0 -OutputDir $signed } catch { $refused = $true }
+    if (-not $refused -or (Test-Path -LiteralPath (Join-Path $signed $zipName))) { throw 'Signed output directory accepted' }
     Remove-Item -LiteralPath (Join-Path $payload 'LICENSE')
     $refused = $false
     try { & (Join-Path $PSScriptRoot 'build.ps1') -PayloadDir $payload -Version 0.1.0 -OutputDir (Join-Path $taskRoot 'missing') } catch { $refused = $true }

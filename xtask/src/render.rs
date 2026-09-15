@@ -55,7 +55,7 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         workspace.pump();
     }
     workspace.find_next(0, false);
-    workspace.editors[0].scroll_y = 0.0;
+    workspace.editors[0].viewport_mut().scroll_y = 0.0;
     operations = app.draw(1100.0, 580.0);
     workspace
         .draw(0, &mut renderer, 1100.0, 580.0, &mut operations)

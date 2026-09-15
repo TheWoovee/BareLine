@@ -39,9 +39,7 @@ impl Viewport {
         let Request::ReadOriginalBytes { range, .. } = self.request()? else {
             unreachable!()
         };
-        if range_start != range.start
-            || bytes.is_some_and(|b| b.len() as u64 != range.end - range.start)
-        {
+        if range_start != range.start || bytes.is_some_and(|b| b.len() as u64 != range.end - range.start) {
             return Err("original byte response range mismatch");
         }
         let mut text = format!(
@@ -97,19 +95,13 @@ mod tests {
             rows: 32,
         };
         view.goto(4 * 1024 * 1024 * 1024 + 3).unwrap();
-        let Request::ReadOriginalBytes {
-            range, generation, ..
-        } = view.request().unwrap()
-        else {
+        let Request::ReadOriginalBytes { range, generation, .. } = view.request().unwrap() else {
             panic!()
         };
         assert_eq!(generation, 7);
         assert!(range.end - range.start <= 36 * 16);
         let text = view
-            .render(
-                range.start,
-                Some(&vec![0xff; (range.end - range.start) as usize]),
-            )
+            .render(range.start, Some(&vec![0xff; (range.end - range.start) as usize]))
             .unwrap();
         assert!(text.contains("disk generation 7"));
         assert!(text.contains("Unsaved text edits are excluded"));
@@ -170,13 +162,8 @@ pub fn run<T: bareline_first_party_common::Transport>(
     let start = range.start;
     let response = client.borrow_mut().call(request);
     let text = match response {
-        Ok(bareline_extension_sdk::BrokerValue::Bytes(bytes)) => {
-            view.render(start, Some(&bytes))?
-        }
-        Err(error) => format!(
-            "{}\nOriginal range unavailable: {error}",
-            view.render(start, None)?
-        ),
+        Ok(bareline_extension_sdk::BrokerValue::Bytes(bytes)) => view.render(start, Some(&bytes))?,
+        Err(error) => format!("{}\nOriginal range unavailable: {error}", view.render(start, None)?),
         _ => return Err("unexpected original-byte response".into()),
     };
     client.borrow_mut().panel("ext.hex.view", text)

@@ -4,9 +4,7 @@ use crate::{
     Input, Selection, completion,
     power::{CommentProvider, Limits, SelectionSet},
 };
-use bareline_document::{
-    Budget, Document, Edit, EditTransaction, TextOffset, paged::PagedSnapshot,
-};
+use bareline_document::{Budget, Document, Edit, EditTransaction, TextOffset, paged::PagedSnapshot};
 use bareline_file_io::cancellation::Cancellation;
 use bareline_syntax::Language;
 use std::sync::Arc;
@@ -24,8 +22,13 @@ pub struct TypingConfig {
 #[derive(Clone)]
 pub enum TypingRequest {
     Input(Input),
-    Comment { block: bool },
-    CommentWithTokens { block: bool, tokens: crate::power::CommentTokens },
+    Comment {
+        block: bool,
+    },
+    CommentWithTokens {
+        block: bool,
+        tokens: crate::power::CommentTokens,
+    },
 }
 pub struct TypingPlan {
     pub transaction: EditTransaction,
@@ -46,11 +49,7 @@ fn limits(config: &TypingConfig) -> Limits {
         tab_width: config.tab_width.clamp(1, 16),
     }
 }
-fn suffix(
-    source: &PagedSnapshot,
-    config: &TypingConfig,
-    typed: char,
-) -> Result<Option<String>, String> {
+fn suffix(source: &PagedSnapshot, config: &TypingConfig, typed: char) -> Result<Option<String>, String> {
     let document = temporary("", source)?;
     let set = Selection::default().into();
     let edit = completion::smart_pair_configured(
@@ -97,9 +96,7 @@ pub fn prepare(
         return Err("Typing source changed".into());
     }
     if let Some(definition) = &config.definition {
-        definition
-            .validate()
-            .map_err(|error| format!("{error:?}"))?;
+        definition.validate().map_err(|error| format!("{error:?}"))?;
     }
     let range = selection.range();
     let make = |edits: Vec<Edit>, caret: usize| TypingPlan {
@@ -107,10 +104,7 @@ pub fn prepare(
             base_revision: source.revision,
             edits,
         },
-        selection: Selection {
-            anchor: caret,
-            caret,
-        },
+        selection: Selection { anchor: caret, caret },
     };
     let mut bounded_read = |start: usize, count: usize| -> Result<(usize, String), String> {
         cancel.check().map_err(|_| "Typing cancelled")?;
@@ -118,33 +112,29 @@ pub fn prepare(
             return Err("Typing context exceeds 256 KiB".into());
         }
         let (origin, text) = read(TextOffset(start), count)?;
-        if text.len() > count
-            || origin.0 > source.len()
-            || origin.0.saturating_add(text.len()) > source.len()
-        {
+        if text.len() > count || origin.0 > source.len() || origin.0.saturating_add(text.len()) > source.len() {
             return Err("Invalid typing source window".into());
         }
         cancel.check().map_err(|_| "Typing cancelled")?;
         Ok((origin.0, text))
     };
     let exact = |origin: usize, text: &str, start: usize, end: usize| -> Result<String, String> {
-        let a = start
-            .checked_sub(origin)
-            .ok_or("Typing boundary unavailable")?;
-        let b = end
-            .checked_sub(origin)
-            .ok_or("Typing boundary unavailable")?;
+        let a = start.checked_sub(origin).ok_or("Typing boundary unavailable")?;
+        let b = end.checked_sub(origin).ok_or("Typing boundary unavailable")?;
         text.get(a..b)
             .map(str::to_owned)
             .ok_or_else(|| "Typing boundary unavailable".into())
     };
-    let captured_tokens=if let TypingRequest::CommentWithTokens{tokens,..}=&request{Some(tokens.clone())}else{None};
+    let captured_tokens = if let TypingRequest::CommentWithTokens { tokens, .. } = &request {
+        Some(tokens.clone())
+    } else {
+        None
+    };
     match request {
         TypingRequest::Input(Input::Insert(value))
             if config.smart_indent && matches!(value.as_str(), "\n" | "\r\n" | "\r") =>
         {
-            let (origin, text) =
-                bounded_read(range.start.saturating_sub(64 * 1024), 64 * 1024 + 8)?;
+            let (origin, text) = bounded_read(range.start.saturating_sub(64 * 1024), 64 * 1024 + 8)?;
             let prefix = exact(origin, &text, origin, range.start)?;
             let line = prefix.rfind(['\n', '\r']).map_or(0, |at| at + 1);
             if origin != 0 && line == 0 {
@@ -177,13 +167,7 @@ pub fn prepare(
             };
             let edit = completion::smart_newline(&snapshot, &set, language, limits(config))
                 .map_err(|error| format!("{error:?}"))?;
-            let mut insert = edit
-                .transaction
-                .edits
-                .first()
-                .ok_or("No newline edit")?
-                .insert
-                .clone();
+            let mut insert = edit.transaction.edits.first().ok_or("No newline edit")?.insert.clone();
             if eol != "\n" && insert.starts_with('\n') {
                 insert.replace_range(..1, eol);
             }
@@ -206,25 +190,18 @@ pub fn prepare(
                 caret,
             )))
         }
-        TypingRequest::Input(Input::Insert(value))
-            if config.smart_pairs && value.chars().count() == 1 =>
-        {
+        TypingRequest::Input(Input::Insert(value)) if config.smart_pairs && value.chars().count() == 1 => {
             let typed = value.chars().next().unwrap();
             if range.is_empty()
                 && (matches!(typed, ')' | ']' | '}' | '\"' | '\'')
                     || config.definition.as_ref().is_some_and(|definition| {
                         definition.strings.contains(&typed)
-                            || definition
-                                .fold_pairs
-                                .iter()
-                                .any(|(_, close)| *close == typed)
+                            || definition.fold_pairs.iter().any(|(_, close)| *close == typed)
                     }))
                 && range.start < source.len()
             {
                 let (origin, text) = bounded_read(range.start, 4)?;
-                if exact(origin, &text, range.start, range.start + typed.len_utf8())
-                    .is_ok_and(|next| next == value)
-                {
+                if exact(origin, &text, range.start, range.start + typed.len_utf8()).is_ok_and(|next| next == value) {
                     return Ok(Some(make(Vec::new(), range.start + typed.len_utf8())));
                 }
             }
@@ -263,24 +240,17 @@ pub fn prepare(
             )))
         }
         TypingRequest::Input(Input::Backspace)
-            if config.smart_pairs
-                && range.is_empty()
-                && range.start > 0
-                && range.start < source.len() =>
+            if config.smart_pairs && range.is_empty() && range.start > 0 && range.start < source.len() =>
         {
             let (origin, text) = bounded_read(range.start.saturating_sub(4), 12)?;
-            let at = range
-                .start
-                .checked_sub(origin)
-                .ok_or("Pair context unavailable")?;
+            let at = range.start.checked_sub(origin).ok_or("Pair context unavailable")?;
             let Some(before) = text.get(..at).and_then(|prefix| prefix.chars().next_back()) else {
                 return Ok(None);
             };
             let Some(after) = text.get(at..).and_then(|suffix| suffix.chars().next()) else {
                 return Ok(None);
             };
-            if suffix(source, config, before)?.is_some_and(|expected| expected == after.to_string())
-            {
+            if suffix(source, config, before)?.is_some_and(|expected| expected == after.to_string()) {
                 let caret = range.start - before.len_utf8();
                 return Ok(Some(make(
                     vec![Edit {
@@ -294,24 +264,21 @@ pub fn prepare(
         }
         TypingRequest::Comment { block } | TypingRequest::CommentWithTokens { block, .. } => {
             let document = temporary("", source)?;
-            let tokens = if let Some(tokens)=captured_tokens {Some(tokens)} else if let Some(definition) = &config.definition {
+            let tokens = if let Some(tokens) = captured_tokens {
+                Some(tokens)
+            } else if let Some(definition) = &config.definition {
                 completion::DefinitionComments(definition).tokens_for(&document.snapshot())
             } else {
                 completion::LanguageComments(config.language).tokens_for(&document.snapshot())
             }
             .ok_or("Comments unavailable for this language")?;
             if block {
-                let (open, close) = tokens
-                    .block
-                    .ok_or("Block comments unavailable for this language")?;
+                let (open, close) = tokens.block.ok_or("Block comments unavailable for this language")?;
                 let unwrap = if range.len() >= open.len() + close.len() {
                     let (a, prefix) = bounded_read(range.start, open.len() + 4)?;
-                    let (b, suffix) =
-                        bounded_read(range.end.saturating_sub(close.len() + 4), close.len() + 8)?;
-                    exact(a, &prefix, range.start, range.start + open.len())
-                        .is_ok_and(|text| text == open)
-                        && exact(b, &suffix, range.end - close.len(), range.end)
-                            .is_ok_and(|text| text == close)
+                    let (b, suffix) = bounded_read(range.end.saturating_sub(close.len() + 4), close.len() + 8)?;
+                    exact(a, &prefix, range.start, range.start + open.len()).is_ok_and(|text| text == open)
+                        && exact(b, &suffix, range.end - close.len(), range.end).is_ok_and(|text| text == close)
                 } else {
                     false
                 };
@@ -319,8 +286,7 @@ pub fn prepare(
                     (
                         vec![
                             Edit {
-                                range: TextOffset(range.start)
-                                    ..TextOffset(range.start + open.len()),
+                                range: TextOffset(range.start)..TextOffset(range.start + open.len()),
                                 insert: String::new(),
                             },
                             Edit {
@@ -356,25 +322,16 @@ pub fn prepare(
                 return Ok(Some(make(edits, caret)));
             }
             if range.len() > CONTEXT - 128 * 1024 {
-                return Err(
-                    "Line comment selection exceeds bounded context; use smaller regions".into(),
-                );
+                return Err("Line comment selection exceeds bounded context; use smaller regions".into());
             }
             let (origin, text) = bounded_read(range.start.saturating_sub(64 * 1024), CONTEXT)?;
-            let from = range
-                .start
-                .checked_sub(origin)
-                .ok_or("Comment context unavailable")?;
+            let from = range.start.checked_sub(origin).ok_or("Comment context unavailable")?;
             let to = range
                 .end
                 .checked_sub(origin)
                 .filter(|end| *end <= text.len())
                 .ok_or("Comment context unavailable")?;
-            if origin > 0
-                && !text
-                    .get(..from)
-                    .is_some_and(|prefix| prefix.contains(['\n', '\r']))
-            {
+            if origin > 0 && !text.get(..from).is_some_and(|prefix| prefix.contains(['\n', '\r'])) {
                 return Err("Comment line exceeds bounded context".into());
             }
             let last = if to > from { to - 1 } else { to };
@@ -442,10 +399,39 @@ mod tests {
         }
     }
     #[test]
-    fn huge_block_comment_uses_captured_tokens_and_only_edge_reads(){
-        let source=source(1<<30);let mut requested=0usize;
-        let plan=prepare(&source,Selection{anchor:7,caret:source.len()-7},TypingRequest::CommentWithTokens{block:true,tokens:crate::power::CommentTokens{line:None,block:Some(("<*".into(),"*>".into()))}},&config(),&Cancellation::default(),|start,count|{requested+=count;Ok((start,"x".repeat(count.min(source.len()-start.0))))}).unwrap().unwrap();
-        assert!(requested<64);assert_eq!(plan.transaction.edits.len(),2);assert_eq!(plan.transaction.edits[0].insert,"<*");assert_eq!(plan.transaction.edits[1].insert,"*>");assert_eq!(plan.transaction.edits[1].range,TextOffset(source.len()-7)..TextOffset(source.len()-7));
+    fn huge_block_comment_uses_captured_tokens_and_only_edge_reads() {
+        let source = source(1 << 30);
+        let mut requested = 0usize;
+        let plan = prepare(
+            &source,
+            Selection {
+                anchor: 7,
+                caret: source.len() - 7,
+            },
+            TypingRequest::CommentWithTokens {
+                block: true,
+                tokens: crate::power::CommentTokens {
+                    line: None,
+                    block: Some(("<*".into(), "*>".into())),
+                },
+            },
+            &config(),
+            &Cancellation::default(),
+            |start, count| {
+                requested += count;
+                Ok((start, "x".repeat(count.min(source.len() - start.0))))
+            },
+        )
+        .unwrap()
+        .unwrap();
+        assert!(requested < 64);
+        assert_eq!(plan.transaction.edits.len(), 2);
+        assert_eq!(plan.transaction.edits[0].insert, "<*");
+        assert_eq!(plan.transaction.edits[1].insert, "*>");
+        assert_eq!(
+            plan.transaction.edits[1].range,
+            TextOffset(source.len() - 7)..TextOffset(source.len() - 7)
+        );
     }
     #[test]
     fn huge_wrap_has_two_edge_inserts_without_reading_selection() {
@@ -464,10 +450,7 @@ mod tests {
         .unwrap()
         .unwrap();
         assert_eq!(plan.transaction.edits.len(), 2);
-        assert_eq!(
-            plan.transaction.edits[0].range,
-            TextOffset(7)..TextOffset(7)
-        );
+        assert_eq!(plan.transaction.edits[0].range, TextOffset(7)..TextOffset(7));
         assert_eq!(
             plan.transaction.edits[1].range,
             TextOffset(source.len() - 7)..TextOffset(source.len() - 7)

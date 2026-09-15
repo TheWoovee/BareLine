@@ -1,0 +1,89 @@
+diff --git a/apps/bareline/src/windows_app/extensions/readers.rs b/apps/bareline/src/windows_app/extensions/readers.rs
+index c5163cf..a508354 100644
+--- a/apps/bareline/src/windows_app/extensions/readers.rs
++++ b/apps/bareline/src/windows_app/extensions/readers.rs
+@@ -127,7 +127,7 @@ impl Readers {
+                     return Ok(window.text().as_bytes()[start - base..end - base].to_vec());
+                 }
+                 WindowPoll::Pending(ticket) => {
+-                    if !handle.resolve_page(ticket)? {
++                    if !handle.resolve_page(ticket).map_err(|error| error.to_string())? {
+                         std::thread::yield_now();
+                     }
+                 }
+diff --git a/apps/bareline/src/windows_app/language.rs b/apps/bareline/src/windows_app/language.rs
+index 60d1b30..3dac146 100644
+--- a/apps/bareline/src/windows_app/language.rs
++++ b/apps/bareline/src/windows_app/language.rs
+@@ -750,7 +750,7 @@ fn read_detection_window(
+         match request.poll() {
+             WindowPoll::Ready(window) => return Ok(window.text().to_owned()),
+             WindowPoll::Pending(ticket) => {
+-                if !handle.resolve_page(ticket)? {
++                if !handle.resolve_page(ticket).map_err(|error| error.to_string())? {
+                     std::thread::yield_now();
+                 }
+             }
+diff --git a/apps/bareline/src/windows_app/launch.rs b/apps/bareline/src/windows_app/launch.rs
+index 1a43646..1a67f06 100644
+--- a/apps/bareline/src/windows_app/launch.rs
++++ b/apps/bareline/src/windows_app/launch.rs
+@@ -700,7 +700,7 @@ fn paged_position(
+         match lookup.poll() {
+             LineLookupPoll::Range(range) => break range,
+             LineLookupPoll::Pending(ticket) => {
+-                if !handle.resolve_page(ticket)? {
++                if !handle.resolve_page(ticket).map_err(|error| error.to_string())? {
+                     std::thread::sleep(std::time::Duration::from_millis(1));
+                 }
+             }
+@@ -725,7 +725,7 @@ fn paged_position(
+             match request.poll() {
+                 WindowPoll::Ready(w) => break w,
+                 WindowPoll::Pending(ticket) => {
+-                    if !handle.resolve_page(ticket)? {
++                    if !handle.resolve_page(ticket).map_err(|error| error.to_string())? {
+                         std::thread::sleep(std::time::Duration::from_millis(1));
+                     }
+                 }
+diff --git a/apps/bareline/src/windows_app/macros/location.rs b/apps/bareline/src/windows_app/macros/location.rs
+index 3494d34..9cb2de4 100644
+--- a/apps/bareline/src/windows_app/macros/location.rs
++++ b/apps/bareline/src/windows_app/macros/location.rs
+@@ -30,7 +30,7 @@ pub(super) fn paged_line_column(
+                     if cancel.load(Ordering::Relaxed) {
+                         return Err("Command preparation cancelled".into());
+                     }
+-                    if !source.resolve_page(ticket)? {
++                    if !source.resolve_page(ticket).map_err(|error| error.to_string())? {
+                         return Err("Document is busy; run the command again".into());
+                     }
+                 }
+@@ -215,7 +215,7 @@ fn locate_paged(
+                     if cancel.load(Ordering::Relaxed) {
+                         return Err("Output navigation cancelled".into());
+                     }
+-                    if !source.resolve_page(ticket)? {
++                    if !source.resolve_page(ticket).map_err(|error| error.to_string())? {
+                         return Err("Document is busy; activate the output location again".into());
+                     }
+                 }
+diff --git a/crates/editor-surface/src/paged_view.rs b/crates/editor-surface/src/paged_view.rs
+index 5ecc1bf..c7e39fc 100644
+--- a/crates/editor-surface/src/paged_view.rs
++++ b/crates/editor-surface/src/paged_view.rs
+@@ -6,10 +6,13 @@ use bareline_document::{
+     Budget, ContentStateId, DocumentBuilder, Edit, EditTransaction, TextOffset,
+     paged::{PagedSnapshot, TextWindow, WindowPoll},
+ };
++/// Compatibility export for the immutable read capability owned and implemented
++/// by `bareline-file-io`; editor-surface adds no persistence authority to it.
++pub use bareline_file_io::paged_service::PagedReadHandle;
+ use bareline_file_io::{
+     cancellation::Cancellation,
+     lifecycle::{Fingerprint, PagedOpened},
+-    paged_service::{PagedLifecycleError, PagedReadHandle, PagedSession},
++    paged_service::{PagedLifecycleError, PagedSession},
+ };
+ use bareline_platform::{
+     LocalFileSystem,

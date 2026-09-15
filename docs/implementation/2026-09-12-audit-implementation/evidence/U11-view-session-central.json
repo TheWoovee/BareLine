@@ -1,0 +1,16 @@
+{
+  "arguments": [
+    "test",
+    "-p",
+    "bareline-app",
+    "--lib",
+    "views::tests",
+    "--offline",
+    "--locked"
+  ],
+  "completed_utc": "2026-09-12T11:10:47.6951197Z",
+  "integration_snapshot": "f2c7f83374d91367f005cdd1d4e6b56d8dd355e3",
+  "exit_code": 0,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\U11-view-session-central.log"
+}

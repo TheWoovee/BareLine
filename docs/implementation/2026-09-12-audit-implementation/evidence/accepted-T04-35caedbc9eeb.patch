@@ -1,0 +1,46 @@
+diff --git a/crates/platform-windows/src/files.rs b/crates/platform-windows/src/files.rs
+index 24662c0..b00a94b 100644
+--- a/crates/platform-windows/src/files.rs
++++ b/crates/platform-windows/src/files.rs
+@@ -7,11 +7,7 @@ use std::{
+     fs::{File, OpenOptions},
+     io::{self, Read, Seek, SeekFrom, Write},
+     mem::size_of,
+-    os::windows::{
+-        ffi::OsStrExt,
+-        fs::{MetadataExt, OpenOptionsExt},
+-        io::AsRawHandle,
+-    },
++    os::windows::{ffi::OsStrExt, fs::OpenOptionsExt, io::AsRawHandle},
+     path::{Path, PathBuf},
+ };
+ use windows::{
+@@ -178,7 +174,7 @@ fn state_from_sealed_records(file_system: &WindowsFileSystem, base: &Path) -> Co
+         match file_system.open_sealed_read(&bareline_platform::commit_state_path(base, state)) {
+             Ok(mut file) => {
+                 let mut bytes = Vec::new();
+-                match file.by_ref().take(129).read_to_end(&mut bytes) {
++                match Read::by_ref(&mut file).take(129).read_to_end(&mut bytes) {
+                     Ok(_) if bytes == expected && !saw_invalid => return state,
+                     Ok(_) if bytes == expected => return CommitState::Unverified,
+                     _ => saw_invalid = true,
+@@ -1059,6 +1055,7 @@ impl WindowsFileSystem {
+ mod tests {
+     use super::*;
+     use bareline_document::{Budget, Edit, EditTransaction, TextOffset};
++    use bareline_file_io::cancellation::Cancellation;
+     use bareline_file_io::lifecycle::{
+         FileError, inspect_save_recovery, inspect_save_transactions, open_utf8, save_utf8,
+     };
+diff --git a/crates/platform-windows/src/replacement_faults.rs b/crates/platform-windows/src/replacement_faults.rs
+index 51433ab..40449e7 100644
+--- a/crates/platform-windows/src/replacement_faults.rs
++++ b/crates/platform-windows/src/replacement_faults.rs
+@@ -1,6 +1,7 @@
+ // SPDX-License-Identifier: MPL-2.0
+ //! Owned child death at the boundaries of actual native replacement calls.
+ use super::*;
++use bareline_file_io::cancellation::Cancellation;
+ use sha2::{Digest, Sha256};
+ use std::{
+     cell::RefCell,

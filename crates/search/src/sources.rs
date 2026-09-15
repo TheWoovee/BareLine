@@ -7,8 +7,7 @@ pub const MAX_OPEN_DOCUMENTS: usize = 4096;
 pub struct PagedOpenDocument {
     pub snapshot: bareline_document::paged::PagedSnapshot,
     pub label: String,
-    pub resolve:
-        Box<dyn FnMut(bareline_document::source::PageTicket) -> Result<bool, String> + Send>,
+    pub resolve: Box<dyn FnMut(bareline_document::source::PageTicket) -> Result<bool, String> + Send>,
 }
 pub struct PagedOpenResults {
     pub results: super::paged::PagedResults,
@@ -26,24 +25,14 @@ impl OpenDocumentResults {
     }
     /// Exact only when Complete; an incomplete collection is never a replace plan.
     pub fn count(&self) -> usize {
-        self.documents
-            .iter()
-            .map(SearchResults::count)
-            .sum::<usize>()
-            + self
-                .paged
-                .iter()
-                .map(|group| group.results.count)
-                .sum::<usize>()
+        self.documents.iter().map(SearchResults::count).sum::<usize>()
+            + self.paged.iter().map(|group| group.results.count).sum::<usize>()
     }
     pub fn completeness(&self) -> Completeness {
         self.completeness
     }
     pub fn retained_bytes(&self) -> usize {
-        self.documents
-            .iter()
-            .map(SearchResults::retained_bytes)
-            .sum::<usize>()
+        self.documents.iter().map(SearchResults::retained_bytes).sum::<usize>()
             + self
                 .paged
                 .iter()
@@ -125,26 +114,18 @@ pub fn scan_mixed_open_documents(
             break;
         }
         let overhead = std::mem::size_of::<PagedOpenResults>() + source.label.len();
-        if output.documents.len() + output.paged.len() >= MAX_OPEN_DOCUMENTS || remaining < overhead
-        {
+        if output.documents.len() + output.paged.len() >= MAX_OPEN_DOCUMENTS || remaining < overhead {
             output.completeness = Completeness::ResultLimit;
             break;
         }
         remaining -= overhead;
         let mut scoped = query.clone();
         scoped.results_ram_bytes = remaining / 2;
-        let mut results =
-            super::paged::scan_paged(&source.snapshot, &scoped, job, &mut source.resolve, |_| {});
-        remaining = remaining
-            .saturating_sub(results.matches.capacity() * std::mem::size_of::<SearchMatch>());
+        let mut results = super::paged::scan_paged(&source.snapshot, &scoped, job, &mut source.resolve, |_| {});
+        remaining = remaining.saturating_sub(results.matches.capacity() * std::mem::size_of::<SearchMatch>());
         let mut excerpts = Vec::new();
         for found in &results.matches {
-            match super::paged::excerpt(
-                &source.snapshot,
-                found.range.start,
-                job,
-                &mut source.resolve,
-            ) {
+            match super::paged::excerpt(&source.snapshot, found.range.start, job, &mut source.resolve) {
                 Ok(value) if value.len() + std::mem::size_of::<String>() <= remaining => {
                     remaining -= value.len() + std::mem::size_of::<String>();
                     excerpts.reserve_exact(1);
@@ -218,12 +199,7 @@ mod tests {
             }),
         };
         let query = SearchQuery::literal("needle");
-        let output = scan_mixed_open_documents(
-            vec![snapshot("needle")],
-            vec![input],
-            &query,
-            &SearchJob::default(),
-        );
+        let output = scan_mixed_open_documents(vec![snapshot("needle")], vec![input], &query, &SearchJob::default());
         assert_eq!(output.completeness(), Completeness::Complete);
         assert_eq!(output.count(), 2);
         assert!(output.paged[0].results.source.same_document(&captured));
@@ -235,8 +211,7 @@ mod tests {
         assert!(output.retained_bytes() <= query.results_ram_bytes);
         let job = SearchJob::default();
         job.cancel();
-        let cancelled =
-            scan_mixed_open_documents(vec![snapshot("needle")], Vec::new(), &query, &job);
+        let cancelled = scan_mixed_open_documents(vec![snapshot("needle")], Vec::new(), &query, &job);
         assert_eq!(cancelled.completeness(), Completeness::Cancelled);
         assert_eq!(cancelled.count(), 0);
     }
@@ -251,8 +226,7 @@ mod tests {
         assert_eq!(results.completeness(), Completeness::Complete);
         assert!(results.documents()[0].source().same_document(&first));
         assert!(results.documents()[1].source().same_document(&second));
-        q.results_ram_bytes =
-            std::mem::size_of::<SearchResults>() + 2 * std::mem::size_of::<SearchMatch>();
+        q.results_ram_bytes = std::mem::size_of::<SearchResults>() + 2 * std::mem::size_of::<SearchMatch>();
         let results = scan_open_documents([first, second], &q, &job, |_| {});
         assert_eq!(results.count(), 2);
         assert_eq!(results.completeness(), Completeness::ResultLimit);
@@ -261,23 +235,15 @@ mod tests {
     #[test]
     fn cancellation_and_partial_prefixes_cannot_be_complete() {
         let job = SearchJob::default();
-        let results = scan_open_documents(
-            [snapshot("a"), snapshot("a")],
-            &SearchQuery::literal("a"),
-            &job,
-            |_| job.cancel(),
-        );
+        let results = scan_open_documents([snapshot("a"), snapshot("a")], &SearchQuery::literal("a"), &job, |_| {
+            job.cancel()
+        });
         assert_eq!(results.completeness(), Completeness::Cancelled);
         assert_eq!(results.documents().len(), 1);
         let mut builder = DocumentBuilder::new(Budget::new(4096), Budget::new(4096)).unwrap();
         builder.append("a").unwrap();
         let prefix = builder.prefix();
-        let result = scan(
-            &prefix,
-            &SearchQuery::literal("a"),
-            &SearchJob::default(),
-            |_| {},
-        );
+        let result = scan(&prefix, &SearchQuery::literal("a"), &SearchJob::default(), |_| {});
         assert_eq!(result.completeness(), Completeness::Unsupported);
         assert!(matches!(
             result.prepare_replace(&prefix, "b", 4096),

@@ -54,11 +54,7 @@ mod refresh_tests {
             },
         );
         tree.selected = Some(vec![0, 0, 0]);
-        tree.replace_child_ids(
-            NodeId(10),
-            &[NodeId(20), NodeId(30)],
-            &[NodeId(30), NodeId(20)],
-        );
+        tree.replace_child_ids(NodeId(10), &[NodeId(20), NodeId(30)], &[NodeId(30), NodeId(20)]);
         assert_eq!(tree.selected, Some(vec![0, 1, 0]));
         assert_eq!(tree.expanded.get(&vec![0, 1]).unwrap().id, NodeId(20));
         tree.replace_child_ids(NodeId(10), &[NodeId(30), NodeId(20)], &[NodeId(30)]);
@@ -104,14 +100,10 @@ impl Tree {
         };
         self.expanded.get_mut(&path).unwrap().children = children;
         self.expanded.retain(|candidate, _| {
-            !candidate.starts_with(&path)
-                || candidate.len() <= path.len()
-                || candidate[path.len()] < children
+            !candidate.starts_with(&path) || candidate.len() <= path.len() || candidate[path.len()] < children
         });
         if self.selected.as_ref().is_some_and(|selected| {
-            selected.starts_with(&path)
-                && selected.len() > path.len()
-                && selected[path.len()] >= children
+            selected.starts_with(&path) && selected.len() > path.len() && selected[path.len()] >= children
         }) {
             self.selected = Some(path);
         }
@@ -126,11 +118,7 @@ impl Tree {
         else {
             return;
         };
-        let positions: BTreeMap<_, _> = new
-            .iter()
-            .enumerate()
-            .map(|(index, id)| (id.0, index))
-            .collect();
+        let positions: BTreeMap<_, _> = new.iter().enumerate().map(|(index, id)| (id.0, index)).collect();
         let remap = |mut path: Vec<usize>| -> Option<Vec<usize>> {
             if path.starts_with(&parent_path) && path.len() > parent_path.len() {
                 let id = old.get(path[parent_path.len()])?;
@@ -160,9 +148,7 @@ impl Tree {
         Some(
             self.expanded
                 .values()
-                .fold(source.child_count(None)?, |sum, b| {
-                    sum.saturating_add(b.children)
-                }),
+                .fold(source.child_count(None)?, |sum, b| sum.saturating_add(b.children)),
         )
     }
     fn path_at(&self, mut row: usize, source: &impl TreeSource) -> Option<Vec<usize>> {
@@ -223,9 +209,11 @@ impl Tree {
         let mut row = 0usize;
         for (depth, index) in path.iter().enumerate() {
             row = row.saturating_add(*index);
-            for (p, _) in self.expanded.iter().filter(|(p, _)| {
-                p.len() == depth + 1 && p.starts_with(&path[..depth]) && p[depth] < *index
-            }) {
+            for (p, _) in self
+                .expanded
+                .iter()
+                .filter(|(p, _)| p.len() == depth + 1 && p.starts_with(&path[..depth]) && p[depth] < *index)
+            {
                 row = row.saturating_add(self.subtree_rows(p).saturating_sub(1));
             }
             if depth + 1 < path.len() {
@@ -244,8 +232,7 @@ impl Tree {
         if top < self.offset {
             self.offset = top;
         } else if top + self.metrics.row_height as f64 > self.offset + self.bounds.height as f64 {
-            self.offset =
-                (top + self.metrics.row_height as f64 - self.bounds.height as f64).max(0.0);
+            self.offset = (top + self.metrics.row_height as f64 - self.bounds.height as f64).max(0.0);
         }
         self.selected = Some(path);
         Some(TreeAction::Selected(item.id))
@@ -262,13 +249,7 @@ impl Tree {
         let Some(children) = source.child_count(Some(item.id)) else {
             return Some(TreeAction::RequestChildren(Some(item.id)));
         };
-        self.expanded.insert(
-            path.clone(),
-            Branch {
-                id: item.id,
-                children,
-            },
-        );
+        self.expanded.insert(path.clone(), Branch { id: item.id, children });
         Some(TreeAction::Expanded(item.id))
     }
     pub fn event(&mut self, event: UiEvent, source: &impl TreeSource) -> Option<TreeAction> {
@@ -284,9 +265,8 @@ impl Tree {
         };
         match event {
             UiEvent::PointerDown(p) if self.bounds.contains(p) && self.metrics.row_height > 0.0 => {
-                let row = (((p.y - self.bounds.y) as f64 + self.offset)
-                    / self.metrics.row_height as f64)
-                    .max(0.0) as usize;
+                let row =
+                    (((p.y - self.bounds.y) as f64 + self.offset) / self.metrics.row_height as f64).max(0.0) as usize;
                 let path = self.path_at(row, source)?;
                 let expand = p.x < self.bounds.x + path.len() as f32 * 16.0;
                 let action = self.select(path, source);
@@ -513,8 +493,7 @@ impl Tree {
                     command,
                     rect(
                         self.bounds.x,
-                        self.bounds.y
-                            + (row as f64 * self.metrics.row_height as f64 - self.offset) as f32,
+                        self.bounds.y + (row as f64 * self.metrics.row_height as f64 - self.offset) as f32,
                         self.bounds.width,
                         self.metrics.row_height,
                     ),
@@ -567,11 +546,7 @@ impl Tree {
             SemanticAction::Invoke => Some(TreeAction::Activated(target)),
             SemanticAction::Expand => self.expand_selected(source),
             SemanticAction::Collapse => {
-                if self
-                    .selected
-                    .as_ref()
-                    .is_some_and(|p| self.expanded.contains_key(p))
-                {
+                if self.selected.as_ref().is_some_and(|p| self.expanded.contains_key(p)) {
                     self.toggle_selected(source)
                 } else {
                     None

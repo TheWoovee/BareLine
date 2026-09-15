@@ -1,0 +1,663 @@
+diff --git a/.github/workflows/check_toolchain_contract.py b/.github/workflows/check_toolchain_contract.py
+new file mode 100644
+index 0000000..9a61c3e
+--- /dev/null
++++ b/.github/workflows/check_toolchain_contract.py
+@@ -0,0 +1,145 @@
++# SPDX-License-Identifier: MPL-2.0
++"""Validate the compiler contract without invoking Cargo."""
++
++import argparse
++import json
++import pathlib
++import re
++import sys
++import tomllib
++
++
++VERSION = re.compile(r"^(\d+)\.(\d+)(?:\.(\d+))?$")
++TOOLCHAIN_DECLARATION = re.compile(
++    r"^\s*toolchain:\s*['\"]?(\d+\.\d+(?:\.\d+)?)['\"]?\s*$",
++    re.MULTILINE,
++)
++
++
++def version(value):
++    match = VERSION.fullmatch(value)
++    if not match:
++        raise ValueError(f"invalid Rust version {value!r}")
++    return tuple(int(part or 0) for part in match.groups())
++
++
++def inherited(package, field):
++    value = package.get(field)
++    return isinstance(value, dict) and value.get("workspace") is True
++
++
++def member_errors(package, relative, edition):
++    errors = []
++    if not inherited(package, "rust-version"):
++        errors.append(f"{relative}: package.rust-version must inherit workspace policy")
++    if not inherited(package, "edition"):
++        errors.append(
++            f"{relative}: package.edition must inherit workspace edition {edition}"
++        )
++    return errors
++
++
++def dependency_errors(packages, supported):
++    errors = []
++    for package in packages:
++        requirement = package.get("rust_version")
++        if requirement and version(requirement) > version(supported):
++            errors.append(
++                f"resolved dependency {package['name']} {package['version']} requires "
++                f"Rust {requirement}, newer than supported {supported}"
++            )
++    return errors
++
++
++def workspace_members(root, workspace):
++    members = {
++        path
++        for pattern in workspace["members"]
++        for path in root.glob(pattern)
++        if (path / "Cargo.toml").is_file()
++    }
++    excluded = {
++        path
++        for pattern in workspace.get("exclude", [])
++        for path in root.glob(pattern)
++    }
++    return sorted(members - excluded)
++
++
++def inspect(root, metadata=None):
++    errors = []
++    root_manifest = tomllib.loads((root / "Cargo.toml").read_text(encoding="utf-8-sig"))
++    workspace = root_manifest["workspace"]
++    package_policy = workspace["package"]
++    supported = package_policy["rust-version"]
++    edition = package_policy["edition"]
++    pinned = tomllib.loads(
++        (root / "rust-toolchain.toml").read_text(encoding="utf-8-sig")
++    )["toolchain"]["channel"]
++
++    if version(supported) != version(pinned):
++        errors.append(
++            f"workspace rust-version {supported} differs from pinned toolchain {pinned}"
++        )
++
++    members = workspace_members(root, workspace)
++    for member in members:
++        manifest = member / "Cargo.toml"
++        package = tomllib.loads(manifest.read_text(encoding="utf-8-sig"))["package"]
++        relative = manifest.relative_to(root).as_posix()
++        errors.extend(member_errors(package, relative, edition))
++
++    workflows = [
++        *(root / ".github/workflows").glob("*.yml"),
++        *(root / ".github/workflows").glob("*.yaml"),
++    ]
++    for workflow in sorted(workflows):
++        for declared in TOOLCHAIN_DECLARATION.findall(
++            workflow.read_text(encoding="utf-8-sig")
++        ):
++            if version(declared) != version(supported):
++                errors.append(
++                    f"{workflow.relative_to(root).as_posix()}: explicit toolchain "
++                    f"{declared} differs from supported {supported}"
++                )
++
++    if metadata is not None:
++        resolved = json.loads(metadata.read_text(encoding="utf-8-sig"))
++        errors.extend(dependency_errors(resolved["packages"], supported))
++
++    return errors, len(members), supported, edition
++
++
++if __name__ == "__main__":
++    assert member_errors({"edition": {"workspace": True}}, "missing/Cargo.toml", "2024")
++    assert member_errors(
++        {"edition": "2024", "rust-version": {"workspace": True}},
++        "explicit/Cargo.toml",
++        "2024",
++    )
++    assert dependency_errors(
++        [{"name": "future", "version": "1.0.0", "rust_version": "1.99"}],
++        "1.98.1",
++    )
++    assert not dependency_errors(
++        [{"name": "supported", "version": "1.0.0", "rust_version": "1.98.1"}],
++        "1.98.1",
++    )
++    parser = argparse.ArgumentParser()
++    parser.add_argument(
++        "--metadata",
++        type=pathlib.Path,
++        help="optional cargo metadata JSON used to check resolved dependency requirements",
++    )
++    arguments = parser.parse_args()
++    repository = pathlib.Path(__file__).resolve().parents[2]
++    failures, count, supported, edition = inspect(repository, arguments.metadata)
++    if failures:
++        print("\n".join(failures))
++    else:
++        suffix = " and resolved dependency requirements" if arguments.metadata else ""
++        print(
++            f"Toolchain contract passed: {count} members inherit Rust {supported} "
++            f"and edition {edition}{suffix}; negative fixtures passed."
++        )
++    sys.exit(bool(failures))
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index d3ecf6f..6bd7a8a 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -60,6 +60,8 @@ jobs:
+         with:
+           python-version: '3.12'
+       - run: python .github/workflows/check_portability.py
++      - run: cargo metadata --locked --format-version 1 > cargo-metadata.json
++      - run: python .github/workflows/check_toolchain_contract.py --metadata cargo-metadata.json
+       - run: cargo fmt --all --check
+       - run: cargo clippy --workspace --all-targets --locked -- -D warnings ${{ env.CLIPPY_BASELINE_ALLOW }}
+       - run: cargo test --workspace --locked
+@@ -83,6 +85,7 @@ jobs:
+       - if: runner.os == 'Linux'
+         run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev libxi-dev libxrandr-dev
+       - run: python .github/workflows/check_portability.py
++      - run: python .github/workflows/check_toolchain_contract.py
+       # Use the actual host compiler (including native C++ build scripts), not
+       # --cfg simulation. Covers helpers/host and every neutral workspace target.
+       - run: cargo check --workspace --all-targets --locked
+diff --git a/.github/workflows/supply-chain.yml b/.github/workflows/supply-chain.yml
+index 661325f..fc0c997 100644
+--- a/.github/workflows/supply-chain.yml
++++ b/.github/workflows/supply-chain.yml
+@@ -14,12 +14,16 @@ jobs:
+       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+         with:
+           persist-credentials: false
++      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
++        with:
++          python-version: '3.12'
+       # Cargo/rustup use the checked-in rust-toolchain.toml; tools have their own
+       # exact versions and locked installation graphs. No application lock edits.
+       - run: cargo install --locked cargo-deny --version 0.20.2
+       - run: cargo install --locked cargo-audit --version 0.22.2
+       - run: cargo install --locked cargo-cyclonedx --version 0.5.9
+       - run: cargo metadata --locked --format-version 1 > cargo-metadata.json
++      - run: python .github/workflows/check_toolchain_contract.py --metadata cargo-metadata.json
+       - name: License, source, dependency and advisory policy
+         run: cargo deny --locked check
+       - name: RustSec audit
+diff --git a/CONTRIBUTING.md b/CONTRIBUTING.md
+index 847c8cf..78f9af0 100644
+--- a/CONTRIBUTING.md
++++ b/CONTRIBUTING.md
+@@ -4,6 +4,12 @@ Core changes use MPL-2.0; SDK/protocol changes use MIT OR Apache-2.0. Sign contr
+ 
+ Read the active PR brief, not the full blueprint. Follow AGENTS.md and keep focused evidence in docs/implementation. Preserve source headers and document any dependency addition against ADR-09. No browser or async runtime in the editor process. UI work must match the current mocks and remain event-driven.
+ 
++Install the Rust 1.98.1 toolchain recorded in rust-toolchain.toml; it is the
++compiler supported for the whole workspace. All members inherit this policy.
++Run python .github/workflows/check_toolchain_contract.py after editing manifests
++or workflow toolchain declarations. A lower Rust version is aspirational until
++its locked dependency graph and supported targets pass a dedicated qualification.
++
+ Before first frame, only CLI, settings, keymap, session header, window and renderer initialization are permitted. Report measurements without treating performance targets as merge gates.
+ 
+ Use a targeted test or incremental compile appropriate to the change. Broaden verification when boundaries or failures justify it. Never present incomplete slices as feature completion.
+diff --git a/Cargo.toml b/Cargo.toml
+index ecd5b3b..ef218ec 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -7,7 +7,7 @@ default-members = ["apps/bareline"]
+ version = "0.1.0"
+ edition = "2024"
+ license = "MPL-2.0"
+-rust-version = "1.85"
++rust-version = "1.98.1"
+ 
+ [workspace.dependencies]
+ winit = "=0.30.13"
+diff --git a/README.md b/README.md
+index f5d3964..25e636e 100644
+--- a/README.md
++++ b/README.md
+@@ -4,6 +4,10 @@ Native Windows text editor, implemented locally from the Bareline v1.3 blueprint
+ 
+ **Current state:** local development preview. Native hardware/software rendering, multiline UTF-8 editing, undo/redo, selection, clipboard commands and background file operations are wired. Open currently supports UTF-8 files up to 1 MiB; save stages and verifies captured content before replacement. Large-file streaming, recovery and several planned features remain unfinished. Visual fidelity and physical input checks await an unlocked desktop.
+ 
++Development and release builds use Rust 1.98.1, pinned by rust-toolchain.toml.
++That compiler is the workspace's currently supported Rust version. Older compilers
++are not a supported minimum until a separate locked compatibility run qualifies one.
++
+ ```powershell
+ cargo run -p bareline --locked
+ cargo run -p bareline --locked -- --software
+diff --git a/apps/bareline/Cargo.toml b/apps/bareline/Cargo.toml
+index 0c34883..6ede8d1 100644
+--- a/apps/bareline/Cargo.toml
++++ b/apps/bareline/Cargo.toml
+@@ -3,6 +3,7 @@ name = "bareline"
+ version.workspace = true
+ edition.workspace = true
+ license.workspace = true
++rust-version.workspace = true
+ 
+ [features]
+ default = []
+diff --git a/apps/extension-host/Cargo.toml b/apps/extension-host/Cargo.toml
+index ab8730c..efc93c6 100644
+--- a/apps/extension-host/Cargo.toml
++++ b/apps/extension-host/Cargo.toml
+@@ -3,7 +3,7 @@ name = "bareline-extension-host"
+ version.workspace = true
+ edition.workspace = true
+ license.workspace = true
+-rust-version = "1.95"
++rust-version.workspace = true
+ 
+ [features]
+ default = []
+diff --git a/apps/update-helper/Cargo.toml b/apps/update-helper/Cargo.toml
+index 7ff44ec..8bd3422 100644
+--- a/apps/update-helper/Cargo.toml
++++ b/apps/update-helper/Cargo.toml
+@@ -3,6 +3,7 @@ name = "bareline-update-helper"
+ version.workspace = true
+ edition.workspace = true
+ license.workspace = true
++rust-version.workspace = true
+ 
+ [dependencies]
+ bareline-distribution = { path = "../../crates/distribution" }
+diff --git a/crates/app/Cargo.toml b/crates/app/Cargo.toml
+index 06936ba..090a4aa 100644
+--- a/crates/app/Cargo.toml
++++ b/crates/app/Cargo.toml
+@@ -3,6 +3,7 @@ name = "bareline-app"
+ version.workspace = true
+ edition.workspace = true
+ license.workspace = true
++rust-version.workspace = true
+ 
+ [dependencies]
+ bareline-commands = { path = "../commands" }
+diff --git a/crates/commands/Cargo.toml b/crates/commands/Cargo.toml
+index d466ef3..72e7d6d 100644
+--- a/crates/commands/Cargo.toml
++++ b/crates/commands/Cargo.toml
+@@ -3,6 +3,7 @@ name = "bareline-commands"
+ version.workspace = true
+ edition.workspace = true
+ license.workspace = true
++rust-version.workspace = true
+ 
+ [dependencies]
+ toml_edit = { version = "=0.22.27", default-features = false, features = ["parse"] }
+diff --git a/crates/diagnostics/Cargo.toml b/crates/diagnostics/Cargo.toml
+index ef7dde5..d386abe 100644
+--- a/crates/diagnostics/Cargo.toml
++++ b/crates/diagnostics/Cargo.toml
+@@ -3,6 +3,7 @@ name = "bareline-diagnostics"
+ version.workspace = true
+ edition.workspace = true
+ license.workspace = true
++rust-version.workspace = true
+ 
+ [features]
+ perf-spans = ["dep:tracing"]
+diff --git a/crates/diff/Cargo.toml b/crates/diff/Cargo.toml
+index eb1393f..517a176 100644
+--- a/crates/diff/Cargo.toml
++++ b/crates/diff/Cargo.toml
+@@ -3,6 +3,7 @@ name = "bareline-diff"
+ version.workspace = true
+ edition.workspace = true
+ license.workspace = true
++rust-version.workspace = true
+ 
+ [dependencies]
+ bareline-document = { path = "../document" }
+diff --git a/crates/document/Cargo.toml b/crates/document/Cargo.toml
+index 869d098..6760ee9 100644
+--- a/crates/document/Cargo.toml
++++ b/crates/document/Cargo.toml
+@@ -3,5 +3,6 @@ name = "bareline-document"
+ version.workspace = true
+ edition.workspace = true
+ license.workspace = true
++rust-version.workspace = true
+ 
+ [dependencies]
+diff --git a/crates/editor-surface/Cargo.toml b/crates/editor-surface/Cargo.toml
+index ae73ce6..4d1898e 100644
+--- a/crates/editor-surface/Cargo.toml
++++ b/crates/editor-surface/Cargo.toml
+@@ -3,6 +3,7 @@ name = "bareline-editor-surface"
+ version.workspace = true
+ edition.workspace = true
+ license.workspace = true
++rust-version.workspace = true
+ 
+ [dependencies]
+ bareline-document = { path = "../document" }
+diff --git a/crates/extension-sdk/Cargo.toml b/crates/extension-sdk/Cargo.toml
+index 1270519..d3786ae 100644
+--- a/crates/extension-sdk/Cargo.toml
++++ b/crates/extension-sdk/Cargo.toml
+@@ -3,6 +3,7 @@ name = "bareline-extension-sdk"
+ version.workspace = true
+ edition.workspace = true
+ license = "MIT OR Apache-2.0"
++rust-version.workspace = true
+ [dependencies]
+ bareline-extensions-protocol = { path = "../extensions-protocol" }
+ 
+diff --git a/crates/extensions-protocol/Cargo.toml b/crates/extensions-protocol/Cargo.toml
+index a8506d5..7143106 100644
+--- a/crates/extensions-protocol/Cargo.toml
++++ b/crates/extensions-protocol/Cargo.toml
+@@ -3,6 +3,7 @@ name = "bareline-extensions-protocol"
+ version.workspace = true
+ edition.workspace = true
+ license = "MIT OR Apache-2.0"
++rust-version.workspace = true
+ 
+ [dependencies]
+ serde = { version = "1", features = ["derive"] }
+diff --git a/crates/file-io/Cargo.toml b/crates/file-io/Cargo.toml
+index 6c9f943..a0af79b 100644
+--- a/crates/file-io/Cargo.toml
++++ b/crates/file-io/Cargo.toml
+@@ -3,6 +3,7 @@ name = "bareline-file-io"
+ version.workspace = true
+ edition.workspace = true
+ license.workspace = true
++rust-version.workspace = true
+ 
+ [dependencies]
+ bareline-document = { path = "../document" }
+diff --git a/crates/macros/Cargo.toml b/crates/macros/Cargo.toml
+index d3c82fc..4709f14 100644
+--- a/crates/macros/Cargo.toml
++++ b/crates/macros/Cargo.toml
+@@ -3,6 +3,7 @@ name = "bareline-macros"
+ version.workspace = true
+ edition.workspace = true
+ license.workspace = true
++rust-version.workspace = true
+ 
+ [dependencies]
+ bareline-commands = { path = "../commands" }
+diff --git a/crates/platform-linux/Cargo.toml b/crates/platform-linux/Cargo.toml
+index ce50c47..fba8055 100644
+--- a/crates/platform-linux/Cargo.toml
++++ b/crates/platform-linux/Cargo.toml
+@@ -3,6 +3,7 @@ name = "bareline-platform-linux"
+ version.workspace = true
+ edition.workspace = true
+ license.workspace = true
++rust-version.workspace = true
+ 
+ [dependencies]
+ bareline-platform = { path = "../platform" }
+diff --git a/crates/platform-macos/Cargo.toml b/crates/platform-macos/Cargo.toml
+index af22501..deff769 100644
+--- a/crates/platform-macos/Cargo.toml
++++ b/crates/platform-macos/Cargo.toml
+@@ -3,6 +3,7 @@ name = "bareline-platform-macos"
+ version.workspace = true
+ edition.workspace = true
+ license.workspace = true
++rust-version.workspace = true
+ 
+ [dependencies]
+ bareline-platform = { path = "../platform" }
+diff --git a/crates/platform-windows/Cargo.toml b/crates/platform-windows/Cargo.toml
+index 8365cf8..771f1c0 100644
+--- a/crates/platform-windows/Cargo.toml
++++ b/crates/platform-windows/Cargo.toml
+@@ -3,6 +3,7 @@ name = "bareline-platform-windows"
+ version.workspace = true
+ edition.workspace = true
+ license.workspace = true
++rust-version.workspace = true
+ 
+ [features]
+ qa-inventory = []
+diff --git a/crates/platform/Cargo.toml b/crates/platform/Cargo.toml
+index dcf7537..474c4a1 100644
+--- a/crates/platform/Cargo.toml
++++ b/crates/platform/Cargo.toml
+@@ -3,6 +3,7 @@ name = "bareline-platform"
+ version.workspace = true
+ edition.workspace = true
+ license.workspace = true
++rust-version.workspace = true
+ 
+ [dependencies]
+ serde = { version = "1", features = ["derive"] }
+diff --git a/crates/renderer-recording/Cargo.toml b/crates/renderer-recording/Cargo.toml
+index c0daefe..3cc9293 100644
+--- a/crates/renderer-recording/Cargo.toml
++++ b/crates/renderer-recording/Cargo.toml
+@@ -3,6 +3,7 @@ name = "bareline-renderer-recording"
+ version.workspace = true
+ edition.workspace = true
+ license.workspace = true
++rust-version.workspace = true
+ 
+ [dependencies]
+ bareline-renderer = { path = "../renderer" }
+diff --git a/crates/renderer/Cargo.toml b/crates/renderer/Cargo.toml
+index 9f44172..b440b9b 100644
+--- a/crates/renderer/Cargo.toml
++++ b/crates/renderer/Cargo.toml
+@@ -3,6 +3,7 @@ name = "bareline-renderer"
+ version.workspace = true
+ edition.workspace = true
+ license.workspace = true
++rust-version.workspace = true
+ 
+ [features]
+ perf-spans = ["dep:tracing"]
+diff --git a/crates/search/Cargo.toml b/crates/search/Cargo.toml
+index 044579b..7aaf50f 100644
+--- a/crates/search/Cargo.toml
++++ b/crates/search/Cargo.toml
+@@ -3,6 +3,7 @@ name = "bareline-search"
+ version.workspace = true
+ edition.workspace = true
+ license.workspace = true
++rust-version.workspace = true
+ 
+ [dependencies]
+ bareline-document = { path = "../document" }
+diff --git a/crates/settings/Cargo.toml b/crates/settings/Cargo.toml
+index 3a092cd..8459dad 100644
+--- a/crates/settings/Cargo.toml
++++ b/crates/settings/Cargo.toml
+@@ -3,6 +3,7 @@ name = "bareline-settings"
+ version.workspace = true
+ edition.workspace = true
+ license.workspace = true
++rust-version.workspace = true
+ 
+ [dependencies]
+ toml_edit = { version = "=0.22.27", default-features = false, features = ["parse", "display"] }
+diff --git a/crates/syntax/Cargo.toml b/crates/syntax/Cargo.toml
+index d1f7002..02f60d7 100644
+--- a/crates/syntax/Cargo.toml
++++ b/crates/syntax/Cargo.toml
+@@ -3,6 +3,7 @@ name = "bareline-syntax"
+ version.workspace = true
+ edition.workspace = true
+ license.workspace = true
++rust-version.workspace = true
+ 
+ [dependencies]
+ bareline-document = { path = "../document" }
+diff --git a/crates/ui/Cargo.toml b/crates/ui/Cargo.toml
+index 907cc15..aeeab6a 100644
+--- a/crates/ui/Cargo.toml
++++ b/crates/ui/Cargo.toml
+@@ -3,6 +3,7 @@ name = "bareline-ui"
+ version.workspace = true
+ edition.workspace = true
+ license.workspace = true
++rust-version.workspace = true
+ 
+ [dependencies]
+ bareline-renderer = { path = "../renderer" }
+diff --git a/crates/unicode-fold/Cargo.toml b/crates/unicode-fold/Cargo.toml
+index 9f044cb..1a7a201 100644
+--- a/crates/unicode-fold/Cargo.toml
++++ b/crates/unicode-fold/Cargo.toml
+@@ -3,3 +3,4 @@ name = "bareline-unicode-fold"
+ version.workspace = true
+ edition.workspace = true
+ license.workspace = true
++rust-version.workspace = true
+diff --git a/docs/extensions/README.md b/docs/extensions/README.md
+index e301b6d..743dbe9 100644
+--- a/docs/extensions/README.md
++++ b/docs/extensions/README.md
+@@ -1,9 +1,11 @@
+ # First-party component walkthrough
+ 
+ The SDK and extensions use MIT OR Apache-2.0. The editor and optional host use MPL-2.0.
+-The optional Wasmtime 48 host requires Rust 1.95. The editor retains its Rust 1.85
+-contract. A Windows machine with the MSVC tools and the repository toolchain is
+-required for the authenticated child integration harness.
++Wasmtime 48 and its host dependencies require at least Rust 1.95. The host still
++inherits the workspace's supported Rust 1.98.1 compiler; the dependency floor is
++not a separately qualified workspace minimum. A Windows machine with the MSVC
++tools and the repository toolchain is required for the authenticated child
++integration harness.
+ 
+ ## Build and execute the reference components
+ 
+diff --git a/docs/implementation/2026-09-12-audit-implementation/PR-T12.md b/docs/implementation/2026-09-12-audit-implementation/PR-T12.md
+new file mode 100644
+index 0000000..334c148
+--- /dev/null
++++ b/docs/implementation/2026-09-12-audit-implementation/PR-T12.md
+@@ -0,0 +1,40 @@
++# PR-T12: Toolchain contract
++
++- **Baseline:** `c3c13f19e377729809451739a4c5026302b3e16c`
++- **Scope:** Align workspace Rust version and edition inheritance, pinned toolchain and CI declarations, contributor documentation, and a static manifest consistency check.
++- **Policy:** Describe the compiler version currently pinned and tested as supported. Treat any older minimum as unqualified until it passes the final integrated compatibility run.
++
++## Evidence
++
++- rustc --version --verbose: rustc 1.98.1 (48a229cea 2026-09-01),
++  host x86_64-pc-windows-msvc.
++- rustup show active-toolchain: repository override
++  1.98.1-x86_64-pc-windows-msvc.
++- rustup toolchain list: installed stable, 1.97.1, and 1.98.1; no toolchain
++  was downloaded.
++- python .github/workflows/check_toolchain_contract.py: passed; all 31
++  workspace members inherit Rust 1.98.1 and edition 2024; missing-inheritance
++  and future-dependency negative fixtures passed.
++- The same checker with --metadata and the local audit evidence
++  cargo-metadata.json passed against its 409-package resolved graph. The highest
++  declared dependency requirement in that evidence is Rust 1.95.0 (Wasmtime 48
++  and related packages).
++- python -m py_compile .github/workflows/check_toolchain_contract.py: passed.
++- git diff --check: passed (Git emitted expected working-copy line-ending
++  notices).
++
++The checked-in toolchain, explicit correctness/performance CI declarations, and
++workspace package metadata now agree on 1.98.1. The extension-host manifest
++inherits that supported policy; contributor documentation separately records
++Wasmtime 48's Rust 1.95 dependency floor without presenting it as a qualified
++workspace minimum. The supply-chain job selects Python 3.12 through the pinned
++setup-python v5.6.0 action before running the manifest checker.
++
++## Deferred qualification
++
++- Supported/minimum-toolchain build and test qualification on the final
++  integrated tree. Both names refer to the same pinned Rust 1.98.1 compiler, so
++  this requires one run and no older-toolchain download.
++- Full native workspace checks owned by integration.
++- Fresh cargo metadata --locked validation on the final integrated dependency
++  graph; CI feeds that output to the static contract checker.
+diff --git a/extensions/common/Cargo.toml b/extensions/common/Cargo.toml
+index 12f72fc..f0b4434 100644
+--- a/extensions/common/Cargo.toml
++++ b/extensions/common/Cargo.toml
+@@ -3,6 +3,7 @@ name = "bareline-first-party-common"
+ version.workspace = true
+ edition.workspace = true
+ license = "MIT OR Apache-2.0"
++rust-version.workspace = true
+ [dependencies]
+ bareline-extension-sdk = { path = "../../crates/extension-sdk" }
+ postcard = { version = "1", features = ["use-std"] }
+diff --git a/extensions/hex-view/Cargo.toml b/extensions/hex-view/Cargo.toml
+index a37b918..f56a977 100644
+--- a/extensions/hex-view/Cargo.toml
++++ b/extensions/hex-view/Cargo.toml
+@@ -3,6 +3,7 @@ name = "bareline-hex-view"
+ version.workspace = true
+ edition.workspace = true
+ license = "MIT OR Apache-2.0"
++rust-version.workspace = true
+ [lib]
+ crate-type = ["cdylib", "rlib"]
+ [dependencies]
+diff --git a/extensions/json-tools/Cargo.toml b/extensions/json-tools/Cargo.toml
+index 274c9b5..39d9ba8 100644
+--- a/extensions/json-tools/Cargo.toml
++++ b/extensions/json-tools/Cargo.toml
+@@ -3,6 +3,7 @@ name = "bareline-json-tools"
+ version.workspace = true
+ edition.workspace = true
+ license = "MIT OR Apache-2.0"
++rust-version.workspace = true
+ [lib]
+ crate-type = ["cdylib", "rlib"]
+ [dependencies]
+diff --git a/extensions/xml-tools/Cargo.toml b/extensions/xml-tools/Cargo.toml
+index 009cecc..2b0db37 100644
+--- a/extensions/xml-tools/Cargo.toml
++++ b/extensions/xml-tools/Cargo.toml
+@@ -3,6 +3,7 @@ name = "bareline-xml-tools"
+ version.workspace = true
+ edition.workspace = true
+ license = "MIT OR Apache-2.0"
++rust-version.workspace = true
+ [lib]
+ crate-type = ["cdylib", "rlib"]
+ [dependencies]
+diff --git a/native/lexilla-bridge/Cargo.toml b/native/lexilla-bridge/Cargo.toml
+index 77403a9..2075668 100644
+--- a/native/lexilla-bridge/Cargo.toml
++++ b/native/lexilla-bridge/Cargo.toml
+@@ -1,8 +1,9 @@
+ [package]
+ name = "bareline-lexilla-bridge"
+ version = "0.1.0"
+-edition = "2024"
++edition.workspace = true
+ license = "MPL-2.0"
++rust-version.workspace = true
+ 
+ [build-dependencies]
+ cc = "1"
+diff --git a/xtask/Cargo.toml b/xtask/Cargo.toml
+index f89ac52..8f52253 100644
+--- a/xtask/Cargo.toml
++++ b/xtask/Cargo.toml
+@@ -3,6 +3,7 @@ name = "xtask"
+ version.workspace = true
+ edition.workspace = true
+ license.workspace = true
++rust-version.workspace = true
+ 
+ [dependencies]
+ bareline-commands = { path = "../crates/commands" }

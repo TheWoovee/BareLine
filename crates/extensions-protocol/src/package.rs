@@ -45,11 +45,7 @@ impl VerifiedPackage {
             return Err(PackageError::UnsafeArchive);
         }
         let archive = root.join(format!("{}.blex", self.entry.sha256));
-        match fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&archive)
-        {
+        match fs::OpenOptions::new().write(true).create_new(true).open(&archive) {
             Ok(mut file) => {
                 let result = file.write_all(&self.bytes).and_then(|_| file.sync_all());
                 drop(file);
@@ -72,10 +68,7 @@ impl VerifiedPackage {
             Err(_) => return Err(PackageError::Io),
         }
         let receipt = serde_json::to_vec(&self.evidence).map_err(|_| PackageError::Metadata)?;
-        atomic_record(
-            &root.join(format!("{}.receipt.json", self.entry.sha256)),
-            &receipt,
-        )
+        atomic_record(&root.join(format!("{}.receipt.json", self.entry.sha256)), &receipt)
     }
 
     pub fn path(&self) -> &Path {
@@ -164,8 +157,7 @@ impl OfflinePackageSource {
         if bytes.len() > MAX_METADATA || signature.len() > 8192 {
             return Err(PackageError::Size);
         }
-        let key = PublicKey::from_base64(policy.public_key)
-            .map_err(|_| PackageError::InvalidSignature)?;
+        let key = PublicKey::from_base64(policy.public_key).map_err(|_| PackageError::InvalidSignature)?;
         let signature_text = signature;
         let signature = Signature::decode(signature).map_err(|_| PackageError::InvalidSignature)?;
         key.verify(bytes, &signature, false)
@@ -352,17 +344,10 @@ fn safe_flat_name(name: &str) -> bool {
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.')
         && ![
-            "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7",
-            "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+            "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1",
+            "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
         ]
-        .contains(
-            &name
-                .split('.')
-                .next()
-                .unwrap_or("")
-                .to_ascii_uppercase()
-                .as_str(),
-        )
+        .contains(&name.split('.').next().unwrap_or("").to_ascii_uppercase().as_str())
 }
 
 /// Versioned owner state is published only after its replacement is durable.
@@ -408,11 +393,7 @@ pub fn restore_cached(
     policy: &CatalogPolicy<'_>,
     cancelled: &std::sync::atomic::AtomicBool,
 ) -> Result<InstalledPackage, PackageError> {
-    if digest.len() != 64
-        || !digest
-            .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-    {
+    if digest.len() != 64 || !digest.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) {
         return Err(PackageError::WrongIdentity);
     }
     let mut bytes = Vec::new();
@@ -424,8 +405,7 @@ pub fn restore_cached(
     if bytes.len() > 8 * MAX_METADATA {
         return Err(PackageError::Size);
     }
-    let evidence: CatalogEvidence =
-        serde_json::from_slice(&bytes).map_err(|_| PackageError::Metadata)?;
+    let evidence: CatalogEvidence = serde_json::from_slice(&bytes).map_err(|_| PackageError::Metadata)?;
     if evidence.accepted_unix == 0 || evidence.accepted_unix > policy.now_unix {
         return Err(PackageError::Metadata);
     }
@@ -480,19 +460,18 @@ impl VerifiedPackage {
         cancelled: &std::sync::atomic::AtomicBool,
         restoring: bool,
     ) -> Result<InstalledPackage, PackageError> {
-        validate_zip_directory(&self.bytes)?;
-        let mut archive = zip::ZipArchive::new(Cursor::new(&self.bytes))
-            .map_err(|_| PackageError::UnsafeArchive)?;
-        if archive.is_empty() || archive.len() > 256 {
+        let declared = validate_zip_directory(&self.bytes)?;
+        let mut archive = zip::ZipArchive::new(Cursor::new(&self.bytes)).map_err(|_| PackageError::UnsafeArchive)?;
+        // Duplicate central-directory names collapse in the zip reader, so an entry
+        // count that disagrees with the EOCD record means the archive is ambiguous.
+        if archive.is_empty() || archive.len() > 256 || archive.len() as u32 != declared {
             return Err(PackageError::UnsafeArchive);
         }
         let mut files = Vec::new();
         let mut total = 0u64;
         let mut names = std::collections::BTreeSet::new();
         for i in 0..archive.len() {
-            let file = archive
-                .by_index(i)
-                .map_err(|_| PackageError::UnsafeArchive)?;
+            let file = archive.by_index(i).map_err(|_| PackageError::UnsafeArchive)?;
             if !safe_flat_name(file.name())
                 || file.is_dir()
                 || file
@@ -538,12 +517,7 @@ impl VerifiedPackage {
                 .collect::<std::collections::BTreeSet<_>>()
                 .len()
                 != manifest.commands.len()
-            || manifest
-                .panels
-                .iter()
-                .collect::<std::collections::BTreeSet<_>>()
-                .len()
-                != manifest.panels.len()
+            || manifest.panels.iter().collect::<std::collections::BTreeSet<_>>().len() != manifest.panels.len()
             || manifest
                 .background_commands
                 .iter()
@@ -590,9 +564,7 @@ impl VerifiedPackage {
                 if !metadata.is_file() || metadata.file_type().is_symlink() {
                     return Err(PackageError::UnsafeArchive);
                 }
-                let mut expected = archive
-                    .by_name(name)
-                    .map_err(|_| PackageError::UnsafeArchive)?;
+                let mut expected = archive.by_name(name).map_err(|_| PackageError::UnsafeArchive)?;
                 if metadata.len() != expected.size() {
                     return Err(PackageError::HashMismatch);
                 }
@@ -640,9 +612,7 @@ impl VerifiedPackage {
                 if cancelled.load(std::sync::atomic::Ordering::Acquire) {
                     return Err(PackageError::Cancelled);
                 }
-                let mut input = archive
-                    .by_name(name)
-                    .map_err(|_| PackageError::UnsafeArchive)?;
+                let mut input = archive.by_name(name).map_err(|_| PackageError::UnsafeArchive)?;
                 let mut output = fs::OpenOptions::new()
                     .write(true)
                     .create_new(true)
@@ -662,9 +632,7 @@ impl VerifiedPackage {
                     if written > input.size() || written > MAX_PACKAGE {
                         return Err(PackageError::Size);
                     }
-                    output
-                        .write_all(&buffer[..count])
-                        .map_err(|_| PackageError::Io)?;
+                    output.write_all(&buffer[..count]).map_err(|_| PackageError::Io)?;
                 }
                 if written != input.size() {
                     return Err(PackageError::Size);
@@ -694,10 +662,36 @@ impl VerifiedPackage {
 mod tests {
     use super::*;
     #[test]
+    fn duplicate_central_directory_names_fail_the_entry_count_assertion() {
+        use std::io::Write;
+        let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        for name in ["a.wasm", "b.wasm"] {
+            zip.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+            zip.write_all(name.as_bytes()).unwrap();
+        }
+        let mut bytes = zip.finish().unwrap().into_inner();
+        assert_eq!(validate_zip_directory(&bytes).unwrap(), 2);
+        assert_eq!(zip::ZipArchive::new(Cursor::new(&bytes)).unwrap().len(), 2);
+        // Rewrite the *central directory* copy of the second name so both records claim
+        // "a.wasm"; the reader keeps one entry while the EOCD still declares two.
+        let directory = bytes
+            .windows(4)
+            .rposition(|w| w == b"PK\x01\x02")
+            .expect("central directory");
+        let position = bytes[directory..]
+            .windows(6)
+            .position(|w| w == b"b.wasm")
+            .expect("second name")
+            + directory;
+        bytes[position..position + 6].copy_from_slice(b"a.wasm");
+        assert_eq!(validate_zip_directory(&bytes).unwrap(), 2);
+        let archive = zip::ZipArchive::new(Cursor::new(&bytes)).unwrap();
+        assert_eq!(archive.len(), 1, "the zip reader collapses duplicate names");
+        assert_ne!(archive.len() as u32, validate_zip_directory(&bytes).unwrap());
+    }
+    #[test]
     fn archive_names_reject_escape_devices_and_ads() {
-        for name in [
-            "../x", "x/y", "x\\y", "C:x", "NUL.wasm", "COM1", "a.", ".", "x ",
-        ] {
+        for name in ["../x", "x/y", "x\\y", "C:x", "NUL.wasm", "COM1", "a.", ".", "x "] {
             assert!(!safe_flat_name(name), "{name}");
         }
         assert!(safe_flat_name("entry.wasm"));
@@ -833,8 +827,7 @@ mod signed_tests {
         fs::create_dir(&root).unwrap();
         let package_file = root.join(format!("{}.blex", catalog.entries[0].sha256));
         fs::write(&package_file, &bytes).unwrap();
-        let source =
-            OfflinePackageSource::open(root.clone(), &metadata, &signature, &policy(&key)).unwrap();
+        let source = OfflinePackageSource::open(root.clone(), &metadata, &signature, &policy(&key)).unwrap();
         let request = PackageRequest {
             id: "fixture.tools".into(),
             version: "1".into(),
@@ -856,10 +849,7 @@ mod signed_tests {
         );
         // Retained receipts restore the exact accepted package offline after
         // metadata expiry; a new install still requires fresh metadata.
-        assert!(matches!(
-            verified.cache(&root),
-            Err(PackageError::HashMismatch)
-        ));
+        assert!(matches!(verified.cache(&root), Err(PackageError::HashMismatch)));
         fs::write(&package_file, &bytes).unwrap();
         verified.cache(&root).unwrap();
         let mut later = policy(&key);
@@ -886,11 +876,7 @@ mod signed_tests {
             )
             .is_err()
         );
-        fs::write(
-            installed.directory().join("entry.wasm"),
-            b"safe nonexecuted fixture",
-        )
-        .unwrap();
+        fs::write(installed.directory().join("entry.wasm"), b"safe nonexecuted fixture").unwrap();
         assert!(
             restore_cached(
                 &root,
@@ -926,12 +912,8 @@ mod signed_tests {
         ));
         let mut wrong = policy(&key);
         wrong.publisher = "other";
-        let source =
-            OfflinePackageSource::open(root.clone(), &metadata, &signature, &wrong).unwrap();
-        assert!(matches!(
-            source.fetch(&request),
-            Err(PackageError::WrongIdentity)
-        ));
+        let source = OfflinePackageSource::open(root.clone(), &metadata, &signature, &wrong).unwrap();
+        assert!(matches!(source.fetch(&request), Err(PackageError::WrongIdentity)));
         fs::write(&package_file, &bytes).unwrap();
         verified.cache(&root).unwrap();
         let again = verified
@@ -954,7 +936,7 @@ mod signed_tests {
 
 // Inspect classic EOCD before zip allocates per-entry metadata. v1 deliberately
 // rejects ZIP64/multidisk; our 128 MiB / 256-file cap never needs either.
-fn validate_zip_directory(bytes: &[u8]) -> Result<(), PackageError> {
+fn validate_zip_directory(bytes: &[u8]) -> Result<u32, PackageError> {
     let start = bytes.len().saturating_sub(65557);
     let offset = (start..bytes.len().saturating_sub(21))
         .rev()
@@ -977,5 +959,5 @@ fn validate_zip_directory(bytes: &[u8]) -> Result<(), PackageError> {
     {
         return Err(PackageError::UnsafeArchive);
     }
-    Ok(())
+    Ok(count as u32)
 }

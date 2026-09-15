@@ -1,0 +1,1730 @@
+diff --git a/apps/bareline/src/windows_app.rs b/apps/bareline/src/windows_app.rs
+index 5f7bd4e..cbff73d 100644
+--- a/apps/bareline/src/windows_app.rs
++++ b/apps/bareline/src/windows_app.rs
+@@ -2433,6 +2433,9 @@ impl Shell {
+                 {
+                     self.app.active = index;
+                 }
++                if let Some(tab) = workspace.search_panel.take_tab_requested() {
++                    search::select_panel_tab(workspace, tab);
++                }
+                 self.window.as_ref().unwrap().request_redraw();
+                 return;
+             }
+diff --git a/apps/bareline/src/windows_app/accessibility.rs b/apps/bareline/src/windows_app/accessibility.rs
+index 922692a..5afee76 100644
+--- a/apps/bareline/src/windows_app/accessibility.rs
++++ b/apps/bareline/src/windows_app/accessibility.rs
+@@ -3,6 +3,7 @@ use super::Shell;
+ use bareline_platform::accessibility::{AccessibilityNode, AccessibilityRole, AccessibilitySnapshot};
+ 
+ const MODAL_TEXT_NAMESPACE: u64 = u64::MAX;
++const SEARCH_TEXT_NAMESPACE: u64 = u64::MAX - 1;
+ 
+ struct ModalTextSource {
+     identity: (u64, u64),
+@@ -47,9 +48,21 @@ fn modal_text_identity(modal: super::modal::ModalDescriptor) -> (u64, u64) {
+ }
+ 
+ fn editor_text_selection_matches(current: (u64, u64), queued: (u64, u64)) -> bool {
+-    queued.0 != MODAL_TEXT_NAMESPACE && current == queued
++    !matches!(queued.0, MODAL_TEXT_NAMESPACE | SEARCH_TEXT_NAMESPACE) && current == queued
+ }
+-fn semantic_group(nodes: &mut Vec<AccessibilityNode>, id: u64, name: &str, mut children: Vec<AccessibilityNode>) {
++
++fn search_text_identity(owner: u64, revision: u64) -> (u64, u64) {
++    assert!(owner < 1 << 17, "search accessibility owner exceeds namespace");
++    assert!(revision < 1 << 47, "search accessibility revision exhausted");
++    (SEARCH_TEXT_NAMESPACE, owner << 47 | revision)
++}
++fn semantic_container(
++    nodes: &mut Vec<AccessibilityNode>,
++    id: u64,
++    role: AccessibilityRole,
++    name: &str,
++    mut children: Vec<AccessibilityNode>,
++) {
+     if children.is_empty() {
+         return;
+     }
+@@ -65,7 +78,7 @@ fn semantic_group(nodes: &mut Vec<AccessibilityNode>, id: u64, name: &str, mut c
+     nodes.push(AccessibilityNode {
+         id,
+         parent: 1,
+-        role: AccessibilityRole::Group,
++        role,
+         name: name.into(),
+         value: None,
+         bounds: [x, y, right - x, bottom - y],
+@@ -77,6 +90,10 @@ fn semantic_group(nodes: &mut Vec<AccessibilityNode>, id: u64, name: &str, mut c
+     });
+     nodes.extend(children);
+ }
++
++fn semantic_group(nodes: &mut Vec<AccessibilityNode>, id: u64, name: &str, children: Vec<AccessibilityNode>) {
++    semantic_container(nodes, id, AccessibilityRole::Group, name, children);
++}
+ fn compose_snapshot(
+     title: &str,
+     width: f64,
+@@ -146,6 +163,80 @@ impl Shell {
+         Some((owner, modal_text_identity(modal), field))
+     }
+ 
++    fn search_text_field(&self) -> Option<(u64, (u64, u64), &bareline_ui::text_field::TextField)> {
++        let (owner, generation, field) = self
++            .search_folder_accessibility_text_field()
++            .or_else(|| {
++                self.workspace
++                    .as_ref()
++                    .and_then(|workspace| workspace.find.accessibility_text_field())
++            })
++            .or_else(|| {
++                self.workspace.as_ref().and_then(|workspace| {
++                    workspace
++                        .search_focus
++                        .then(|| workspace.search_panel.accessibility_text_field())
++                        .flatten()
++                })
++            })?;
++        Some((owner, search_text_identity(owner, generation), field))
++    }
++
++    fn search_accessibility_active(&self) -> bool {
++        self.search_folder_open()
++            || self.workspace.as_ref().is_some_and(|workspace| {
++                workspace.find.has_focus() || (workspace.search_focus && workspace.search_panel.open)
++            })
++    }
++
++    fn search_text_selection_action(&mut self, source_identity: (u64, u64), anchor: usize, caret: usize) -> bool {
++        if source_identity.0 != SEARCH_TEXT_NAMESPACE {
++            return false;
++        }
++        let Some((owner, current, _)) = self.search_text_field() else {
++            return true;
++        };
++        if source_identity != current {
++            return true;
++        }
++        if (77_000..77_003).contains(&owner) {
++            if let Some(field) = self.search_folder_field() {
++                field.set_selection(anchor, caret);
++            }
++        } else if let Some(workspace) = &mut self.workspace {
++            match owner {
++                6000 | 6001 => {
++                    workspace.find.accessibility_action(owner, true);
++                    workspace.find.active_field().set_selection(anchor, caret);
++                }
++                7000 if workspace.search_panel.open && workspace.search_focus => {
++                    workspace.search_panel.field.set_selection(anchor, caret);
++                }
++                _ => {}
++            }
++        }
++        true
++    }
++
++    fn set_search_accessibility_value(&mut self, id: u64, value: &str) -> bool {
++        let Some(workspace) = &mut self.workspace else {
++            return false;
++        };
++        if (id == 6000 || id == 6001) && workspace.find.open {
++            workspace.find.accessibility_action(id, true);
++            let field = workspace.find.active_field();
++            field.select_all();
++            return field.insert(value);
++        }
++        if id == 7000 && workspace.search_panel.open {
++            workspace.search_focus = true;
++            workspace.search_panel.accessibility_focus(id);
++            workspace.search_panel.field.select_all();
++            return workspace.search_panel.field.insert(value);
++        }
++        false
++    }
++
+     pub(super) fn accessibility_text_source(
+         &self,
+     ) -> Option<std::sync::Arc<dyn bareline_platform::accessibility::AccessibilityTextSource>> {
+@@ -158,6 +249,15 @@ impl Shell {
+         if self.modal.is_some() {
+             return None;
+         }
++        if let Some((_owner, identity, field)) = self.search_text_field() {
++            return Some(std::sync::Arc::new(ModalTextSource {
++                identity,
++                value: field.value().to_owned(),
++            }));
++        }
++        if self.search_accessibility_active() {
++            return None;
++        }
+         self.workspace
+             .as_ref()
+             .and_then(|w| self.views.active_workspace_editor(w, self.app.active))
+@@ -342,6 +442,7 @@ impl Shell {
+         }
+         semantic_group(&mut chrome, 90_000_012, "Settings", settings_nodes);
+         if let Some(workspace) = &self.workspace {
++            let mut search_tabs = Vec::new();
+             for semantic in workspace
+                 .find
+                 .semantics(editor_bounds.width)
+@@ -354,13 +455,24 @@ impl Shell {
+                 let mut node = bareline_app::accessibility::semantic_node(&semantic, 1);
+                 node.bounds[0] += editor_bounds.x as f64;
+                 node.bounds[1] += editor_bounds.y as f64;
+-                if node.role != AccessibilityRole::TextField
++                if !matches!(node.role, AccessibilityRole::TextField | AccessibilityRole::Tab)
+                     && let Some(command) = self.app.commands.entries().find(|c| c.id.0 == semantic.command_id)
+                 {
+                     node.name = command.title.into();
+                 }
+-                chrome.push(node);
++                if node.role == AccessibilityRole::Tab {
++                    search_tabs.push(node);
++                } else {
++                    chrome.push(node);
++                }
+             }
++            semantic_container(
++                &mut chrome,
++                90_000_031,
++                AccessibilityRole::TabList,
++                "Search modes",
++                search_tabs,
++            );
+             if let Some(message) = &workspace.message {
+                 chrome.push(AccessibilityNode {
+                     id: 9000,
+@@ -529,7 +641,11 @@ impl Shell {
+             editor.map(|v| v.viewport()),
+             chrome,
+             if let Some(modal) = self.modal {
+-                modal.focused
++                if modal.surface == super::modal::ModalSurface::Recovery {
++                    self.recovery_accessibility_focus().unwrap_or(modal.focused)
++                } else {
++                    modal.focused
++                }
+             } else if self.palette.open {
+                 self.palette
+                     .semantics()
+@@ -541,7 +657,14 @@ impl Shell {
+             },
+             active_layer,
+         );
+-        if let Some((owner, identity, field)) = self.modal_text_field() {
++        let owned_text = self.modal_text_field().or_else(|| {
++            if self.modal.is_none() {
++                self.search_text_field()
++            } else {
++                None
++            }
++        });
++        if let Some((owner, identity, field)) = owned_text {
+             let (anchor, caret) = field.selection();
+             if let Some(mut text) =
+                 bareline_app::accessibility::bounded_text(field.value().to_owned(), 0, anchor, caret)
+@@ -557,7 +680,7 @@ impl Shell {
+                 });
+                 snapshot.text_geometry.clear();
+             }
+-        } else if self.modal.is_some() {
++        } else if self.modal.is_some() || self.search_accessibility_active() {
+             snapshot.text = None;
+             snapshot.text_context = None;
+             snapshot.text_geometry.clear();
+@@ -750,6 +873,15 @@ impl Shell {
+                 }
+                 true
+             }
++            super::modal::ModalSurface::Recovery => {
++                let accepted = self.recovery_accessibility(el, action);
++                if accepted && let Some(focus) = self.recovery_accessibility_focus() {
++                    self.modal_focus(modal.surface, focus);
++                }
++                // Recovery owns the active accessibility layer. Unknown and
++                // stale background actions never continue into the editor.
++                true
++            }
+         }
+     }
+ 
+@@ -765,6 +897,18 @@ impl Shell {
+                 }
+                 continue;
+             }
++            if let AccessibilityAction::SetSelection {
++                source_identity,
++                anchor,
++                caret,
++            } = &action
++                && self.search_text_selection_action(*source_identity, *anchor, *caret)
++            {
++                if let Some(window) = &self.window {
++                    window.request_redraw();
++                }
++                continue;
++            }
+             if self.palette.open {
+                 let id = match &action {
+                     AccessibilityAction::Focus(id)
+@@ -1032,18 +1176,8 @@ impl Shell {
+                         let context = self.command_context();
+                         self.palette
+                             .refresh(&self.app.commands, &context, &self.settings.keymap.keymap);
+-                    } else if let Some(workspace) = &mut self.workspace {
+-                        if (id == 6000 || id == 6001) && workspace.find.open {
+-                            workspace.find.accessibility_action(id, true);
+-                            let field = workspace.find.active_field();
+-                            field.select_all();
+-                            field.insert(&value);
+-                        } else if id == 7000 && workspace.search_panel.open {
+-                            workspace.search_focus = true;
+-                            workspace.search_panel.accessibility_focus(id);
+-                            workspace.search_panel.field.select_all();
+-                            workspace.search_panel.field.insert(&value);
+-                        }
++                    } else {
++                        self.set_search_accessibility_value(id, &value);
+                     }
+                 }
+                 AccessibilityAction::Focus(id) if id == EDITOR_ID => {
+@@ -1099,11 +1233,11 @@ impl Shell {
+                     if let Some(workspace) = &mut self.workspace {
+                         if (6000..6300).contains(&id) {
+                             command_action = workspace.find.accessibility_action(id, false).map(super::find_action);
+-                        } else if workspace.search_panel.semantics().iter().any(|n| n.id.0 == id)
+-                            && let Some((source, range)) = workspace.search_panel.accessibility_activate(id)
+-                            && let Some(index) = workspace.activate_search(source, range)
+-                        {
+-                            self.app.active = index;
++                        } else {
++                            let (handled, active) = super::search::accessibility_invoke_panel(workspace, id);
++                            if handled && let Some(index) = active {
++                                self.app.active = index;
++                            }
+                         }
+                     }
+                     if let Some(action) = command_action {
+@@ -1497,7 +1631,8 @@ mod tests {
+         }
+         if scenario.starts_with("search") || scenario == "all_app_panels" {
+             let workspace = shell.workspace.as_mut().unwrap();
+-            workspace.search_panel.open = true;
++            workspace.search_panel.show();
++            workspace.search_focus = true;
+             workspace.search_panel.field.insert("workspace");
+             workspace
+                 .search_panel
+@@ -1554,6 +1689,182 @@ mod tests {
+         shell
+     }
+ 
++    #[test]
++    fn search_provider_tracks_field_selection_modes_and_close_without_editing_document() {
++        let mut shell = app_shell("find.open");
++        let document_before = shell.workspace.as_ref().unwrap().editors[shell.app.active]
++            .snapshot()
++            .identity_token();
++
++        assert!(shell.set_search_accessibility_value(6000, "café"));
++        let find = shell_snapshot(&shell);
++        assert_eq!(find.focus, 6000);
++        assert_eq!(find.text.as_ref().map(|text| text.editor_id), Some(6000));
++        let find_identity = find.text_context.as_ref().unwrap().source_identity;
++        assert_eq!(find_identity.0, SEARCH_TEXT_NAMESPACE);
++        assert!(shell.search_text_selection_action(find_identity, 0, "café".len()));
++        assert_eq!(
++            shell.workspace.as_ref().unwrap().find.field.selection(),
++            (0, "café".len())
++        );
++
++        assert!(shell.set_search_accessibility_value(6001, "changed"));
++        let replace = shell_snapshot(&shell);
++        assert_eq!(replace.focus, 6001);
++        assert_eq!(replace.text.as_ref().map(|text| text.editor_id), Some(6001));
++        assert_ne!(replace.text_context.as_ref().unwrap().source_identity, find_identity);
++
++        {
++            let workspace = shell.workspace.as_mut().unwrap();
++            workspace.find.hide();
++            workspace.search_panel.show();
++            workspace.search_focus = true;
++        }
++        assert!(shell.set_search_accessibility_value(7000, "workspace"));
++        let files = shell_snapshot(&shell);
++        assert_eq!(files.focus, 7000);
++        assert_eq!(files.text.as_ref().map(|text| text.editor_id), Some(7000));
++        assert!(files.nodes.iter().any(|node| {
++            node.id == bareline_app::search_panel::FILES_TAB_ID
++                && node.role == AccessibilityRole::Tab
++                && node.selected
++                && node.invokable
++        }));
++        assert!(
++            files
++                .nodes
++                .iter()
++                .any(|node| { node.id == 90_000_031 && node.role == AccessibilityRole::TabList })
++        );
++        assert_eq!(
++            files
++                .nodes
++                .iter()
++                .filter(|node| node.parent == 90_000_031 && node.selected)
++                .map(|node| node.id)
++                .collect::<Vec<_>>(),
++            vec![bareline_app::search_panel::FILES_TAB_ID]
++        );
++        let files_identity = files.text_context.as_ref().unwrap().source_identity;
++        let (handled, active) = super::super::search::accessibility_invoke_panel(
++            shell.workspace.as_mut().unwrap(),
++            bareline_app::search_panel::REPLACE_TAB_ID,
++        );
++        assert!(handled);
++        assert_eq!(active, None);
++        assert!(shell.workspace.as_ref().unwrap().find.replacing);
++        assert!(!shell.workspace.as_ref().unwrap().search_panel.open);
++        super::super::search::select_panel_tab(
++            shell.workspace.as_mut().unwrap(),
++            bareline_app::search_panel::SearchTab::Files,
++        );
++        assert!(shell.workspace.as_ref().unwrap().search_panel.open);
++        assert!(shell.workspace.as_ref().unwrap().search_focus);
++        shell.workspace.as_mut().unwrap().search_panel.hide();
++        shell.workspace.as_mut().unwrap().search_focus = false;
++        assert!(shell.search_text_selection_action(files_identity, 0, 1));
++        assert!(!editor_text_selection_matches(document_before, files_identity));
++        assert_eq!(
++            shell.workspace.as_ref().unwrap().editors[shell.app.active]
++                .snapshot()
++                .identity_token(),
++            document_before
++        );
++
++        shell.workspace.as_mut().unwrap().search_panel.show();
++        shell.workspace.as_mut().unwrap().search_focus = true;
++        let reopened = shell_snapshot(&shell);
++        assert_ne!(
++            reopened.text_context.as_ref().unwrap().source_identity,
++            files_identity,
++            "a reopened field must not recycle a queued provider identity"
++        );
++    }
++
++    #[test]
++    fn recovery_modal_hides_background_text_and_restores_the_find_invoker() {
++        let mut shell = app_shell("find.open");
++        shell.ui_focus.set_targets(vec![bareline_ui::focus::FocusTarget {
++            id: bareline_ui::ViewId(bareline_app::accessibility::EDITOR_ID),
++            enabled: true,
++        }]);
++        assert!(
++            shell
++                .ui_focus
++                .focus(bareline_ui::ViewId(bareline_app::accessibility::EDITOR_ID))
++        );
++        super::super::recovery::accessibility_modal_test_setup(&mut shell);
++        assert_eq!(shell.modal.unwrap().invoker, 6000);
++        let recovery = shell_snapshot(&shell);
++        recovery.validate().unwrap();
++        assert_eq!(recovery.focus, super::super::modal::RECOVERY_CLOSE_ID);
++        assert!(recovery.text.is_none());
++        assert!(recovery.text_context.is_none());
++        assert!(shell.accessibility_text_source().is_none());
++        assert!(
++            recovery
++                .nodes
++                .iter()
++                .any(|node| { node.id == bareline_app::accessibility::EDITOR_ID && node.disabled && !node.focusable })
++        );
++        assert!(
++            recovery
++                .nodes
++                .iter()
++                .any(|node| { node.id == super::super::modal::RECOVERY_CLOSE_ID && node.invokable && !node.disabled })
++        );
++
++        shell.dismiss_modal(super::super::modal::ModalSurface::Recovery);
++        let closed = shell_snapshot(&shell);
++        assert_eq!(closed.focus, 6000);
++        assert_eq!(closed.text.as_ref().map(|text| text.editor_id), Some(6000));
++        assert!(shell.accessibility_text_source().is_some());
++        assert!(
++            closed
++                .nodes
++                .iter()
++                .any(|node| { node.id == 6000 && !node.disabled && node.focusable })
++        );
++
++        let button = shell
++            .workspace
++            .as_ref()
++            .unwrap()
++            .find
++            .semantics(1200.0)
++            .into_iter()
++            .find(|node| node.command_id == "search.match_case")
++            .unwrap()
++            .id
++            .0;
++        shell
++            .workspace
++            .as_mut()
++            .unwrap()
++            .find
++            .accessibility_action(button, true);
++        shell.ui_focus.set_targets(vec![bareline_ui::focus::FocusTarget {
++            id: bareline_ui::ViewId(bareline_app::accessibility::EDITOR_ID),
++            enabled: true,
++        }]);
++        assert!(
++            shell
++                .ui_focus
++                .focus(bareline_ui::ViewId(bareline_app::accessibility::EDITOR_ID))
++        );
++        super::super::recovery::accessibility_modal_test_setup(&mut shell);
++        assert_eq!(shell.modal.unwrap().invoker, button);
++        shell.dismiss_modal(super::super::modal::ModalSurface::Recovery);
++        let button_restored = shell_snapshot(&shell);
++        assert_eq!(button_restored.focus, button);
++        assert!(
++            button_restored
++                .nodes
++                .iter()
++                .any(|node| node.id == button && node.focusable && !node.disabled)
++        );
++    }
++
+     #[test]
+     fn complete_native_semantic_json_golden() {
+         let mut errors = Vec::new();
+@@ -1835,7 +2146,7 @@ mod tests {
+                     .semantics()
+                     .iter()
+                     .map(|n| n.id.0)
+-                    .chain([9002])
++                    .chain([9002, 90_000_031])
+                     .collect(),
+                 "settings.open" => vec![90_000_012],
+                 "palette.open" => vec![90_000_002],
+diff --git a/apps/bareline/src/windows_app/modal.rs b/apps/bareline/src/windows_app/modal.rs
+index 78fc243..64f9436 100644
+--- a/apps/bareline/src/windows_app/modal.rs
++++ b/apps/bareline/src/windows_app/modal.rs
+@@ -16,12 +16,15 @@ pub(super) const COMPARE_GROUP_ID: u64 = 90_000_025;
+ pub(super) const COMPARE_GENERAL_ID: u64 = 91_000_200;
+ pub(super) const COMPARE_COLORS_ID: u64 = 91_000_201;
+ pub(super) const COMPARE_DONE_ID: u64 = 91_000_202;
++pub(super) const RECOVERY_GROUP_ID: u64 = 100_900;
++pub(super) const RECOVERY_CLOSE_ID: u64 = 100_504;
+ 
+ #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+ pub(super) enum ModalSurface {
+     Run,
+     Goto,
+     CompareOptions,
++    Recovery,
+ }
+ 
+ #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+@@ -84,6 +87,16 @@ impl ModalDescriptor {
+                 None,
+                 OutsideDismissal::Block,
+             ),
++            ModalSurface::Recovery => (
++                ModalSemanticIds {
++                    group: RECOVERY_GROUP_ID,
++                    primary: RECOVERY_CLOSE_ID,
++                    submit: 100_500,
++                    cancel: RECOVERY_CLOSE_ID,
++                },
++                None,
++                OutsideDismissal::Block,
++            ),
+         };
+         Self {
+             surface,
+@@ -113,6 +126,22 @@ impl Shell {
+     }
+ 
+     fn modal_invoker(&self) -> u64 {
++        if let Some(id) = self.search_folder_accessibility_focus() {
++            return id;
++        }
++        if let Some(workspace) = &self.workspace {
++            if workspace.find.has_focus() {
++                return workspace
++                    .find
++                    .semantics(1200.0)
++                    .into_iter()
++                    .find(|node| node.focused)
++                    .map_or(6000, |node| node.id.0);
++            }
++            if workspace.search_focus && workspace.search_panel.open {
++                return workspace.search_panel.accessibility_focus_id().unwrap_or(7000);
++            }
++        }
+         self.ui_focus.focused().map_or_else(
+             || {
+                 self.workspace.as_ref().map_or(2, |workspace| {
+@@ -193,25 +222,46 @@ impl Shell {
+                 self.compare.color_field.cancel();
+                 self.compare.color_bounds = None;
+             }
++            ModalSurface::Recovery => {
++                self.recovery.dismiss();
++            }
+         }
+         if let Some(renderer) = &mut self.renderer {
+             match modal.surface {
+                 ModalSurface::Run => self.run_prompt.field.release(renderer),
+                 ModalSurface::Goto => self.goto.field.release(renderer),
+                 ModalSurface::CompareOptions => self.compare.color_field.release(renderer),
++                ModalSurface::Recovery => {}
+             }
+         }
+         self.ui_focus.close_layer();
++        let restored = self.ui_focus.focused().map(|id| id.0).unwrap_or(modal.invoker);
++        let mut restored_owner =
++            (77_000..77_007).contains(&restored) && self.search_folder_accessibility(restored, false, None);
+         if let Some(workspace) = &mut self.workspace {
+-            match self.ui_focus.focused().map(|id| id.0).unwrap_or(modal.invoker) {
+-                6000 | 6001 => {
+-                    workspace.find.accessibility_action(modal.invoker, true);
++            match restored {
++                id if workspace.find.open
++                    && workspace.find.semantics(1200.0).iter().any(|node| {
++                        node.id.0 == id
++                            && !node.disabled
++                            && node.actions.contains(&bareline_ui::widgets::SemanticAction::Focus)
++                    }) =>
++                {
++                    workspace.find.accessibility_action(restored, true);
+                     workspace.search_focus = false;
++                    restored_owner = true;
++                }
++                20000 if workspace.search_panel.open => {
++                    workspace.find.blur();
++                    workspace.search_focus = true;
++                    workspace.search_panel.accessibility_focus(7000);
++                    restored_owner = true;
+                 }
+-                20000 => {
++                id if workspace.search_panel.owns_accessibility_id(id) => {
+                     workspace.find.blur();
+                     workspace.search_focus = true;
+-                    workspace.search_panel.focused = true;
++                    workspace.search_panel.accessibility_focus(id);
++                    restored_owner = true;
+                 }
+                 _ => {
+                     workspace.find.blur();
+@@ -219,6 +269,9 @@ impl Shell {
+                 }
+             }
+         }
++        if !restored_owner {
++            self.ui_focus.focus(bareline_ui::ViewId(2));
++        }
+         if let Some(window) = &self.window {
+             window.request_redraw();
+         }
+@@ -255,6 +308,7 @@ impl Shell {
+                 ModalSurface::Run if id == RUN_FIELD_ID => Some(id),
+                 ModalSurface::Goto if id == GOTO_FIELD_ID => Some(id),
+                 ModalSurface::CompareOptions if id == 59_999 => Some(id),
++                ModalSurface::Recovery => None,
+                 _ => None,
+             };
+         }
+@@ -316,6 +370,7 @@ impl Shell {
+                 ModalSurface::Run => self.run_prompt.bounds.contains(self.pointer),
+                 ModalSurface::Goto => self.goto.bounds.contains(self.pointer),
+                 ModalSurface::CompareOptions => true,
++                ModalSurface::Recovery => true,
+             };
+             if !inside {
+                 if modal.outside_dismissal == OutsideDismissal::Dismiss {
+@@ -328,10 +383,14 @@ impl Shell {
+             ModalSurface::Run => self.run_prompt_event(el, event),
+             ModalSurface::Goto => self.goto_event(el, event),
+             ModalSurface::CompareOptions => self.compare_event(el, event),
++            ModalSurface::Recovery => self.recovery_event(el, event),
+         };
+         if handled
+-            && modal.surface == ModalSurface::CompareOptions
+-            && let Some(focus) = self.compare_accessibility_focus()
++            && let Some(focus) = match modal.surface {
++                ModalSurface::CompareOptions => self.compare_accessibility_focus(),
++                ModalSurface::Recovery => self.recovery_accessibility_focus(),
++                _ => None,
++            }
+         {
+             self.modal_focus(modal.surface, focus);
+         }
+diff --git a/apps/bareline/src/windows_app/recovery.rs b/apps/bareline/src/windows_app/recovery.rs
+index 75ae595..0b0157b 100644
+--- a/apps/bareline/src/windows_app/recovery.rs
++++ b/apps/bareline/src/windows_app/recovery.rs
+@@ -125,6 +125,9 @@ fn format_size(bytes: u64) -> String {
+         format!("{value:.1} {}", UNITS[unit])
+     }
+ }
++fn should_auto_open(documents: usize, allow: bool, open: bool, another_modal: bool) -> bool {
++    documents > 0 && allow && !open && !another_modal
++}
+ #[derive(Default)]
+ pub(super) struct RecoveryRuntime {
+     root: Option<PathBuf>,
+@@ -145,6 +148,7 @@ pub(super) struct RecoveryRuntime {
+     preview: Option<Receiver<Result<String, String>>>,
+     preview_text: String,
+     preview_cancellation: bareline_file_io::cancellation::Cancellation,
++    allow_auto_open: bool,
+ }
+ impl RecoveryRuntime {
+     pub(super) fn has_input_focus(&self) -> bool {
+@@ -171,6 +175,7 @@ impl RecoveryRuntime {
+     fn rebuild_rows(&mut self) {
+         self.rows = group_documents(&self.entries);
+         self.selected = self.selected.min(self.rows.len().saturating_sub(1));
++        self.focus = None;
+     }
+     pub(super) fn configure(&mut self, root: Option<PathBuf>) {
+         self.cancellation.cancel();
+@@ -181,6 +186,14 @@ impl RecoveryRuntime {
+         self.entries.clear();
+         self.rows.clear();
+         self.cancellation = Default::default();
++        self.allow_auto_open = true;
++    }
++    pub(super) fn dismiss(&mut self) {
++        self.open = false;
++        self.preview_cancellation.cancel();
++        self.confirm_discard = None;
++        self.focus = None;
++        self.allow_auto_open = false;
+     }
+ }
+ impl Drop for RecoveryRuntime {
+@@ -190,6 +203,24 @@ impl Drop for RecoveryRuntime {
+     }
+ }
+ impl Shell {
++    fn recovery_auto_open_blocked(&self) -> bool {
++        self.modal.is_some()
++            || self.palette.open
++            || self.search_modal()
++            || self.settings.controller.open
++            || self.shortcuts.open
++            || self.macros.controller.manager.open
++            || self.extensions.open
++            || self.power.open
++            || self.utilities.has_input_focus()
++            || self.panels_accessibility_focus().is_some()
++            || self.views_accessibility_focus().is_some()
++            || self
++                .workspace
++                .as_ref()
++                .is_some_and(|workspace| workspace.find.has_focus() || workspace.search_focus)
++    }
++
+     pub(super) fn recovery_dispatch(&mut self, el: &ActiveEventLoop, id: &str) -> bool {
+         if !self.recovery.action_enabled(id) {
+             if let Some(workspace) = &mut self.workspace {
+@@ -202,13 +233,13 @@ impl Shell {
+                 if !self.ensure_workspace(el) {
+                     return true;
+                 }
++                self.activate_modal(modal::ModalSurface::Recovery);
+                 self.recovery.open = true;
++                self.recovery.allow_auto_open = true;
+                 self.recovery.started = false;
+             }
+             "recovery.keep" => {
+-                self.recovery.open = false;
+-                self.recovery.preview_cancellation.cancel();
+-                self.recovery.confirm_discard = None;
++                self.dismiss_modal(modal::ModalSurface::Recovery);
+             }
+             "recovery.restore_selected" => {
+                 if let Some(directory) = self
+@@ -219,7 +250,7 @@ impl Shell {
+                     && self.ensure_workspace(el)
+                 {
+                     self.workspace.as_mut().unwrap().restore_paged_recovery(directory);
+-                    self.recovery.open = false;
++                    self.dismiss_modal(modal::ModalSurface::Recovery);
+                 }
+             }
+             "recovery.compare" => {
+@@ -243,7 +274,7 @@ impl Shell {
+                             recovered: None,
+                         });
+                         workspace.restore_paged_recovery(directory);
+-                        self.recovery.open = false;
++                        self.dismiss_modal(modal::ModalSurface::Recovery);
+                     } else {
+                         workspace.message = Some(
+                             "This recovery has no original disk path. Open the recovered copy or export saved edits."
+@@ -596,9 +627,16 @@ impl Shell {
+                             self.recovery.entries = entries;
+                             self.recovery.rebuild_rows();
+                             let documents = self.recovery.rows.len();
+-                            self.recovery.open |= documents > 0;
+-                            if documents > 0 {
++                            let open_center = should_auto_open(
++                                documents,
++                                self.recovery.allow_auto_open,
++                                self.recovery.open,
++                                self.recovery_auto_open_blocked(),
++                            );
++                            if open_center {
+                                 self.ensure_workspace(_el);
++                                self.activate_modal(modal::ModalSurface::Recovery);
++                                self.recovery.open = true;
+                             }
+                             if documents > 0
+                                 && let Some(workspace) = &mut self.workspace
+@@ -666,8 +704,7 @@ impl Shell {
+             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
+                 match &event.logical_key {
+                     Key::Named(NamedKey::Escape) => {
+-                        self.recovery.confirm_discard = None;
+-                        self.recovery.open = false;
++                        self.dismiss_modal(modal::ModalSurface::Recovery);
+                     }
+                     Key::Named(NamedKey::ArrowDown) => {
+                         self.recovery.focus = None;
+@@ -679,11 +716,14 @@ impl Shell {
+                         self.recovery.selected = self.recovery.selected.saturating_sub(1)
+                     }
+                     Key::Named(NamedKey::Tab) => {
+-                        self.recovery.focus = next_recovery_focus(
+-                            self.recovery.focus,
+-                            self.recovery.hits.len(),
+-                            self.modifiers.shift_key(),
+-                        );
++                        let enabled: Vec<_> = self
++                            .recovery
++                            .hits
++                            .iter()
++                            .map(|(_, command)| self.recovery.action_enabled(command))
++                            .collect();
++                        self.recovery.focus =
++                            next_recovery_focus(self.recovery.focus, &enabled, self.modifiers.shift_key());
+                     }
+                     Key::Named(NamedKey::Enter) | Key::Named(NamedKey::Space) => {
+                         let id = self
+@@ -847,26 +887,22 @@ impl RecoveryRuntime {
+     }
+ }
+ 
+-fn next_recovery_focus(current: Option<usize>, count: usize, backwards: bool) -> Option<usize> {
+-    if count == 0 {
++fn next_recovery_focus(current: Option<usize>, enabled: &[bool], backwards: bool) -> Option<usize> {
++    if enabled.is_empty() || !enabled.iter().any(|enabled| *enabled) {
+         return None;
+     }
+-    Some(match current {
+-        None => {
+-            if backwards {
+-                count - 1
+-            } else {
+-                0
+-            }
+-        }
+-        Some(index) => {
+-            if backwards {
+-                (index % count + count - 1) % count
+-            } else {
+-                (index % count + 1) % count
+-            }
++    let mut index = current.unwrap_or(if backwards { 0 } else { enabled.len() - 1 });
++    for _ in 0..enabled.len() {
++        index = if backwards {
++            (index + enabled.len() - 1) % enabled.len()
++        } else {
++            (index + 1) % enabled.len()
++        };
++        if enabled[index] {
++            return Some(index);
+         }
+-    })
++    }
++    None
+ }
+ fn center_consumes_event(event: &WindowEvent) -> bool {
+     matches!(
+@@ -886,17 +922,15 @@ mod tests {
+         runtime.open = true;
+         let mut ops = Vec::new();
+         runtime.draw(Default::default(), 1000.0, 600.0, &mut ops);
+-        let mut focus = None;
+-        for (_, command) in &runtime.hits {
+-            focus = next_recovery_focus(focus, runtime.hits.len(), false);
+-            assert_eq!(&runtime.hits[focus.unwrap()].1, command);
+-        }
++        let enabled: Vec<_> = runtime
++            .hits
++            .iter()
++            .map(|(_, command)| runtime.action_enabled(command))
++            .collect();
++        let focus = next_recovery_focus(None, &enabled, false);
++        assert_eq!(runtime.hits[focus.unwrap()].1, "recovery.keep");
+         assert!(runtime.hits.iter().any(|(_, command)| command == "recovery.compare"));
+-        assert_eq!(next_recovery_focus(focus, runtime.hits.len(), false), Some(0));
+-        assert_eq!(
+-            next_recovery_focus(Some(0), runtime.hits.len(), true),
+-            Some(runtime.hits.len() - 1)
+-        );
++        assert_eq!(next_recovery_focus(focus, &enabled, false), focus);
+         let mut ids: Vec<_> = runtime
+             .hits
+             .iter()
+@@ -984,6 +1018,27 @@ mod tests {
+         assert_eq!(rows.len(), 2);
+         assert!(rows.iter().all(|row| row.name == "Untitled document" && row.count == 1));
+     }
++
++    #[test]
++    fn removed_rows_select_the_nearest_survivor_and_closed_discovery_stays_closed() {
++        let mut runtime = RecoveryRuntime::default();
++        runtime.entries = vec![
++            (PathBuf::from("one"), inspection(Some("/docs/one.txt"), 1, 10)),
++            (PathBuf::from("two"), inspection(Some("/docs/two.txt"), 2, 10)),
++        ];
++        runtime.rebuild_rows();
++        runtime.selected = 1;
++        runtime.focus = Some(0);
++        runtime.entries.truncate(1);
++        runtime.rebuild_rows();
++        assert_eq!(runtime.selected, 0);
++        assert_eq!(runtime.focus, None);
++
++        runtime.dismiss();
++        assert!(!should_auto_open(1, runtime.allow_auto_open, runtime.open, false));
++        assert!(!should_auto_open(1, true, false, true));
++        assert!(should_auto_open(1, true, false, false));
++    }
+ }
+ 
+ fn recovery_action_id(command: &str) -> u64 {
+@@ -1238,11 +1293,16 @@ pub(super) fn accessibility_test_cases() -> Vec<(
+             runtime.confirm_discard = Some(vec![PathBuf::from("checkpoint-1")]);
+         }
+         runtime.draw(Default::default(), 1000.0, 800.0, &mut Vec::new());
++        let enabled: Vec<_> = runtime
++            .hits
++            .iter()
++            .map(|(_, command)| runtime.action_enabled(command))
++            .collect();
+         if scenario == "focus_forward" {
+-            runtime.focus = next_recovery_focus(None, runtime.hits.len(), false);
++            runtime.focus = next_recovery_focus(None, &enabled, false);
+         }
+         if scenario == "focus_backward" {
+-            runtime.focus = next_recovery_focus(None, runtime.hits.len(), true);
++            runtime.focus = next_recovery_focus(None, &enabled, true);
+         }
+         result.push((
+             scenario,
+@@ -1253,6 +1313,13 @@ pub(super) fn accessibility_test_cases() -> Vec<(
+     result
+ }
+ 
++#[cfg(test)]
++pub(super) fn accessibility_modal_test_setup(shell: &mut Shell) {
++    shell.activate_modal(modal::ModalSurface::Recovery);
++    shell.recovery.open = true;
++    shell.recovery.draw(Default::default(), 1000.0, 800.0, &mut Vec::new());
++}
++
+ #[cfg(windows)]
+ mod alive {
+     const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+diff --git a/apps/bareline/src/windows_app/search.rs b/apps/bareline/src/windows_app/search.rs
+index df7b18d..17806cf 100644
+--- a/apps/bareline/src/windows_app/search.rs
++++ b/apps/bareline/src/windows_app/search.rs
+@@ -9,6 +9,49 @@ use bareline_document::TextOffset;
+ use bareline_file_io::lifecycle::Fingerprint;
+ use bareline_search::folders::FolderScope;
+ use std::{ops::Range, sync::Arc};
++
++pub(super) fn select_panel_tab(
++    workspace: &mut bareline_app::workspace::Workspace,
++    tab: bareline_app::search_panel::SearchTab,
++) {
++    match tab {
++        bareline_app::search_panel::SearchTab::Find | bareline_app::search_panel::SearchTab::Replace => {
++            let query = workspace.search_panel.query();
++            workspace.search_panel.hide();
++            workspace.search_focus = false;
++            let _ = workspace.find.set_query(&query);
++            if tab == bareline_app::search_panel::SearchTab::Replace {
++                workspace.find.show_replace();
++            } else {
++                workspace.find.show();
++            }
++        }
++        bareline_app::search_panel::SearchTab::Files => {
++            let query = workspace.find.query();
++            workspace.find.blur();
++            workspace.search_panel.show();
++            workspace.search_panel.field.select_all();
++            workspace.search_panel.field.insert(&query.pattern);
++            workspace.search_focus = true;
++        }
++    }
++}
++
++pub(super) fn accessibility_invoke_panel(
++    workspace: &mut bareline_app::workspace::Workspace,
++    id: u64,
++) -> (bool, Option<usize>) {
++    if !workspace.search_panel.owns_accessibility_id(id) {
++        return (false, None);
++    }
++    let activation = workspace.search_panel.accessibility_activate(id);
++    if let Some(tab) = workspace.search_panel.take_tab_requested() {
++        select_panel_tab(workspace, tab);
++        return (true, None);
++    }
++    let active = activation.and_then(|(source, range)| workspace.activate_search(source, range));
++    (true, active)
++}
+ #[derive(Default)]
+ pub(super) struct SearchRuntime {
+     folder: folder::FolderControls,
+diff --git a/apps/bareline/src/windows_app/search/folder.rs b/apps/bareline/src/windows_app/search/folder.rs
+index 9684204..c8521b9 100644
+--- a/apps/bareline/src/windows_app/search/folder.rs
++++ b/apps/bareline/src/windows_app/search/folder.rs
+@@ -22,6 +22,8 @@ pub(super) struct FolderControls {
+     count_beyond_limit: bool,
+     error: Option<String>,
+     pub ime_caret: Option<Rect>,
++    accessibility_revision: std::cell::Cell<u64>,
++    accessibility_fingerprint: std::cell::Cell<u64>,
+ }
+ impl Default for FolderControls {
+     fn default() -> Self {
+@@ -38,6 +40,8 @@ impl Default for FolderControls {
+             count_beyond_limit: false,
+             error: None,
+             ime_caret: None,
++            accessibility_revision: std::cell::Cell::new(0),
++            accessibility_fingerprint: std::cell::Cell::new(0),
+         }
+     }
+ }
+@@ -87,6 +91,12 @@ impl FolderControls {
+         self.focus = index;
+     }
+     pub fn show(&mut self, root: PathBuf, query: bareline_search::SearchQuery) {
++        self.accessibility_revision.set(
++            self.accessibility_revision
++                .get()
++                .checked_add(1)
++                .expect("folder search accessibility revision exhausted"),
++        );
+         self.root = Some(root);
+         self.fields[0].select_all();
+         self.fields[0].insert(&query.pattern);
+@@ -302,6 +312,41 @@ impl Shell {
+             None
+         }
+     }
++    pub(in crate::windows_app) fn search_folder_accessibility_text_field(&self) -> Option<(u64, u64, &TextField)> {
++        (self.search.folder.open && self.search.folder.focus < 3).then(|| {
++            let index = self.search.folder.focus;
++            let field = &self.search.folder.fields[index];
++            use std::hash::{Hash, Hasher};
++            let mut state = std::collections::hash_map::DefaultHasher::new();
++            index.hash(&mut state);
++            field.value().hash(&mut state);
++            field.selection().hash(&mut state);
++            field.composition_text().hash(&mut state);
++            let fingerprint = state.finish();
++            if fingerprint != self.search.folder.accessibility_fingerprint.get() {
++                self.search.folder.accessibility_fingerprint.set(fingerprint);
++                self.search.folder.accessibility_revision.set(
++                    self.search
++                        .folder
++                        .accessibility_revision
++                        .get()
++                        .checked_add(1)
++                        .expect("folder search accessibility revision exhausted"),
++                );
++            }
++            (
++                BASE + index as u64,
++                self.search.folder.accessibility_revision.get(),
++                field,
++            )
++        })
++    }
++    pub(in crate::windows_app) fn search_folder_accessibility_focus(&self) -> Option<u64> {
++        self.search
++            .folder
++            .open
++            .then_some(BASE + self.search.folder.focus as u64)
++    }
+     pub(in crate::windows_app) fn search_folder_event(&mut self, event: &WindowEvent) -> bool {
+         if !self.search.folder.open || self.palette.open {
+             return false;
+diff --git a/crates/app/src/find.rs b/crates/app/src/find.rs
+index 6d29036..de09058 100644
+--- a/crates/app/src/find.rs
++++ b/crates/app/src/find.rs
+@@ -47,6 +47,8 @@ pub struct FindController {
+     requested: Option<(DocumentSnapshot, String, bool, bool, SearchMode)>,
+     pressed: Option<FindAction>,
+     keyboard_focus: Option<FindAction>,
++    accessibility_revision: std::cell::Cell<u64>,
++    accessibility_fingerprint: std::cell::Cell<u64>,
+ }
+ impl Default for FindController {
+     fn default() -> Self {
+@@ -72,6 +74,8 @@ impl Default for FindController {
+             requested: None,
+             pressed: None,
+             keyboard_focus: None,
++            accessibility_revision: std::cell::Cell::new(0),
++            accessibility_fingerprint: std::cell::Cell::new(0),
+         }
+     }
+ }
+@@ -197,11 +201,18 @@ impl FindController {
+     }
+ 
+     pub fn show(&mut self) {
++        self.accessibility_revision.set(
++            self.accessibility_revision
++                .get()
++                .checked_add(1)
++                .expect("find accessibility revision exhausted"),
++        );
+         self.cancelled_query = None;
+         if self.results.is_none() {
+             self.requested = None;
+         }
+         self.open = true;
++        self.replacing = false;
+         self.focused = true;
+         self.keyboard_focus = None;
+         self.field.select_all();
+@@ -253,6 +264,33 @@ impl FindController {
+             &mut self.field
+         }
+     }
++    pub fn accessibility_text_field(&self) -> Option<(u64, u64, &TextField)> {
++        if !self.has_focus() || !self.focused {
++            return None;
++        }
++        let (owner, field) = if self.replacing && self.replacement_focus {
++            (6001, &self.replacement)
++        } else {
++            (6000, &self.field)
++        };
++        use std::hash::{Hash, Hasher};
++        let mut state = std::collections::hash_map::DefaultHasher::new();
++        owner.hash(&mut state);
++        field.value().hash(&mut state);
++        field.selection().hash(&mut state);
++        field.composition_text().hash(&mut state);
++        let fingerprint = state.finish();
++        if fingerprint != self.accessibility_fingerprint.get() {
++            self.accessibility_fingerprint.set(fingerprint);
++            self.accessibility_revision.set(
++                self.accessibility_revision
++                    .get()
++                    .checked_add(1)
++                    .expect("find accessibility revision exhausted"),
++            );
++        }
++        Some((owner, self.accessibility_revision.get(), field))
++    }
+     pub fn enter_action(&self) -> FindAction {
+         self.keyboard_focus.unwrap_or(if self.replacement_focus {
+             FindAction::ReplaceOne
+diff --git a/crates/app/src/search_panel.rs b/crates/app/src/search_panel.rs
+index 5cf6e2e..10b3a11 100644
+--- a/crates/app/src/search_panel.rs
++++ b/crates/app/src/search_panel.rs
+@@ -19,8 +19,18 @@ use std::{
+ };
+ 
+ pub const HEIGHT: f32 = 260.0;
++pub const FIND_TAB_ID: u64 = 7_100;
++pub const REPLACE_TAB_ID: u64 = 7_101;
++pub const FILES_TAB_ID: u64 = 7_102;
+ const ROW_HEIGHT: f32 = 28.0;
+ type Activation = (DocumentSnapshot, Range<TextOffset>);
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum SearchTab {
++    Find,
++    Replace,
++    Files,
++}
+ pub fn register_commands(
+     registry: &mut bareline_commands::CommandRegistry,
+ ) -> Result<(), bareline_commands::CommandId> {
+@@ -73,6 +83,10 @@ pub struct SearchPanel {
+     list_bounds: Rect,
+     field_bounds: Rect,
+     search_requested: bool,
++    tab_requested: Option<SearchTab>,
++    semantic_focus: Option<u64>,
++    accessibility_revision: std::cell::Cell<u64>,
++    accessibility_fingerprint: std::cell::Cell<u64>,
+     visible_names: Vec<(usize, String)>,
+ }
+ impl SearchPanel {
+@@ -91,12 +105,42 @@ impl SearchPanel {
+     pub fn status(&self) -> &str {
+         &self.status
+     }
++    pub fn accessibility_text_field(&self) -> Option<(u64, u64, &TextField)> {
++        if !self.open || !self.focused || self.semantic_focus.is_some_and(|id| id != 7000) {
++            return None;
++        }
++        use std::hash::{Hash, Hasher};
++        let mut state = std::collections::hash_map::DefaultHasher::new();
++        self.field.value().hash(&mut state);
++        self.field.selection().hash(&mut state);
++        self.field.composition_text().hash(&mut state);
++        let fingerprint = state.finish();
++        if fingerprint != self.accessibility_fingerprint.get() {
++            self.accessibility_fingerprint.set(fingerprint);
++            self.accessibility_revision.set(
++                self.accessibility_revision
++                    .get()
++                    .checked_add(1)
++                    .expect("search accessibility revision exhausted"),
++            );
++        }
++        Some((7000, self.accessibility_revision.get(), &self.field))
++    }
+     pub fn accessibility_activate(&mut self, id: u64) -> Option<Activation> {
+         self.semantic_action(ViewId(id), SemanticAction::Invoke)
+     }
+     pub fn accessibility_focus(&mut self, id: u64) {
+         self.semantic_action(ViewId(id), SemanticAction::Focus);
+     }
++    pub fn accessibility_focus_id(&self) -> Option<u64> {
++        self.semantics()
++            .into_iter()
++            .find(|node| node.focused)
++            .map(|node| node.id.0)
++    }
++    pub fn take_tab_requested(&mut self) -> Option<SearchTab> {
++        self.tab_requested.take()
++    }
+     pub fn semantics(&self) -> Vec<Semantics> {
+         if !self.open {
+             return Vec::new();
+@@ -108,7 +152,7 @@ impl SearchPanel {
+             "search.open_documents",
+             self.field_bounds,
+             ControlState {
+-                focused: self.focused,
++                focused: self.focused && self.semantic_focus.is_none_or(|id| id == 7000),
+                 ..Default::default()
+             },
+         )
+@@ -116,6 +160,47 @@ impl SearchPanel {
+         .action(SemanticAction::SetValue);
+         field.value = Some(self.field.value().into());
+         let mut nodes = vec![field];
++        for (id, name, tab, bounds) in [
++            (
++                FIND_TAB_ID,
++                "Find",
++                SearchTab::Find,
++                rect(self.bounds.x + 12.0, self.bounds.y, 58.0, 34.0),
++            ),
++            (
++                REPLACE_TAB_ID,
++                "Replace",
++                SearchTab::Replace,
++                rect(self.bounds.x + 70.0, self.bounds.y, 88.0, 34.0),
++            ),
++            (
++                FILES_TAB_ID,
++                "Files",
++                SearchTab::Files,
++                rect(self.bounds.x + 158.0, self.bounds.y, 70.0, 34.0),
++            ),
++        ] {
++            let mut node = Semantics::new(
++                ViewId(id),
++                SemanticRole::Tab,
++                name,
++                match tab {
++                    SearchTab::Find => "search.find",
++                    SearchTab::Replace => "search.replace",
++                    SearchTab::Files => "search.open_documents",
++                },
++                bounds,
++                ControlState {
++                    focused: self.semantic_focus == Some(id),
++                    ..Default::default()
++                },
++            )
++            .action(SemanticAction::Focus)
++            .action(SemanticAction::Invoke)
++            .action(SemanticAction::Select);
++            node.selected = tab == SearchTab::Files;
++            nodes.push(node);
++        }
+         for (id, name, command, bounds, disabled) in [
+             (
+                 7001,
+@@ -163,6 +248,7 @@ impl SearchPanel {
+                     bounds,
+                     ControlState {
+                         disabled,
++                        focused: self.semantic_focus == Some(id),
+                         ..Default::default()
+                     },
+                 )
+@@ -189,7 +275,8 @@ impl SearchPanel {
+                     ROW_HEIGHT,
+                 ),
+                 ControlState {
+-                    focused: !self.focused && self.selected == Some(*row),
++                    focused: self.semantic_focus == Some(2_000_000 + *row as u64)
++                        || (self.semantic_focus.is_none() && !self.focused && self.selected == Some(*row)),
+                     ..Default::default()
+                 },
+             )
+@@ -208,15 +295,36 @@ impl SearchPanel {
+             return None;
+         }
+         match id.0 {
+-            7000 if action == SemanticAction::Focus => self.focused = true,
++            7000 if action == SemanticAction::Focus => {
++                self.focused = true;
++                self.semantic_focus = Some(7000);
++            }
++            7001..=7003 if action == SemanticAction::Focus => {
++                self.focused = false;
++                self.semantic_focus = Some(id.0);
++            }
+             7001 if action == SemanticAction::Invoke => self.search_requested = true,
+             7002 if action == SemanticAction::Invoke => self.cancel(),
+             7003 if action == SemanticAction::Invoke => self.hide(),
++            FIND_TAB_ID if matches!(action, SemanticAction::Invoke | SemanticAction::Select) => {
++                self.tab_requested = Some(SearchTab::Find)
++            }
++            REPLACE_TAB_ID if matches!(action, SemanticAction::Invoke | SemanticAction::Select) => {
++                self.tab_requested = Some(SearchTab::Replace)
++            }
++            FILES_TAB_ID if matches!(action, SemanticAction::Invoke | SemanticAction::Select) => {
++                self.tab_requested = Some(SearchTab::Files)
++            }
++            FIND_TAB_ID..=FILES_TAB_ID if action == SemanticAction::Focus => {
++                self.focused = false;
++                self.semantic_focus = Some(id.0);
++            }
+             number if number >= 2000000 => {
+                 let row = (number - 2000000) as usize;
+                 if row < self.row_count() {
+                     self.selected = Some(row);
+                     self.focused = false;
++                    self.semantic_focus = Some(number);
+                     self.reveal();
+                     if action == SemanticAction::Invoke {
+                         return self.activate();
+@@ -228,13 +336,21 @@ impl SearchPanel {
+         None
+     }
+     pub fn show(&mut self) {
++        self.accessibility_revision.set(
++            self.accessibility_revision
++                .get()
++                .checked_add(1)
++                .expect("search accessibility revision exhausted"),
++        );
+         self.open = true;
+         self.focused = true;
++        self.semantic_focus = Some(7000);
+         self.field.select_all();
+     }
+     pub fn hide(&mut self) {
+         self.open = false;
+         self.focused = false;
++        self.semantic_focus = None;
+     }
+     pub fn release(&mut self, backend: &mut impl TextBackend) {
+         self.field.release(backend);
+@@ -269,6 +385,12 @@ impl SearchPanel {
+         mut query: SearchQuery,
+         notify: Arc<dyn Fn() + Send + Sync>,
+     ) {
++        self.accessibility_revision.set(
++            self.accessibility_revision
++                .get()
++                .checked_add(1)
++                .expect("search accessibility revision exhausted"),
++        );
+         self.paged_activation = None;
+         self.open = true;
+         self.folder_options = None;
+@@ -317,6 +439,12 @@ impl SearchPanel {
+         platform: Arc<dyn bareline_platform::LocalFileSystem>,
+         notify: Arc<dyn Fn() + Send + Sync>,
+     ) {
++        self.accessibility_revision.set(
++            self.accessibility_revision
++                .get()
++                .checked_add(1)
++                .expect("search accessibility revision exhausted"),
++        );
+         self.folder_options = Some((scope.clone(), trust.clone(), platform.clone(), notify.clone()));
+         self.open = true;
+         self.pending = None;
+@@ -466,8 +594,16 @@ impl SearchPanel {
+                 self.offsets.push(self.offsets.last().copied().unwrap() + rows);
+             }
+         }
+-        if self.selected.is_some_and(|row| row >= self.row_count()) {
+-            self.selected = None;
++        let row_count = self.row_count();
++        if let Some(selected) = self.selected {
++            self.selected = if row_count == 0 {
++                None
++            } else {
++                Some(selected.min(row_count - 1))
++            };
++            if self.semantic_focus.is_some_and(|id| id >= 2_000_000) {
++                self.semantic_focus = self.selected.map(|row| 2_000_000 + row as u64);
++            }
+         }
+     }
+     fn row_count(&self) -> usize {
+@@ -531,6 +667,7 @@ impl SearchPanel {
+         match key {
+             Key::Escape => {
+                 self.focused = false;
++                self.semantic_focus = None;
+                 self.field.cancel();
+             }
+             Key::Enter if self.focused => self.search_requested = true,
+@@ -543,6 +680,7 @@ impl SearchPanel {
+                     Key::Up => self.selected.unwrap_or(1).saturating_sub(1),
+                     _ => (self.selected.map_or(0, |i| i + 1)).min(self.row_count() - 1),
+                 });
++                self.semantic_focus = self.selected.map(|row| 2_000_000 + row as u64);
+                 self.reveal();
+             }
+             Key::Tab => {
+@@ -550,6 +688,11 @@ impl SearchPanel {
+                 if !self.focused && self.selected.is_none() && self.row_count() > 0 {
+                     self.selected = Some(0);
+                 }
++                self.semantic_focus = if self.focused {
++                    Some(7000)
++                } else {
++                    self.selected.map(|row| 2_000_000 + row as u64)
++                };
+             }
+             _ => {}
+         }
+@@ -559,8 +702,28 @@ impl SearchPanel {
+         if !self.open || !self.bounds.contains(point) {
+             return None;
+         }
++        for (bounds, tab) in [
++            (rect(self.bounds.x + 12.0, self.bounds.y, 58.0, 34.0), SearchTab::Find),
++            (
++                rect(self.bounds.x + 70.0, self.bounds.y, 88.0, 34.0),
++                SearchTab::Replace,
++            ),
++            (rect(self.bounds.x + 158.0, self.bounds.y, 70.0, 34.0), SearchTab::Files),
++        ] {
++            if bounds.contains(point) {
++                self.tab_requested = Some(tab);
++                self.focused = false;
++                self.semantic_focus = Some(match tab {
++                    SearchTab::Find => FIND_TAB_ID,
++                    SearchTab::Replace => REPLACE_TAB_ID,
++                    SearchTab::Files => FILES_TAB_ID,
++                });
++                return None;
++            }
++        }
+         if self.field_bounds.contains(point) {
+             self.focused = true;
++            self.semantic_focus = Some(7000);
+             return None;
+         }
+         self.focused = false;
+@@ -584,6 +747,7 @@ impl SearchPanel {
+         .contains(point)
+         {
+             self.search_requested = true;
++            self.semantic_focus = Some(7001);
+             return None;
+         }
+         if rect(
+@@ -595,11 +759,13 @@ impl SearchPanel {
+         .contains(point)
+         {
+             self.cancel();
++            self.semantic_focus = Some(7002);
+             return None;
+         }
+         if self.list_bounds.contains(point) {
+             let row = ((point.y - self.list_bounds.y) as f64 + self.scroll) / ROW_HEIGHT as f64;
+             self.selected = (row >= 0.0 && (row as usize) < self.row_count()).then_some(row as usize);
++            self.semantic_focus = self.selected.map(|row| 2_000_000 + row as u64);
+             return self.activate();
+         }
+         None
+@@ -628,10 +794,18 @@ impl SearchPanel {
+         ops.push(DrawOp::FillRounded(self.bounds, ELEVATED, 4.0));
+         ops.push(DrawOp::StrokeRounded(self.bounds, BORDER, 4.0, 1.0));
+         ops.push(DrawOp::PushClip(self.bounds));
+-        text(ops, 26.0, top + 10.0, "Find", 13.0, TEXT);
++        text(ops, 26.0, top + 10.0, "Find", 13.0, MUTED);
+         text(ops, 94.0, top + 10.0, "Replace", 13.0, MUTED);
+-        text(ops, 184.0, top + 10.0, "Files", 13.0, MUTED);
+-        ops.push(DrawOp::Fill(rect(18.0, top + 31.0, 58.0, 2.0), ACCENT));
++        text(ops, 184.0, top + 10.0, "Files", 13.0, TEXT);
++        ops.push(DrawOp::Fill(rect(164.0, top + 31.0, 70.0, 2.0), ACCENT));
++        if let Some(bounds) = match self.semantic_focus {
++            Some(FIND_TAB_ID) => Some(rect(18.0, top, 58.0, 34.0)),
++            Some(REPLACE_TAB_ID) => Some(rect(76.0, top, 88.0, 34.0)),
++            Some(FILES_TAB_ID) => Some(rect(164.0, top, 70.0, 34.0)),
++            _ => None,
++        } {
++            ops.push(DrawOp::Stroke(bounds, ACCENT, 2.0));
++        }
+         text(ops, width - 32.0, top + 9.0, "×", 14.0, TEXT);
+         let caret = self.field.draw(backend, self.field_bounds, self.focused, ops)?;
+         let query = self.query();
+@@ -695,7 +869,8 @@ impl SearchPanel {
+                 let label = if let Some(index) = matched {
+                     let found = &file.matches[index];
+                     format!(
+-                        "{}: {}",
++                        "{}; line unavailable; byte {}; {}",
++                        file.path.display(),
+                         found.range.start.0,
+                         found.excerpt.replace(['\r', '\n', '\t'], " ")
+                     )
+@@ -727,7 +902,8 @@ impl SearchPanel {
+                 }
+                 let label = if let Some(index) = matched {
+                     format!(
+-                        "Offset {}: {}",
++                        "{}; line unavailable; byte {}; {}",
++                        document.label,
+                         document.results.matches[index].range.start.0,
+                         document.excerpts[index].replace(['\r', '\n', '\t'], " ")
+                     )
+@@ -776,7 +952,13 @@ impl SearchPanel {
+                     .unwrap_or_else(|_| "?".into());
+                 text(ops, 52.0, y + 6.0, &line, 13.0, MUTED);
+                 text(ops, 108.0, y + 6.0, &excerpt, 13.0, TEXT);
+-                self.visible_names.push((row, format!("Line {line}: {excerpt}")));
++                let name = labels
++                    .iter()
++                    .find(|(candidate, _)| candidate.same_document(snapshot))
++                    .map(|(_, name)| name.as_str())
++                    .unwrap_or("Closed document");
++                self.visible_names
++                    .push((row, format!("{name}; line {line}; {excerpt}")));
+             } else {
+                 let name = labels
+                     .iter()
+@@ -862,6 +1044,13 @@ mod tests {
+                 &mut ops,
+             )
+             .unwrap();
++        let first_result = panel
++            .semantics()
++            .into_iter()
++            .find(|node| node.id.0 == 2_000_001)
++            .unwrap();
++        assert!(first_result.name.contains("example.txt; line 1;"));
++        assert!(first_result.actions.contains(&SemanticAction::Invoke));
+         assert!(balanced_clips(&ops));
+         assert!(ops.len() < 100);
+         panel.key(Key::Home);
+@@ -894,4 +1083,47 @@ mod tests {
+         assert_eq!(panel.query().pattern, "needle");
+         assert!(panel.query().selection.is_none());
+     }
++
++    #[test]
++    fn accessibility_tabs_select_modes_and_provider_revisions_do_not_recycle() {
++        let mut panel = SearchPanel::default();
++        panel.show();
++        let first = panel.accessibility_text_field().unwrap().1;
++        panel.field.insert("é");
++        let changed = panel.accessibility_text_field().unwrap().1;
++        assert!(changed > first);
++        panel.field.set_selection(0, "é".len());
++        let selected = panel.accessibility_text_field().unwrap().1;
++        assert!(selected > changed);
++
++        let semantics = panel.semantics();
++        for id in [FIND_TAB_ID, REPLACE_TAB_ID, FILES_TAB_ID] {
++            let tab = semantics.iter().find(|node| node.id.0 == id).unwrap();
++            assert_eq!(tab.role, SemanticRole::Tab);
++            assert!(tab.actions.contains(&SemanticAction::Invoke));
++            assert!(tab.actions.contains(&SemanticAction::Select));
++        }
++        assert!(
++            semantics
++                .iter()
++                .find(|node| node.id.0 == FILES_TAB_ID)
++                .unwrap()
++                .selected
++        );
++        panel.semantic_action(ViewId(REPLACE_TAB_ID), SemanticAction::Select);
++        assert_eq!(panel.take_tab_requested(), Some(SearchTab::Replace));
++
++        panel.hide();
++        panel.show();
++        let reopened = panel.accessibility_text_field().unwrap().1;
++        assert!(reopened > selected);
++
++        panel.selected = Some(4);
++        panel.semantic_focus = Some(2_000_004);
++        panel.offsets = vec![0, 5];
++        panel.rebuild_rows();
++        assert_eq!(panel.row_count(), 0);
++        assert_eq!(panel.selected, None);
++        assert_eq!(panel.semantic_focus, None);
++    }
+ }
+diff --git a/crates/platform-windows/src/accessibility.rs b/crates/platform-windows/src/accessibility.rs
+index 3534702..e93911e 100644
+--- a/crates/platform-windows/src/accessibility.rs
++++ b/crates/platform-windows/src/accessibility.rs
+@@ -30,6 +30,7 @@ fn tree(snapshot: &AccessibilitySnapshot) -> TreeUpdate {
+             AccessibilityRole::Separator => Role::Splitter,
+             AccessibilityRole::Tooltip => Role::Tooltip,
+             AccessibilityRole::Alert => Role::Alert,
++            AccessibilityRole::TabList => Role::TabList,
+             AccessibilityRole::Tab => Role::Tab,
+             AccessibilityRole::Scrollbar => Role::ScrollBar,
+             AccessibilityRole::Tree => Role::Tree,
+@@ -446,6 +447,43 @@ mod tests {
+         assert_eq!(update.nodes[2].1.value(), Some("aé"));
+     }
+     #[test]
++    fn provider_tree_maps_tab_list_and_selected_tab() {
++        let mut model = snapshot();
++        model.nodes.push(AccessibilityNode {
++            id: 10,
++            parent: 1,
++            role: AccessibilityRole::TabList,
++            name: "Search modes".into(),
++            value: None,
++            bounds: [0., 0., 300., 30.],
++            disabled: false,
++            selected: false,
++            expanded: None,
++            focusable: false,
++            invokable: false,
++        });
++        model.nodes.push(AccessibilityNode {
++            id: 11,
++            parent: 10,
++            role: AccessibilityRole::Tab,
++            name: "Files".into(),
++            value: None,
++            bounds: [200., 0., 100., 30.],
++            disabled: false,
++            selected: true,
++            expanded: None,
++            focusable: true,
++            invokable: true,
++        });
++        let update = tree(&model);
++        let list = update.nodes.iter().find(|(id, _)| *id == NodeId(10)).unwrap();
++        let tab = update.nodes.iter().find(|(id, _)| *id == NodeId(11)).unwrap();
++        assert_eq!(list.1.role(), Role::TabList);
++        assert_eq!(tab.1.role(), Role::Tab);
++        assert_eq!(tab.1.is_selected(), Some(true));
++        assert!(tab.1.supports_action(Action::Click));
++    }
++    #[test]
+     fn provider_actions_map_to_absolute_bytes_without_document_reads() {
+         let shared = Arc::new(Mutex::new(Shared {
+             snapshot: snapshot(),
+diff --git a/crates/platform/src/accessibility.rs b/crates/platform/src/accessibility.rs
+index 25f0c29..6104e74 100644
+--- a/crates/platform/src/accessibility.rs
++++ b/crates/platform/src/accessibility.rs
+@@ -16,6 +16,7 @@ pub enum AccessibilityRole {
+     Separator,
+     Tooltip,
+     Alert,
++    TabList,
+     Tab,
+     Scrollbar,
+     Tree,
+diff --git a/docs/implementation/2026-09-12-audit-implementation/PR-U07.md b/docs/implementation/2026-09-12-audit-implementation/PR-U07.md
+new file mode 100644
+index 0000000..245c241
+--- /dev/null
++++ b/docs/implementation/2026-09-12-audit-implementation/PR-U07.md
+@@ -0,0 +1,44 @@
++# PR-U07 — Search and Recovery accessibility focus
++
++## Baseline
++
++- Base commit: `97fcf41ce355874358129453cf2a2f77d2ee0095`
++- Worktree: `audit-implementation-worktrees/modal`
++
++## Scope
++
++Complete Search and Recovery Center semantics, text-provider ownership, focus movement, and modal/background isolation on top of PR-U01. Split-view providers remain assigned to PR-U08, and shared dock redesign remains assigned to PR-U11.
++
++## Decisions
++
++- Reuse PR-U01's modal descriptor for Recovery Center. Its semantic group is the active layer, so editor, tabs, and unrelated chrome become inert while recovery owns focus.
++- Publish the visually focused Find, Replace, open-document, or folder field through the native text provider. Search provider identities use a namespace that editor selection rejects plus a non-recycling revision encoded with the field owner.
++- Treat Find, Replace, and Files as one semantic mode group. Files remains the selected tab while the bottom search panel is visible; pointer and accessibility invocation transfer the current query into the requested panel.
++- Keep asynchronous search/recovery publication data-only after close. Search row rebuilds clamp to the nearest surviving row; Recovery discovery may update the status but cannot reopen a dismissed Center or displace another modal.
++- Folder and paged sources do not retain a full line index in their bounded result receipts. Their row names state `line unavailable`, retain the exact path/document and byte offset, and include the bounded excerpt rather than synthesizing a line number.
++
++## Changed files
++
++- `apps/bareline/src/windows_app/modal.rs`: Recovery modal descriptor and shared input/focus dispatch.
++- `apps/bareline/src/windows_app/recovery.rs`: inert modal lifecycle, enabled-only focus traversal, late-open guard, nearest-row regression fixtures.
++- `apps/bareline/src/windows_app/accessibility.rs`: search field provider ownership, stale-selection rejection, tab grouping/actions, Recovery active-layer checks.
++- `apps/bareline/src/windows_app.rs`, `apps/bareline/src/windows_app/search.rs`, and `search/folder.rs`: tab routing and folder provider revision ownership.
++- `crates/app/src/find.rs` and `crates/app/src/search_panel.rs`: focused-field ownership, mode semantics, stable result names, focus/selection state, and provider revisions.
++- `crates/platform/src/accessibility.rs` and `crates/platform-windows/src/accessibility.rs`: neutral `TabList` role and native UIA Tab container mapping.
++
++## Focused checks
++
++- Source-only checks completed in the isolated worktree: `rustfmt --edition 2024` on the changed Rust files and `git diff --check`.
++- Per integration policy, no worker Cargo or native desktop run was performed. Root can run the contained regressions after applying the commit:
++  - `cargo test -p bareline-app --offline --locked search_panel::tests::accessibility_tabs_select_modes_and_provider_revisions_do_not_recycle`
++  - `cargo test -p bareline-app --offline --locked search_panel::tests::grouped_panel_draws_only_visible_rows_and_activates_exact_source`
++  - `cargo test -p bareline --offline --locked --features perf-spans,qa-inventory --bin bareline windows_app::accessibility::tests::search_provider_tracks_field_selection_modes_and_close_without_editing_document`
++  - `cargo test -p bareline --offline --locked --features perf-spans,qa-inventory --bin bareline windows_app::accessibility::tests::recovery_modal_hides_background_text_and_restores_the_find_invoker`
++  - `cargo test -p bareline --offline --locked --features perf-spans,qa-inventory --bin bareline windows_app::recovery::tests::removed_rows_select_the_nearest_survivor_and_closed_discovery_stays_closed`
++  - `cargo test -p bareline-platform-windows --offline --locked accessibility::tests::provider_tree_maps_tab_list_and_selected_tab`
++- Search semantic/provider changes require a reviewed native-semantic golden refresh in the integration checkout. Capture to a candidate with `BARELINE_CAPTURE_ACCESSIBILITY_GOLDEN`, inspect the Search-only delta, install it in `tests/a11y/native-semantic.json`, then rerun `cargo test -p bareline --offline --locked --features perf-spans,qa-inventory --bin bareline windows_app::accessibility::tests::complete_native_semantic_json_golden`.
++
++## Unresolved qualifications
++
++- Native desktop and integrated Cargo qualification are owned by the root integration pass.
++- Folder and paged search receipts expose exact byte ranges but no retained full line index. The accessible name reports that the line is unavailable; adding bounded line metadata at worker publication belongs with the later search-result binding work rather than scanning source data on the UI thread.

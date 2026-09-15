@@ -1,0 +1,15 @@
+{
+  "arguments": [
+    "test",
+    "-p",
+    "bareline-file-io",
+    "--lib",
+    "profile_migration::tests",
+    "--locked"
+  ],
+  "completed_utc": "2026-09-12T14:10:21.6309206Z",
+  "integration_snapshot": "127e99ed7bcc477015c4c698bc34347db433c53f",
+  "exit_code": 0,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\final-T02-path-codec-central.log"
+}

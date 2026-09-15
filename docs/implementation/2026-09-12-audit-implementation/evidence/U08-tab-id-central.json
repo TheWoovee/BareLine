@@ -1,0 +1,18 @@
+{
+  "arguments": [
+    "test",
+    "--offline",
+    "--locked",
+    "-p",
+    "bareline-app",
+    "--lib",
+    "restored_tab_ids_must_fit_the_native_provider_block_contract",
+    "--",
+    "--test-threads=1"
+  ],
+  "completed_utc": "2026-09-12T08:26:35.2452846Z",
+  "integration_snapshot": "190410a7bbd4b0efe2d7e1a8245f672aa3503e2f",
+  "exit_code": 0,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\U08-tab-id-central.log"
+}

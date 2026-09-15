@@ -1,0 +1,165 @@
+diff --git a/apps/bareline/src/windows_app/accessibility.rs b/apps/bareline/src/windows_app/accessibility.rs
+index c8a53b7..89af738 100644
+--- a/apps/bareline/src/windows_app/accessibility.rs
++++ b/apps/bareline/src/windows_app/accessibility.rs
+@@ -828,13 +828,16 @@ impl Shell {
+         }
+         let mut manager = Vec::new();
+         let mut output = Vec::new();
++        let mut output_row_focused = false;
+         for semantic in self.macros.controller.semantics() {
+             let is_output = semantic.id.0 >= 2_000_000;
+             if semantic.focused
+                 && !self.settings.controller.open
+-                && (!is_output || self.dock.active() == Some(super::dock::DockTab::Output))
++                && (!is_output
++                    || (self.dock.active() == Some(super::dock::DockTab::Output) && self.macros.output_focused()))
+             {
+                 focus = semantic.id.0;
++                output_row_focused = is_output;
+             }
+             let mut node = bareline_app::accessibility::semantic_node(&semantic, 1);
+             if is_output {
+@@ -847,6 +850,34 @@ impl Shell {
+                 manager.push(node);
+             }
+         }
++        if self.dock.active() == Some(super::dock::DockTab::Output)
++            && let Some(layout) = self.dock.current_layout()
++        {
++            let mut bounds = layout.body;
++            bounds.x += editor_bounds.x;
++            bounds.y += editor_bounds.y;
++            output.push(AccessibilityNode {
++                id: super::macros::OUTPUT_BODY_ID,
++                parent: 1,
++                role: AccessibilityRole::List,
++                name: "Command output".into(),
++                value: None,
++                bounds: [
++                    bounds.x as f64,
++                    bounds.y as f64,
++                    bounds.width as f64,
++                    bounds.height as f64,
++                ],
++                disabled: false,
++                selected: false,
++                expanded: None,
++                focusable: true,
++                invokable: false,
++            });
++            if self.macros.output_focused() && !output_row_focused {
++                focus = super::macros::OUTPUT_BODY_ID;
++            }
++        }
+         semantic_group(&mut chrome, 90_000_014, "Macro and Run manager", manager);
+         semantic_group(&mut chrome, 90_000_015, "Command output", output);
+         let power_nodes = self.power.accessibility_nodes();
+@@ -2284,7 +2315,7 @@ pub(super) mod tests {
+         shell.activate_dock_tab(super::super::dock::DockTab::Output);
+         let snapshot = shell_snapshot(&shell);
+         snapshot.validate().unwrap();
+-        assert_eq!(snapshot.focus, super::super::dock::TAB_IDS[2]);
++        assert_eq!(snapshot.focus, super::super::macros::OUTPUT_BODY_ID);
+         assert_eq!(
+             snapshot
+                 .nodes
+@@ -2300,6 +2331,27 @@ pub(super) mod tests {
+                 .accessibility_text_source()
+                 .is_none_or(|source| { source.identity().0 != SEARCH_TEXT_NAMESPACE })
+         );
++
++        let output = "src/example.rs:12:3\nBuild finished";
++        assert!(
++            shell
++                .macros
++                .controller
++                .update_output_snapshot(Some(output), (output.len(), 0), "Exited(0)",)
++        );
++        let body = shell.dock.current_layout().unwrap().body;
++        shell
++            .macros
++            .draw_output_in(body, bareline_renderer::Point::default(), &mut Vec::new());
++        let _ = shell.macros.controller.output_accessibility(2_000_000, false);
++        shell.focus_dock_body(super::super::dock::DockTab::Output);
++        assert_eq!(shell_snapshot(&shell).focus, 2_000_000);
++
++        shell.dock.focus_active();
++        shell.deactivate_dock_focus();
++        assert_eq!(shell_snapshot(&shell).focus, super::super::dock::TAB_IDS[2]);
++        shell.blur_dock_ownership();
++        assert_eq!(shell_snapshot(&shell).focus, bareline_app::accessibility::EDITOR_ID);
+     }
+ 
+     #[test]
+@@ -2348,7 +2400,7 @@ pub(super) mod tests {
+ 
+         shell.dock.focus_active();
+         shell.focus_dock_body(super::super::dock::DockTab::Output);
+-        assert!(shell.macros.output_has_focus());
++        assert!(shell.macros.output_focused());
+         assert!(shell.dock.accessibility_focus().is_none());
+ 
+         shell.dock.focus_active();
+diff --git a/apps/bareline/src/windows_app/macros.rs b/apps/bareline/src/windows_app/macros.rs
+index 8a7fa08..99776c3 100644
+--- a/apps/bareline/src/windows_app/macros.rs
++++ b/apps/bareline/src/windows_app/macros.rs
+@@ -15,6 +15,8 @@ use std::{
+     sync::mpsc,
+ };
+ 
++pub(super) const OUTPUT_BODY_ID: u64 = 90_000_016;
++
+ #[cfg(test)]
+ pub(super) fn accessibility_test_cases() -> Vec<(
+     &'static str,
+@@ -165,8 +167,7 @@ impl MacrosRuntime {
+     pub(super) fn set_output_focused(&mut self, focused: bool) {
+         self.focused = focused;
+     }
+-    #[cfg(test)]
+-    pub(super) fn output_has_focus(&self) -> bool {
++    pub(super) fn output_focused(&self) -> bool {
+         self.focused
+     }
+     fn output_point(&self, point: Point) -> Point {
+@@ -428,11 +429,6 @@ impl MacrosRuntime {
+             revision,
+         }
+     }
+-    pub fn draw_output(&mut self, width: f32, height: f32, ops: &mut Vec<DrawOp>) {
+-        self.bounds = bareline_ui::rect(0.0, (height - 24.0 - self.height()).max(0.0), width, self.height());
+-        self.output_offset = Point::default();
+-        self.controller.draw_output(self.bounds, self.theme, ops);
+-    }
+     pub(super) fn draw_output_in(
+         &mut self,
+         bounds: bareline_renderer::Rect,
+@@ -612,6 +608,14 @@ impl Shell {
+         invoke: bool,
+         value: Option<String>,
+     ) -> bool {
++        if id == OUTPUT_BODY_ID && self.dock.active() == Some(super::dock::DockTab::Output) {
++            self.dock.blur_focus();
++            self.macros.focused = true;
++            if let Some(window) = &self.window {
++                window.request_redraw();
++            }
++            return true;
++        }
+         if !self.macros.controller.semantics().iter().any(|node| node.id.0 == id) {
+             return false;
+         }
+diff --git a/docs/implementation/2026-09-12-audit-implementation/PR-U11.md b/docs/implementation/2026-09-12-audit-implementation/PR-U11.md
+index cf094af..687d782 100644
+--- a/docs/implementation/2026-09-12-audit-implementation/PR-U11.md
++++ b/docs/implementation/2026-09-12-audit-implementation/PR-U11.md
+@@ -19,6 +19,7 @@ Unify Search, Compare controls, and Output under one bottom dock with one select
+ - Dock header focus, selected-surface control focus, and editor focus are distinct owners. Existing Search and Output user commands request and reveal their retained surface, and hidden completion is marked unread.
+ - Search owns and clips its exact supplied body, Output translates window input once into its painted editor-local body, and Compare uses a compact three-row control layout when height or width is constrained.
+ - Search translates text hit testing with the same nonzero dock origin used for paint and semantics. Every raw Search, Compare, and Output body click transfers focus from the dock header to the clicked child; Shift+Tab from the header returns to the editor.
++- Output exposes a stable focusable body when it has no selected visible row. A retained selected row can own accessibility focus only while Output owns keyboard input, so editor and dock-header focus remain authoritative.
+ 
+ ## Changed files
+ 

@@ -2,8 +2,8 @@
 use bareline_renderer::{Color, DrawOp, RenderBackend};
 use bareline_renderer_recording::RecordingBackend;
 use bareline_ui::{
-    ViewId, controls::*, overlays::*, rect, text_field::TextField, theme::UiTheme,
-    variable_list::*, virtual_tree::*, widgets::*,
+    ViewId, controls::*, overlays::*, rect, text_field::TextField, theme::UiTheme, variable_list::*, virtual_tree::*,
+    widgets::*,
 };
 
 struct Rows;
@@ -78,9 +78,7 @@ fn op_color(op: &DrawOp) -> Option<Color> {
         | DrawOp::Stroke(_, c, _)
         | DrawOp::FillRounded(_, c, _)
         | DrawOp::StrokeRounded(_, c, _, _) => Some(*c),
-        DrawOp::Text { color, .. } | DrawOp::Layout { color, .. } | DrawOp::Line { color, .. } => {
-            Some(*color)
-        }
+        DrawOp::Text { color, .. } | DrawOp::Layout { color, .. } | DrawOp::Line { color, .. } => Some(*color),
         _ => None,
     }
 }
@@ -96,15 +94,11 @@ fn every_control_records_resolved_theme_at_required_scales() {
     ] {
         let tokens = SettingsTheme::resolve(
             ThemeMode::System,
-            SystemAppearance {
-                dark,
-                high_contrast,
-            },
+            SystemAppearance { dark, high_contrast },
             &Default::default(),
         )
         .unwrap();
-        let theme =
-            UiTheme::from_tokens(|key| tokens.color(key).map(|c| (c.rgb, c.alpha))).unwrap();
+        let theme = UiTheme::from_tokens(|key| tokens.color(key).map(|c| (c.rgb, c.alpha))).unwrap();
         assert!(
             tokens
                 .color("text")
@@ -163,22 +157,13 @@ fn every_control_records_resolved_theme_at_required_scales() {
         record!("list", |ops| list().paint(&Rows, theme.widgets(), ops));
         let mut combo = Combo::new(list());
         combo.set_open(true);
-        record!("combo", |ops| combo.paint(
-            bounds,
-            &Rows,
-            theme.widgets(),
-            ops
-        ));
+        record!("combo", |ops| combo.paint(bounds, &Rows, theme.widgets(), ops));
         let range = NumberRange::new(0.0, 100.0, 5.0, 50.0).unwrap();
         let mut slider = Slider::new(bounds, range);
         slider.state = state;
         record!("slider", |ops| slider.paint(theme.widgets(), ops));
-        record!("stepper", |ops| Stepper {
-            bounds,
-            state,
-            range
-        }
-        .paint(theme.widgets(), ops));
+        record!("stepper", |ops| Stepper { bounds, state, range }
+            .paint(theme.widgets(), ops));
         let mut splitter = Splitter::new(rect(100.0, 0.0, 6.0, 100.0), true, range);
         splitter.state = state;
         record!("splitter", |ops| splitter.paint(theme.widgets(), ops));
@@ -226,17 +211,12 @@ fn every_control_records_resolved_theme_at_required_scales() {
         field.insert("Selected");
         field.select_all();
         record!("text-field", |ops| {
-            field
-                .draw_with_theme(&mut backend, bounds, true, theme, ops)
-                .unwrap();
+            field.draw_with_theme(&mut backend, bounds, true, theme, ops).unwrap();
         });
         for (control, ops) in &cases {
             assert!(!ops.is_empty(), "{name}/{control}");
             for color in ops.iter().filter_map(op_color) {
-                assert!(
-                    allowed.contains(&color),
-                    "unresolved paint {name}/{control}: {color:?}"
-                );
+                assert!(allowed.contains(&color), "unresolved paint {name}/{control}: {color:?}");
             }
             if [
                 "button",
@@ -274,8 +254,5 @@ fn every_control_records_resolved_theme_at_required_scales() {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, &snapshot).unwrap();
     }
-    assert_eq!(
-        std::fs::read_to_string(path).unwrap().replace("\r\n", "\n"),
-        snapshot
-    );
+    assert_eq!(std::fs::read_to_string(path).unwrap().replace("\r\n", "\n"), snapshot);
 }

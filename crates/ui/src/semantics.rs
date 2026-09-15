@@ -23,9 +23,7 @@ pub fn list(
         .take(4096)
         .filter_map(|index| {
             let bounds = list.row_bounds(index);
-            if bounds.y + bounds.height <= list.bounds.y
-                || bounds.y >= list.bounds.y + list.bounds.height
-            {
+            if bounds.y + bounds.height <= list.bounds.y || bounds.y >= list.bounds.y + list.bounds.height {
                 return None;
             }
             let (id, name) = identity(index);
@@ -61,10 +59,7 @@ pub fn radio_group(
     let mut nodes = list(&group.list, source, parent, identity, command);
     for entry in &mut nodes {
         entry.node.role = SemanticRole::Radio;
-        entry
-            .node
-            .actions
-            .retain(|action| *action != SemanticAction::Invoke);
+        entry.node.actions.retain(|action| *action != SemanticAction::Invoke);
     }
     nodes
 }

@@ -1,0 +1,57 @@
+diff --git a/crates/app/src/workspace.rs b/crates/app/src/workspace.rs
+index 6bd47ca..c4306be 100644
+--- a/crates/app/src/workspace.rs
++++ b/crates/app/src/workspace.rs
+@@ -5155,6 +5155,7 @@ mod tests {
+         assert_eq!(workspace.editors.len(), 1);
+         let prefix = workspace.editors[0].snapshot().clone();
+         assert!(!prefix.is_complete());
++        assert!(workspace.editors[0].read_only());
+         workspace.editors[0].enqueue(Input::Insert("forbidden".into()));
+         workspace.editors[0].enqueue(Input::Undo);
+         assert_eq!(workspace.editors[0].snapshot().revision, prefix.revision);
+@@ -5164,9 +5165,14 @@ mod tests {
+         let mut renderer = bareline_renderer_recording::RecordingBackend::default();
+         let mut ops = Vec::new();
+         workspace.draw(0, &mut renderer, 1100.0, 700.0, &mut ops).unwrap();
++        assert!(
++            ops.iter().any(
++                |op| matches!(op, DrawOp::Text { text, .. } if text.contains("Line numbers estimated · indexing"))
++            )
++        );
+         assert!(
+             ops.iter()
+-                .any(|op| matches!(op, DrawOp::Text { text, .. } if text.contains("indexing…")))
++                .any(|op| matches!(op, DrawOp::Text { text, .. } if text == "~"))
+         );
+         release.send(()).unwrap();
+         while workspace.io_busy() {
+@@ -5179,6 +5185,16 @@ mod tests {
+         assert!(workspace.editors[0].snapshot().same_document(&prefix));
+         assert_eq!(workspace.editors[0].snapshot().len(), content.len());
+         assert_eq!(workspace.path(0), Some(path.as_path()));
++        ops.clear();
++        workspace.draw(0, &mut renderer, 1100.0, 700.0, &mut ops).unwrap();
++        assert!(
++            ops.iter()
++                .all(|op| !matches!(op, DrawOp::Text { text, .. } if text.contains("estimated") || text == "~"))
++        );
++        assert!(
++            ops.iter()
++                .any(|op| matches!(op, DrawOp::Text { text, .. } if text.starts_with("Tab: ")))
++        );
+         std::fs::remove_file(path).unwrap();
+     }
+     struct GatedFileSystem(std::sync::Mutex<std::sync::mpsc::Receiver<()>>);
+diff --git a/docs/implementation/2026-09-12-audit-implementation/PR-U13.md b/docs/implementation/2026-09-12-audit-implementation/PR-U13.md
+index 02a5ca9..b006a53 100644
+--- a/docs/implementation/2026-09-12-audit-implementation/PR-U13.md
++++ b/docs/implementation/2026-09-12-audit-implementation/PR-U13.md
+@@ -11,6 +11,7 @@
+ - While incomplete, every visible label keeps its verified global number and paints a separate `~` cue in a fixed gutter column plus the existing muted color. The fixed column preserves numeral alignment at scaled DPI and does not depend on italic font availability.
+ - The status strip says line numbers are estimated and prefixes its line value with `~`. Accessibility describes the visible gutter range and caret line as estimated; the stable status nodes change to exact text once when the index reaches completion.
+ - `peer_tests::go_to_end_resolves_to_the_last_line_once_the_index_is_complete` now holds an actual scan after mutable-index acquisition and proves UI pump, progress/status reads and cancellation finish before release. It then proves an index above 99.9% remains estimated until EOF establishes its line count, preserves exact state during a held receipt publication lock, and verifies the same row loses the marker, retains its global number, reports the exact count, and does not repeat the transition. Installing a later complete resident viewport slice must preserve the full paged index's exact state.
++- The existing streaming-prefix workspace fixture now checks the current rendered contract instead of the retired generic `indexing…` copy: the incomplete same-tab prefix is read-only and renders `Line numbers estimated · indexing` plus the `~` gutter cue; the completed snapshot is writable, preserves document identity and path, renders exact tab status, and removes both estimated cues.
+ - Static checks in the private worktree: direct `rustfmt --edition 2024` on all four changed Rust files and `git diff --check`. Cargo remains central by policy.
+ 
+ ## Proposed contained integration command

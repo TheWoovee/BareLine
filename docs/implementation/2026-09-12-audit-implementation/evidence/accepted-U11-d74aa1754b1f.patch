@@ -1,0 +1,42 @@
+diff --git a/apps/bareline/src/windows_app.rs b/apps/bareline/src/windows_app.rs
+index 0fa831c..01aff57 100644
+--- a/apps/bareline/src/windows_app.rs
++++ b/apps/bareline/src/windows_app.rs
+@@ -3826,9 +3826,9 @@ impl Shell {
+         editor_bounds: bareline_renderer::Rect,
+         operations: &mut Vec<bareline_renderer::DrawOp>,
+     ) -> Result<Vec<String>, ()> {
++        self.sync_bottom_dock(editor_bounds.width, editor_bounds.height);
+         let window = self.window.as_ref().unwrap();
+         let mut footer_labels = Vec::new();
+-        self.sync_bottom_dock(editor_bounds.width, editor_bounds.height);
+         if let Some(workspace) = &mut self.workspace {
+             workspace.theme = self.settings.ui_theme();
+             let effective = self.settings.effective();
+diff --git a/apps/bareline/src/windows_app/accessibility.rs b/apps/bareline/src/windows_app/accessibility.rs
+index 4921cc1..c8a53b7 100644
+--- a/apps/bareline/src/windows_app/accessibility.rs
++++ b/apps/bareline/src/windows_app/accessibility.rs
+@@ -688,6 +688,9 @@ impl Shell {
+                 focus = semantic.id.0;
+             }
+             let mut node = bareline_app::accessibility::semantic_node(&semantic, 1);
++            if semantic.id.0 == super::dock::TAB_LIST_ID {
++                node.role = AccessibilityRole::TabList;
++            }
+             if semantic.role == bareline_ui::widgets::SemanticRole::Tab {
+                 node.parent = super::dock::TAB_LIST_ID;
+             }
+diff --git a/apps/bareline/src/windows_app/dock.rs b/apps/bareline/src/windows_app/dock.rs
+index 83666d5..34c215f 100644
+--- a/apps/bareline/src/windows_app/dock.rs
++++ b/apps/bareline/src/windows_app/dock.rs
+@@ -377,7 +377,7 @@ impl DockRuntime {
+         let Some(layout) = self.layout else { return Vec::new() };
+         let group = Semantics::new(
+             ViewId(TAB_LIST_ID),
+-            SemanticRole::TabList,
++            SemanticRole::Group,
+             "Bottom panel tabs",
+             "view.bottom_panel",
+             layout.header,

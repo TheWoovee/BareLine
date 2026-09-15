@@ -141,19 +141,11 @@ pub fn lease_history_group<'a>(
 }
 impl PagedDocument {
     pub fn history_group(&self, undo: bool) -> Option<UndoGroup> {
-        (if undo {
-            self.undo.last()
-        } else {
-            self.redo.last()
-        })
-        .and_then(|entry| entry.group.as_ref().map(|tag| tag.id))
+        (if undo { self.undo.last() } else { self.redo.last() })
+            .and_then(|entry| entry.group.as_ref().map(|tag| tag.id))
     }
     pub fn history_group_members(&self, undo: bool) -> Option<&[u64]> {
-        (if undo {
-            self.undo.last()
-        } else {
-            self.redo.last()
-        })
-        .and_then(|entry| entry.group.as_ref().map(|tag| tag.members.ids.as_ref()))
+        (if undo { self.undo.last() } else { self.redo.last() })
+            .and_then(|entry| entry.group.as_ref().map(|tag| tag.members.ids.as_ref()))
     }
 }

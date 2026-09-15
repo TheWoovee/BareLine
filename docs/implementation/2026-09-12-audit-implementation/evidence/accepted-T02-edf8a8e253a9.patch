@@ -1,0 +1,437 @@
+diff --git a/crates/file-io/src/profile_migration.rs b/crates/file-io/src/profile_migration.rs
+index 9b0b97b..35dd3f6 100644
+--- a/crates/file-io/src/profile_migration.rs
++++ b/crates/file-io/src/profile_migration.rs
+@@ -96,19 +96,33 @@ impl MigrationReport {
+ }
+ 
+ pub fn inspect_authorities(roaming: &Path, local: &Path, platform: &dyn LocalFileSystem) -> MigrationReport {
++    let journal = load_journal(local, platform)
++        .ok()
++        .filter(|journal| validate_journal(journal).is_ok());
+     let items: Vec<_> = ITEMS
+         .into_iter()
+-        .map(|name| ItemReceipt {
+-            name,
+-            state: ItemState::Pending,
+-            detail: None,
+-            retained_source: None,
+-            authority: probe_authority(&local.join(name), &roaming.join(name), platform),
+-            migrated: false,
+-            destination_present: entry_present(&local.join(name), platform).unwrap_or(false),
++        .map(|name| {
++            let destination = local.join(name);
++            let source = roaming.join(name);
++            let record = journal
++                .as_ref()
++                .and_then(|journal| journal.items.iter().find(|item| item.name == name));
++            ItemReceipt {
++                name,
++                state: record.map_or(ItemState::Pending, |record| record.state),
++                detail: record.and_then(|record| record.detail.clone()),
++                retained_source: entry_present(&source, platform)
++                    .ok()
++                    .and_then(|present| present.then_some(source.clone())),
++                authority: probe_record_authority(record, &destination, &source, platform),
++                migrated: record.is_some_and(|record| record.source.is_some()),
++                destination_present: entry_present(&destination, platform).unwrap_or(false),
++            }
+         })
+         .collect();
+-    let retryable = items.iter().any(|item| item.authority == ReadAuthority::Unavailable);
++    let retryable = items
++        .iter()
++        .any(|item| item.authority == ReadAuthority::Unavailable || item.state == ItemState::FailedRetryable);
+     MigrationReport {
+         items,
+         retryable,
+@@ -231,7 +245,7 @@ pub fn migrate(
+         report.retryable |=
+             record.state == ItemState::FailedRetryable || record.retirement == RetirementDisposition::Retry;
+         report.conflicts |= record.state == ItemState::Conflict;
+-        let authority = probe_authority(&destination, &source, platform);
++        let authority = probe_record_authority(Some(record), &destination, &source, platform);
+         let destination_present = entry_present(&destination, platform).unwrap_or(false);
+         let retained_source = entry_present(&source, platform)
+             .ok()
+@@ -276,7 +290,25 @@ fn migrate_item(
+     {
+         return Ok(());
+     }
+-    if !entry_present(source, platform)? {
++    let source_present = entry_present(source, platform)?;
++    let prior_unverified_publication = journal.items[index].source.is_some()
++        && matches!(
++            journal.items[index].state,
++            ItemState::CopiedVerified | ItemState::FailedRetryable
++        );
++    if !source_present && prior_unverified_publication {
++        let recorded = journal.items[index]
++            .source
++            .as_ref()
++            .expect("unverified publication has a recorded source fingerprint");
++        if !entry_present(destination, platform)? || fingerprint(destination, platform, budget)? != *recorded {
++            return Err(io::Error::new(
++                io::ErrorKind::InvalidData,
++                format!("unverified {name} publication cannot replace its absent retained source"),
++            ));
++        }
++    }
++    if !source_present {
+         journal.items[index].retirement = RetirementDisposition::Complete;
+         return transition(local, journal, index, ItemState::SourceRetired, None, platform);
+     }
+@@ -285,8 +317,16 @@ fn migrate_item(
+         let destination_fingerprint = fingerprint(destination, platform, budget)?;
+         if destination_fingerprint != source_fingerprint {
+             return Err(io::Error::new(
+-                io::ErrorKind::AlreadyExists,
+-                format!("{name} differs at source and destination; both copies were retained"),
++                if prior_unverified_publication {
++                    io::ErrorKind::InvalidData
++                } else {
++                    io::ErrorKind::AlreadyExists
++                },
++                if prior_unverified_publication {
++                    format!("unverified {name} publication differs from its retained source")
++                } else {
++                    format!("{name} differs at source and destination; both copies were retained")
++                },
+             ));
+         }
+     } else {
+@@ -295,10 +335,14 @@ fn migrate_item(
+             quarantine_stage(&stage, local, name, platform)?;
+         }
+         if !entry_present(&stage, platform)? {
+-            copy_entry(source, &stage, platform, budget, 0)?;
++            copy_entry(source, &stage, platform, budget, 0)
++                .map_err(|error| migration_stage_error("stage copy", error))?;
+         }
+-        let lease = platform.migration_entry_guard(&stage)?;
+-        let (staged_fingerprint, staged_children) = fingerprint_held(&stage, &lease, platform, budget)?;
++        let lease = platform
++            .migration_entry_guard(&stage)
++            .map_err(|error| migration_stage_error("stage root lease", error))?;
++        let (staged_fingerprint, staged_children) = fingerprint_held(&stage, &lease, platform, budget)
++            .map_err(|error| migration_stage_error("held stage fingerprint", error))?;
+         let source_after_copy = fingerprint(source, platform, budget)?;
+         if staged_fingerprint != source_after_copy || source_after_copy != source_fingerprint {
+             return Err(io::Error::new(
+@@ -308,15 +352,35 @@ fn migrate_item(
+         }
+         journal.items[index].source = Some(source_fingerprint.clone());
+         transition(local, journal, index, ItemState::CopiedVerified, None, platform)?;
+-        platform.publish_migration_entry(destination, lease)?;
+-        // Child leases pin the verified staged generation through the atomic
+-        // parent rename. Release them only after publication so destination
+-        // verification can reacquire the same entries by their new paths.
++        let published_identity = lease.identity;
++        // Windows cannot rename a nonempty directory while any descendant
++        // handle remains open, even when those handles share delete. The root
++        // lease still pins the staged identity across this required release.
+         drop(staged_children);
+-        if fingerprint(destination, platform, budget)? != source_fingerprint {
+-            return Err(io::Error::new(
+-                io::ErrorKind::InvalidData,
+-                format!("published {name} failed verification"),
++        platform
++            .publish_migration_entry(destination, lease)
++            .map_err(|error| migration_stage_error("stage publication", error))?;
++        let verification = fingerprint(destination, platform, budget).and_then(|fingerprint| {
++            if fingerprint == source_fingerprint {
++                Ok(())
++            } else {
++                Err(io::Error::new(
++                    io::ErrorKind::InvalidData,
++                    format!("published {name} failed verification"),
++                ))
++            }
++        });
++        if let Err(error) = verification {
++            let quarantine = quarantine_published(destination, local, name, published_identity, platform);
++            let detail = match quarantine {
++                Ok(()) => error.to_string(),
++                Err(quarantine_error) => {
++                    format!("{error}; exact-identity quarantine failed: {quarantine_error}")
++                }
++            };
++            return Err(migration_stage_error(
++                "published destination verification",
++                io::Error::new(error.kind(), detail),
+             ));
+         }
+     }
+@@ -363,6 +427,28 @@ fn migrate_item(
+     transition(local, journal, index, ItemState::SourceRetired, None, platform)
+ }
+ 
++fn probe_record_authority(
++    record: Option<&ItemRecord>,
++    local: &Path,
++    legacy: &Path,
++    platform: &dyn LocalFileSystem,
++) -> ReadAuthority {
++    let unverified_publication = record.is_some_and(|record| {
++        record.source.is_some() && matches!(record.state, ItemState::CopiedVerified | ItemState::FailedRetryable)
++    });
++    if unverified_publication {
++        return match platform.migration_entry_guard(legacy) {
++            Ok(_) => ReadAuthority::Legacy,
++            Err(_) => ReadAuthority::Unavailable,
++        };
++    }
++    probe_authority(local, legacy, platform)
++}
++
++fn migration_stage_error(stage: &'static str, error: io::Error) -> io::Error {
++    io::Error::new(error.kind(), format!("{stage}: {error}"))
++}
++
+ fn entry_present(path: &Path, platform: &dyn LocalFileSystem) -> io::Result<bool> {
+     match platform.migration_entry_guard(path) {
+         Ok(_) => Ok(true),
+@@ -694,6 +780,29 @@ fn quarantine_stage(stage: &Path, local: &Path, name: &str, platform: &dyn Local
+     platform.publish_migration_entry(&retained, lease)
+ }
+ 
++fn quarantine_published(
++    destination: &Path,
++    local: &Path,
++    name: &str,
++    expected: bareline_platform::CacheDirectoryIdentity,
++    platform: &dyn LocalFileSystem,
++) -> io::Result<()> {
++    let lease = platform.migration_entry_guard(destination)?;
++    if lease.identity != expected {
++        return Err(io::Error::new(
++            io::ErrorKind::InvalidData,
++            "published migration identity changed before quarantine",
++        ));
++    }
++    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
++    let retained = local.join(format!(
++        ".bareline-migration-incomplete-{name}-{}-{}",
++        std::process::id(),
++        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
++    ));
++    platform.publish_migration_entry(&retained, lease)
++}
++
+ struct Budget<'a> {
+     entries: usize,
+     bytes: u64,
+@@ -770,6 +879,8 @@ mod tests {
+     struct FakeFileSystem {
+         fail_reads: AtomicUsize,
+         fail_publications: AtomicUsize,
++        corrupt_publications: AtomicUsize,
++        fail_quarantines: AtomicUsize,
+         denied_root: std::sync::Mutex<Option<PathBuf>>,
+     }
+     impl FakeFileSystem {
+@@ -836,6 +947,13 @@ mod tests {
+             })
+         }
+         fn publish_migration_entry(&self, target: &Path, lease: CacheDirectoryLease) -> io::Result<()> {
++            if target
++                .file_name()
++                .is_some_and(|name| name.to_string_lossy().starts_with(".bareline-migration-incomplete-"))
++                && Self::consume(&self.fail_quarantines)
++            {
++                return Err(io::Error::other("injected quarantine failure"));
++            }
+             if Self::consume(&self.fail_publications) {
+                 return Err(io::Error::other("injected publication failure"));
+             }
+@@ -845,7 +963,11 @@ mod tests {
+             if target.exists() {
+                 return Err(io::Error::new(io::ErrorKind::AlreadyExists, "target exists"));
+             }
+-            fs::rename(lease.path, target)
++            fs::rename(lease.path, target)?;
++            if Self::consume(&self.corrupt_publications) {
++                fs::write(target.join("injected-child"), b"changed after publication")?;
++            }
++            Ok(())
+         }
+         fn open_migration_read(&self, lease: &CacheDirectoryLease) -> io::Result<fs::File> {
+             self.open_sealed_read(&lease.path)
+@@ -1017,6 +1139,52 @@ mod tests {
+         assert!(roaming.join("recovery/generation.bin").is_file());
+     }
+ 
++    #[test]
++    fn unverified_published_tree_keeps_legacy_authority_until_a_verified_retry() {
++        let temp = Temp::new("post-publish-verification-retry");
++        let (roaming, local) = temp.roots();
++        fs::create_dir(roaming.join("recovery")).unwrap();
++        fs::write(roaming.join("recovery/generation.bin"), b"original recovery bytes").unwrap();
++        let platform = FakeFileSystem::default();
++        platform.corrupt_publications.store(1, Ordering::SeqCst);
++        platform.fail_quarantines.store(1, Ordering::SeqCst);
++
++        let first = run(&roaming, &local, false, &platform);
++        let recovery = first.items.iter().find(|item| item.name == "recovery").unwrap();
++        assert_eq!(recovery.state, ItemState::FailedRetryable);
++        assert_eq!(recovery.authority, ReadAuthority::Legacy);
++        assert!(recovery.detail.as_deref().is_some_and(|detail| {
++            detail.contains("published destination verification") && detail.contains("exact-identity quarantine failed")
++        }));
++        assert!(local.join("recovery/injected-child").is_file());
++        assert_eq!(
++            inspect_authorities(&roaming, &local, &platform).authority("recovery"),
++            Some(ReadAuthority::Legacy)
++        );
++
++        let absent_source = temp.0.join("temporarily-absent-recovery");
++        fs::rename(roaming.join("recovery"), &absent_source).unwrap();
++        let absent = run(&roaming, &local, false, &platform);
++        assert_eq!(absent.state("recovery"), Some(ItemState::FailedRetryable));
++        assert_eq!(absent.authority("recovery"), Some(ReadAuthority::Unavailable));
++        assert!(local.join("recovery/injected-child").is_file());
++        assert_eq!(
++            inspect_authorities(&roaming, &local, &platform).authority("recovery"),
++            Some(ReadAuthority::Unavailable)
++        );
++
++        fs::rename(absent_source, roaming.join("recovery")).unwrap();
++        fs::remove_file(local.join("recovery/injected-child")).unwrap();
++        let second = run(&roaming, &local, false, &platform);
++        assert_eq!(second.state("recovery"), Some(ItemState::Published));
++        assert_eq!(second.authority("recovery"), Some(ReadAuthority::Local));
++        assert_eq!(
++            fs::read(local.join("recovery/generation.bin")).unwrap(),
++            b"original recovery bytes"
++        );
++        assert!(roaming.join("recovery/generation.bin").is_file());
++    }
++
+     #[test]
+     fn divergent_destination_is_a_lossless_conflict() {
+         let temp = Temp::new("conflict");
+diff --git a/docs/implementation/2026-09-12-audit-implementation/PR-T02.md b/docs/implementation/2026-09-12-audit-implementation/PR-T02.md
+index 67c55d4..1a24859 100644
+--- a/docs/implementation/2026-09-12-audit-implementation/PR-T02.md
++++ b/docs/implementation/2026-09-12-audit-implementation/PR-T02.md
+@@ -22,6 +22,7 @@ Replace the best-effort roaming-to-local renames with a versioned, per-item migr
+ - Directory enumeration charges the shared budget before retaining each entry and rejects depth beyond 64. Tree hashes use lossless length-prefixed names, explicit type/end records, file lengths and per-file content hashes.
+ - `profile.migration.retry` is an actual command owned by the retained T17 maintenance request. It regates profile readers, schedules the retry, installs the new authority receipt, then wakes the readers.
+ - R2 runtime reconciliation keeps fallback extension packages read-only until an exact local inventory restore completes, including repeated retries to the same incomplete root; preserves running extension and macro operations during retry; switches future macro reads without replacing live edits; and applies settings only when the receipt proves a migrated destination is present and no value draft is active. Dismissal, stop and cancellation commands remain available while retry maintenance is unsettled.
++- Windows requires every descendant handle to close before a nonempty staged directory can be renamed, including handles opened with delete sharing. The migration root identity remains pinned across that release and atomic rename; the journal retains legacy reader authority until a complete destination fingerprint matches. Failed verification quarantines only a reacquired matching identity when possible and otherwise leaves the unverified local tree explicitly non-authoritative for retry.
+ 
+ ## State and authority table
+ 
+@@ -42,6 +43,8 @@ Replace the best-effort roaming-to-local renames with a versioned, per-item migr
+ - `cargo test -p bareline --bin bareline migration_receipt_does_not_overwrite_a_newer_live_settings_revision --offline --locked`
+ - Deterministic fixtures cover a locked/read-denied first attempt followed by restart, injected atomic publication failure followed by staged resume, local-only, empty and damaged-journal authority, a divergent destination, retained recovery bytes, fresh file-generation conflict, durable directory-retention disposition, flat/deep traversal limits, and equal-size/equal-count tree framing. Runtime fixtures cover blocked fallback inventory removal/permission writes, successful loaded-fallback handoff to local extension and macro roots, and preservation of an open Settings tab.
+ - Native Windows adapter fixtures cover handle publication for files and nested directories, a real sharing violation followed by retry, engine restart from a verified stage, child creation while the production directory lease is held followed by the engine's retained-by-policy decision, and real junction rejection with an external sentinel.
++- `python docs/implementation/2026-09-12-audit-implementation/evidence/probe_directory_rename_with_child_lease.py` records the native handle boundary in `evidence/T02-directory-rename-child-lease-probe.log`: parent rename fails with Win32 error 5 for descendant handles sharing read alone and read plus delete.
++- The post-publication fixture injects a changed child and a failed exact-identity quarantine, proves source absence leaves the corrupted local tree unavailable, then restores the retained source, removes the injected corruption, and proves a later full verification succeeds.
+ - Failure/restart log assertions: first locked item is `FailedRetryable` with source present, local item absent and journal present; restart reaches `Published` with byte-identical local data and source still present. Injected publication failure follows the same retained-source contract and resumes from the verified stage.
+ 
+ ## Unresolved qualification
+diff --git a/docs/implementation/2026-09-12-audit-implementation/evidence/T02-directory-rename-child-lease-probe.log b/docs/implementation/2026-09-12-audit-implementation/evidence/T02-directory-rename-child-lease-probe.log
+new file mode 100644
+index 0000000..23c885a
+--- /dev/null
++++ b/docs/implementation/2026-09-12-audit-implementation/evidence/T02-directory-rename-child-lease-probe.log
+@@ -0,0 +1,2 @@
++parent_rename_with_child_share_read=failed winerror=5
++parent_rename_with_child_share_read_delete=failed winerror=5
+diff --git a/docs/implementation/2026-09-12-audit-implementation/evidence/probe_directory_rename_with_child_lease.py b/docs/implementation/2026-09-12-audit-implementation/evidence/probe_directory_rename_with_child_lease.py
+new file mode 100644
+index 0000000..ac61747
+--- /dev/null
++++ b/docs/implementation/2026-09-12-audit-implementation/evidence/probe_directory_rename_with_child_lease.py
+@@ -0,0 +1,90 @@
++"""Probe the migration handle contract using generated scratch files only."""
++import ctypes
++from ctypes import wintypes
++from pathlib import Path
++import struct
++import uuid
++
++root = Path(__file__).resolve().parent
++
++kernel = ctypes.WinDLL("kernel32", use_last_error=True)
++kernel.CreateFileW.argtypes = [
++    wintypes.LPCWSTR,
++    wintypes.DWORD,
++    wintypes.DWORD,
++    ctypes.c_void_p,
++    wintypes.DWORD,
++    wintypes.DWORD,
++    wintypes.HANDLE,
++]
++kernel.CreateFileW.restype = wintypes.HANDLE
++kernel.SetFileInformationByHandle.argtypes = [
++    wintypes.HANDLE,
++    ctypes.c_int,
++    ctypes.c_void_p,
++    wintypes.DWORD,
++]
++kernel.SetFileInformationByHandle.restype = wintypes.BOOL
++kernel.CloseHandle.argtypes = [wintypes.HANDLE]
++
++DELETE_READ_ATTRIBUTES = 0x00010080
++SHARE_READ = 0x1
++SHARE_DELETE = 0x4
++OPEN_EXISTING = 3
++NO_FOLLOW_DIRECTORY = 0x02200000
++INVALID = ctypes.c_void_p(-1).value
++
++
++def open_lease(path: Path, access: int, sharing: int) -> int:
++    handle = kernel.CreateFileW(
++        str(path),
++        access,
++        sharing,
++        None,
++        OPEN_EXISTING,
++        NO_FOLLOW_DIRECTORY if path.is_dir() else 0x00200000,
++        None,
++    )
++    if handle == INVALID:
++        raise ctypes.WinError(ctypes.get_last_error())
++    return handle
++
++
++def probe(label: str, child_sharing: int) -> None:
++    scratch = root / ("directory-rename-child-lease-" + uuid.uuid4().hex)
++    source = scratch / "stage"
++    target = scratch / "published"
++    source.mkdir(parents=True)
++    child = source / "nested.bin"
++    child.write_bytes(b"verified bytes")
++    parent_handle = open_lease(source, DELETE_READ_ATTRIBUTES, SHARE_READ)
++    child_handle = open_lease(child, 0x80, child_sharing)
++    try:
++        encoded = str(target).encode("utf-16-le")
++        # FILE_RENAME_INFO on 64-bit Windows: BOOLEAN at 0, HANDLE at 8,
++        # FileNameLength at 16, and the UTF-16 name at 20.
++        info = bytearray(20 + len(encoded) + 2)
++        struct.pack_into("<Q", info, 8, 0)
++        struct.pack_into("<I", info, 16, len(encoded))
++        info[20 : 20 + len(encoded)] = encoded
++        storage = (ctypes.c_ubyte * len(info)).from_buffer(info)
++        ok = kernel.SetFileInformationByHandle(parent_handle, 3, storage, len(info))
++        error = ctypes.get_last_error()
++        print(label + "=" + ("succeeded" if ok else f"failed winerror={error}"))
++    finally:
++        kernel.CloseHandle(child_handle)
++        kernel.CloseHandle(parent_handle)
++        published_child = target / "nested.bin"
++        if published_child.exists():
++            published_child.unlink()
++        elif child.exists():
++            child.unlink()
++        if target.exists():
++            target.rmdir()
++        elif source.exists():
++            source.rmdir()
++        scratch.rmdir()
++
++
++probe("parent_rename_with_child_share_read", SHARE_READ)
++probe("parent_rename_with_child_share_read_delete", SHARE_READ | SHARE_DELETE)

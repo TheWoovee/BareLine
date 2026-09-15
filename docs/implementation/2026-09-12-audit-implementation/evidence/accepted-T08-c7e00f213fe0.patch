@@ -1,0 +1,13 @@
+diff --git a/crates/platform-windows/src/extension_transport.rs b/crates/platform-windows/src/extension_transport.rs
+index 15a6191..91fd1ed 100644
+--- a/crates/platform-windows/src/extension_transport.rs
++++ b/crates/platform-windows/src/extension_transport.rs
+@@ -534,7 +534,7 @@ fn run_host_process(
+     // host (SEC-03) can still load exactly those files, then launch it under the restricted
+     // token; a machine that cannot build the token falls back to the job-limited launch.
+     let (stop_tx, stop_rx) = mpsc::channel();
+-    let (guard_tx, guard_rx) = mpsc::sync_channel(1);
++    let (guard_tx, guard_rx) = mpsc::sync_channel::<HostGuard>(1);
+     let abandoned = cancelled.clone();
+     let deadline = Instant::now() + Duration::from_millis(launch.budget.timeout_ms());
+     // The watchdog must exist before the untrusted process can be created and

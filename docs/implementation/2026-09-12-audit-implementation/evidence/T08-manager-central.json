@@ -1,0 +1,17 @@
+{
+  "arguments": [
+    "test",
+    "-p",
+    "bareline",
+    "--bin",
+    "bareline",
+    "windows_app::extensions::manager_tests",
+    "--offline",
+    "--locked"
+  ],
+  "completed_utc": "2026-09-12T07:26:04.5296946Z",
+  "integration_snapshot": "f4e5c6308122fda5bf81bbc2e97b6f8394f5b53f",
+  "exit_code": 101,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\T08-manager-central.log"
+}

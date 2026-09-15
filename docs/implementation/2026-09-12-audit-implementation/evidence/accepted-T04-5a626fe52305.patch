@@ -1,0 +1,118 @@
+diff --git a/crates/editor-surface/src/paged_view.rs b/crates/editor-surface/src/paged_view.rs
+index c7e39fc..e4b4556 100644
+--- a/crates/editor-surface/src/paged_view.rs
++++ b/crates/editor-surface/src/paged_view.rs
+@@ -3481,6 +3481,21 @@ mod peer_tests {
+         fn identity(&self, file: &File) -> std::io::Result<bareline_platform::FileIdentity> {
+             Platform.identity(file)
+         }
++        fn prepare_commit(
++            &self,
++            staged: &Path,
++            target: &Path,
++            mode: bareline_platform::CommitMode,
++            cancellation: &dyn bareline_platform::CommitCancellation,
++        ) -> std::io::Result<bareline_platform::PreparedCommit> {
++            bareline_platform::prepare_simulated_commit(self, staged, target, mode, cancellation)
++        }
++        fn commit_transaction(
++            &self,
++            transaction: bareline_platform::PreparedCommit,
++        ) -> std::io::Result<bareline_platform::CommitReceipt> {
++            bareline_platform::simulate_commit_transaction(self, transaction)
++        }
+         fn commit(&self, staged: &Path, target: &Path, existed: bool) -> std::io::Result<()> {
+             self.started.send(()).map_err(std::io::Error::other)?;
+             self.release
+diff --git a/crates/platform-windows/src/files.rs b/crates/platform-windows/src/files.rs
+index 892f58f..9e9585f 100644
+--- a/crates/platform-windows/src/files.rs
++++ b/crates/platform-windows/src/files.rs
+@@ -1557,6 +1557,7 @@ mod tests {
+         assert_eq!(std::fs::read(&staged).unwrap(), b"\xef\xbb\xbfba\r\n");
+         std::fs::remove_file(staged).unwrap();
+         let proposed = proposed.expect("replacement prepares editor recovery");
++        assert_eq!(std::fs::read(&proposed).unwrap(), b"\xef\xbb\xbfba\r\n");
+         std::fs::remove_dir_all(proposed.parent().unwrap()).unwrap();
+         let snapshot = opened.document.snapshot();
+         opened
+@@ -1589,7 +1590,7 @@ mod tests {
+             panic!("expected conflict")
+         };
+         assert_eq!(std::fs::read(&path).unwrap(), b"external");
+-        assert_eq!(std::fs::read(&proposed).unwrap(), b"abc");
++        assert_eq!(std::fs::read(&proposed).unwrap(), b"\xef\xbb\xbfba\r\n");
+         std::fs::remove_dir_all(transaction.parent().unwrap()).unwrap();
+         std::fs::remove_file(path).unwrap();
+         std::fs::remove_dir(directory).unwrap();
+diff --git a/crates/search/src/replace_disk.rs b/crates/search/src/replace_disk.rs
+index d133f55..200fff2 100644
+--- a/crates/search/src/replace_disk.rs
++++ b/crates/search/src/replace_disk.rs
+@@ -1374,6 +1374,9 @@ mod tests {
+         cancel: Option<SearchJob>,
+     }
+     impl LocalFileSystem for Injected {
++        fn guard_directory(&self, path: &Path) -> io::Result<std::sync::Arc<dyn Send + Sync>> {
++            WindowsFileSystem.guard_directory(path)
++        }
+         fn validate_source(&self, path: &Path) -> io::Result<()> {
+             WindowsFileSystem.validate_source(path)
+         }
+@@ -1383,24 +1386,46 @@ mod tests {
+         fn identity(&self, file: &File) -> io::Result<FileIdentity> {
+             WindowsFileSystem.identity(file)
+         }
+-        fn commit(&self, stage: &Path, target: &Path, existed: bool) -> io::Result<()> {
+-            if target == self.source && self.fail_source {
++        fn prepare_commit(
++            &self,
++            staged: &Path,
++            target: &Path,
++            mode: bareline_platform::CommitMode,
++            cancellation: &dyn bareline_platform::CommitCancellation,
++        ) -> io::Result<bareline_platform::PreparedCommit> {
++            bareline_platform::prepare_simulated_commit(self, staged, target, mode, cancellation)
++        }
++        fn commit_transaction(
++            &self,
++            transaction: bareline_platform::PreparedCommit,
++        ) -> io::Result<bareline_platform::CommitReceipt> {
++            if transaction.target == self.source && self.fail_source {
+                 return Err(io::Error::other("injected disk full before commit"));
+             }
++            let source = transaction.target == self.source;
++            let receipt = bareline_platform::simulate_commit_transaction(self, transaction)?;
++            if source {
++                self.committed.store(true, Ordering::Release);
++            }
++            Ok(receipt)
++        }
++        fn cleanup_commit(&self, receipt: &mut bareline_platform::CommitReceipt) -> io::Result<()> {
++            WindowsFileSystem.cleanup_commit(receipt)?;
++            if self.committed.load(Ordering::Acquire)
++                && let Some(job) = &self.cancel
++            {
++                job.cancel();
++            }
++            Ok(())
++        }
++        fn commit(&self, stage: &Path, target: &Path, existed: bool) -> io::Result<()> {
+             if self.fail_receipt
+                 && self.committed.load(Ordering::Acquire)
+                 && target.file_name().is_some_and(|n| n == "receipt.json")
+             {
+                 return Err(io::Error::other("injected receipt failure after source commit"));
+             }
+-            WindowsFileSystem.commit(stage, target, existed)?;
+-            if target == self.source {
+-                self.committed.store(true, Ordering::Release);
+-                if let Some(job) = &self.cancel {
+-                    job.cancel();
+-                }
+-            }
+-            Ok(())
++            WindowsFileSystem.commit(stage, target, existed)
+         }
+     }
+     #[test]

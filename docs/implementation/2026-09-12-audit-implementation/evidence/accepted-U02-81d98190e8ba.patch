@@ -1,0 +1,3200 @@
+diff --git a/apps/bareline/src/windows_app.rs b/apps/bareline/src/windows_app.rs
+index 0fa831c..1c5d67b 100644
+--- a/apps/bareline/src/windows_app.rs
++++ b/apps/bareline/src/windows_app.rs
+@@ -707,6 +707,7 @@ impl ApplicationHandler<Wake> for Handler {
+                 self.shell.app.tabs = workspace.titles();
+                 self.shell.app.active = self.shell.app.active.min(self.shell.app.tabs.len().saturating_sub(1));
+             }
++            self.shell.sync_data_safety_notifications();
+             if let Some(window) = &self.shell.window {
+                 window.request_redraw();
+             }
+@@ -1050,14 +1051,93 @@ impl Shell {
+ 
+     fn profile_initialization_message(&mut self, message: String) {
+         eprintln!("event=profile_migration_notice message={message}");
+-        if let Some(workspace) = &mut self.workspace {
+-            workspace.message = Some(message);
+-        }
++        let revision = toast::next_revision();
++        self.toasts.push_typed(
++            format!("profile-initialization-{revision}"),
++            revision,
++            bareline_ui::theme::ToastLevel::Error,
++            toast::NotificationKind::Outcome,
++            message,
++            None,
++            None,
++            toast::NotificationLifetime::Persistent,
++            Instant::now(),
++        );
+         if let Some(window) = &self.window {
+             window.request_redraw();
+         }
+     }
+ 
++    fn sync_data_safety_notifications(&mut self) {
++        let mut notifications = Vec::new();
++        if let Some(workspace) = &self.workspace {
++            for conflict in workspace.save_conflicts() {
++                let id = toast::NotificationId(format!("data-safety:save-conflict:{}", conflict.transaction.display()));
++                let target = conflict
++                    .target
++                    .as_ref()
++                    .map_or_else(|| "an unselected destination".into(), |path| path.display().to_string());
++                let details = format!(
++                    "Destination: {target}\nEditor version: {}\nOther version: {}\nRecovery transaction: {}",
++                    conflict.editor_version.display(),
++                    conflict
++                        .other_version
++                        .as_ref()
++                        .map_or_else(|| "unavailable".into(), |path| path.display().to_string()),
++                    conflict.transaction.display(),
++                );
++                notifications.push(toast::Notification::new(
++                    id,
++                    1,
++                    bareline_ui::theme::ToastLevel::Error,
++                    toast::NotificationKind::Outcome,
++                    "Save conflict: both versions were preserved.",
++                    Some(details),
++                    None,
++                    toast::NotificationLifetime::Persistent,
++                ));
++            }
++            for cleanup in workspace.save_cleanups() {
++                let id = toast::NotificationId(format!("data-safety:save-cleanup:{}", cleanup.transaction.display()));
++                let details = format!(
++                    "{}\nTarget: {}\nRetained editor version: {}\nRecovery transaction: {}",
++                    cleanup.error,
++                    cleanup.target.display(),
++                    cleanup.editor_version.display(),
++                    cleanup.transaction.display(),
++                );
++                notifications.push(toast::Notification::new(
++                    id,
++                    1,
++                    bareline_ui::theme::ToastLevel::Error,
++                    toast::NotificationKind::Outcome,
++                    "Saved data cleanup needs attention.",
++                    Some(details),
++                    None,
++                    toast::NotificationLifetime::Persistent,
++                ));
++            }
++        }
++        let active: Vec<_> = notifications.iter().map(|notice| notice.id.clone()).collect();
++        self.toasts.retain_owned("data-safety:", &active);
++        for mut notification in notifications {
++            let fingerprint = format!(
++                "{}\n{}",
++                notification.text,
++                notification.details.as_deref().unwrap_or("")
++            );
++            notification.revision = self.toasts.owned_revision(&notification.id, fingerprint);
++            self.toasts.enqueue_owned(notification, Instant::now());
++        }
++        if self
++            .modal
++            .is_some_and(|modal| modal.surface == modal::ModalSurface::NotificationDetails)
++            && !self.toasts.details_open()
++        {
++            self.dismiss_modal(modal::ModalSurface::NotificationDetails);
++        }
++    }
++
+     fn editor_has_input_focus(&self) -> bool {
+         self.window.as_ref().is_some_and(Window::has_focus)
+             && self.modal.is_none()
+@@ -1803,11 +1883,12 @@ impl Shell {
+                     self.lifecycle.cancel_preflight(document_identity);
+                     // A closed document leaves none of its notices behind (UX-60).
+                     self.toasts.clear_document(toast_identity);
++                    self.recovery.forget_document(toast_identity);
+                     // Never leave a blank editor with dashes: closing the last tab
+                     // opens a fresh Untitled and the status reads "Ready" (UX-31).
+                     if workspace.editors.is_empty() {
+                         let _ = workspace.new_document();
+-                        self.toasts.clear_all();
++                        self.toasts.clear_transient();
+                         workspace.message = Some("Ready".into());
+                     }
+                     self.app.tabs = workspace.titles();
+@@ -1831,7 +1912,19 @@ impl Shell {
+                         editor.set_read_only(target.was_read_only);
+                         editor.resume_recovery_after_discard();
+                     }
+-                    workspace.message = Some(format!("Discard remains pending: {error}. Close again to retry."));
++                    self.toasts.enqueue_owned(
++                        toast::Notification::new(
++                            format!("recovery-cleanup-{}", toast_identity.0),
++                            toast::next_revision(),
++                            bareline_ui::theme::ToastLevel::Error,
++                            toast::NotificationKind::Outcome,
++                            "Discard remains pending. Close again to retry.",
++                            Some(error),
++                            Some(toast_identity),
++                            toast::NotificationLifetime::Persistent,
++                        ),
++                        Instant::now(),
++                    );
+                 }
+                 Err(_) => {}
+             }
+@@ -1966,7 +2059,19 @@ impl Shell {
+             }
+             bareline_file_io::recovery_retirement::DiscardPoll::CleanupPending(error) => {
+                 if Self::exit_discard_still_current(workspace, consents) {
+-                    workspace.message = Some(format!("Documents discarded; recovery cleanup pending: {error}"));
++                    self.toasts.enqueue_owned(
++                        toast::Notification::new(
++                            "recovery-cleanup-exit",
++                            toast::next_revision(),
++                            bareline_ui::theme::ToastLevel::Error,
++                            toast::NotificationKind::Outcome,
++                            "Documents were discarded; recovery cleanup is pending.",
++                            Some(error),
++                            None,
++                            toast::NotificationLifetime::Persistent,
++                        ),
++                        Instant::now(),
++                    );
+                     true
+                 } else {
+                     Self::cancel_exit_discard(workspace, consents);
+@@ -2769,13 +2874,28 @@ impl ApplicationHandler for Shell {
+             button: MouseButton::Left,
+             ..
+         } = &event
+-            && self.toasts.hit(self.pointer)
++            && let Some(action) = self.toasts.hit(self.pointer)
+         {
++            match action {
++                toast::ToastAction::OpenDetails(id) if self.toasts.open_details(id) => {
++                    self.activate_modal(modal::ModalSurface::NotificationDetails);
++                }
++                other => self.toasts.perform(other),
++            }
+             if let Some(window) = &self.window {
+                 window.request_redraw();
+             }
+             return;
+         }
++        if matches!(
++            event,
++            WindowEvent::MouseInput {
++                state: ElementState::Pressed,
++                ..
++            }
++        ) {
++            self.toasts.blur();
++        }
+         let editor_bounds = self.editor_bounds();
+         let editor_pointer = self.editor_pointer();
+         if self.recovery_event(el, &event)
+@@ -3284,6 +3404,20 @@ impl Shell {
+         event: winit::event::KeyEvent,
+         editor_bounds: bareline_renderer::Rect,
+     ) {
++        if self.modal.is_none()
++            && !self.palette.open
++            && !self.settings.controller.open
++            && let Some(action) = self.toasts.key(&event.logical_key, self.modifiers.shift_key())
++        {
++            match action {
++                toast::ToastAction::OpenDetails(id) if self.toasts.open_details(id) => {
++                    self.activate_modal(modal::ModalSurface::NotificationDetails);
++                }
++                other => self.toasts.perform(other),
++            }
++            self.window.as_ref().unwrap().request_redraw();
++            return;
++        }
+         let editor_focused = !self.palette.open
+             && self
+                 .workspace
+@@ -3729,16 +3863,9 @@ impl Shell {
+             .map_or(0, |workspace| workspace.editors.len())
+             .max(1);
+         let visible_rows = ((size.height as f32 / scale / 10.0).ceil() as usize).max(1);
+-        // Fold the current status message into the toast stack (tagged with
+-        // the active document) and retire any expired info toasts (UX-60).
++        // Producers enqueue typed notices once. Redraw only retires elapsed
++        // transient notices; it never reinterprets status text as a new event.
+         let toast_now = Instant::now();
+-        let active_document = self
+-            .workspace
+-            .as_ref()
+-            .and_then(|workspace| workspace.editors.get(self.app.active))
+-            .map(|editor| editor.snapshot().identity_token());
+-        let toast_message = self.workspace.as_ref().and_then(|workspace| workspace.message.clone());
+-        self.toasts.ingest(toast_message.as_deref(), active_document, toast_now);
+         self.toasts.tick(toast_now);
+         // Hand the renderer to the frame pipeline as a local so the draw
+         // helpers can borrow it alongside disjoint `self` fields; it is
+@@ -4113,13 +4240,17 @@ impl Shell {
+                     theme.text,
+                 );
+             }
+-            // Discoverability hint for the command palette, filling the gap
+-            // between the left segments and the caret position (UX-40).
++            let scoped_status = self
++                .workspace
++                .as_ref()
++                .and_then(|workspace| workspace.editors.get(self.app.active))
++                .and_then(|editor| self.toasts.scoped_for(editor.document_identity()))
++                .map(|notice| notice.text.as_str());
+             bareline_ui::text(
+                 operations,
+                 (width / 2.0 - 90.0).max(150.0),
+                 y + 4.0,
+-                "Ctrl+Shift+P for commands",
++                scoped_status.unwrap_or("Ctrl+Shift+P for commands"),
+                 13.0,
+                 theme.muted,
+             );
+@@ -4352,6 +4483,7 @@ impl Shell {
+             operations,
+         );
+         self.toasts.draw(
++            renderer,
+             size.width as f32 / scale,
+             size.height as f32 / scale,
+             self.settings.ui_theme(),
+@@ -5015,3 +5147,61 @@ mod input_and_menu_tests {
+         }
+     }
+ }
++
++#[cfg(test)]
++mod notification_shell_tests {
++    use super::accessibility::tests::headless_shell;
++    use bareline_app::workspace::Workspace;
++    use bareline_file_io::lifecycle::SaveConflict;
++    use std::{path::PathBuf, sync::Arc};
++
++    fn conflict(index: usize) -> SaveConflict {
++        SaveConflict {
++            target: Some(PathBuf::from(format!(r"C:\target-{index}.txt"))),
++            editor_version: PathBuf::from(format!(r"C:\retained\editor-{index}.txt")),
++            other_version: Some(PathBuf::from(format!(r"C:\retained\other-{index}.txt"))),
++            transaction: PathBuf::from(format!(r"C:\retained\transaction-{index}")),
++            state: bareline_platform::CommitState::Conflict,
++            verified: true,
++        }
++    }
++
++    #[test]
++    fn shell_sync_retains_more_than_visible_conflicts_without_replay_or_status_erasure() {
++        let mut shell = headless_shell();
++        let mut workspace =
++            Workspace::new(Arc::new(|| {}), Arc::new(bareline_platform_windows::WindowsFileSystem)).unwrap();
++        workspace.message = Some("Unrelated scoped status".into());
++        for index in 0..40 {
++            workspace.track_save_conflict(conflict(index));
++        }
++        shell.workspace = Some(workspace);
++        shell.sync_data_safety_notifications();
++        shell.toasts.draw(
++            &mut bareline_renderer_recording::RecordingBackend::default(),
++            1000.0,
++            800.0,
++            Default::default(),
++            &mut Vec::new(),
++        );
++        let first = shell.toasts.accessibility();
++        assert_eq!(first.len(), 6, "five notices plus the overflow route");
++        assert_eq!(
++            shell.workspace.as_ref().unwrap().message.as_deref(),
++            Some("Unrelated scoped status")
++        );
++        shell.sync_data_safety_notifications();
++        assert_eq!(shell.toasts.accessibility().len(), first.len());
++        assert!(
++            shell
++                .toasts
++                .accessibility()
++                .last()
++                .unwrap()
++                .details
++                .as_ref()
++                .unwrap()
++                .contains("transaction-0")
++        );
++    }
++}
+diff --git a/apps/bareline/src/windows_app/accessibility.rs b/apps/bareline/src/windows_app/accessibility.rs
+index 4921cc1..4449b68 100644
+--- a/apps/bareline/src/windows_app/accessibility.rs
++++ b/apps/bareline/src/windows_app/accessibility.rs
+@@ -654,6 +654,36 @@ impl Shell {
+                     );
+                     focus = super::modal::GOTO_FIELD_ID;
+                 }
++                super::modal::ModalSurface::NotificationDetails => {
++                    if let Some((details, bounds, close_bounds)) = self.toasts.details_semantics() {
++                        semantic_group(
++                            &mut chrome,
++                            modal.semantics.group,
++                            "Notification details",
++                            vec![
++                                node(
++                                    super::toast::DETAILS_CONTENT_ID,
++                                    AccessibilityRole::Status,
++                                    "Complete notification details",
++                                    Some(details),
++                                    bounds,
++                                    false,
++                                    false,
++                                ),
++                                node(
++                                    super::toast::DETAILS_CLOSE_ID,
++                                    AccessibilityRole::Button,
++                                    "Close notification details",
++                                    None,
++                                    close_bounds,
++                                    true,
++                                    true,
++                                ),
++                            ],
++                        );
++                        focus = super::toast::DETAILS_CLOSE_ID;
++                    }
++                }
+                 _ => {}
+             }
+         }
+@@ -730,7 +760,7 @@ impl Shell {
+                 chrome.push(AccessibilityNode {
+                     id: 9000,
+                     parent: 1,
+-                    role: AccessibilityRole::Alert,
++                    role: AccessibilityRole::Status,
+                     name: message.clone(),
+                     value: None,
+                     bounds: [0., 0., 0., 0.],
+@@ -741,6 +771,89 @@ impl Shell {
+                     invokable: false,
+                 });
+             }
++            if let Some(scoped) = workspace
++                .editors
++                .get(self.app.active)
++                .and_then(|editor| self.toasts.scoped_for(editor.document_identity()))
++            {
++                chrome.push(AccessibilityNode {
++                    id: 9002,
++                    parent: 1,
++                    role: AccessibilityRole::Status,
++                    name: scoped.text.clone(),
++                    value: scoped.details.clone(),
++                    bounds: [0., 0., 0., 0.],
++                    disabled: false,
++                    selected: false,
++                    expanded: None,
++                    focusable: false,
++                    invokable: false,
++                });
++            }
++            for notice in self.toasts.accessibility() {
++                let bounds = [
++                    notice.bounds.x as f64,
++                    notice.bounds.y as f64,
++                    notice.bounds.width as f64,
++                    notice.bounds.height as f64,
++                ];
++                chrome.push(AccessibilityNode {
++                    id: notice.id,
++                    parent: 1,
++                    role: if notice.kind == toast::NotificationKind::Progress
++                        || notice.level == bareline_ui::theme::ToastLevel::Info
++                    {
++                        AccessibilityRole::Status
++                    } else {
++                        AccessibilityRole::Alert
++                    },
++                    name: notice.text.clone(),
++                    value: notice.details.clone(),
++                    bounds,
++                    disabled: false,
++                    selected: false,
++                    expanded: notice.details.as_ref().map(|_| notice.expanded),
++                    focusable: true,
++                    invokable: notice.details.is_some(),
++                });
++                if notice.details.is_some() {
++                    chrome.push(AccessibilityNode {
++                        id: notice.id + 1,
++                        parent: notice.id,
++                        role: AccessibilityRole::Button,
++                        name: if notice.expanded {
++                            "Hide notification details".into()
++                        } else {
++                            "Show notification details".into()
++                        },
++                        value: notice.details.clone(),
++                        bounds,
++                        disabled: false,
++                        selected: false,
++                        expanded: Some(notice.expanded),
++                        focusable: true,
++                        invokable: true,
++                    });
++                }
++                if notice.dismissable {
++                    chrome.push(AccessibilityNode {
++                        id: notice.id + 2,
++                        parent: notice.id,
++                        role: AccessibilityRole::Button,
++                        name: "Dismiss notification".into(),
++                        value: None,
++                        bounds,
++                        disabled: false,
++                        selected: false,
++                        expanded: None,
++                        focusable: true,
++                        invokable: true,
++                    });
++                }
++            }
++            if let Some(notification_focus) = self.toasts.accessibility_focus() {
++                focus = notification_focus;
++            }
+             if workspace.find.open {
+                 chrome.push(AccessibilityNode {
+                     id: 9001,
+@@ -1202,6 +1315,17 @@ impl Shell {
+                 // stale background actions never continue into the editor.
+                 true
+             }
++            super::modal::ModalSurface::NotificationDetails => match action {
++                AccessibilityAction::Focus(id) if *id == super::toast::DETAILS_CLOSE_ID => {
++                    self.modal_focus(modal.surface, *id);
++                    true
++                }
++                AccessibilityAction::Invoke(id) if *id == super::toast::DETAILS_CLOSE_ID => {
++                    self.dismiss_modal(modal.surface);
++                    true
++                }
++                _ => true,
++            },
+         }
+     }
+ 
+@@ -1229,6 +1353,25 @@ impl Shell {
+                 }
+                 continue;
+             }
++            let notification_action = match &action {
++                AccessibilityAction::Focus(id) => Some((*id, false)),
++                AccessibilityAction::Invoke(id) => Some((*id, true)),
++                _ => None,
++            };
++            if let Some((id, invoke)) = notification_action
++                && let Some(notification_action) = self.toasts.accessibility_action(id, invoke)
++            {
++                match notification_action {
++                    super::toast::ToastAction::OpenDetails(id) if self.toasts.open_details(id) => {
++                        self.activate_modal(super::modal::ModalSurface::NotificationDetails);
++                    }
++                    other => self.toasts.perform(other),
++                }
++                if let Some(window) = &self.window {
++                    window.request_redraw();
++                }
++                continue;
++            }
+             if self.palette.open {
+                 let id = match &action {
+                     AccessibilityAction::Focus(id)
+diff --git a/apps/bareline/src/windows_app/lifecycle.rs b/apps/bareline/src/windows_app/lifecycle.rs
+index d12a572..e2d972e 100644
+--- a/apps/bareline/src/windows_app/lifecycle.rs
++++ b/apps/bareline/src/windows_app/lifecycle.rs
+@@ -345,9 +345,17 @@ impl Shell {
+             Ok(Some(path)) => path,
+             Ok(None) => return false,
+             Err(error) => {
+-                if let Some(workspace) = &mut self.workspace {
+-                    workspace.message = Some(error);
+-                }
++                self.toasts.push_typed(
++                    "save-dialog",
++                    toast::next_revision(),
++                    bareline_ui::theme::ToastLevel::Error,
++                    toast::NotificationKind::Outcome,
++                    "The save destination could not be chosen.",
++                    Some(error),
++                    None,
++                    toast::NotificationLifetime::Persistent,
++                    Instant::now(),
++                );
+                 return false;
+             }
+         };
+@@ -404,9 +412,17 @@ impl Shell {
+                 true
+             }
+             Err(error) => {
+-                if let Some(workspace) = &mut self.workspace {
+-                    workspace.message = Some(format!("Could not check save destination: {error}"));
+-                }
++                self.toasts.push_typed(
++                    format!("save-preflight-{}", document.0),
++                    toast::next_revision(),
++                    bareline_ui::theme::ToastLevel::Error,
++                    toast::NotificationKind::Outcome,
++                    "Could not check the save destination.",
++                    Some(error.to_string()),
++                    Some(document),
++                    toast::NotificationLifetime::Persistent,
++                    Instant::now(),
++                );
+                 if save_all {
+                     self.lifecycle.failed += 1;
+                     (self.notify)();
+@@ -521,7 +537,10 @@ impl Shell {
+                     let request = self.lifecycle.allocate_conflict_open_request();
+                     let workspace = self.workspace.as_mut().unwrap();
+                     workspace.select_save_conflict(self.app.active, &conflict.transaction);
+-                    match self.lifecycle.open_conflict(workspace, request, conflict.editor_version.clone()) {
++                    match self
++                        .lifecycle
++                        .open_conflict(workspace, request, conflict.editor_version.clone())
++                    {
+                         Ok(()) => {
+                             self.lifecycle.conflict_action = Some(PendingConflictAction::SaveElsewhere {
+                                 transaction: conflict.transaction,
+@@ -531,7 +550,22 @@ impl Shell {
+                             });
+                             workspace.message = Some("Opening the preserved editor version for Save Elsewhere…".into());
+                         }
+-                        Err(_) => workspace.message = Some("The preserved editor version could not be queued; its recovery transaction remains retained.".into()),
++                        Err(_) => self.toasts.enqueue_owned(
++                            toast::Notification::new(
++                                format!("data-safety:save-conflict-open:{}", conflict.transaction.display()),
++                                toast::next_revision(),
++                                bareline_ui::theme::ToastLevel::Error,
++                                toast::NotificationKind::Outcome,
++                                "The preserved editor version could not be queued.",
++                                Some(format!(
++                                    "Recovery transaction retained at {}",
++                                    conflict.transaction.display()
++                                )),
++                                None,
++                                toast::NotificationLifetime::Persistent,
++                            ),
++                            Instant::now(),
++                        ),
+                     }
+                 }
+             }
+@@ -660,7 +694,19 @@ impl Shell {
+                             "The exact save comparison could not open ({error}); recovery files remain retained."
+                         );
+                         if pending_requests.is_empty() {
+-                            workspace.message = Some(message);
++                            self.toasts.enqueue_owned(
++                                toast::Notification::new(
++                                    format!("data-safety:save-compare:{}", transaction.display()),
++                                    toast::next_revision(),
++                                    bareline_ui::theme::ToastLevel::Error,
++                                    toast::NotificationKind::Outcome,
++                                    "The exact save comparison could not open.",
++                                    Some(message),
++                                    None,
++                                    toast::NotificationLifetime::Persistent,
++                                ),
++                                Instant::now(),
++                            );
+                         } else {
+                             self.lifecycle.conflict_action = Some(PendingConflictAction::DrainFailed {
+                                 requests: pending_requests,
+@@ -676,15 +722,33 @@ impl Shell {
+                             if !self.compare_start_pair(left, right)
+                                 && let Some(workspace) = &mut self.workspace
+                             {
+-                                workspace.message = Some(
+-                                    "The exact recovery documents closed before comparison; files remain retained."
+-                                        .into(),
++                                self.toasts.enqueue_owned(
++                                    toast::Notification::new(
++                                        format!("data-safety:save-compare:{}", transaction.display()),
++                                        toast::next_revision(),
++                                        bareline_ui::theme::ToastLevel::Error,
++                                        toast::NotificationKind::Outcome,
++                                        "The exact recovery documents closed before comparison.",
++                                        Some(format!("Recovery files remain retained at {}", transaction.display())),
++                                        None,
++                                        toast::NotificationLifetime::Persistent,
++                                    ),
++                                    Instant::now(),
+                                 );
+                             }
+                         } else {
+-                            workspace.message = Some(
+-                                "A tracked recovery document changed or closed before comparison; files remain retained."
+-                                    .into(),
++                            self.toasts.enqueue_owned(
++                                toast::Notification::new(
++                                    format!("data-safety:save-compare:{}", transaction.display()),
++                                    toast::next_revision(),
++                                    bareline_ui::theme::ToastLevel::Error,
++                                    toast::NotificationKind::Outcome,
++                                    "A tracked recovery document changed or closed before comparison.",
++                                    Some(format!("Recovery files remain retained at {}", transaction.display())),
++                                    None,
++                                    toast::NotificationLifetime::Persistent,
++                                ),
++                                Instant::now(),
+                             );
+                         }
+                     } else {
+@@ -719,15 +783,43 @@ impl Shell {
+                         }
+                     }
+                     if let Some(error) = failed {
+-                        workspace.message = Some(format!(
+-                            "The preserved editor version could not open ({error}); its recovery transaction remains retained."
+-                        ));
++                        self.toasts.enqueue_owned(
++                            toast::Notification::new(
++                                format!("data-safety:save-elsewhere:{}", transaction.display()),
++                                toast::next_revision(),
++                                bareline_ui::theme::ToastLevel::Error,
++                                toast::NotificationKind::Outcome,
++                                "The preserved editor version could not open.",
++                                Some(format!(
++                                    "{error}\nRecovery transaction retained at {}",
++                                    transaction.display()
++                                )),
++                                None,
++                                toast::NotificationLifetime::Persistent,
++                            ),
++                            Instant::now(),
++                        );
+                     } else if let Some(document) = document {
+                         if let Some(index) = resolve(workspace, document, &editor) {
+                             self.app.active = index;
+                             self.request_document_save(index, SaveOperation::SaveAs);
+                         } else {
+-                            workspace.message = Some("The tracked recovery document changed or closed before Save Elsewhere; retained bytes were not reused.".into());
++                            self.toasts.enqueue_owned(
++                                toast::Notification::new(
++                                    format!("data-safety:save-elsewhere:{}", transaction.display()),
++                                    toast::next_revision(),
++                                    bareline_ui::theme::ToastLevel::Error,
++                                    toast::NotificationKind::Outcome,
++                                    "The tracked recovery document changed or closed before Save Elsewhere.",
++                                    Some(format!(
++                                        "Retained bytes were not reused. Recovery transaction: {}",
++                                        transaction.display()
++                                    )),
++                                    None,
++                                    toast::NotificationLifetime::Persistent,
++                                ),
++                                Instant::now(),
++                            );
+                         }
+                     } else {
+                         self.lifecycle.conflict_action = Some(PendingConflictAction::SaveElsewhere {
+@@ -748,7 +840,19 @@ impl Shell {
+                             requests.retain(|request| *request != request_id);
+                         }
+                         if requests.is_empty() {
+-                            workspace.message = Some(message);
++                            self.toasts.enqueue_owned(
++                                toast::Notification::new(
++                                    "data-safety:save-conflict-open-drain",
++                                    toast::next_revision(),
++                                    bareline_ui::theme::ToastLevel::Error,
++                                    toast::NotificationKind::Outcome,
++                                    "Save conflict versions could not be opened.",
++                                    Some(message),
++                                    None,
++                                    toast::NotificationLifetime::Persistent,
++                                ),
++                                Instant::now(),
++                            );
+                         } else {
+                             self.lifecycle.conflict_action =
+                                 Some(PendingConflictAction::DrainFailed { requests, message });
+@@ -766,9 +870,20 @@ impl Shell {
+         {
+             pending.cancellation.cancel();
+             pending.cancelled = true;
+-            if let Some(workspace) = &mut self.workspace {
+-                workspace.message = Some("Save destination expired because the document changed or closed.".into());
+-            }
++            let document = pending.identity.token();
++            self.toasts.enqueue_owned(
++                toast::Notification::new(
++                    format!("data-safety:save-preflight-{}", document.0),
++                    toast::next_revision(),
++                    bareline_ui::theme::ToastLevel::Warning,
++                    toast::NotificationKind::Outcome,
++                    "Save destination expired because the document changed or closed.",
++                    None,
++                    Some(document),
++                    toast::NotificationLifetime::Persistent,
++                ),
++                Instant::now(),
++            );
+         }
+         if let Some(pending) = self.lifecycle.preflight.take() {
+             match pending.receiver.try_recv() {
+@@ -784,9 +899,18 @@ impl Shell {
+                         }
+                         return;
+                     }
+-                    if let Some(workspace) = &mut self.workspace {
+-                        workspace.message = Some("Save destination check stopped.".into());
+-                    }
++                    let document = pending.identity.token();
++                    self.toasts.push_typed(
++                        format!("save-preflight-{}", document.0),
++                        toast::next_revision(),
++                        bareline_ui::theme::ToastLevel::Error,
++                        toast::NotificationKind::Outcome,
++                        "Save destination check stopped.",
++                        None,
++                        Some(document),
++                        toast::NotificationLifetime::Persistent,
++                        Instant::now(),
++                    );
+                     if pending.save_all {
+                         self.lifecycle.failed += 1;
+                     }
+@@ -799,9 +923,18 @@ impl Shell {
+                         }
+                         return;
+                     }
+-                    if let Some(workspace) = &mut self.workspace {
+-                        workspace.message = Some(format!("Save destination rejected: {error:?}"));
+-                    }
++                    let document = pending.identity.token();
++                    self.toasts.push_typed(
++                        format!("save-preflight-{}", document.0),
++                        toast::next_revision(),
++                        bareline_ui::theme::ToastLevel::Error,
++                        toast::NotificationKind::Outcome,
++                        "Save destination rejected.",
++                        Some(format!("{error:?}")),
++                        Some(document),
++                        toast::NotificationLifetime::Persistent,
++                        Instant::now(),
++                    );
+                     if pending.save_all {
+                         self.lifecycle.failed += 1;
+                     }
+@@ -897,9 +1030,17 @@ impl Shell {
+                         }
+                         Some(Err(error)) => {
+                             self.lifecycle.failed += 1;
+-                            if let Some(workspace) = &mut self.workspace {
+-                                workspace.message = Some(error);
+-                            }
++                            self.toasts.push_typed(
++                                "save-all-dialog",
++                                toast::next_revision(),
++                                bareline_ui::theme::ToastLevel::Error,
++                                toast::NotificationKind::Outcome,
++                                "Save All could not choose a destination.",
++                                Some(error),
++                                None,
++                                toast::NotificationLifetime::Persistent,
++                                Instant::now(),
++                            );
+                             continue;
+                         }
+                         None => {
+@@ -924,12 +1065,30 @@ impl Shell {
+             }
+         }
+         self.lifecycle.running = false;
+-        if let Some(workspace) = &mut self.workspace {
+-            workspace.message = Some(format!(
++        let level = if self.lifecycle.failed == 0 {
++            bareline_ui::theme::ToastLevel::Info
++        } else {
++            bareline_ui::theme::ToastLevel::Error
++        };
++        let lifetime = if self.lifecycle.failed == 0 {
++            toast::NotificationLifetime::Transient
++        } else {
++            toast::NotificationLifetime::Persistent
++        };
++        self.toasts.push_typed(
++            "save-all-outcome",
++            toast::next_revision(),
++            level,
++            toast::NotificationKind::Outcome,
++            format!(
+                 "Save All: {} saved; {} cancelled or closed; {} failed or changed during save.",
+                 self.lifecycle.saved, self.lifecycle.skipped, self.lifecycle.failed
+-            ));
+-        }
++            ),
++            None,
++            None,
++            lifetime,
++            Instant::now(),
++        );
+     }
+ }
+ 
+diff --git a/apps/bareline/src/windows_app/modal.rs b/apps/bareline/src/windows_app/modal.rs
+index 64f9436..5753ca9 100644
+--- a/apps/bareline/src/windows_app/modal.rs
++++ b/apps/bareline/src/windows_app/modal.rs
+@@ -25,6 +25,7 @@ pub(super) enum ModalSurface {
+     Goto,
+     CompareOptions,
+     Recovery,
++    NotificationDetails,
+ }
+ 
+ #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+@@ -97,6 +98,16 @@ impl ModalDescriptor {
+                 None,
+                 OutsideDismissal::Block,
+             ),
++            ModalSurface::NotificationDetails => (
++                ModalSemanticIds {
++                    group: toast::DETAILS_GROUP_ID,
++                    primary: toast::DETAILS_CLOSE_ID,
++                    submit: toast::DETAILS_CLOSE_ID,
++                    cancel: toast::DETAILS_CLOSE_ID,
++                },
++                None,
++                OutsideDismissal::Block,
++            ),
+         };
+         Self {
+             surface,
+@@ -225,6 +236,7 @@ impl Shell {
+             ModalSurface::Recovery => {
+                 self.recovery.dismiss();
+             }
++            ModalSurface::NotificationDetails => self.toasts.close_details(),
+         }
+         if let Some(renderer) = &mut self.renderer {
+             match modal.surface {
+@@ -232,6 +244,7 @@ impl Shell {
+                 ModalSurface::Goto => self.goto.field.release(renderer),
+                 ModalSurface::CompareOptions => self.compare.color_field.release(renderer),
+                 ModalSurface::Recovery => {}
++                ModalSurface::NotificationDetails => {}
+             }
+         }
+         self.ui_focus.close_layer();
+@@ -309,6 +322,7 @@ impl Shell {
+                 ModalSurface::Goto if id == GOTO_FIELD_ID => Some(id),
+                 ModalSurface::CompareOptions if id == 59_999 => Some(id),
+                 ModalSurface::Recovery => None,
++                ModalSurface::NotificationDetails => None,
+                 _ => None,
+             };
+         }
+@@ -371,6 +385,7 @@ impl Shell {
+                 ModalSurface::Goto => self.goto.bounds.contains(self.pointer),
+                 ModalSurface::CompareOptions => true,
+                 ModalSurface::Recovery => true,
++                ModalSurface::NotificationDetails => self.toasts.details_contains(self.pointer),
+             };
+             if !inside {
+                 if modal.outside_dismissal == OutsideDismissal::Dismiss {
+@@ -384,11 +399,57 @@ impl Shell {
+             ModalSurface::Goto => self.goto_event(el, event),
+             ModalSurface::CompareOptions => self.compare_event(el, event),
+             ModalSurface::Recovery => self.recovery_event(el, event),
++            ModalSurface::NotificationDetails => {
++                match event {
++                    WindowEvent::KeyboardInput { event, .. }
++                        if event.state == ElementState::Pressed
++                            && event.logical_key == Key::Named(NamedKey::Escape) =>
++                    {
++                        self.dismiss_modal(modal.surface);
++                    }
++                    WindowEvent::KeyboardInput { event, .. }
++                        if event.state == ElementState::Pressed
++                            && (event.logical_key == Key::Named(NamedKey::Enter)
++                                || matches!(&event.logical_key, Key::Character(value) if value == " ")) =>
++                    {
++                        self.dismiss_modal(modal.surface);
++                    }
++                    WindowEvent::KeyboardInput { event, .. }
++                        if event.state == ElementState::Pressed
++                            && matches!(&event.logical_key, Key::Named(NamedKey::PageDown | NamedKey::ArrowDown)) =>
++                    {
++                        self.toasts.scroll_details(true);
++                    }
++                    WindowEvent::KeyboardInput { event, .. }
++                        if event.state == ElementState::Pressed
++                            && matches!(&event.logical_key, Key::Named(NamedKey::PageUp | NamedKey::ArrowUp)) =>
++                    {
++                        self.toasts.scroll_details(false);
++                    }
++                    WindowEvent::MouseWheel { delta, .. } => {
++                        let down = match delta {
++                            MouseScrollDelta::LineDelta(_, y) => *y < 0.0,
++                            MouseScrollDelta::PixelDelta(point) => point.y < 0.0,
++                        };
++                        self.toasts.scroll_details(down);
++                    }
++                    WindowEvent::MouseInput {
++                        state: ElementState::Pressed,
++                        button: MouseButton::Left,
++                        ..
++                    } if self.toasts.details_pointer_close(self.pointer) => {
++                        self.dismiss_modal(modal.surface);
++                    }
++                    _ => {}
++                }
++                true
++            }
+         };
+         if handled
+             && let Some(focus) = match modal.surface {
+                 ModalSurface::CompareOptions => self.compare_accessibility_focus(),
+                 ModalSurface::Recovery => self.recovery_accessibility_focus(),
++                ModalSurface::NotificationDetails => Some(toast::DETAILS_CLOSE_ID),
+                 _ => None,
+             }
+         {
+@@ -437,4 +498,49 @@ mod tests {
+         let second = ModalDescriptor::new(ModalSurface::Run, 2, 8);
+         assert_ne!((first.generation, first.revision), (second.generation, second.revision));
+     }
++
++    #[test]
++    fn notification_details_uses_the_shared_inert_modal_contract() {
++        let modal = ModalDescriptor::new(ModalSurface::NotificationDetails, 2, 41);
++        assert!(modal.inert_background);
++        assert_eq!(modal.outside_dismissal, OutsideDismissal::Block);
++        assert_eq!(modal.focused, toast::DETAILS_CLOSE_ID);
++        assert_eq!(modal.semantics.group, toast::DETAILS_GROUP_ID);
++        assert_eq!(modal.semantics.cancel, toast::DETAILS_CLOSE_ID);
++    }
++
++    #[test]
++    fn notification_modal_close_returns_next_key_to_the_shell_owner() {
++        let mut shell = super::super::accessibility::tests::headless_shell();
++        shell.toasts.enqueue(
++            toast::Notification::new(
++                "modal-contract",
++                1,
++                bareline_ui::theme::ToastLevel::Error,
++                toast::NotificationKind::Outcome,
++                "Complete message",
++                None,
++                None,
++                toast::NotificationLifetime::Persistent,
++            ),
++            std::time::Instant::now(),
++        );
++        shell.toasts.draw(
++            &mut bareline_renderer_recording::RecordingBackend::default(),
++            800.0,
++            600.0,
++            Default::default(),
++            &mut Vec::new(),
++        );
++        let details = shell.toasts.accessibility()[0].id;
++        assert!(shell.toasts.open_details(details));
++        shell.activate_modal(ModalSurface::NotificationDetails);
++        assert!(shell.dismiss_modal(ModalSurface::NotificationDetails));
++        assert!(shell.modal.is_none());
++        assert_eq!(shell.toasts.accessibility_focus(), None);
++        assert!(
++            shell.toasts.key(&Key::Named(NamedKey::Enter), false).is_none(),
++            "the first editor key after modal close must not be captured by notifications"
++        );
++    }
+ }
+diff --git a/apps/bareline/src/windows_app/recovery.rs b/apps/bareline/src/windows_app/recovery.rs
+index f2c3cb4..5189b4e 100644
+--- a/apps/bareline/src/windows_app/recovery.rs
++++ b/apps/bareline/src/windows_app/recovery.rs
+@@ -13,6 +13,12 @@ struct PendingCompare {
+     recovered: Option<super::lifecycle::Identity>,
+ }
+ type RecoveryDiscovery = Result<Vec<(PathBuf, bareline_file_io::recovery::RecoveryInspection)>, String>;
++#[derive(Clone, Debug, PartialEq, Eq)]
++enum RecoveryNoticeState {
++    Idle,
++    Preparing { directory: PathBuf },
++    Failed { directory: Option<PathBuf>, error: String },
++}
+ /// One document, collapsed from every checkpoint directory that recovers it.
+ /// The Recovery Center shows one row per document (UX-53) even when a document
+ /// left dozens of checkpoint directories behind after repeated crashes.
+@@ -137,7 +143,9 @@ pub(super) struct RecoveryRuntime {
+     entries: Vec<(PathBuf, bareline_file_io::recovery::RecoveryInspection)>,
+     rows: Vec<RecoveryRow>,
+     cancellation: bareline_file_io::cancellation::Cancellation,
+-    last_status: Option<String>,
++    notice_states: std::collections::BTreeMap<toast::DocumentKey, RecoveryNoticeState>,
++    active_notice_document: Option<toast::DocumentKey>,
++    notice_revision: u64,
+     open: bool,
+     selected: usize,
+     focus: Option<usize>,
+@@ -152,6 +160,12 @@ pub(super) struct RecoveryRuntime {
+     allow_auto_open: bool,
+ }
+ impl RecoveryRuntime {
++    pub(super) fn forget_document(&mut self, document: toast::DocumentKey) {
++        self.notice_states.remove(&document);
++        if self.active_notice_document == Some(document) {
++            self.active_notice_document = None;
++        }
++    }
+     pub(super) fn has_input_focus(&self) -> bool {
+         self.open || self.confirm_discard.is_some()
+     }
+@@ -399,15 +413,33 @@ impl Shell {
+             }
+             "recovery.retry" => {
+                 let cleanup_retries = bareline_file_io::recovery_retirement::retry_pending_cleanup();
++                let mut retry_failure = None;
+                 if let Some(workspace) = &mut self.workspace {
+-                    let editor_error = workspace
+-                        .editors
+-                        .get_mut(self.app.active)
+-                        .and_then(|editor| editor.retry_recovery().err());
+-                    workspace.message = editor_error.or_else(|| {
++                    retry_failure = workspace.editors.get_mut(self.app.active).and_then(|editor| {
++                        let document = editor.snapshot().identity_token();
++                        editor.retry_recovery().err().map(|error| (document, error))
++                    });
++                    workspace.message = if retry_failure.is_none() {
+                         (cleanup_retries > 0)
+                             .then(|| format!("Retrying {cleanup_retries} pending recovery cleanup(s)…"))
+-                    });
++                    } else {
++                        None
++                    };
++                }
++                if let Some((document, error)) = retry_failure {
++                    self.toasts.enqueue_owned(
++                        toast::Notification::new(
++                            format!("recovery-preparation-{}", document.0),
++                            toast::next_revision(),
++                            bareline_ui::theme::ToastLevel::Error,
++                            toast::NotificationKind::Outcome,
++                            "Recovery retry could not start.",
++                            Some(error),
++                            Some(document),
++                            toast::NotificationLifetime::Persistent,
++                        ),
++                        Instant::now(),
++                    );
+                 }
+             }
+             "recovery.save_as" => self.dispatch(el, Action::SaveAs),
+@@ -428,6 +460,49 @@ impl Shell {
+         }
+         true
+     }
++    fn publish_recovery_notice(&mut self, document: toast::DocumentKey, state: RecoveryNoticeState) {
++        let id = toast::NotificationId(format!("recovery-preparation-{}", document.0));
++        self.recovery.notice_revision = self.recovery.notice_revision.wrapping_add(1);
++        let notification = match state {
++            RecoveryNoticeState::Idle => {
++                self.toasts.resolve(&id);
++                None
++            }
++            RecoveryNoticeState::Preparing { directory } => Some(toast::Notification::new(
++                id,
++                self.recovery.notice_revision,
++                bareline_ui::theme::ToastLevel::Info,
++                toast::NotificationKind::Progress,
++                "Recovery snapshot preparing; editing remains available.",
++                Some(format!("Recovery directory: {}", directory.display())),
++                Some(document),
++                toast::NotificationLifetime::Scoped,
++            )),
++            RecoveryNoticeState::Failed { directory, error } => Some(toast::Notification::new(
++                id,
++                self.recovery.notice_revision,
++                bareline_ui::theme::ToastLevel::Error,
++                toast::NotificationKind::Outcome,
++                "Recovery unavailable. Retry Recovery or Save As.",
++                Some(directory.map_or(error.clone(), |path| {
++                    format!("{error}\nRecovery directory: {}", path.display())
++                })),
++                Some(document),
++                toast::NotificationLifetime::Persistent,
++            )),
++        };
++        if let Some(notification) = notification {
++            self.toasts.enqueue_owned(notification, Instant::now());
++        }
++        if self
++            .modal
++            .is_some_and(|modal| modal.surface == modal::ModalSurface::NotificationDetails)
++            && !self.toasts.details_open()
++        {
++            self.dismiss_modal(modal::ModalSurface::NotificationDetails);
++        }
++    }
++
+     pub(super) fn recovery_pump(&mut self, _el: &ActiveEventLoop) {
+         if self.recovery.pending_compare.is_some() && self.workspace.as_ref().is_some_and(|w| !w.io_busy()) {
+             let mut pending = self.recovery.pending_compare.take().unwrap();
+@@ -449,8 +524,19 @@ impl Shell {
+                             self.compare_recovery_pair(left, index);
+                         }
+                     } else {
+-                        workspace.message =
+-                            Some("Current disk compare source did not open; recovered copy is retained.".into());
++                        self.toasts.enqueue_owned(
++                            toast::Notification::new(
++                                format!("recovery-compare:{}", pending.directory.display()),
++                                toast::next_revision(),
++                                bareline_ui::theme::ToastLevel::Error,
++                                toast::NotificationKind::Outcome,
++                                "Current disk compare source did not open.",
++                                Some(format!("Recovered copy retained at {}", pending.directory.display())),
++                                None,
++                                toast::NotificationLifetime::Persistent,
++                            ),
++                            Instant::now(),
++                        );
+                     }
+                 } else {
+                     pending.recovered = Some(super::lifecycle::Identity::capture(&workspace.editors[index]));
+@@ -463,8 +549,20 @@ impl Shell {
+                     self.recovery.pending_compare = Some(pending);
+                 }
+                 self.app.tabs = self.workspace.as_ref().unwrap().titles();
+-            } else if workspace.message.is_none() {
+-                workspace.message = Some("Recovery comparison could not open its source.".into());
++            } else {
++                self.toasts.enqueue_owned(
++                    toast::Notification::new(
++                        format!("recovery-compare:{}", pending.directory.display()),
++                        toast::next_revision(),
++                        bareline_ui::theme::ToastLevel::Error,
++                        toast::NotificationKind::Outcome,
++                        "Recovery comparison could not open its source.",
++                        Some(format!("Recovered copy retained at {}", pending.directory.display())),
++                        None,
++                        toast::NotificationLifetime::Persistent,
++                    ),
++                    Instant::now(),
++                );
+             }
+         }
+         let selected_preview = self
+@@ -533,23 +631,57 @@ impl Shell {
+                 Err(TryRecvError::Empty) => {}
+                 result => {
+                     self.recovery.operation = None;
+-                    let message = match result {
++                    let (level, lifetime, message, details) = match result {
+                         Ok(Ok(removed)) if !removed.is_empty() => {
+                             self.recovery.entries.retain(|(entry, _)| !removed.contains(entry));
+                             self.recovery.rebuild_rows();
+                             if removed.len() == 1 {
+-                                "Recovery discarded.".into()
++                                (
++                                    bareline_ui::theme::ToastLevel::Info,
++                                    toast::NotificationLifetime::Transient,
++                                    "Recovery discarded.".into(),
++                                    None,
++                                )
+                             } else {
+-                                format!("{} recovery checkpoints discarded.", removed.len())
++                                (
++                                    bareline_ui::theme::ToastLevel::Info,
++                                    toast::NotificationLifetime::Transient,
++                                    format!("{} recovery checkpoints discarded.", removed.len()),
++                                    None,
++                                )
+                             }
+                         }
+-                        Ok(Ok(_)) => "Saved edits exported with gaps.json in the selected folder.".into(),
+-                        Ok(Err(error)) => format!("Recovery action failed: {error}"),
+-                        Err(_) => "Recovery worker stopped; checkpoint retained.".into(),
++                        Ok(Ok(_)) => (
++                            bareline_ui::theme::ToastLevel::Info,
++                            toast::NotificationLifetime::Transient,
++                            "Saved edits exported with gaps.json in the selected folder.".into(),
++                            None,
++                        ),
++                        Ok(Err(error)) => (
++                            bareline_ui::theme::ToastLevel::Error,
++                            toast::NotificationLifetime::Persistent,
++                            "Recovery action failed.".into(),
++                            Some(error),
++                        ),
++                        Err(_) => (
++                            bareline_ui::theme::ToastLevel::Error,
++                            toast::NotificationLifetime::Persistent,
++                            "Recovery worker stopped; checkpoint retained.".into(),
++                            None,
++                        ),
+                     };
+-                    if let Some(workspace) = &mut self.workspace {
+-                        workspace.message = Some(message);
+-                    }
++                    self.recovery.notice_revision = self.recovery.notice_revision.wrapping_add(1);
++                    self.toasts.push_typed(
++                        "recovery-action",
++                        self.recovery.notice_revision,
++                        level,
++                        toast::NotificationKind::Outcome,
++                        message,
++                        details,
++                        None,
++                        lifetime,
++                        Instant::now(),
++                    );
+                     self.recovery.selected = self.recovery.selected.min(self.recovery.rows.len().saturating_sub(1));
+                 }
+             }
+@@ -650,44 +782,74 @@ impl Shell {
+                                 self.activate_modal(modal::ModalSurface::Recovery);
+                                 self.recovery.open = true;
+                             }
+-                            if documents > 0
+-                                && let Some(workspace) = &mut self.workspace
+-                            {
+-                                workspace.message = Some(format!(
+-                                    "{documents} document(s) with recovery checkpoints available. Use Restore Latest Recovery or Open Recovery Folder."
+-                                ));
++                            if documents > 0 {
++                                self.recovery.notice_revision = self.recovery.notice_revision.wrapping_add(1);
++                                self.toasts.push_typed(
++                                    "recovery-discovery",
++                                    self.recovery.notice_revision,
++                                    bareline_ui::theme::ToastLevel::Info,
++                                    toast::NotificationKind::Outcome,
++                                    format!("{documents} document(s) with recovery checkpoints available."),
++                                    Some("Use Restore Latest Recovery or Open Recovery Folder.".into()),
++                                    None,
++                                    toast::NotificationLifetime::Transient,
++                                    Instant::now(),
++                                );
+                             }
+                         }
+                         Ok(Err(error)) => {
+-                            if let Some(workspace) = &mut self.workspace {
+-                                workspace.message = Some(format!("Recovery discovery unavailable: {error}"));
+-                            }
++                            self.recovery.notice_revision = self.recovery.notice_revision.wrapping_add(1);
++                            self.toasts.push_typed(
++                                "recovery-discovery",
++                                self.recovery.notice_revision,
++                                bareline_ui::theme::ToastLevel::Error,
++                                toast::NotificationKind::Outcome,
++                                "Recovery discovery unavailable.",
++                                Some(error),
++                                None,
++                                toast::NotificationLifetime::Persistent,
++                                Instant::now(),
++                            );
+                         }
+                         Err(_) => {}
+                     }
+                 }
+             }
+         }
++        let open_documents: std::collections::BTreeSet<_> = self
++            .workspace
++            .as_ref()
++            .into_iter()
++            .flat_map(|workspace| workspace.editors.iter().map(|editor| editor.document_identity()))
++            .collect();
++        self.recovery
++            .notice_states
++            .retain(|document, _| open_documents.contains(document));
++        let mut recovery_notice = None;
+         if let Some(workspace) = &mut self.workspace
+             && let Some(editor) = workspace.editors.get(self.app.active)
+         {
++            let document = editor.snapshot().identity_token();
+             let status = editor.recovery_status();
+-            let message = if let Some(error) = status.error {
+-                Some(format!("Recovery unavailable: {error}. Retry Recovery or Save As."))
+-            } else if status.directory.is_some() && !status.complete {
+-                Some("Recovery snapshot preparing; editing remains available.".into())
++            let state = if let Some(error) = status.error {
++                RecoveryNoticeState::Failed {
++                    directory: status.directory,
++                    error,
++                }
++            } else if let Some(directory) = status.directory.filter(|_| !status.complete) {
++                RecoveryNoticeState::Preparing { directory }
+             } else {
+-                None
++                RecoveryNoticeState::Idle
+             };
+-            if message != self.recovery.last_status {
+-                if workspace.message == self.recovery.last_status {
+-                    workspace.message = None;
+-                }
+-                self.recovery.last_status = message.clone();
+-                if let Some(message) = message {
+-                    workspace.message = Some(message);
+-                }
++            let changed = self.recovery.notice_states.get(&document) != Some(&state);
++            if changed {
++                self.recovery.notice_states.insert(document, state.clone());
++                recovery_notice = Some((document, state));
+             }
++            self.recovery.active_notice_document = Some(document);
++        }
++        if let Some((document, state)) = recovery_notice {
++            self.publish_recovery_notice(document, state);
+         }
+     }
+     pub(super) fn recovery_event(&mut self, el: &ActiveEventLoop, event: &WindowEvent) -> bool {
+@@ -1051,6 +1213,35 @@ mod tests {
+         assert!(!should_auto_open(1, true, false, true));
+         assert!(should_auto_open(1, true, false, false));
+     }
++
++    #[test]
++    fn pump_notice_transition_is_generation_fenced_and_closed_failure_is_retained() {
++        let mut shell = super::super::accessibility::tests::headless_shell();
++        let document = (17, 4);
++        shell.publish_recovery_notice(
++            document,
++            RecoveryNoticeState::Preparing {
++                directory: PathBuf::from("recovery-17"),
++            },
++        );
++        assert!(shell.toasts.scoped_for(document).is_some());
++        assert!(shell.toasts.scoped_for((17, 3)).is_none());
++
++        shell.publish_recovery_notice(
++            document,
++            RecoveryNoticeState::Failed {
++                directory: Some(PathBuf::from("recovery-17")),
++                error: "checkpoint failed".into(),
++            },
++        );
++        assert!(shell.toasts.scoped_for(document).is_none());
++        assert_eq!(shell.toasts.persistent_len(), 1);
++        shell.toasts.clear_document(document);
++        assert_eq!(shell.toasts.persistent_len(), 1);
++
++        shell.publish_recovery_notice(document, RecoveryNoticeState::Idle);
++        assert!(shell.toasts.is_empty());
++    }
+ }
+ 
+ fn recovery_action_id(command: &str) -> u64 {
+diff --git a/apps/bareline/src/windows_app/search.rs b/apps/bareline/src/windows_app/search.rs
+index 22ae906..652028a 100644
+--- a/apps/bareline/src/windows_app/search.rs
++++ b/apps/bareline/src/windows_app/search.rs
+@@ -141,9 +141,17 @@ impl Shell {
+                     }
+                 }
+                 Some(Err(error)) => {
+-                    if let Some(workspace) = &mut self.workspace {
+-                        workspace.message = Some(error);
+-                    }
++                    self.toasts.push_typed(
++                        "search-folder-picker",
++                        toast::next_revision(),
++                        bareline_ui::theme::ToastLevel::Error,
++                        toast::NotificationKind::Outcome,
++                        "Folder search could not choose a folder.",
++                        Some(error),
++                        None,
++                        toast::NotificationLifetime::Persistent,
++                        Instant::now(),
++                    );
+                 }
+                 _ => {}
+             }
+@@ -185,7 +193,18 @@ impl Shell {
+                         match ranges {
+                             Some(ranges) => {
+                                 if let Err(error) = editor.set_search_marks(style, ranges) {
+-                                    workspace.message = Some(error);
++                                    let document = editor.snapshot().identity_token();
++                                    self.toasts.push_typed(
++                                        format!("search-mark-{}", document.0),
++                                        toast::next_revision(),
++                                        bareline_ui::theme::ToastLevel::Error,
++                                        toast::NotificationKind::Outcome,
++                                        "Search marks could not be updated.",
++                                        Some(error),
++                                        Some(document),
++                                        toast::NotificationLifetime::Persistent,
++                                        Instant::now(),
++                                    );
+                                 }
+                             }
+                             None => workspace.message = Some("Complete the current search before marking".into()),
+@@ -235,7 +254,18 @@ impl Shell {
+             return false;
+         }
+         if workspace.fingerprint(index) != Some(fingerprint) || workspace.editors[index].dirty() {
+-            workspace.message = Some("Search result changed; search the file again before navigating".into());
++            let document = workspace.editors[index].snapshot().identity_token();
++            self.toasts.push_typed(
++                format!("search-stale-{}", document.0),
++                toast::next_revision(),
++                bareline_ui::theme::ToastLevel::Warning,
++                toast::NotificationKind::Outcome,
++                "Search result changed; search the file again before navigating.",
++                None,
++                Some(document),
++                toast::NotificationLifetime::Persistent,
++                Instant::now(),
++            );
+             self.search.navigation = None;
+             return true;
+         }
+@@ -248,7 +278,18 @@ impl Shell {
+             }
+             WorkspaceEditor::Paged(editor) => {
+                 if let Err(error) = editor.restore_selection(range.start, range.end) {
+-                    workspace.message = Some(error);
++                    let document = editor.snapshot().identity_token();
++                    self.toasts.push_typed(
++                        format!("search-navigation-{}", document.0),
++                        toast::next_revision(),
++                        bareline_ui::theme::ToastLevel::Error,
++                        toast::NotificationKind::Outcome,
++                        "Search result could not be selected.",
++                        Some(error),
++                        Some(document),
++                        toast::NotificationLifetime::Persistent,
++                        Instant::now(),
++                    );
+                 }
+             }
+         }
+diff --git a/apps/bareline/src/windows_app/session.rs b/apps/bareline/src/windows_app/session.rs
+index 3b88aec..668e44c 100644
+--- a/apps/bareline/src/windows_app/session.rs
++++ b/apps/bareline/src/windows_app/session.rs
+@@ -160,11 +160,19 @@ impl Shell {
+         }
+     }
+     fn session_message(&mut self, message: String) {
+-        if let Some(workspace) = &mut self.workspace {
+-            workspace.message = Some(message);
+-        } else {
+-            eprintln!("event=session message={message}");
+-        }
++        eprintln!("event=session message={message}");
++        let revision = toast::next_revision();
++        self.toasts.push_typed(
++            format!("session-outcome-{revision}"),
++            revision,
++            bareline_ui::theme::ToastLevel::Error,
++            toast::NotificationKind::Outcome,
++            message,
++            None,
++            None,
++            toast::NotificationLifetime::Persistent,
++            Instant::now(),
++        );
+         if let Some(window) = &self.window {
+             window.request_redraw();
+         }
+diff --git a/apps/bareline/src/windows_app/toast.rs b/apps/bareline/src/windows_app/toast.rs
+index c0c174f..dbd5179 100644
+--- a/apps/bareline/src/windows_app/toast.rs
++++ b/apps/bareline/src/windows_app/toast.rs
+@@ -1,257 +1,1202 @@
+ // SPDX-License-Identifier: MPL-2.0
+-//! A small stack of transient notifications ("toasts") shown in the lower-right
+-//! corner (UX-60). Info toasts fade on their own after six seconds; warnings and
+-//! errors stay until the reader dismisses them with the ×. Each toast belongs to
+-//! the document that raised it and is cleared when that document closes, so no
+-//! notice survives the document it describes.
+-use bareline_renderer::{DrawOp, Point, Rect};
++//! Typed, event-driven shell notifications with retained operation ownership.
++use bareline_renderer::{DrawOp, Point, Rect, TextBackend};
+ use bareline_ui::theme::{ToastLevel, UiTheme};
++use std::collections::{BTreeMap, BTreeSet};
++use std::sync::atomic::{AtomicU64, Ordering};
+ use std::time::{Duration, Instant};
++use winit::keyboard::{Key, NamedKey};
+ 
+ const INFO_LIFETIME: Duration = Duration::from_secs(6);
+ const WIDTH: f32 = 380.0;
+-const ROW_HEIGHT: f32 = 40.0;
++const ROW_HEIGHT: f32 = 58.0;
+ const GAP: f32 = 8.0;
++const MAX_VISIBLE: usize = 6;
++const MAX_TRANSIENT: usize = 6;
++const MAX_RESOLVED_HISTORY: usize = 64;
++const OVERFLOW_ID: u64 = 90_099_990;
++pub(super) const DETAILS_GROUP_ID: u64 = 90_099_980;
++pub(super) const DETAILS_CONTENT_ID: u64 = 90_099_981;
++pub(super) const DETAILS_CLOSE_ID: u64 = 90_099_982;
++
++pub(super) fn next_revision() -> u64 {
++    static NEXT: AtomicU64 = AtomicU64::new(1);
++    NEXT.fetch_add(1, Ordering::Relaxed)
++}
+ 
+-/// Stable identity of the document a toast belongs to.
+ pub(super) type DocumentKey = (u64, u64);
+ 
++#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
++pub(super) struct NotificationId(pub(super) String);
++impl From<&str> for NotificationId {
++    fn from(value: &str) -> Self {
++        Self(value.into())
++    }
++}
++impl From<String> for NotificationId {
++    fn from(value: String) -> Self {
++        Self(value)
++    }
++}
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub(super) enum NotificationKind {
++    Progress,
++    Outcome,
++}
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub(super) enum NotificationLifetime {
++    Scoped,
++    Transient,
++    Persistent,
++}
++
++#[derive(Clone, Debug)]
++pub(super) struct Notification {
++    pub(super) id: NotificationId,
++    pub(super) revision: u64,
++    pub(super) level: ToastLevel,
++    pub(super) kind: NotificationKind,
++    pub(super) text: String,
++    pub(super) details: Option<String>,
++    pub(super) document: Option<DocumentKey>,
++    pub(super) lifetime: NotificationLifetime,
++}
++
++impl Notification {
++    pub(super) fn new(
++        id: impl Into<NotificationId>,
++        revision: u64,
++        level: ToastLevel,
++        kind: NotificationKind,
++        text: impl Into<String>,
++        details: Option<String>,
++        document: Option<DocumentKey>,
++        lifetime: NotificationLifetime,
++    ) -> Self {
++        Self {
++            id: id.into(),
++            revision,
++            level,
++            kind,
++            text: text.into(),
++            details,
++            document,
++            lifetime,
++        }
++    }
++}
++
+ struct Toast {
+-    id: u64,
+-    level: ToastLevel,
+-    text: String,
+-    document: Option<DocumentKey>,
++    notification: Notification,
++    accessibility_id: u64,
+     born: Instant,
++    bounds: Rect,
++}
++
++#[derive(Clone, Copy)]
++enum Hit {
++    Details(u64),
++    Dismiss(u64),
++}
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub(super) enum ToastAction {
++    Consumed,
++    OpenDetails(u64),
++    Dismiss(u64),
++}
++
++pub(super) struct AccessibilityNotice {
++    pub(super) id: u64,
++    pub(super) level: ToastLevel,
++    pub(super) kind: NotificationKind,
++    pub(super) text: String,
++    pub(super) details: Option<String>,
++    pub(super) bounds: Rect,
++    pub(super) expanded: bool,
++    pub(super) dismissable: bool,
+ }
+ 
+-/// Ordered oldest-first; drawn newest nearest the status strip.
+ #[derive(Default)]
+ pub(super) struct ToastStack {
+     toasts: Vec<Toast>,
+-    next_id: u64,
+-    last_message: Option<String>,
+-    hits: Vec<(Rect, u64)>,
++    scoped: Vec<Notification>,
++    owned_seen: BTreeSet<(NotificationId, u64)>,
++    source_revisions: BTreeMap<NotificationId, (String, u64)>,
++    resolved_history: Vec<(NotificationId, u64)>,
++    next_accessibility_id: u64,
++    hits: Vec<(Rect, Hit)>,
++    focus: Option<u64>,
++    details_open: Option<u64>,
++    details_scroll: usize,
++    overflow_bounds: Rect,
++    overflow_painted: bool,
++    details_bounds: Rect,
++    details_close_bounds: Rect,
++    painted: Vec<u64>,
++    hidden: Vec<u64>,
+ }
+ 
+ impl ToastStack {
+-    /// Choose a severity from the wording of a plain status string.
+-    fn classify(text: &str) -> ToastLevel {
+-        let lower = text.to_ascii_lowercase();
+-        if [
+-            "fail",
+-            "error",
+-            "unavailable",
+-            "cannot",
+-            "could not",
+-            "denied",
+-            "corrupt",
+-            "invalid",
+-            "lost",
+-            "stopped",
+-        ]
+-        .iter()
+-        .any(|needle| lower.contains(needle))
+-        {
+-            ToastLevel::Error
+-        } else if ["wait", "busy", "paused", "retained", "read only", "read-only", "limit"]
+-            .iter()
+-            .any(|needle| lower.contains(needle))
++    pub(super) fn owned_revision(&mut self, id: &NotificationId, fingerprint: String) -> u64 {
++        if let Some((known, revision)) = self.source_revisions.get(id)
++            && known == &fingerprint
+         {
+-            ToastLevel::Warning
+-        } else {
+-            ToastLevel::Info
++            return *revision;
+         }
++        let revision = next_revision();
++        self.source_revisions.insert(id.clone(), (fingerprint, revision));
++        revision
++    }
++
++    fn latest_revision(&self, id: &NotificationId) -> Option<u64> {
++        self.toasts
++            .iter()
++            .filter(|toast| &toast.notification.id == id)
++            .map(|toast| toast.notification.revision)
++            .chain(
++                self.scoped
++                    .iter()
++                    .filter(|notice| &notice.id == id)
++                    .map(|notice| notice.revision),
++            )
++            .chain(self.owned_seen.iter().filter(|seen| &seen.0 == id).map(|seen| seen.1))
++            .chain(
++                self.resolved_history
++                    .iter()
++                    .filter(|seen| &seen.0 == id)
++                    .map(|seen| seen.1),
++            )
++            .max()
++    }
++
++    pub(super) fn enqueue(&mut self, notification: Notification, now: Instant) {
++        self.enqueue_inner(notification, now, false);
+     }
+ 
+-    pub fn push(&mut self, level: ToastLevel, text: impl Into<String>, document: Option<DocumentKey>, now: Instant) {
+-        let text = text.into();
+-        // Collapse an immediate duplicate of the newest toast.
++    pub(super) fn enqueue_owned(&mut self, notification: Notification, now: Instant) {
++        self.enqueue_inner(notification, now, true);
++    }
++
++    fn enqueue_inner(&mut self, mut notification: Notification, now: Instant, owned: bool) {
+         if self
++            .latest_revision(&notification.id)
++            .is_some_and(|revision| revision >= notification.revision)
++        {
++            return;
++        }
++        if owned {
++            self.owned_seen.retain(|seen| seen.0 != notification.id);
++            self.owned_seen.insert((notification.id.clone(), notification.revision));
++        }
++        if notification.lifetime == NotificationLifetime::Scoped {
++            let replaced: Vec<_> = self
++                .toasts
++                .iter()
++                .filter(|toast| toast.notification.id == notification.id)
++                .map(|toast| toast.accessibility_id)
++                .collect();
++            self.toasts.retain(|toast| toast.notification.id != notification.id);
++            for root in replaced {
++                self.reconcile_removed(root);
++            }
++            self.scoped.retain(|current| current.id != notification.id);
++            self.scoped.push(notification);
++            return;
++        }
++        self.scoped.retain(|current| current.id != notification.id);
++        if notification.level != ToastLevel::Info {
++            notification.lifetime = NotificationLifetime::Persistent;
++        }
++        if let Some(toast) = self
+             .toasts
+-            .last()
+-            .is_some_and(|toast| toast.text == text && toast.document == document)
++            .iter_mut()
++            .find(|toast| toast.notification.id == notification.id)
+         {
++            toast.notification = notification;
++            toast.born = now;
+             return;
+         }
+-        self.next_id = self.next_id.wrapping_add(1);
++        self.next_accessibility_id = self.next_accessibility_id.wrapping_add(3).max(3);
+         self.toasts.push(Toast {
+-            id: self.next_id,
+-            level,
+-            text,
+-            document,
++            notification,
++            accessibility_id: 90_100_000 + self.next_accessibility_id,
+             born: now,
++            bounds: Rect::default(),
+         });
+-        // Keep the stack bounded so a chatty session cannot grow it without limit.
+-        while self.toasts.len() > 6 {
+-            self.toasts.remove(0);
++        while self
++            .toasts
++            .iter()
++            .filter(|toast| toast.notification.lifetime == NotificationLifetime::Transient)
++            .count()
++            > MAX_TRANSIENT
++        {
++            if let Some(index) = self
++                .toasts
++                .iter()
++                .position(|toast| toast.notification.lifetime == NotificationLifetime::Transient)
++            {
++                self.retire(index);
++            }
+         }
+     }
+ 
+-    /// Fold the workspace's current status string into the stack, once per
+-    /// change, tagging it with the document that is currently active.
+-    pub fn ingest(&mut self, message: Option<&str>, document: Option<DocumentKey>, now: Instant) {
+-        if message.map(str::to_owned) == self.last_message {
+-            return;
++    pub(super) fn push_typed(
++        &mut self,
++        id: impl Into<NotificationId>,
++        revision: u64,
++        level: ToastLevel,
++        kind: NotificationKind,
++        text: impl Into<String>,
++        details: Option<String>,
++        document: Option<DocumentKey>,
++        lifetime: NotificationLifetime,
++        now: Instant,
++    ) {
++        self.enqueue(
++            Notification::new(id, revision, level, kind, text, details, document, lifetime),
++            now,
++        );
++    }
++
++    fn retire(&mut self, index: usize) {
++        let toast = self.toasts.remove(index);
++        self.reconcile_removed(toast.accessibility_id);
++        if !self
++            .owned_seen
++            .contains(&(toast.notification.id.clone(), toast.notification.revision))
++        {
++            self.resolved_history
++                .push((toast.notification.id, toast.notification.revision));
++            while self.resolved_history.len() > MAX_RESOLVED_HISTORY {
++                self.resolved_history.remove(0);
++            }
+         }
+-        self.last_message = message.map(str::to_owned);
+-        if let Some(text) = message.filter(|message| !message.is_empty()) {
+-            let level = Self::classify(text);
+-            self.push(level, text, document, now);
++    }
++
++    fn reconcile_removed(&mut self, root: u64) {
++        if self.details_open == Some(root) {
++            self.details_open = None;
++            self.details_scroll = 0;
+         }
++        if self.focus.is_some_and(|id| id >= root && id <= root + 2) {
++            self.focus = None;
++        }
++        self.painted.retain(|id| *id != root);
++        self.hidden.retain(|id| *id != root);
+     }
+ 
+-    /// Retire info toasts that have shown for their full lifetime. Warnings and
+-    /// errors are left alone. Returns true when a toast was dropped.
+-    pub fn tick(&mut self, now: Instant) -> bool {
++    pub(super) fn tick(&mut self, now: Instant) -> bool {
+         let before = self.toasts.len();
+-        self.toasts.retain(|toast| {
+-            toast.level != ToastLevel::Info || now.saturating_duration_since(toast.born) < INFO_LIFETIME
+-        });
++        let expired: Vec<_> = self
++            .toasts
++            .iter()
++            .enumerate()
++            .filter_map(|(index, toast)| {
++                (toast.notification.lifetime == NotificationLifetime::Transient
++                    && now.saturating_duration_since(toast.born) >= INFO_LIFETIME)
++                    .then_some(index)
++            })
++            .collect();
++        for index in expired.into_iter().rev() {
++            self.retire(index);
++        }
+         self.toasts.len() != before
+     }
+ 
+-    /// Earliest instant at which `tick` will next drop a toast, so the caller can
+-    /// schedule a redraw instead of polling.
+-    pub fn next_deadline(&self) -> Option<Instant> {
++    pub(super) fn next_deadline(&self) -> Option<Instant> {
+         self.toasts
+             .iter()
+-            .filter(|toast| toast.level == ToastLevel::Info)
++            .filter(|toast| toast.notification.lifetime == NotificationLifetime::Transient)
+             .map(|toast| toast.born + INFO_LIFETIME)
+             .min()
+     }
+ 
+-    pub fn dismiss(&mut self, id: u64) {
+-        self.toasts.retain(|toast| toast.id != id);
++    fn dismiss(&mut self, accessibility_id: u64) {
++        if accessibility_id == OVERFLOW_ID {
++            self.details_open = None;
++            return;
++        }
++        if let Some(index) = self
++            .toasts
++            .iter()
++            .position(|toast| toast.accessibility_id == accessibility_id)
++        {
++            self.retire(index);
++        }
++        if self.details_open == Some(accessibility_id) {
++            self.details_open = None;
++        }
++        if self
++            .focus
++            .is_some_and(|focus| focus >= accessibility_id && focus <= accessibility_id + 2)
++        {
++            self.focus = None;
++        }
+     }
+ 
+-    /// Drop every toast raised by a document that is closing.
+-    pub fn clear_document(&mut self, document: DocumentKey) {
+-        self.toasts.retain(|toast| toast.document != Some(document));
++    pub(super) fn resolve(&mut self, id: &NotificationId) {
++        let removed: Vec<_> = self
++            .toasts
++            .iter()
++            .filter(|toast| &toast.notification.id == id)
++            .map(|toast| toast.accessibility_id)
++            .collect();
++        self.toasts.retain(|toast| &toast.notification.id != id);
++        for root in removed {
++            self.reconcile_removed(root);
++        }
++        self.scoped.retain(|notice| &notice.id != id);
++        self.owned_seen.retain(|seen| &seen.0 != id);
++        self.resolved_history.retain(|seen| &seen.0 != id);
+     }
+ 
+-    pub fn clear_all(&mut self) {
+-        self.toasts.clear();
+-        self.last_message = None;
++    pub(super) fn retain_owned(&mut self, prefix: &str, active: &[NotificationId]) {
++        let obsolete: Vec<_> = self
++            .owned_seen
++            .iter()
++            .filter_map(|seen| (seen.0.0.starts_with(prefix) && !active.contains(&seen.0)).then_some(seen.0.clone()))
++            .collect();
++        for id in obsolete {
++            self.source_revisions.remove(&id);
++            self.resolve(&id);
++        }
++    }
++
++    pub(super) fn clear_document(&mut self, document: DocumentKey) {
++        let retired_scoped: Vec<_> = self
++            .scoped
++            .iter()
++            .filter(|notice| notice.document == Some(document))
++            .map(|notice| (notice.id.clone(), notice.revision))
++            .collect();
++        self.scoped.retain(|notice| notice.document != Some(document));
++        for retired in retired_scoped {
++            self.owned_seen.remove(&retired);
++            self.resolved_history.push(retired);
++        }
++        while self.resolved_history.len() > MAX_RESOLVED_HISTORY {
++            self.resolved_history.remove(0);
++        }
++        let stale: Vec<_> = self
++            .toasts
++            .iter()
++            .enumerate()
++            .filter_map(|(index, toast)| {
++                (toast.notification.document == Some(document)
++                    && toast.notification.lifetime != NotificationLifetime::Persistent)
++                    .then_some(index)
++            })
++            .collect();
++        for index in stale.into_iter().rev() {
++            self.retire(index);
++        }
++    }
++
++    pub(super) fn clear_transient(&mut self) {
++        for notice in self.scoped.drain(..) {
++            let retired = (notice.id, notice.revision);
++            self.owned_seen.remove(&retired);
++            self.resolved_history.push(retired);
++        }
++        while self.resolved_history.len() > MAX_RESOLVED_HISTORY {
++            self.resolved_history.remove(0);
++        }
++        let stale: Vec<_> = self
++            .toasts
++            .iter()
++            .enumerate()
++            .filter_map(|(index, toast)| {
++                (toast.notification.lifetime != NotificationLifetime::Persistent).then_some(index)
++            })
++            .collect();
++        for index in stale.into_iter().rev() {
++            self.retire(index);
++        }
++    }
++
++    pub(super) fn scoped_for(&self, document: DocumentKey) -> Option<&Notification> {
++        self.scoped
++            .iter()
++            .rev()
++            .find(|notice| notice.document == Some(document))
+     }
+ 
+     #[cfg(test)]
+-    pub fn is_empty(&self) -> bool {
+-        self.toasts.is_empty()
++    pub(super) fn is_empty(&self) -> bool {
++        self.toasts.is_empty() && self.scoped.is_empty()
+     }
+ 
+-    /// Dismiss a toast if the pointer fell on its × affordance. Returns true when
+-    /// a toast was dismissed so the caller can consume the click.
+-    pub fn hit(&mut self, point: Point) -> bool {
+-        if let Some((_, id)) = self.hits.iter().find(|(rect, _)| rect.contains(point)).copied() {
+-            self.dismiss(id);
+-            true
++    #[cfg(test)]
++    pub(super) fn persistent_len(&self) -> usize {
++        self.toasts.len()
++    }
++
++    pub(super) fn accessibility(&self) -> Vec<AccessibilityNotice> {
++        let visible: BTreeSet<_> = self.painted.iter().copied().collect();
++        let mut notices: Vec<_> = self
++            .toasts
++            .iter()
++            .filter(|toast| visible.contains(&toast.accessibility_id))
++            .map(|toast| AccessibilityNotice {
++                id: toast.accessibility_id,
++                level: toast.notification.level,
++                kind: toast.notification.kind,
++                text: toast.notification.text.clone(),
++                details: Some(self.full_details(toast.accessibility_id)),
++                bounds: toast.bounds,
++                expanded: self.details_open == Some(toast.accessibility_id),
++                dismissable: true,
++            })
++            .collect();
++        if self.overflow_painted {
++            notices.push(AccessibilityNotice {
++                id: OVERFLOW_ID,
++                level: ToastLevel::Warning,
++                kind: NotificationKind::Outcome,
++                text: format!("{} more retained notifications", self.hidden.len()),
++                details: Some(self.overflow_details()),
++                bounds: self.overflow_bounds,
++                expanded: self.details_open == Some(OVERFLOW_ID),
++                dismissable: false,
++            });
++        }
++        notices
++    }
++
++    pub(super) fn accessibility_focus(&self) -> Option<u64> {
++        self.focus
++    }
++
++    pub(super) fn blur(&mut self) {
++        self.focus = None;
++    }
++
++    pub(super) fn details_open(&self) -> bool {
++        self.details_open.is_some()
++    }
++
++    pub(super) fn open_details(&mut self, id: u64) -> bool {
++        if id != OVERFLOW_ID && !self.toasts.iter().any(|toast| toast.accessibility_id == id) {
++            return false;
++        }
++        if id == OVERFLOW_ID && self.hidden.is_empty() {
++            return false;
++        }
++        self.details_open = Some(id);
++        self.details_scroll = 0;
++        self.focus = Some(id);
++        true
++    }
++
++    pub(super) fn close_details(&mut self) {
++        self.details_open = None;
++        self.details_scroll = 0;
++        self.focus = None;
++    }
++
++    pub(super) fn details_semantics(&self) -> Option<(String, Rect, Rect)> {
++        let id = self.details_open?;
++        Some((self.full_details(id), self.details_bounds, self.details_close_bounds))
++    }
++
++    pub(super) fn details_pointer_close(&self, point: Point) -> bool {
++        self.details_open.is_some() && self.details_close_bounds.contains(point)
++    }
++
++    pub(super) fn details_contains(&self, point: Point) -> bool {
++        self.details_open.is_some() && self.details_bounds.contains(point)
++    }
++
++    pub(super) fn scroll_details(&mut self, down: bool) {
++        if self.details_open.is_some() {
++            self.details_scroll = if down {
++                self.details_scroll.saturating_add(3)
++            } else {
++                self.details_scroll.saturating_sub(3)
++            };
++        }
++    }
++
++    pub(super) fn accessibility_action(&mut self, id: u64, invoke: bool) -> Option<ToastAction> {
++        let root = if self.overflow_painted && (id == OVERFLOW_ID || id == OVERFLOW_ID + 1) {
++            Some(OVERFLOW_ID)
+         } else {
+-            false
++            self.toasts.iter().find_map(|toast| {
++                (self.painted.contains(&toast.accessibility_id)
++                    && id >= toast.accessibility_id
++                    && id <= toast.accessibility_id + 2)
++                    .then_some(toast.accessibility_id)
++            })
++        };
++        let Some(root) = root else {
++            return None;
++        };
++        self.focus = Some(id);
++        if invoke {
++            if id == root + 2 {
++                return Some(ToastAction::Dismiss(root));
++            } else if id == root || id == root + 1 {
++                return Some(ToastAction::OpenDetails(root));
++            }
++        }
++        Some(ToastAction::Consumed)
++    }
++
++    pub(super) fn key(&mut self, key: &Key, backwards: bool) -> Option<ToastAction> {
++        let mut roots = self.painted.clone();
++        if self.overflow_painted {
++            roots.insert(0, OVERFLOW_ID);
+         }
++        if roots.is_empty() {
++            self.focus = None;
++            return None;
++        }
++        if self.focus.is_none() && *key != Key::Named(NamedKey::F8) {
++            return None;
++        }
++        match key {
++            Key::Named(NamedKey::F8) => self.focus = Some(*roots.last().unwrap()),
++            Key::Named(NamedKey::Tab) => {
++                let current = self
++                    .focus
++                    .and_then(|id| roots.iter().position(|candidate| *candidate == id));
++                let next = if backwards {
++                    current.unwrap_or(0).checked_sub(1).unwrap_or(roots.len() - 1)
++                } else {
++                    current.map_or(0, |index| (index + 1) % roots.len())
++                };
++                self.focus = Some(roots[next]);
++            }
++            Key::Named(NamedKey::Enter) => {
++                let focus = self.focus.unwrap_or(*roots.last().unwrap());
++                return Some(ToastAction::OpenDetails(self.root_for_action(focus).unwrap_or(focus)));
++            }
++            Key::Character(value) if value == " " => {
++                let focus = self.focus.unwrap_or(*roots.last().unwrap());
++                return Some(ToastAction::OpenDetails(self.root_for_action(focus).unwrap_or(focus)));
++            }
++            Key::Named(NamedKey::Delete) => {
++                let focus = self.focus.unwrap_or(*roots.last().unwrap());
++                return Some(ToastAction::Dismiss(self.root_for_action(focus).unwrap_or(focus)));
++            }
++            Key::Named(NamedKey::Escape) => self.focus = None,
++            Key::Named(NamedKey::PageDown | NamedKey::ArrowDown) if self.details_open.is_some() => {
++                self.details_scroll = self.details_scroll.saturating_add(1);
++            }
++            Key::Named(NamedKey::PageUp | NamedKey::ArrowUp) if self.details_open.is_some() => {
++                self.details_scroll = self.details_scroll.saturating_sub(1);
++            }
++            _ => return None,
++        }
++        Some(ToastAction::Consumed)
++    }
++
++    fn root_for_action(&self, id: u64) -> Option<u64> {
++        if id >= OVERFLOW_ID && id <= OVERFLOW_ID + 2 {
++            Some(OVERFLOW_ID)
++        } else {
++            self.toasts.iter().find_map(|toast| {
++                (id >= toast.accessibility_id && id <= toast.accessibility_id + 2).then_some(toast.accessibility_id)
++            })
++        }
++    }
++
++    pub(super) fn hit(&mut self, point: Point) -> Option<ToastAction> {
++        let Some((_, hit)) = self.hits.iter().find(|(rect, _)| rect.contains(point)).copied() else {
++            return None;
++        };
++        Some(match hit {
++            Hit::Dismiss(id) => ToastAction::Dismiss(id),
++            Hit::Details(id) => ToastAction::OpenDetails(id),
++        })
++    }
++
++    pub(super) fn perform(&mut self, action: ToastAction) {
++        if let ToastAction::Dismiss(id) = action {
++            self.dismiss(id);
++        }
++    }
++
++    fn overflow_details(&self) -> String {
++        self.toasts
++            .iter()
++            .filter(|toast| self.hidden.contains(&toast.accessibility_id))
++            .map(|toast| {
++                toast.notification.details.as_ref().map_or_else(
++                    || toast.notification.text.clone(),
++                    |details| format!("{}\n{}", toast.notification.text, details),
++                )
++            })
++            .collect::<Vec<_>>()
++            .join("\n\n")
+     }
+ 
+-    pub fn draw(&mut self, width: f32, height: f32, theme: UiTheme, ops: &mut Vec<DrawOp>) {
++    fn full_details(&self, id: u64) -> String {
++        if id == OVERFLOW_ID {
++            return self.overflow_details();
++        }
++        self.toasts
++            .iter()
++            .find(|toast| toast.accessibility_id == id)
++            .map(|toast| match &toast.notification.details {
++                Some(details) => format!("{}\n\n{details}", toast.notification.text),
++                None => toast.notification.text.clone(),
++            })
++            .unwrap_or_default()
++    }
++
++    pub(super) fn draw(
++        &mut self,
++        renderer: &mut impl TextBackend,
++        width: f32,
++        height: f32,
++        theme: UiTheme,
++        ops: &mut Vec<DrawOp>,
++    ) {
+         self.hits.clear();
+-        if self.toasts.is_empty() {
+-            return;
++        self.painted.clear();
++        self.hidden.clear();
++        self.overflow_bounds = Rect::default();
++        self.overflow_painted = false;
++        let toast_width = (width - 32.0).min(WIDTH).max(80.0).min(width.max(0.0));
++        let x = ((width - toast_width) / 2.0).max(0.0);
++        let mut y = height - bareline_ui::STATUS_HEIGHT - GAP;
++        let available = ((y - bareline_ui::TAB_HEIGHT) / (ROW_HEIGHT + GAP)).floor().max(0.0) as usize;
++        let capacity = available.min(MAX_VISIBLE);
++        let visible_count =
++            if self.toasts.len() > capacity || (self.details_open == Some(OVERFLOW_ID) && !self.toasts.is_empty()) {
++                capacity.saturating_sub(1)
++            } else {
++                capacity
++            };
++        let ids: Vec<_> = self
++            .toasts
++            .iter()
++            .rev()
++            .take(visible_count)
++            .map(|toast| toast.accessibility_id)
++            .collect();
++        self.painted.extend(ids.iter().copied());
++        self.hidden = self
++            .toasts
++            .iter()
++            .map(|toast| toast.accessibility_id)
++            .filter(|id| !self.painted.contains(id))
++            .collect();
++        if let Some(focus) = self.focus {
++            let root = self.root_for_action(focus).unwrap_or(focus);
++            if !self.painted.contains(&root) {
++                self.focus = (capacity > 0 && !self.hidden.is_empty()).then_some(OVERFLOW_ID);
++            }
+         }
+-        // Sit above both the editor status strip and the global footer.
+-        let mut y = height - bareline_ui::STATUS_HEIGHT - GAP - ROW_HEIGHT;
+-        let x = (width - WIDTH - 16.0).max(16.0);
+-        for toast in self.toasts.iter().rev() {
++        for id in ids {
++            y -= ROW_HEIGHT;
+             if y < bareline_ui::TAB_HEIGHT {
+                 break;
+             }
+-            let palette = theme.toast(toast.level);
+-            let bounds = bareline_ui::rect(x, y, WIDTH, ROW_HEIGHT);
+-            ops.push(DrawOp::FillRounded(bounds, palette.surface, 8.0));
+-            ops.push(DrawOp::StrokeRounded(bounds, palette.border, 8.0, 1.0));
+-            // Severity accent bar down the left edge.
+-            ops.push(DrawOp::FillRounded(
+-                bareline_ui::rect(x, y + 6.0, 4.0, ROW_HEIGHT - 12.0),
+-                palette.accent,
+-                2.0,
++            let Some(toast) = self.toasts.iter_mut().find(|toast| toast.accessibility_id == id) else {
++                continue;
++            };
++            toast.bounds = bareline_ui::rect(x, y, toast_width, ROW_HEIGHT);
++            draw_row(
++                renderer,
++                toast.bounds,
++                &toast.notification.text,
++                toast.notification.level,
++                true,
++                self.focus.is_some_and(|focus| focus >= id && focus <= id + 2),
++                theme,
++                ops,
++            );
++            self.hits.push((
++                bareline_ui::rect(x + 14.0, y + ROW_HEIGHT - 23.0, 76.0, 19.0),
++                Hit::Details(id),
++            ));
++            self.hits.push((
++                bareline_ui::rect(x + toast_width - 28.0, y + 5.0, 20.0, 20.0),
++                Hit::Dismiss(id),
+             ));
+-            let dismissable = toast.level != ToastLevel::Info;
+-            let text_right = if dismissable { WIDTH - 34.0 } else { WIDTH - 16.0 };
++            y -= GAP;
++        }
++        if !self.hidden.is_empty() && capacity > 0 && y >= bareline_ui::TAB_HEIGHT + ROW_HEIGHT {
++            y -= ROW_HEIGHT;
++            let bounds = bareline_ui::rect(x, y, toast_width, ROW_HEIGHT);
++            self.overflow_bounds = bounds;
++            self.overflow_painted = true;
++            let hidden = self.hidden.len();
++            draw_row(
++                renderer,
++                bounds,
++                &format!("{hidden} more retained notifications"),
++                ToastLevel::Warning,
++                true,
++                self.focus
++                    .is_some_and(|focus| focus >= OVERFLOW_ID && focus <= OVERFLOW_ID + 2),
++                theme,
++                ops,
++            );
++            self.hits.push((bounds, Hit::Details(OVERFLOW_ID)));
++        }
++        if let Some(id) = self.details_open {
++            self.draw_details(renderer, id, width, height, theme, ops);
++        }
++    }
++
++    fn draw_details(
++        &mut self,
++        renderer: &mut impl TextBackend,
++        id: u64,
++        width: f32,
++        height: f32,
++        theme: UiTheme,
++        ops: &mut Vec<DrawOp>,
++    ) {
++        let content = self.full_details(id);
++        let panel_width = (width - 32.0).min(720.0).max(80.0).min(width.max(0.0));
++        let panel_height = (height - 96.0).min(420.0).max(100.0).min(height.max(0.0));
++        let bounds = bareline_ui::rect(
++            (width - panel_width).max(0.0) / 2.0,
++            (height - panel_height).max(0.0) / 2.0,
++            panel_width,
++            panel_height,
++        );
++        self.details_bounds = bounds;
++        self.details_close_bounds = bareline_ui::rect(bounds.x + panel_width - 84.0, bounds.y + 10.0, 68.0, 26.0);
++        let palette = theme.toast(ToastLevel::Info);
++        ops.push(DrawOp::FillRounded(bounds, palette.surface, 8.0));
++        ops.push(DrawOp::StrokeRounded(bounds, palette.border, 8.0, 1.0));
++        bareline_ui::text(
++            ops,
++            bounds.x + 16.0,
++            bounds.y + 12.0,
++            "Notification details",
++            15.0,
++            palette.text,
++        );
++        ops.push(DrawOp::StrokeRounded(
++            self.details_close_bounds,
++            palette.border,
++            5.0,
++            1.0,
++        ));
++        bareline_ui::text(
++            ops,
++            self.details_close_bounds.x + 14.0,
++            self.details_close_bounds.y + 5.0,
++            "Close",
++            12.0,
++            palette.text,
++        );
++        let lines = wrap_measured(renderer, &content, 13.0, (panel_width - 32.0).max(20.0));
++        let visible = ((panel_height - 58.0) / 18.0).max(1.0) as usize;
++        self.details_scroll = self.details_scroll.min(lines.len().saturating_sub(visible));
++        for (row, line) in lines.iter().skip(self.details_scroll).take(visible).enumerate() {
+             bareline_ui::text(
+                 ops,
+-                x + 16.0,
+-                y + ROW_HEIGHT / 2.0 - 7.0,
+-                truncate(&toast.text, text_right),
++                bounds.x + 16.0,
++                bounds.y + 39.0 + row as f32 * 18.0,
++                line,
+                 13.0,
+                 palette.text,
+             );
+-            if dismissable {
+-                let close = bareline_ui::rect(x + WIDTH - 28.0, y + ROW_HEIGHT / 2.0 - 10.0, 20.0, 20.0);
+-                bareline_ui::text(ops, close.x + 5.0, close.y + 3.0, "×", 15.0, palette.muted);
+-                self.hits.push((close, toast.id));
+-            }
+-            y -= ROW_HEIGHT + GAP;
+         }
++        bareline_ui::text(
++            ops,
++            bounds.x + 16.0,
++            bounds.y + panel_height - 20.0,
++            "Page Up/Down scrolls · Escape closes",
++            11.0,
++            palette.muted,
++        );
++    }
++}
++
++fn draw_row(
++    renderer: &mut impl TextBackend,
++    bounds: Rect,
++    value: &str,
++    level: ToastLevel,
++    details: bool,
++    focused: bool,
++    theme: UiTheme,
++    ops: &mut Vec<DrawOp>,
++) {
++    let palette = theme.toast(level);
++    ops.push(DrawOp::FillRounded(bounds, palette.surface, 8.0));
++    ops.push(DrawOp::StrokeRounded(
++        bounds,
++        if focused { palette.accent } else { palette.border },
++        8.0,
++        if focused { 2.0 } else { 1.0 },
++    ));
++    ops.push(DrawOp::FillRounded(
++        bareline_ui::rect(bounds.x, bounds.y + 6.0, 4.0, bounds.height - 12.0),
++        palette.accent,
++        2.0,
++    ));
++    for (row, line) in wrap_measured(renderer, value, 13.0, (bounds.width - 50.0).max(20.0))
++        .into_iter()
++        .take(2)
++        .enumerate()
++    {
++        bareline_ui::text(
++            ops,
++            bounds.x + 16.0,
++            bounds.y + 7.0 + row as f32 * 16.0,
++            &line,
++            13.0,
++            palette.text,
++        );
++    }
++    if details {
++        bareline_ui::text(
++            ops,
++            bounds.x + 16.0,
++            bounds.y + bounds.height - 20.0,
++            "Details…",
++            12.0,
++            palette.accent,
++        );
+     }
++    bareline_ui::text(
++        ops,
++        bounds.x + bounds.width - 23.0,
++        bounds.y + 8.0,
++        "×",
++        15.0,
++        palette.muted,
++    );
+ }
+ 
+-/// Trim to fit the available width, appending an ellipsis. Deliberately cheap:
+-/// the strip only needs a defensive bound, not exact metrics.
+-fn truncate(text: &str, max_width: f32) -> String {
+-    let budget = ((max_width - 16.0) / 7.0).max(4.0) as usize;
+-    if text.chars().count() <= budget {
+-        return text.to_owned();
++fn wrap_measured(renderer: &mut impl TextBackend, text: &str, size: f32, width: f32) -> Vec<String> {
++    let mut lines = Vec::new();
++    for source in text.lines() {
++        let mut rest = source;
++        while !rest.is_empty() {
++            let boundaries: Vec<_> = rest
++                .char_indices()
++                .map(|(index, _)| index)
++                .chain(std::iter::once(rest.len()))
++                .collect();
++            let mut low = 1usize;
++            let mut high = boundaries.len();
++            while low < high {
++                let mid = (low + high) / 2;
++                let fits = renderer
++                    .measure_text(&rest[..boundaries[mid]], size)
++                    .map_or(true, |measured| measured.0 <= width);
++                if fits {
++                    low = mid + 1;
++                } else {
++                    high = mid;
++                }
++            }
++            let fit = low.saturating_sub(1).max(1).min(boundaries.len() - 1);
++            let mut split = boundaries[fit];
++            if split < rest.len()
++                && let Some(space) = rest[..split]
++                    .char_indices()
++                    .rev()
++                    .find_map(|(index, ch)| (index > 0 && ch.is_whitespace()).then_some(index))
++            {
++                split = space;
++            }
++            lines.push(rest[..split].trim_end().to_owned());
++            rest = rest[split..].trim_start();
++        }
++        if source.is_empty() {
++            lines.push(String::new());
++        }
++    }
++    if lines.is_empty() {
++        lines.push(String::new());
+     }
+-    let mut out: String = text.chars().take(budget.saturating_sub(1)).collect();
+-    out.push('…');
+-    out
++    lines
+ }
+ 
+ #[cfg(test)]
+ mod tests {
+     use super::*;
++    fn notice(id: impl Into<NotificationId>, revision: u64, lifetime: NotificationLifetime) -> Notification {
++        Notification::new(
++            id,
++            revision,
++            ToastLevel::Error,
++            NotificationKind::Outcome,
++            "message",
++            None,
++            None,
++            lifetime,
++        )
++    }
+ 
+     #[test]
+-    fn toast_lifecycle_matches_severity_rules() {
+-        let t0 = Instant::now();
++    fn persistent_ownership_is_separate_from_visible_capacity() {
++        let now = Instant::now();
+         let mut stack = ToastStack::default();
+-        // An info toast expires on its own after the lifetime.
+-        stack.push(ToastLevel::Info, "Ready.", None, t0);
+-        assert!(!stack.is_empty());
+-        assert!(stack.tick(t0 + Duration::from_secs(7)));
+-        assert!(stack.is_empty());
+-        // A warning outlives the info lifetime and only goes when dismissed.
+-        stack.push(ToastLevel::Warning, "Wait for pending edits.", None, t0);
+-        let warning = stack.toasts[0].id;
+-        assert!(!stack.tick(t0 + Duration::from_secs(3600)));
+-        assert!(!stack.is_empty());
+-        stack.dismiss(warning);
+-        assert!(stack.is_empty());
+-        // An error persists until acknowledged, however long that takes.
+-        stack.push(ToastLevel::Error, "Save failed.", None, t0);
+-        let error = stack.toasts[0].id;
+-        assert!(!stack.tick(t0 + Duration::from_secs(86_400)));
+-        assert!(!stack.is_empty());
+-        stack.dismiss(error);
+-        assert!(stack.is_empty());
++        for revision in 0..40 {
++            stack.enqueue_owned(
++                notice(format!("owned-{revision}"), revision, NotificationLifetime::Persistent),
++                now,
++            );
++        }
++        assert_eq!(stack.toasts.len(), 40);
++        let mut renderer = bareline_renderer_recording::RecordingBackend::default();
++        stack.draw(&mut renderer, 900.0, 800.0, UiTheme::default(), &mut Vec::new());
++        assert_eq!(stack.painted.len(), MAX_VISIBLE - 1);
++        assert!(stack.accessibility().iter().any(|notice| notice.id == OVERFLOW_ID));
++        for revision in 0..40 {
++            stack.enqueue_owned(
++                notice(format!("owned-{revision}"), revision, NotificationLifetime::Persistent),
++                now,
++            );
++        }
++        assert_eq!(
++            stack.toasts.len(),
++            40,
++            "source synchronization must not replay retained outcomes"
++        );
++        stack.enqueue_owned(notice("owned-10", 9, NotificationLifetime::Persistent), now);
++        assert_eq!(
++            stack
++                .toasts
++                .iter()
++                .find(|toast| toast.notification.id.0 == "owned-10")
++                .unwrap()
++                .notification
++                .revision,
++            10,
++            "an older revision must not replace current state",
++        );
++        stack.dismiss(stack.toasts[0].accessibility_id);
++        stack.enqueue_owned(notice("owned-0", 0, NotificationLifetime::Persistent), now);
++        assert_eq!(stack.toasts.len(), 39, "acknowledged owned outcomes stay acknowledged");
++        let active: Vec<_> = (1..40)
++            .map(|revision| NotificationId(format!("owned-{revision}")))
++            .collect();
++        stack.retain_owned("owned-", &active);
++        stack.enqueue_owned(notice("owned-0", 0, NotificationLifetime::Persistent), now);
++        assert_eq!(stack.toasts.len(), 40, "resolution permits a later identical event");
+     }
+ 
+     #[test]
+-    fn closing_a_document_clears_only_its_toasts() {
++    fn scoped_progress_is_typed_and_document_owned() {
+         let now = Instant::now();
+         let mut stack = ToastStack::default();
+-        let document = (7u64, 1u64);
+-        stack.push(ToastLevel::Error, "Reload failed.", Some(document), now);
+-        stack.push(ToastLevel::Error, "Global notice.", None, now);
+-        stack.clear_document(document);
+-        assert_eq!(stack.toasts.len(), 1);
+-        assert_eq!(stack.toasts[0].document, None);
++        let mut first = Notification::new(
++            "recovery-1",
++            1,
++            ToastLevel::Info,
++            NotificationKind::Progress,
++            "Preparing",
++            None,
++            Some((1, 1)),
++            NotificationLifetime::Scoped,
++        );
++        stack.enqueue(first.clone(), now);
++        first.revision = 2;
++        first.text = "Ready".into();
++        stack.enqueue(first, now);
++        stack.enqueue(
++            Notification::new(
++                "recovery-2",
++                1,
++                ToastLevel::Info,
++                NotificationKind::Progress,
++                "Preparing",
++                None,
++                Some((2, 1)),
++                NotificationLifetime::Scoped,
++            ),
++            now,
++        );
++        assert_eq!(stack.scoped.len(), 2);
++        assert_eq!(
++            stack
++                .scoped
++                .iter()
++                .find(|notice| notice.id.0 == "recovery-1")
++                .unwrap()
++                .revision,
++            2
++        );
++        stack.clear_document((1, 1));
++        assert_eq!(stack.scoped.len(), 1);
++        assert_eq!(stack.scoped[0].document, Some((2, 1)));
+     }
+ 
+     #[test]
+-    fn classify_maps_wording_to_severity() {
+-        assert_eq!(ToastStack::classify("Save failed."), ToastLevel::Error);
++    fn document_generation_close_expires_progress_but_retains_failure() {
++        let now = Instant::now();
++        let mut stack = ToastStack::default();
++        stack.enqueue(
++            Notification::new(
++                "recovery-progress",
++                1,
++                ToastLevel::Info,
++                NotificationKind::Progress,
++                "Preparing",
++                None,
++                Some((7, 11)),
++                NotificationLifetime::Scoped,
++            ),
++            now,
++        );
++        stack.enqueue(
++            Notification::new(
++                "recovery-failed",
++                1,
++                ToastLevel::Error,
++                NotificationKind::Outcome,
++                "Recovery unavailable",
++                Some("complete failure".into()),
++                Some((7, 11)),
++                NotificationLifetime::Persistent,
++            ),
++            now,
++        );
++        stack.clear_document((7, 10));
+         assert_eq!(
+-            ToastStack::classify("Wait for pending edits before closing."),
+-            ToastLevel::Warning
++            stack.scoped.len(),
++            1,
++            "an older generation cannot retire current progress"
+         );
+-        assert_eq!(ToastStack::classify("Replacement complete."), ToastLevel::Info);
++        stack.clear_document((7, 11));
++        assert!(stack.scoped.is_empty());
++        assert_eq!(
++            stack.toasts.len(),
++            1,
++            "closed-document failure keeps operation ownership"
++        );
++    }
++
++    #[test]
++    fn warning_wording_does_not_choose_level_and_details_are_complete() {
++        let now = Instant::now();
++        let mut stack = ToastStack::default();
++        let details = "C:\\長い名前\\stage-copy-with-an-unbroken-name-that-must-remain-complete.tmp";
++        let mut event = Notification::new(
++            "save",
++            1,
++            ToastLevel::Warning,
++            NotificationKind::Outcome,
++            "Everything succeeded",
++            Some(details.into()),
++            None,
++            NotificationLifetime::Transient,
++        );
++        stack.enqueue(event.clone(), now);
++        assert_eq!(stack.toasts[0].notification.level, ToastLevel::Warning);
++        assert_eq!(stack.toasts[0].notification.lifetime, NotificationLifetime::Persistent);
++        stack.draw(
++            &mut bareline_renderer_recording::RecordingBackend::default(),
++            800.0,
++            600.0,
++            UiTheme::default(),
++            &mut Vec::new(),
++        );
++        assert!(stack.accessibility()[0].details.as_deref().unwrap().ends_with(details));
++        event.revision = 2;
++        event.level = ToastLevel::Error;
++        stack.enqueue(event, now);
++        assert_eq!(stack.toasts.len(), 1);
++        assert_eq!(stack.toasts[0].notification.revision, 2);
++    }
++
++    #[test]
++    fn narrow_geometry_and_keyboard_details_keep_complete_unicode_value() {
++        let now = Instant::now();
++        let details = "C:\\長い名前\\an-unbroken-file-name-that-does-not-fit-in-one-row.tmp";
++        let mut event = notice("details", 1, NotificationLifetime::Persistent);
++        event.details = Some(details.into());
++        let mut stack = ToastStack::default();
++        stack.enqueue(event, now);
++        let mut renderer = bareline_renderer_recording::RecordingBackend::default();
++        let mut ops = Vec::new();
++        stack.draw(&mut renderer, 120.0, 240.0, UiTheme::default(), &mut ops);
++        assert!(stack.toasts[0].bounds.x >= 0.0);
++        assert!(stack.toasts[0].bounds.x + stack.toasts[0].bounds.width <= 120.0);
++        assert!(stack.key(&Key::Named(NamedKey::F8), false).is_some());
++        let action = stack.key(&Key::Named(NamedKey::Enter), false).unwrap();
++        assert!(matches!(action, ToastAction::OpenDetails(_)));
++        assert!(stack.accessibility()[0].details.as_deref().unwrap().ends_with(details));
++        let details_id = stack.accessibility()[0].id + 1;
++        assert!(matches!(
++            stack.accessibility_action(details_id, true),
++            Some(ToastAction::OpenDetails(_))
++        ));
++    }
++
++    #[test]
++    fn measured_wrapping_is_unicode_boundary_safe_and_keeps_full_summary() {
++        let mut renderer = bareline_renderer_recording::RecordingBackend::default();
++        let text = "\u{3000}長い通知 without explicit details";
++        let lines = wrap_measured(&mut renderer, text, 13.0, 12.0);
++        // Layout discards whitespace used only at a visual line boundary; the
++        // complete source remains available through the Details value below.
++        assert_eq!(lines.concat().replace(' ', ""), text.trim_start().replace(' ', ""));
++        let mut stack = ToastStack::default();
++        stack.enqueue(notice("unicode", 1, NotificationLifetime::Persistent), Instant::now());
++        stack.toasts[0].notification.text = text.into();
++        stack.draw(&mut renderer, 160.0, 180.0, UiTheme::default(), &mut Vec::new());
++        assert_eq!(stack.accessibility()[0].details.as_deref(), Some(text));
++    }
++
++    #[test]
++    fn height_clipped_rows_are_only_reachable_through_overflow() {
++        let mut stack = ToastStack::default();
++        for revision in 0..8 {
++            stack.enqueue(
++                notice(format!("n-{revision}"), revision, NotificationLifetime::Persistent),
++                Instant::now(),
++            );
++        }
++        let mut renderer = bareline_renderer_recording::RecordingBackend::default();
++        stack.draw(&mut renderer, 320.0, 180.0, UiTheme::default(), &mut Vec::new());
++        let accessible = stack.accessibility();
++        assert_eq!(accessible.len(), stack.painted.len() + 1);
++        assert!(accessible.iter().any(|notice| notice.id == OVERFLOW_ID));
++        assert_eq!(stack.hidden.len() + stack.painted.len(), stack.toasts.len());
++    }
++
++    #[test]
++    fn zero_row_capacity_does_not_publish_an_unpainted_overflow_control() {
++        let mut stack = ToastStack::default();
++        stack.enqueue(notice("hidden", 1, NotificationLifetime::Persistent), Instant::now());
++        stack.draw(
++            &mut bareline_renderer_recording::RecordingBackend::default(),
++            240.0,
++            50.0,
++            UiTheme::default(),
++            &mut Vec::new(),
++        );
++        assert!(stack.accessibility().is_empty());
++        assert!(stack.key(&Key::Named(NamedKey::F8), false).is_none());
++        assert_eq!(stack.accessibility_focus(), None);
++    }
++
++    #[test]
++    fn pointer_details_has_close_geometry_and_removed_owner_releases_focus() {
++        let mut stack = ToastStack::default();
++        stack.enqueue(notice("owned", 1, NotificationLifetime::Persistent), Instant::now());
++        let mut renderer = bareline_renderer_recording::RecordingBackend::default();
++        stack.draw(&mut renderer, 360.0, 300.0, UiTheme::default(), &mut Vec::new());
++        let root = stack.painted[0];
++        assert!(stack.open_details(root));
++        stack.draw(&mut renderer, 360.0, 300.0, UiTheme::default(), &mut Vec::new());
++        assert!(stack.details_contains(Point {
++            x: stack.details_bounds.x + 1.0,
++            y: stack.details_bounds.y + 1.0,
++        }));
++        assert!(stack.details_pointer_close(Point {
++            x: stack.details_close_bounds.x + 1.0,
++            y: stack.details_close_bounds.y + 1.0,
++        }));
++        stack.resolve(&NotificationId::from("owned"));
++        assert!(!stack.details_open());
++        assert_eq!(stack.accessibility_focus(), None);
+     }
+ }
+diff --git a/apps/bareline/src/windows_app/watch.rs b/apps/bareline/src/windows_app/watch.rs
+index d3c6fd2..ad60713 100644
+--- a/apps/bareline/src/windows_app/watch.rs
++++ b/apps/bareline/src/windows_app/watch.rs
+@@ -218,9 +218,17 @@ impl Shell {
+                 self.watch.setup = Some(rx);
+             }
+             Err(e) => {
+-                if let Some(w) = &mut self.workspace {
+-                    w.message = Some(format!("File watching unavailable: {e}"));
+-                }
++                self.toasts.push_typed(
++                    "watch-setup",
++                    toast::next_revision(),
++                    bareline_ui::theme::ToastLevel::Error,
++                    toast::NotificationKind::Outcome,
++                    "File watching unavailable.",
++                    Some(e.to_string()),
++                    None,
++                    toast::NotificationLifetime::Persistent,
++                    Instant::now(),
++                );
+             }
+         }
+     }
+@@ -232,9 +240,22 @@ impl Shell {
+             }
+             "file.monitor.start" => {
+                 if let Err(error) = self.watch_start_follow(self.app.active) {
+-                    if let Some(w) = &mut self.workspace {
+-                        w.message = Some(error);
+-                    }
++                    let document = self
++                        .workspace
++                        .as_ref()
++                        .and_then(|w| w.editors.get(self.app.active))
++                        .map(|editor| editor.snapshot().identity_token());
++                    self.toasts.push_typed(
++                        "watch-follow-start",
++                        toast::next_revision(),
++                        bareline_ui::theme::ToastLevel::Error,
++                        toast::NotificationKind::Outcome,
++                        "File monitoring could not start.",
++                        Some(error),
++                        document,
++                        toast::NotificationLifetime::Persistent,
++                        Instant::now(),
++                    );
+                 }
+                 true
+             }
+@@ -260,7 +281,18 @@ impl Shell {
+                         self.views.active_workspace_editor_mut(w, self.app.active)
+                 {
+                     if let Err(error) = editor.unlock_follow(true) {
+-                        w.message = Some(error);
++                        let document = editor.snapshot().identity_token();
++                        self.toasts.push_typed(
++                            format!("watch-unlock-{}", document.0),
++                            toast::next_revision(),
++                            bareline_ui::theme::ToastLevel::Error,
++                            toast::NotificationKind::Outcome,
++                            "Monitoring could not be stopped.",
++                            Some(error),
++                            Some(document),
++                            toast::NotificationLifetime::Persistent,
++                            Instant::now(),
++                        );
+                     }
+                 }
+                 true
+@@ -285,7 +317,18 @@ impl Shell {
+                     w.editors[self.app.active].viewport_mut().user_read_only = was_read_only;
+                     match result {
+                         Err(error) => {
+-                            w.message = Some(error);
++                            let document = w.editors[self.app.active].snapshot().identity_token();
++                            self.toasts.push_typed(
++                                format!("watch-reopen-{}", document.0),
++                                toast::next_revision(),
++                                bareline_ui::theme::ToastLevel::Error,
++                                toast::NotificationKind::Outcome,
++                                "Monitored file could not be reopened.",
++                                Some(error),
++                                Some(document),
++                                toast::NotificationLifetime::Persistent,
++                                Instant::now(),
++                            );
+                         }
+                         Ok(()) => {
+                             if let Some(path) = path {
+@@ -331,7 +374,18 @@ impl Shell {
+                     && let Some(w) = &mut self.workspace
+                     && let Err(e) = w.reload(active, dirty)
+                 {
+-                    w.message = Some(e);
++                    let document = w.editors.get(active).map(|editor| editor.snapshot().identity_token());
++                    self.toasts.push_typed(
++                        "watch-external-reload",
++                        toast::next_revision(),
++                        bareline_ui::theme::ToastLevel::Error,
++                        toast::NotificationKind::Outcome,
++                        "The externally changed file could not be reloaded.",
++                        Some(e),
++                        document,
++                        toast::NotificationLifetime::Persistent,
++                        Instant::now(),
++                    );
+                 }
+                 true
+             }
+@@ -459,9 +513,17 @@ impl Shell {
+                     if let Some((grant, _)) = self.watch.remote_follow.remove(&path) {
+                         grant.revoke();
+                     }
+-                    if let Some(w) = &mut self.workspace {
+-                        w.message = Some(error);
+-                    }
++                    self.toasts.push_typed(
++                        format!("watch-follow-reopen:{}", path.display()),
++                        toast::next_revision(),
++                        bareline_ui::theme::ToastLevel::Error,
++                        toast::NotificationKind::Outcome,
++                        "File monitoring could not resume.",
++                        Some(error),
++                        None,
++                        toast::NotificationLifetime::Persistent,
++                        Instant::now(),
++                    );
+                 }
+             }
+         }
+@@ -475,11 +537,17 @@ impl Shell {
+                             self.watch.requested = true;
+                         }
+                         Err(e) => {
+-                            if let Some(w) = &mut self.workspace {
+-                                w.message = Some(format!(
+-                                    "File watching unavailable: {e}. Check for External Changes remains available."
+-                                ));
+-                            }
++                            self.toasts.push_typed(
++                                "watch-setup",
++                                toast::next_revision(),
++                                bareline_ui::theme::ToastLevel::Error,
++                                toast::NotificationKind::Outcome,
++                                "File watching unavailable.",
++                                Some(format!("{e}. Check for External Changes remains available.")),
++                                None,
++                                toast::NotificationLifetime::Persistent,
++                                Instant::now(),
++                            );
+                         }
+                     }
+                 }
+@@ -568,16 +636,26 @@ impl Shell {
+                                     continue;
+                                 }
+                                 self.watch.conflicts.insert(path.clone());
+-                                let name = path.display();
+-                                w.message = Some(if w.editors[index].dirty() {
+-                                    format!(
+-                                        "{name} changed outside Bareline. Your edits are preserved. Keep Current Buffer, Save As, or explicitly reload."
+-                                    )
++                                let document = w.editors[index].snapshot().identity_token();
++                                let message = if w.editors[index].dirty() {
++                                    format!("{} changed outside Bareline. Your edits are preserved.", path.display())
+                                 } else {
+                                     format!(
+-                                        "{name} changed or became unavailable outside Bareline. Current bytes are preserved; choose Keep Current Buffer or explicitly reload."
++                                        "{} changed or became unavailable outside Bareline. Current bytes are preserved.",
++                                        path.display()
+                                     )
+-                                });
++                                };
++                                self.toasts.push_typed(
++                                    format!("watch-conflict:{}", path.display()),
++                                    toast::next_revision(),
++                                    bareline_ui::theme::ToastLevel::Warning,
++                                    toast::NotificationKind::Outcome,
++                                    message,
++                                    Some("Choose Keep Current Buffer, Save As, or explicitly reload.".into()),
++                                    Some(document),
++                                    toast::NotificationLifetime::Persistent,
++                                    Instant::now(),
++                                );
+                             }
+                         }
+                     }
+@@ -628,9 +706,17 @@ impl Shell {
+                 }) {
+                 Ok(_) => self.watch.checking = Some(rx),
+                 Err(e) => {
+-                    if let Some(w) = &mut self.workspace {
+-                        w.message = Some(format!("External-change check unavailable: {e}"));
+-                    }
++                    self.toasts.push_typed(
++                        "watch-external-check",
++                        toast::next_revision(),
++                        bareline_ui::theme::ToastLevel::Error,
++                        toast::NotificationKind::Outcome,
++                        "External-change check unavailable.",
++                        Some(e.to_string()),
++                        None,
++                        toast::NotificationLifetime::Persistent,
++                        Instant::now(),
++                    );
+                 }
+             }
+         }
+@@ -827,9 +913,17 @@ impl Shell {
+         let grant = match RemoteReadGrant::after_consent(path.clone(), action, std::time::Duration::from_secs(60)) {
+             Ok(grant) => grant,
+             Err(error) => {
+-                if let Some(w) = &mut self.workspace {
+-                    w.message = Some(error.to_string());
+-                }
++                self.toasts.push_typed(
++                    "watch-remote-grant",
++                    toast::next_revision(),
++                    bareline_ui::theme::ToastLevel::Error,
++                    toast::NotificationKind::Outcome,
++                    "Remote file access could not start.",
++                    Some(error.to_string()),
++                    None,
++                    toast::NotificationLifetime::Persistent,
++                    Instant::now(),
++                );
+                 return;
+             }
+         };
+@@ -868,9 +962,17 @@ impl Shell {
+                     }
+                     Err(error) => {
+                         grant.revoke();
+-                        if let Some(w) = &mut self.workspace {
+-                            w.message = Some(error);
+-                        }
++                        self.toasts.push_typed(
++                            "watch-remote-follow",
++                            toast::next_revision(),
++                            bareline_ui::theme::ToastLevel::Error,
++                            toast::NotificationKind::Outcome,
++                            "Remote file monitoring could not start.",
++                            Some(error),
++                            None,
++                            toast::NotificationLifetime::Persistent,
++                            Instant::now(),
++                        );
+                     }
+                 }
+                 return;
+@@ -894,7 +996,17 @@ impl Shell {
+             }),
+         };
+         if let Err(error) = result {
+-            w.message = Some(error);
++            self.toasts.push_typed(
++                "watch-remote-operation",
++                toast::next_revision(),
++                bareline_ui::theme::ToastLevel::Error,
++                toast::NotificationKind::Outcome,
++                "Remote file operation failed.",
++                Some(error),
++                None,
++                toast::NotificationLifetime::Persistent,
++                Instant::now(),
++            );
+         }
+     }
+ }
+diff --git a/docs/implementation/2026-09-12-audit-implementation/PR-U02.md b/docs/implementation/2026-09-12-audit-implementation/PR-U02.md
+new file mode 100644
+index 0000000..74b3c41
+--- /dev/null
++++ b/docs/implementation/2026-09-12-audit-implementation/PR-U02.md
+@@ -0,0 +1,52 @@
++# PR-U02 — Notification routing
++
++## Scope and baseline
++
++- Finding: UX-04.
++- Baseline: `6e8a4e92776c94c650e250d2dac099c17602d08e` on `codex/audit-20260912-u02-fresh`.
++- Contracts inspected: the shared modal owner, Save As conflict ownership, recovery ownership, and the bottom dock/status layout.
++- Visual reference: `docs/blueprint/mockups/bareline-recovery-center.png`.
++
++## Final behavior
++
++Notifications enter the shell as typed events with a stable id, monotonic revision, explicit level and kind, complete text/details, optional document and generation owner, and scoped, transient, or persistent lifetime. Producers choose the level and lifetime; redraw never ingests a workspace string or infers severity from English text.
++
++Active recovery preparation is stored and presented as typed scoped status for the active document identity. Switching documents projects only that document's current status. Completion resolves it. Failure replaces it with one persistent error carrying the complete error and recovery directory. Closing a document expires its UI-only progress while persistent recovery, cleanup, save-conflict, and process outcomes retain operation or global ownership until acknowledged or resolved.
++
++Unresolved warnings and errors are retained independently of visual capacity. The stack paints only rows that fit the current height, up to the visual limit, and reserves an overflow control whenever notices are hidden and at least one row fits. Accessibility publishes only controls painted in that frame, so a zero-row viewport does not advertise fabricated bounds. The overflow details contain every hidden event, including rows hidden by a short viewport. Resolved transient history is bounded; active owned events are never discarded to satisfy that bound.
++
++Every notification exposes its complete message through Details even when the producer supplied no separate diagnostic. Summary and detail wrapping use measured Unicode character boundaries and may discard whitespace used only at a visual wrap boundary; the Details value preserves the exact source. The detail surface uses the shared modal owner: pointer, keyboard, and UI Automation actions enter the same inert-background layer; Escape, Enter/Space on Close, Page Up/Down, the pointer Close button, and the UIA Close action share dismissal and focus restoration. Closing the modal also relinquishes toast keyboard focus before input returns to the editor. Toast focus clears on outside pointer input, expiry, acknowledgement, resolution, and retired ownership. Replacement preserves the stable control identity and active detail owner.
++
++Save conflict and cleanup synchronization is typed and source-owned. The pump no longer clears `workspace.message` based on a coincident safety transaction, so a later unrelated pump result cannot be erased. Actual lifecycle, recovery, search, watch, session, and process failure producers enqueue explicit typed outcomes at their completion boundary.
++
++## Controlled evidence
++
++Code-level tests cover:
++
++- forty unresolved persistent conflicts retained behind a height-aware overflow route without replay;
++- exact revision dedupe, replacement, acknowledgement, and later reannouncement after resolution;
++- document and generation scoped progress retirement while a closed-document failure survives;
++- complete Unicode summary/details and leading multibyte whitespace wrapping;
++- pointer detail/Close geometry and focus cleanup when an owner disappears;
++- typed severity independent of message wording and bounded resolved history.
++
++Local non-Cargo verification:
++
++```text
++rustfmt --edition 2024 --check apps/bareline/src/windows_app.rs apps/bareline/src/windows_app/*.rs
++git diff --check
++```
++
++Root-owned contained commands requested:
++
++```text
++cargo test -p bareline toast::tests -- --nocapture
++cargo test -p bareline modal::tests -- --nocapture
++cargo test -p bareline recovery -- --nocapture
++cargo test -p bareline notification_shell_tests -- --nocapture
++cargo check -p bareline
++```
++
++## Remaining verification
++
++The root-owned Cargo lane must compile and run the focused tests. Native review should verify a short viewport, pointer-open then Escape, pointer Close, UIA background suppression and Close, focus return to the editor or bottom dock invoker, complete long-path details, and no redraw or tab-switch replay.

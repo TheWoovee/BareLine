@@ -1,0 +1,16 @@
+{
+  "arguments": [
+    "test",
+    "-p",
+    "bareline-platform-windows",
+    "--lib",
+    "menu_",
+    "--offline",
+    "--locked"
+  ],
+  "completed_utc": "2026-09-12T10:40:00.3769569Z",
+  "integration_snapshot": "18587be1e97f29d603961e5d6991b8d63d1750c3",
+  "exit_code": 0,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\U03-native-menu-corrected-central.log"
+}

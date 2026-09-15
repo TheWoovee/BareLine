@@ -1,0 +1,107 @@
+diff --git a/crates/file-io/src/paged_service.rs b/crates/file-io/src/paged_service.rs
+index 5c9c182..28d9ef1 100644
+--- a/crates/file-io/src/paged_service.rs
++++ b/crates/file-io/src/paged_service.rs
+@@ -459,24 +459,23 @@ impl PagedSession {
+             .lock()
+             .map_err(|_| PagedLifecycleError::SourceUnavailable("recovery actor stopped".into()))?;
+         if recovery.is_none() {
+-            let status = self
++            let status = Arc::new(Mutex::new(Default::default()));
++            let created = crate::paged_recovery::PagedRecovery::create(
++                &root,
++                actor.0.transcoded.store.clone(),
++                actor.0.recovery_origin.is_none().then(|| actor.0.path.clone()),
++                baseline.clone(),
++                platform,
++                status.clone(),
++                notify,
++            )
++            .map_err(PagedLifecycleError::SourceUnavailable)?;
++            *self
+                 .0
+                 .recovery_status
+                 .lock()
+-                .map_err(|_| PagedLifecycleError::SourceUnavailable("recovery status stopped".into()))?
+-                .clone();
+-            *recovery = Some(
+-                crate::paged_recovery::PagedRecovery::create(
+-                    &root,
+-                    actor.0.transcoded.store.clone(),
+-                    actor.0.recovery_origin.is_none().then(|| actor.0.path.clone()),
+-                    baseline.clone(),
+-                    platform,
+-                    status,
+-                    notify,
+-                )
+-                .map_err(PagedLifecycleError::SourceUnavailable)?,
+-            );
++                .map_err(|_| PagedLifecycleError::SourceUnavailable("recovery status stopped".into()))? = status;
++            *recovery = Some(created);
+         }
+         Ok(())
+     }
+@@ -650,14 +649,15 @@ impl PagedSession {
+             return Ok(());
+         };
+         let path = retired.directory().to_path_buf();
++        let retired_status = retired.status.clone();
+         match retired.retire() {
+             Ok(_) => {
+-                let no_new_recovery = self.0.recovery.lock().is_ok_and(|recovery| recovery.is_none());
+-                if no_new_recovery
+-                    && let Ok(status) = self.0.recovery_status.lock()
+-                    && let Ok(mut status) = status.lock()
++                if let Ok(recovery) = self.0.recovery.lock()
++                    && recovery.is_none()
++                    && let Ok(mut current_status) = self.0.recovery_status.lock()
++                    && Arc::ptr_eq(&*current_status, &retired_status)
+                 {
+-                    *status = Default::default();
++                    *current_status = Arc::new(Mutex::new(Default::default()));
+                 }
+                 Ok(())
+             }
+@@ -667,10 +667,15 @@ impl PagedSession {
+                     .lock()
+                     .map_err(|_| PagedLifecycleError::SourceUnavailable("recovery retirement stopped".into()))?
+                     .push(path);
+-                if let Ok(status) = self.0.recovery_status.lock()
+-                    && let Ok(mut status) = status.lock()
++                if let Ok(recovery) = self.0.recovery.lock()
++                    && recovery.is_none()
++                    && let Ok(mut current_status) = self.0.recovery_status.lock()
++                    && Arc::ptr_eq(&*current_status, &retired_status)
++                    && let Ok(status) = retired_status.lock()
+                 {
++                    let mut status = status.clone();
+                     status.error = Some(error.clone());
++                    *current_status = Arc::new(Mutex::new(status));
+                 }
+                 Err(PagedLifecycleError::SourceUnavailable(error))
+             }
+@@ -685,12 +690,19 @@ impl PagedSession {
+             .unwrap_or_default()
+     }
+     pub fn resume_recovery_after_discard(&self) {
+-        let _state = self.0.state.lock().unwrap_or_else(|e| e.into_inner());
+-        if let Ok(mut discard) = self.0.recovery_discard.lock() {
+-            *discard = None;
++        {
++            if let Ok(mut discard) = self.0.recovery_discard.lock() {
++                *discard = None;
++            }
++        }
++        {
++            *self.0.recovery_status.lock().unwrap_or_else(|e| e.into_inner()) =
++                Arc::new(Mutex::new(Default::default()));
++        }
++        {
++            let _state = self.0.state.lock().unwrap_or_else(|e| e.into_inner());
++            self.0.operation_generation.fetch_add(1, Ordering::AcqRel);
+         }
+-        *self.0.recovery_status.lock().unwrap_or_else(|e| e.into_inner()) = Arc::new(Mutex::new(Default::default()));
+-        self.0.operation_generation.fetch_add(1, Ordering::AcqRel);
+     }
+     pub fn poll_recovery_discard(
+         &self,

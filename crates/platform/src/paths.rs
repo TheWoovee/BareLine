@@ -48,10 +48,7 @@ impl SerializedPath {
         #[cfg(unix)]
         let (encoding, bytes) = {
             use std::os::unix::ffi::OsStrExt;
-            (
-                PathEncoding::UnixBytes,
-                path.as_os_str().as_bytes().to_vec(),
-            )
+            (PathEncoding::UnixBytes, path.as_os_str().as_bytes().to_vec())
         };
         Self {
             version: 1,
@@ -206,10 +203,7 @@ mod tests {
         assert_eq!(path.to_native(), Err(PathDecodeError::ForeignPlatform));
         path.encoding = PathEncoding::WindowsUtf16Le;
         path.data = "YQ==".into();
-        assert_eq!(
-            path.identity_bytes(),
-            Err(PathDecodeError::InvalidCodeUnits)
-        );
+        assert_eq!(path.identity_bytes(), Err(PathDecodeError::InvalidCodeUnits));
     }
     #[test]
     fn validation_rejects_nul_and_oversized_state() {

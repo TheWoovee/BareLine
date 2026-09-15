@@ -1,0 +1,17 @@
+{
+  "arguments": [
+    "test",
+    "--offline",
+    "--locked",
+    "-p",
+    "bareline-platform-windows",
+    "extension_transport::tests::failed_watchdog_transfer_terminates_and_reaps_contained_child",
+    "--",
+    "--exact"
+  ],
+  "completed_utc": "2026-09-12T07:44:13.5530995Z",
+  "integration_snapshot": "96f3566661cb1f397a89106f7aef00927793c0c0",
+  "exit_code": 0,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\T08-transport-transfer-central.log"
+}

@@ -1,0 +1,21 @@
+{
+  "arguments": [
+    "test",
+    "-p",
+    "bareline",
+    "--bin",
+    "bareline",
+    "--features",
+    "qa-inventory",
+    "inventory::route_tests",
+    "--offline",
+    "--locked",
+    "--",
+    "--nocapture"
+  ],
+  "completed_utc": "2026-09-12T12:41:26.7981060Z",
+  "integration_snapshot": "89d5463f3087b733fe461b4a0e3a6e589fa29db0",
+  "exit_code": 0,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\T14-inventory-route-central-r2.log"
+}

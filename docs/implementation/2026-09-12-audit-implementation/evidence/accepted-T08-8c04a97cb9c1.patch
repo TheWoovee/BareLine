@@ -1,0 +1,1399 @@
+diff --git a/apps/bareline/src/windows_app/extensions.rs b/apps/bareline/src/windows_app/extensions.rs
+index 84e3248..550f773 100644
+--- a/apps/bareline/src/windows_app/extensions.rs
++++ b/apps/bareline/src/windows_app/extensions.rs
+@@ -14,7 +14,10 @@ pub(super) fn accessibility_test_cases() -> Vec<(
+ )> {
+     ui::accessibility_test_cases()
+ }
+-use bareline_platform::PlatformServices;
++use bareline_platform::{
++    PlatformServices,
++    executor::{BoundedExecutor, SubmitError, WorkKind},
++};
+ use bareline_platform_windows::extension_transport::{HostLaunch, HostLifecycle, run_verified_host_observed};
+ use std::{
+     path::PathBuf,
+@@ -50,6 +53,161 @@ struct Pending {
+     cancel: Arc<AtomicBool>,
+     result: mpsc::Receiver<Result<InvocationOutput, String>>,
+ }
++
++const EXTENSION_WORKERS: usize = 4;
++const EXTENSION_QUEUE_DEPTH: usize = 32;
++
++pub(super) fn extension_worker() -> &'static BoundedExecutor {
++    static WORKER: std::sync::OnceLock<BoundedExecutor> = std::sync::OnceLock::new();
++    WORKER.get_or_init(|| BoundedExecutor::new(EXTENSION_WORKERS, EXTENSION_QUEUE_DEPTH, "bareline-extension"))
++}
++
++fn admission_error(error: SubmitError) -> String {
++    match error {
++        SubmitError::Busy => "Extension worker queue is full; retry".into(),
++        SubmitError::Closed => "Extension workers are unavailable".into(),
++    }
++}
++
++struct CompletionWake(Option<Arc<dyn Fn() + Send + Sync>>);
++
++struct TemporaryArtifact {
++    path: PathBuf,
++    published: bool,
++}
++
++impl TemporaryArtifact {
++    fn create(path: PathBuf) -> std::io::Result<(Self, std::fs::File)> {
++        let file = std::fs::OpenOptions::new().write(true).create_new(true).open(&path)?;
++        Ok((Self { path, published: false }, file))
++    }
++
++    fn publish(&mut self) {
++        self.published = true;
++    }
++}
++
++impl Drop for TemporaryArtifact {
++    fn drop(&mut self) {
++        if !self.published {
++            let _ = std::fs::remove_file(&self.path);
++        }
++    }
++}
++
++impl CompletionWake {
++    fn new(notify: Arc<dyn Fn() + Send + Sync>) -> Self {
++        Self(Some(notify))
++    }
++
++    fn fire(&mut self) {
++        if let Some(notify) = self.0.take() {
++            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| notify()));
++        }
++    }
++}
++
++impl Drop for CompletionWake {
++    fn drop(&mut self) {
++        self.fire();
++    }
++}
++
++pub(super) struct WorkerCompletion<T> {
++    sender: Option<mpsc::SyncSender<Result<T, String>>>,
++    failure: &'static str,
++    wake: CompletionWake,
++}
++
++impl<T> WorkerCompletion<T> {
++    pub(super) fn new(
++        sender: mpsc::SyncSender<Result<T, String>>,
++        notify: Arc<dyn Fn() + Send + Sync>,
++        failure: &'static str,
++    ) -> Self {
++        Self {
++            sender: Some(sender),
++            failure,
++            wake: CompletionWake::new(notify),
++        }
++    }
++
++    pub(super) fn complete(mut self, result: Result<T, String>) {
++        if let Some(sender) = self.sender.take() {
++            let _ = sender.try_send(result);
++        }
++        self.wake.fire();
++    }
++}
++
++impl<T> Drop for WorkerCompletion<T> {
++    fn drop(&mut self) {
++        if let Some(sender) = self.sender.take() {
++            let _ = sender.try_send(Err(self.failure.into()));
++        }
++        self.wake.fire();
++    }
++}
++
++struct InvocationCompletion {
++    broker: Option<InvocationBroker>,
++    sender: Option<mpsc::SyncSender<Result<InvocationOutput, String>>>,
++    lifecycle: Arc<std::sync::Mutex<ExtensionLifecycleReceipt>>,
++    wake: CompletionWake,
++}
++
++impl InvocationCompletion {
++    fn new(
++        broker: InvocationBroker,
++        sender: mpsc::SyncSender<Result<InvocationOutput, String>>,
++        lifecycle: Arc<std::sync::Mutex<ExtensionLifecycleReceipt>>,
++        notify: Arc<dyn Fn() + Send + Sync>,
++    ) -> Self {
++        Self {
++            broker: Some(broker),
++            sender: Some(sender),
++            lifecycle,
++            wake: CompletionWake::new(notify),
++        }
++    }
++
++    fn broker(&mut self) -> &mut InvocationBroker {
++        self.broker.as_mut().expect("invocation broker owner")
++    }
++
++    fn complete(mut self, child: Result<(), String>) {
++        let result = self.broker.take().expect("invocation broker owner").finish(child);
++        if let Some(sender) = self.sender.take() {
++            let _ = sender.try_send(result);
++        }
++        self.wake.fire();
++    }
++}
++
++impl Drop for InvocationCompletion {
++    fn drop(&mut self) {
++        if let Ok(mut receipt) = self.lifecycle.lock()
++            && receipt.phase != ExtensionLifecyclePhase::Drained
++        {
++            receipt.phase = ExtensionLifecyclePhase::Rejected;
++            receipt.succeeded = Some(false);
++        }
++        let result = self
++            .broker
++            .take()
++            .map(|broker| {
++                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
++                    broker.finish(Err("Extension worker stopped; document unchanged".into()))
++                }))
++                .unwrap_or_else(|_| Err("Extension worker stopped; document unchanged".into()))
++            })
++            .unwrap_or_else(|| Err("Extension worker stopped; document unchanged".into()));
++        if let Some(sender) = self.sender.take() {
++            let _ = sender.try_send(result);
++        }
++        self.wake.fire();
++    }
++}
+ #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+ pub enum ExtensionLifecyclePhase {
+     #[default]
+@@ -194,13 +352,22 @@ impl ExtensionsRuntime {
+         }
+     }
+     pub fn start(&mut self, job: InvocationJob, notify: Arc<dyn Fn() + Send + Sync>) -> Result<(), String> {
++        self.start_on(extension_worker(), job, notify)
++    }
++
++    fn start_on(
++        &mut self,
++        executor: &BoundedExecutor,
++        job: InvocationJob,
++        notify: Arc<dyn Fn() + Send + Sync>,
++    ) -> Result<(), String> {
+         if !self.enabled {
+             return Err("Extensions disabled for this session".into());
+         }
+         if self.running() {
+             return Err("An extension is running; cancel it before starting another".into());
+         }
+-        let mut broker = if job.paged.is_some() {
++        let broker = if job.paged.is_some() {
+             InvocationBroker::new_paged(job.invocation.clone(), job.source, job.session, job.panels)?
+         } else {
+             InvocationBroker::new(job.invocation.clone(), job.source, job.session, job.panels)?
+@@ -219,72 +386,90 @@ impl ExtensionsRuntime {
+             receipt.pid = None;
+             receipt.succeeded = None;
+         }
+-        std::thread::spawn(move || {
+-            let readers = std::cell::RefCell::new(readers::Readers::new(
+-                job.original,
+-                job.paged,
+-                worker_cancel.clone(),
+-                std::time::Instant::now() + std::time::Duration::from_millis(job.budget.timeout_ms()),
+-            ));
+-            let outcome = run_verified_host_observed(
+-                HostLaunch {
+-                    executable: &job.runtime.executable,
+-                    executable_sha256: job.runtime.executable_sha256,
+-                    publisher_certificate_sha256: job.runtime.publisher_certificate_sha256,
+-                    component: &job.component,
+-                    component_sha256: job.component_sha256,
+-                    invocation: &job.invocation,
+-                    budget: job.budget,
+-                },
+-                worker_cancel.clone(),
+-                |event| {
++        let completion = InvocationCompletion::new(broker, send, lifecycle.clone(), notify);
++        let submitted = executor.submit(
++            WorkKind::General,
++            Box::new(move || {
++                let mut completion = completion;
++                if worker_cancel.load(Ordering::Acquire) {
+                     if let Ok(mut receipt) = lifecycle.lock() {
+-                        let (phase, pid) = match event {
+-                            HostLifecycle::Started(pid) => (ExtensionLifecyclePhase::Started, pid),
+-                            HostLifecycle::Authenticated(pid) => (ExtensionLifecyclePhase::Authenticated, pid),
+-                            HostLifecycle::Drained(pid) => (ExtensionLifecyclePhase::Drained, pid),
+-                        };
+-                        receipt.phase = phase;
+-                        receipt.pid = Some(pid);
++                        receipt.phase = ExtensionLifecyclePhase::Rejected;
+                     }
+-                },
+-                |message| {
+-                    if !job.edits_preserve_original
+-                        && matches!(
+-                            message.request,
+-                            bareline_extensions_protocol::Request::ApplyEdits { .. }
+-                                | bareline_extensions_protocol::Request::BeginEdits { .. }
++                    completion.complete(Err("Extension cancelled; document unchanged".into()));
++                    return;
++                }
++                let readers = std::cell::RefCell::new(readers::Readers::new(
++                    job.original,
++                    job.paged,
++                    worker_cancel.clone(),
++                    std::time::Instant::now() + std::time::Duration::from_millis(job.budget.timeout_ms()),
++                ));
++                let outcome = run_verified_host_observed(
++                    HostLaunch {
++                        executable: &job.runtime.executable,
++                        executable_sha256: job.runtime.executable_sha256,
++                        publisher_certificate_sha256: job.runtime.publisher_certificate_sha256,
++                        component: &job.component,
++                        component_sha256: job.component_sha256,
++                        invocation: &job.invocation,
++                        budget: job.budget,
++                    },
++                    worker_cancel.clone(),
++                    |event| {
++                        if let Ok(mut receipt) = lifecycle.lock() {
++                            let (phase, pid) = match event {
++                                HostLifecycle::Started(pid) => (ExtensionLifecyclePhase::Started, pid),
++                                HostLifecycle::Authenticated(pid) => (ExtensionLifecyclePhase::Authenticated, pid),
++                                HostLifecycle::Drained(pid) => (ExtensionLifecyclePhase::Drained, pid),
++                            };
++                            receipt.phase = phase;
++                            receipt.pid = Some(pid);
++                        }
++                    },
++                    |message| {
++                        if !job.edits_preserve_original
++                            && matches!(
++                                message.request,
++                                bareline_extensions_protocol::Request::ApplyEdits { .. }
++                                    | bareline_extensions_protocol::Request::BeginEdits { .. }
++                            )
++                        {
++                            return bareline_extensions_protocol::BrokerResponse {
++                                request_id: message.request_id,
++                                result: Err(
++                                    "Formatting is unavailable while original undecodable bytes require preservation"
++                                        .into(),
++                                ),
++                            };
++                        }
++                        completion.broker().request_with_text(
++                            message,
++                            |_, range| readers.borrow_mut().raw(range),
++                            |range| readers.borrow_mut().text(range),
+                         )
+-                    {
+-                        return bareline_extensions_protocol::BrokerResponse {
+-                            request_id: message.request_id,
+-                            result: Err(
+-                                "Formatting is unavailable while original undecodable bytes require preservation"
+-                                    .into(),
+-                            ),
+-                        };
+-                    }
+-                    broker.request_with_text(
+-                        message,
+-                        |_, range| readers.borrow_mut().raw(range),
+-                        |range| readers.borrow_mut().text(range),
+-                    )
+-                },
+-            )
+-            .map_err(|e| e.to_string());
+-            if let Ok(mut receipt) = lifecycle.lock()
+-                && receipt.phase == ExtensionLifecyclePhase::Requested
+-            {
++                    },
++                )
++                .map_err(|e| e.to_string());
++                if let Ok(mut receipt) = lifecycle.lock()
++                    && receipt.phase == ExtensionLifecyclePhase::Requested
++                {
++                    receipt.phase = ExtensionLifecyclePhase::Rejected;
++                }
++                let outcome = if worker_cancel.load(Ordering::Acquire) {
++                    Err("Extension cancelled; document unchanged".into())
++                } else {
++                    outcome
++                };
++                completion.complete(outcome);
++            }),
++        );
++        if let Err(error) = submitted {
++            if let Ok(mut receipt) = self.lifecycle.lock() {
+                 receipt.phase = ExtensionLifecyclePhase::Rejected;
++                receipt.succeeded = Some(false);
+             }
+-            let outcome = if worker_cancel.load(Ordering::Acquire) {
+-                Err("Extension cancelled; document unchanged".into())
+-            } else {
+-                outcome
+-            };
+-            let _ = send.send(broker.finish(outcome));
+-            notify();
+-        });
++            return Err(admission_error(error));
++        }
+         self.pending = Some(Pending {
+             cancel,
+             result: receive,
+@@ -659,6 +844,15 @@ impl ExtensionsRuntime {
+         &mut self,
+         notify: Arc<dyn Fn() + Send + Sync>,
+         work: impl FnOnce(Arc<AtomicBool>) -> Result<ManagerResult, String> + Send + 'static,
++    ) -> Result<(), String> {
++        self.manager_work_on(extension_worker(), notify, work)
++    }
++
++    fn manager_work_on(
++        &mut self,
++        executor: &BoundedExecutor,
++        notify: Arc<dyn Fn() + Send + Sync>,
++        work: impl FnOnce(Arc<AtomicBool>) -> Result<ManagerResult, String> + Send + 'static,
+     ) -> Result<(), String> {
+         if !self.enabled {
+             return Err("Extensions disabled for this session".into());
+@@ -669,10 +863,20 @@ impl ExtensionsRuntime {
+         let (send, receive) = mpsc::sync_channel(1);
+         self.manager_cancel = Arc::new(AtomicBool::new(false));
+         let cancel = self.manager_cancel.clone();
+-        std::thread::spawn(move || {
+-            let _ = send.send(work(cancel));
+-            notify();
+-        });
++        let completion = WorkerCompletion::new(send, notify, "Package worker stopped");
++        if let Err(error) = executor.submit(
++            WorkKind::Bulk,
++            Box::new(move || {
++                if cancel.load(Ordering::Acquire) {
++                    completion.complete(Err("Operation cancelled".into()));
++                } else {
++                    completion.complete(work(cancel));
++                }
++            }),
++        ) {
++            self.manager_cancel.store(true, Ordering::Release);
++            return Err(admission_error(error));
++        }
+         self.manager_pending = Some(receive);
+         Ok(())
+     }
+@@ -753,21 +957,18 @@ impl ExtensionsRuntime {
+                 return Err("Operation cancelled".into());
+             }
+             let temporary = storage.join(format!("{artifact_type}-metadata-{}-{}.tmp", std::process::id(), now));
+-            {
+-                use std::io::Write;
+-                let mut file = std::fs::OpenOptions::new()
+-                    .write(true)
+-                    .create_new(true)
+-                    .open(&temporary)
+-                    .map_err(|e| e.to_string())?;
+-                file.write_all(source.metadata_version().to_string().as_bytes())
+-                    .and_then(|_| file.sync_all())
+-                    .map_err(|e| e.to_string())?;
+-            }
+-            if let Err(error) = std::fs::rename(&temporary, &version_path) {
+-                let _ = std::fs::remove_file(&temporary);
+-                return Err(error.to_string());
++            let (mut temporary_owner, mut file) =
++                TemporaryArtifact::create(temporary.clone()).map_err(|e| e.to_string())?;
++            use std::io::Write;
++            file.write_all(source.metadata_version().to_string().as_bytes())
++                .and_then(|_| file.sync_all())
++                .map_err(|e| e.to_string())?;
++            drop(file);
++            if cancel.load(Ordering::Acquire) {
++                return Err("Operation cancelled".into());
+             }
++            std::fs::rename(&temporary, &version_path).map_err(|error| error.to_string())?;
++            temporary_owner.publish();
+             let entries = source
+                 .entries()
+                 .iter()
+@@ -1071,6 +1272,260 @@ impl ExtensionsRuntime {
+ #[cfg(test)]
+ mod manager_tests {
+     use super::*;
++    use std::time::Duration;
++
++    fn invocation_job() -> InvocationJob {
++        let document = bareline_document::Document::from_utf8(
++            "fixture",
++            bareline_document::Budget::new(4096),
++            bareline_document::Budget::new(4096),
++        )
++        .unwrap();
++        let source = document.snapshot();
++        let mut session = ExtensionSession::new("fixture.tools".into()).unwrap();
++        session.approve(vec![]);
++        InvocationJob {
++            runtime: VerifiedRuntime {
++                executable: PathBuf::from("unused-host.exe"),
++                executable_sha256: [0; 32],
++                publisher_certificate_sha256: [0; 32],
++            },
++            component: PathBuf::from("unused-component.wasm"),
++            component_sha256: [0; 32],
++            invocation: Invocation {
++                extension_id: "fixture.tools".into(),
++                command: "fixture.command".into(),
++                arguments: String::new(),
++                document: 1,
++                revision: source.revision.0,
++                source_generation: 1,
++                text_length: source.len() as u64,
++                raw_length: 0,
++                grant_generation: session.generation(),
++            },
++            budget: bareline_extensions_protocol::ExecutionBudget::Interactive,
++            source,
++            original: None,
++            paged: None,
++            session,
++            panels: vec![],
++            edits_preserve_original: true,
++        }
++    }
++
++    #[test]
++    fn failed_exclusive_create_preserves_preexisting_stage() {
++        let root = std::env::temp_dir().join(format!(
++            "bareline-manager-stage-owner-{}-{}",
++            std::process::id(),
++            std::time::SystemTime::now()
++                .duration_since(std::time::UNIX_EPOCH)
++                .unwrap()
++                .as_nanos()
++        ));
++        std::fs::create_dir(&root).unwrap();
++        let stage = root.join("existing.tmp");
++        std::fs::write(&stage, b"other operation").unwrap();
++        assert!(TemporaryArtifact::create(stage.clone()).is_err());
++        assert_eq!(std::fs::read(&stage).unwrap(), b"other operation");
++        std::fs::remove_file(stage).unwrap();
++        std::fs::remove_dir(root).unwrap();
++    }
++
++    #[test]
++    fn invocation_rejection_revokes_owner_without_pending_state() {
++        let executor = BoundedExecutor::new(1, 1, "extension-invocation-reject-test");
++        let (started_tx, started_rx) = mpsc::sync_channel(1);
++        let (release_tx, release_rx) = mpsc::sync_channel(1);
++        executor
++            .submit(
++                WorkKind::General,
++                Box::new(move || {
++                    started_tx.send(()).unwrap();
++                    release_rx.recv().unwrap();
++                }),
++            )
++            .unwrap();
++        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
++        executor.submit(WorkKind::General, Box::new(|| {})).unwrap();
++        let (wake_tx, wake_rx) = mpsc::sync_channel(2);
++        let mut runtime = ExtensionsRuntime::default();
++        let error = runtime
++            .start_on(
++                &executor,
++                invocation_job(),
++                Arc::new(move || {
++                    let _ = wake_tx.try_send(());
++                }),
++            )
++            .unwrap_err();
++        assert!(error.contains("queue is full"));
++        assert!(runtime.pending.is_none());
++        let receipt = runtime.lifecycle_receipt().unwrap();
++        assert_eq!(receipt.phase, ExtensionLifecyclePhase::Rejected);
++        assert_eq!(receipt.succeeded, Some(false));
++        wake_rx.recv_timeout(Duration::from_secs(5)).unwrap();
++        assert!(wake_rx.try_recv().is_err(), "rejected invocation woke more than once");
++        release_tx.send(()).unwrap();
++    }
++
++    #[test]
++    fn manager_rejection_does_not_leave_pending_and_wakes_once() {
++        let executor = BoundedExecutor::new(1, 1, "extension-manager-reject-test");
++        let (started_tx, started_rx) = mpsc::sync_channel(1);
++        let (release_tx, release_rx) = mpsc::sync_channel(1);
++        executor
++            .submit(
++                WorkKind::Bulk,
++                Box::new(move || {
++                    started_tx.send(()).unwrap();
++                    release_rx.recv().unwrap();
++                }),
++            )
++            .unwrap();
++        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
++        executor.submit(WorkKind::Bulk, Box::new(|| {})).unwrap();
++
++        let (wake_tx, wake_rx) = mpsc::sync_channel(2);
++        let mut runtime = ExtensionsRuntime::default();
++        let error = runtime
++            .manager_work_on(
++                &executor,
++                Arc::new(move || {
++                    let _ = wake_tx.try_send(());
++                }),
++                |_| Err("must not run".into()),
++            )
++            .unwrap_err();
++        assert!(error.contains("queue is full"));
++        assert!(runtime.manager_pending.is_none());
++        assert!(runtime.manager_cancel.load(Ordering::Acquire));
++        wake_rx.recv_timeout(Duration::from_secs(5)).unwrap();
++        assert!(wake_rx.try_recv().is_err(), "rejected work woke more than once");
++        release_tx.send(()).unwrap();
++    }
++
++    #[test]
++    fn queued_manager_cancel_is_terminal_and_blocks_overlap() {
++        let executor = BoundedExecutor::new(1, 2, "extension-manager-cancel-test");
++        let (started_tx, started_rx) = mpsc::sync_channel(1);
++        let (release_tx, release_rx) = mpsc::sync_channel(1);
++        executor
++            .submit(
++                WorkKind::Bulk,
++                Box::new(move || {
++                    started_tx.send(()).unwrap();
++                    release_rx.recv().unwrap();
++                }),
++            )
++            .unwrap();
++        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
++
++        let (wake_tx, wake_rx) = mpsc::sync_channel(2);
++        let mut runtime = ExtensionsRuntime::default();
++        runtime
++            .manager_work_on(
++                &executor,
++                Arc::new(move || {
++                    let _ = wake_tx.try_send(());
++                }),
++                |_| Err("work ignored cancellation".into()),
++            )
++            .unwrap();
++        assert!(
++            runtime
++                .manager_work_on(&executor, Arc::new(|| {}), |_| Err("overlap ran".into()))
++                .unwrap_err()
++                .contains("current extension operation")
++        );
++        runtime.cancel();
++        release_tx.send(()).unwrap();
++        let result = runtime
++            .manager_pending
++            .take()
++            .unwrap()
++            .recv_timeout(Duration::from_secs(5))
++            .unwrap();
++        assert!(matches!(result, Err(ref error) if error == "Operation cancelled"));
++        wake_rx.recv_timeout(Duration::from_secs(5)).unwrap();
++        assert!(wake_rx.try_recv().is_err(), "cancelled work woke more than once");
++    }
++
++    #[test]
++    fn cancellation_after_manager_publication_preserves_receipt() {
++        let executor = BoundedExecutor::new(1, 1, "extension-manager-receipt-test");
++        let mut runtime = ExtensionsRuntime::default();
++        runtime
++            .manager_work_on(&executor, Arc::new(|| {}), |cancel| {
++                // Model a cancellation racing after the durable operation has
++                // committed and produced its complete receipt.
++                cancel.store(true, Ordering::Release);
++                Ok(ManagerResult::Permissions(ManagerIndex::default()))
++            })
++            .unwrap();
++        let result = runtime
++            .manager_pending
++            .take()
++            .unwrap()
++            .recv_timeout(Duration::from_secs(5))
++            .unwrap();
++        assert!(matches!(result, Ok(ManagerResult::Permissions(_))));
++    }
++
++    #[test]
++    fn manager_unwind_publishes_terminal_failure() {
++        let executor = BoundedExecutor::new(1, 1, "extension-manager-unwind-test");
++        let (wake_tx, wake_rx) = mpsc::sync_channel(1);
++        let mut runtime = ExtensionsRuntime::default();
++        runtime
++            .manager_work_on(
++                &executor,
++                Arc::new(move || {
++                    let _ = wake_tx.try_send(());
++                }),
++                |_| -> Result<ManagerResult, String> { panic!("controlled manager failure") },
++            )
++            .unwrap();
++        let result = runtime
++            .manager_pending
++            .take()
++            .unwrap()
++            .recv_timeout(Duration::from_secs(5))
++            .unwrap();
++        assert!(matches!(result, Err(ref error) if error == "Package worker stopped"));
++        wake_rx.recv_timeout(Duration::from_secs(5)).unwrap();
++    }
++
++    #[test]
++    fn failed_result_send_still_wakes_exactly_once() {
++        let (sender, receiver) = mpsc::sync_channel::<Result<(), String>>(1);
++        drop(receiver);
++        let (wake_tx, wake_rx) = mpsc::sync_channel(2);
++        WorkerCompletion::new(
++            sender,
++            Arc::new(move || {
++                let _ = wake_tx.try_send(());
++            }),
++            "worker stopped",
++        )
++        .complete(Ok(()));
++        wake_rx.recv_timeout(Duration::from_secs(5)).unwrap();
++        assert!(wake_rx.try_recv().is_err(), "failed send woke more than once");
++    }
++
++    #[test]
++    fn closing_runtime_cancels_owned_invocation() {
++        let cancel = Arc::new(AtomicBool::new(false));
++        let (_sender, receiver) = mpsc::sync_channel::<Result<InvocationOutput, String>>(1);
++        let mut runtime = ExtensionsRuntime::default();
++        runtime.pending = Some(Pending {
++            cancel: cancel.clone(),
++            result: receiver,
++        });
++        drop(runtime);
++        assert!(cancel.load(Ordering::Acquire));
++    }
++
+     #[test]
+     fn deferred_disable_persists_against_latest_completed_manager_generation() {
+         let root = std::env::temp_dir().join(format!(
+@@ -1233,7 +1688,10 @@ impl ExtensionsRuntime {
+                 return Ok(());
+             }
+         }
+-        self.manager_work(notify, move |_cancel| {
++        self.manager_work(notify, move |cancel| {
++            if cancel.load(Ordering::Acquire) {
++                return Err("Operation cancelled".into());
++            }
+             index.save(&root)?;
+             Ok(ManagerResult::Permissions(index))
+         })
+@@ -1255,7 +1713,10 @@ impl ExtensionsRuntime {
+             }
+         }
+         if self
+-            .manager_work(notify, move |_| {
++            .manager_work(notify, move |cancel| {
++                if cancel.load(Ordering::Acquire) {
++                    return Err("Operation cancelled".into());
++                }
+                 index.save(&root)?;
+                 Ok(ManagerResult::Permissions(index))
+             })
+@@ -1376,9 +1837,6 @@ impl ExtensionsRuntime {
+                 &cancel,
+             )
+             .map_err(|e| e.to_string())?;
+-            if cancel.load(Ordering::Acquire) {
+-                return Err("Runtime installation cancelled".into());
+-            }
+             index.runtime_digest = Some(runtime.executable_sha256.iter().map(|b| format!("{b:02x}")).collect());
+             index.runtime_metadata_version = index.runtime_metadata_version.max(runtime.metadata_version);
+             index.save(&root)?;
+@@ -1393,7 +1851,10 @@ impl ExtensionsRuntime {
+         let runtime = self.runtime_package.clone().ok_or("Runtime not installed")?;
+         let root = self.root.clone().ok_or("Extension storage unavailable")?;
+         let mut index = self.index.clone();
+-        self.manager_work(notify, move |_cancel| {
++        self.manager_work(notify, move |cancel| {
++            if cancel.load(Ordering::Acquire) {
++                return Err("Operation cancelled".into());
++            }
+             bareline_platform_windows::update::remove_verified_runtime(&runtime).map_err(|e| e.to_string())?;
+             index.runtime_digest = None;
+             index.save(&root)?;
+@@ -1414,7 +1875,10 @@ impl ExtensionsRuntime {
+         let id = package.id.clone();
+         let root = self.root.clone().ok_or("Extension storage unavailable")?;
+         let mut index = self.index.clone();
+-        self.manager_work(notify, move |_cancel| {
++        self.manager_work(notify, move |cancel| {
++            if cancel.load(Ordering::Acquire) {
++                return Err("Operation cancelled".into());
++            }
+             package.remove_cached().map_err(|e| format!("Removal: {e:?}"))?;
+             index.remove(&id)?;
+             index.save(&root)?;
+diff --git a/apps/bareline/src/windows_app/inventory.rs b/apps/bareline/src/windows_app/inventory.rs
+index e1a3560..d28d328 100644
+--- a/apps/bareline/src/windows_app/inventory.rs
++++ b/apps/bareline/src/windows_app/inventory.rs
+@@ -1,7 +1,11 @@
+ // SPDX-License-Identifier: MPL-2.0
+ //! Explicit QA metadata export; normal launches never write an inventory.
++use super::extensions::{WorkerCompletion, extension_worker};
+ use super::*;
++use bareline_platform::executor::WorkKind;
+ use std::{collections::BTreeSet, ffi::OsString, io::Write, sync::mpsc};
++
++static INVENTORY_STAGE_SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+ pub(super) struct Request {
+     path: PathBuf,
+     commit: String,
+@@ -11,6 +15,89 @@ pub(super) struct InventoryRuntime {
+     request: Option<Request>,
+     deadline: Option<Instant>,
+     pending: Option<mpsc::Receiver<Result<(), String>>>,
++    cancel: Arc<std::sync::atomic::AtomicBool>,
++}
++
++struct StagedInventory {
++    path: PathBuf,
++    published: bool,
++}
++
++impl Drop for StagedInventory {
++    fn drop(&mut self) {
++        if !self.published {
++            let _ = std::fs::remove_file(&self.path);
++        }
++    }
++}
++
++impl Drop for InventoryRuntime {
++    fn drop(&mut self) {
++        self.cancel.store(true, std::sync::atomic::Ordering::Release);
++    }
++}
++
++fn write_inventory(request: Request, json: String, cancel: Arc<std::sync::atomic::AtomicBool>) -> Result<(), String> {
++    write_inventory_with_before_publish(request, json, cancel, || {})
++}
++
++fn write_inventory_with_before_publish(
++    request: Request,
++    json: String,
++    cancel: Arc<std::sync::atomic::AtomicBool>,
++    before_publish: impl FnOnce(),
++) -> Result<(), String> {
++    if cancel.load(std::sync::atomic::Ordering::Acquire) {
++        return Err("Inventory export cancelled".into());
++    }
++    bareline_platform::LocalFileSystem::validate_target(&bareline_platform_windows::WindowsFileSystem, &request.path)
++        .map_err(|e| e.to_string())?;
++    let parent = request.path.parent().ok_or("Inventory parent unavailable")?;
++    let operation = INVENTORY_STAGE_SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
++    let stage = parent.join(format!(
++        ".bareline-command-inventory-{}-{operation}.tmp",
++        std::process::id()
++    ));
++    let mut file = std::fs::OpenOptions::new()
++        .write(true)
++        .create_new(true)
++        .open(&stage)
++        .map_err(|e| e.to_string())?;
++    let mut ownership = StagedInventory {
++        path: stage.clone(),
++        published: false,
++    };
++    file.write_all(json.as_bytes()).map_err(|e| e.to_string())?;
++    file.sync_all().map_err(|e| e.to_string())?;
++    drop(file);
++    before_publish();
++    if cancel.load(std::sync::atomic::Ordering::Acquire) {
++        return Err("Inventory export cancelled".into());
++    }
++    bareline_platform::LocalFileSystem::rename_entry(
++        &bareline_platform_windows::WindowsFileSystem,
++        &stage,
++        &request.path,
++    )
++    .map_err(|e| e.to_string())?;
++    ownership.published = true;
++    Ok(())
++}
++
++fn submit_inventory(
++    executor: &bareline_platform::executor::BoundedExecutor,
++    request: Request,
++    json: String,
++    cancel: Arc<std::sync::atomic::AtomicBool>,
++    notify: Arc<dyn Fn() + Send + Sync>,
++) -> Result<mpsc::Receiver<Result<(), String>>, bareline_platform::executor::SubmitError> {
++    let (tx, rx) = mpsc::sync_channel(1);
++    let completion = WorkerCompletion::new(tx, notify, "Inventory worker stopped");
++    executor.submit(
++        WorkKind::Bulk,
++        Box::new(move || completion.complete(write_inventory(request, json, cancel))),
++    )?;
++    Ok(rx)
+ }
+ pub(super) fn parse(args: Vec<OsString>) -> Result<(Vec<OsString>, Option<Request>), Box<dyn std::error::Error>> {
+     let mut remaining = Vec::new();
+@@ -63,6 +150,8 @@ impl InventoryRuntime {
+         self.deadline
+     }
+     pub(super) fn configure(&mut self, request: Option<Request>) {
++        self.cancel.store(true, std::sync::atomic::Ordering::Release);
++        self.cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+         self.request = request;
+         self.deadline = self.request.as_ref().map(|_| Instant::now() + Duration::from_secs(60));
+     }
+@@ -78,6 +167,7 @@ impl Shell {
+             .is_some_and(|deadline| Instant::now() >= deadline)
+         {
+             eprintln!("Command inventory discovery timed out");
++            self.inventory.cancel.store(true, std::sync::atomic::Ordering::Release);
+             self.failed = true;
+             self.inventory.deadline = None;
+             el.exit();
+@@ -96,6 +186,7 @@ impl Shell {
+                     el.exit();
+                 }
+                 Err(mpsc::TryRecvError::Disconnected) => {
++                    self.inventory.cancel.store(true, std::sync::atomic::Ordering::Release);
+                     self.failed = true;
+                     self.inventory.deadline = None;
+                     el.exit();
+@@ -164,41 +255,141 @@ impl Shell {
+             request.commit,
+             ids.iter().map(|id| format!("\"{id}\"")).collect::<Vec<_>>().join(",")
+         );
+-        let (tx, rx) = mpsc::sync_channel(1);
+-        self.inventory.pending = Some(rx);
+         let notify = self.notify.clone();
+-        std::thread::spawn(move || {
+-            let result = (|| -> Result<(), String> {
+-                bareline_platform::LocalFileSystem::validate_target(
+-                    &bareline_platform_windows::WindowsFileSystem,
+-                    &request.path,
+-                )
+-                .map_err(|e| e.to_string())?;
+-                let parent = request.path.parent().ok_or("Inventory parent unavailable")?;
+-                let stage = parent.join(format!(".bareline-command-inventory-{}.tmp", std::process::id()));
+-                let mut file = std::fs::OpenOptions::new()
+-                    .write(true)
+-                    .create_new(true)
+-                    .open(&stage)
+-                    .map_err(|e| e.to_string())?;
+-                let result = (|| {
+-                    file.write_all(json.as_bytes())?;
+-                    file.sync_all()?;
+-                    drop(file);
+-                    bareline_platform::LocalFileSystem::rename_entry(
+-                        &bareline_platform_windows::WindowsFileSystem,
+-                        &stage,
+-                        &request.path,
+-                    )
+-                })();
+-                if result.is_err() {
+-                    let _ = std::fs::remove_file(&stage);
+-                }
+-                result.map_err(|e: std::io::Error| e.to_string())
+-            })();
+-            let _ = tx.send(result);
+-            notify();
++        match submit_inventory(extension_worker(), request, json, self.inventory.cancel.clone(), notify) {
++            Ok(rx) => self.inventory.pending = Some(rx),
++            Err(error) => {
++                eprintln!("Command inventory worker unavailable: {error:?}");
++                self.failed = true;
++                self.inventory.deadline = None;
++                el.exit();
++            }
++        }
++    }
++}
++
++#[cfg(test)]
++mod worker_tests {
++    use super::*;
++    use std::time::Duration;
++
++    #[test]
++    fn rejected_inventory_never_creates_stage_and_wakes_once() {
++        let executor = bareline_platform::executor::BoundedExecutor::new(0, 1, "inventory-reject-test");
++        let root = std::env::temp_dir().join(format!("bareline-inventory-reject-{}", std::process::id()));
++        std::fs::create_dir_all(&root).unwrap();
++        let target = root.join("inventory.json");
++        let (wake_tx, wake_rx) = mpsc::sync_channel(2);
++        let result = submit_inventory(
++            &executor,
++            Request {
++                path: target.clone(),
++                commit: "a".repeat(40),
++            },
++            "{}".into(),
++            Arc::new(std::sync::atomic::AtomicBool::new(false)),
++            Arc::new(move || {
++                let _ = wake_tx.try_send(());
++            }),
++        );
++        assert!(matches!(result, Err(bareline_platform::executor::SubmitError::Closed)));
++        wake_rx.recv_timeout(Duration::from_secs(5)).unwrap();
++        assert!(wake_rx.try_recv().is_err(), "rejected export woke more than once");
++        assert!(!target.exists());
++        assert!(std::fs::read_dir(&root).unwrap().next().is_none());
++        std::fs::remove_dir(root).unwrap();
++    }
++
++    #[test]
++    fn unpublished_inventory_stage_is_removed_on_owner_drop() {
++        let root = std::env::temp_dir().join(format!("bareline-inventory-stage-{}", std::process::id()));
++        std::fs::create_dir_all(&root).unwrap();
++        let stage = root.join("stage.tmp");
++        std::fs::write(&stage, b"partial").unwrap();
++        drop(StagedInventory {
++            path: stage.clone(),
++            published: false,
+         });
++        assert!(!stage.exists());
++        std::fs::remove_dir(root).unwrap();
++    }
++
++    #[test]
++    fn dropping_inventory_runtime_signals_owned_export() {
++        let runtime = InventoryRuntime::default();
++        let cancel = runtime.cancel.clone();
++        drop(runtime);
++        assert!(cancel.load(std::sync::atomic::Ordering::Acquire));
++    }
++
++    #[test]
++    fn cancellation_before_inventory_publication_removes_stage() {
++        let root = std::env::temp_dir().join(format!("bareline-inventory-cancel-{}", std::process::id()));
++        std::fs::create_dir_all(&root).unwrap();
++        let target = root.join("inventory.json");
++        let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
++        let signal = cancel.clone();
++        let result = write_inventory_with_before_publish(
++            Request {
++                path: target.clone(),
++                commit: "a".repeat(40),
++            },
++            "{}".into(),
++            cancel,
++            move || signal.store(true, std::sync::atomic::Ordering::Release),
++        );
++        assert!(matches!(result, Err(ref error) if error == "Inventory export cancelled"));
++        assert!(!target.exists());
++        assert!(std::fs::read_dir(&root).unwrap().next().is_none());
++        std::fs::remove_dir(root).unwrap();
++    }
++
++    #[test]
++    fn queued_inventory_cancel_touches_no_target_or_stage() {
++        let executor = bareline_platform::executor::BoundedExecutor::new(1, 1, "inventory-queued-cancel-test");
++        let (started_tx, started_rx) = mpsc::sync_channel(1);
++        let (release_tx, release_rx) = mpsc::sync_channel(1);
++        executor
++            .submit(
++                WorkKind::Bulk,
++                Box::new(move || {
++                    started_tx.send(()).unwrap();
++                    release_rx.recv().unwrap();
++                }),
++            )
++            .unwrap();
++        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
++
++        let root = std::env::temp_dir().join(format!(
++            "bareline-inventory-queued-cancel-{}-{}",
++            std::process::id(),
++            std::time::SystemTime::now()
++                .duration_since(std::time::UNIX_EPOCH)
++                .unwrap()
++                .as_nanos()
++        ));
++        std::fs::create_dir(&root).unwrap();
++        let target = root.join("inventory.json");
++        let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
++        let receiver = submit_inventory(
++            &executor,
++            Request {
++                path: target.clone(),
++                commit: "a".repeat(40),
++            },
++            "{}".into(),
++            cancel.clone(),
++            Arc::new(|| {}),
++        )
++        .unwrap();
++        cancel.store(true, std::sync::atomic::Ordering::Release);
++        release_tx.send(()).unwrap();
++
++        let result = receiver.recv_timeout(Duration::from_secs(5)).unwrap();
++        assert!(matches!(result, Err(ref error) if error == "Inventory export cancelled"));
++        assert!(!target.exists());
++        assert!(std::fs::read_dir(&root).unwrap().next().is_none());
++        std::fs::remove_dir(root).unwrap();
+     }
+ }
+ 
+diff --git a/apps/extension-host/src/lib.rs b/apps/extension-host/src/lib.rs
+index 123a9a2..5f7700b 100644
+--- a/apps/extension-host/src/lib.rs
++++ b/apps/extension-host/src/lib.rs
+@@ -13,6 +13,7 @@ use wasmtime::{Config, Engine, Store, StoreLimits, StoreLimitsBuilder};
+ use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
+ 
+ type Broker = Box<dyn FnMut(Vec<u8>) -> Result<Vec<u8>, String> + Send>;
++type WatchdogRun = Box<dyn FnOnce() + Send + 'static>;
+ struct State {
+     invocation: Vec<u8>,
+     broker: Broker,
+@@ -99,6 +100,21 @@ impl Runtime {
+         cancelled: Arc<AtomicBool>,
+         budget: Duration,
+         fuel: u64,
++    ) -> wasmtime::Result<()> {
++        self.execute_with_watchdog_spawner(bytes, invocation, broker, cancelled, budget, fuel, |name, run| {
++            std::thread::Builder::new().name(name).spawn(run)
++        })
++    }
++
++    fn execute_with_watchdog_spawner(
++        &self,
++        bytes: &[u8],
++        invocation: Vec<u8>,
++        broker: Broker,
++        cancelled: Arc<AtomicBool>,
++        budget: Duration,
++        fuel: u64,
++        spawn_watchdog: impl FnOnce(String, WatchdogRun) -> std::io::Result<std::thread::JoinHandle<()>>,
+     ) -> wasmtime::Result<()> {
+         if cancelled.load(Ordering::Acquire) {
+             wasmtime::bail!("cancelled");
+@@ -155,22 +171,26 @@ impl Runtime {
+         let engine = self.engine.clone();
+         let (stop_tx, stop_rx) = mpsc::channel();
+         // Fine-grained cancellation without an always-running host timer.
+-        let watchdog = std::thread::spawn(move || {
+-            let deadline = std::time::Instant::now() + budget;
+-            loop {
+-                if cancelled.load(Ordering::Acquire) || std::time::Instant::now() >= deadline {
+-                    engine.increment_epoch();
+-                    if stop_rx.recv_timeout(Duration::from_millis(50)).is_err() {
+-                        std::process::exit(124);
++        let watchdog = spawn_watchdog(
++            "bareline-extension-host-watchdog".into(),
++            Box::new(move || {
++                let deadline = std::time::Instant::now() + budget;
++                loop {
++                    if cancelled.load(Ordering::Acquire) || std::time::Instant::now() >= deadline {
++                        engine.increment_epoch();
++                        if stop_rx.recv_timeout(Duration::from_millis(50)).is_err() {
++                            std::process::exit(124);
++                        }
++                        return;
++                    }
++                    match stop_rx.recv_timeout(Duration::from_millis(10)) {
++                        Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => return,
++                        Err(mpsc::RecvTimeoutError::Timeout) => {}
+                     }
+-                    return;
+-                }
+-                match stop_rx.recv_timeout(Duration::from_millis(10)) {
+-                    Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => return,
+-                    Err(mpsc::RecvTimeoutError::Timeout) => {}
+                 }
+-            }
+-        });
++            }),
++        )
++        .map_err(|error| wasmtime::Error::msg(format!("extension watchdog unavailable: {error}")))?;
+         let result: wasmtime::Result<()> = (|| {
+             let component = Component::from_binary(&self.engine, bytes)?;
+             let instance = linker.instantiate(&mut store, &component)?;
+@@ -179,7 +199,9 @@ impl Runtime {
+             Ok(())
+         })();
+         let _ = stop_tx.send(());
+-        let _ = watchdog.join();
++        if watchdog.join().is_err() {
++            return Err(wasmtime::Error::msg("extension watchdog stopped"));
++        }
+         result.map_err(|error| {
+             let diagnostic = format!(
+                 "extension execution failed: trap={:?}, remaining_fuel={:?}",
+@@ -221,4 +243,20 @@ mod tests {
+         assert!(rt.invoke(b"garbage", Arc::new(AtomicBool::new(false))).is_err());
+         rt.invoke(&asm(SAFE), Arc::new(AtomicBool::new(false))).unwrap();
+     }
++    #[test]
++    fn watchdog_spawn_failure_precedes_component_execution() {
++        let rt = Runtime::new().unwrap();
++        let error = rt
++            .execute_with_watchdog_spawner(
++                b"not a component",
++                vec![],
++                Box::new(|_| panic!("broker must not run")),
++                Arc::new(AtomicBool::new(false)),
++                Duration::from_secs(1),
++                1,
++                |_name, _run| Err(std::io::Error::other("controlled watchdog spawn failure")),
++            )
++            .unwrap_err();
++        assert!(error.to_string().contains("extension watchdog unavailable"));
++    }
+ }
+diff --git a/crates/platform-windows/src/extension_transport.rs b/crates/platform-windows/src/extension_transport.rs
+index a59ff65..15a6191 100644
+--- a/crates/platform-windows/src/extension_transport.rs
++++ b/crates/platform-windows/src/extension_transport.rs
+@@ -15,6 +15,50 @@ use windows::{
+     },
+     core::{PCWSTR, PWSTR},
+ };
++type WatchdogRun = Box<dyn FnOnce() + Send + 'static>;
++type HostGuard = Box<dyn bareline_macros::process::ProcessTreeGuard>;
++
++fn spawn_transport_watchdog(
++    run: WatchdogRun,
++    spawn: impl FnOnce(String, WatchdogRun) -> io::Result<std::thread::JoinHandle<()>>,
++) -> io::Result<std::thread::JoinHandle<()>> {
++    spawn("bareline-extension-transport-watchdog".into(), run)
++        .map_err(|error| io::Error::new(error.kind(), format!("extension watchdog unavailable: {error}")))
++}
++
++fn transfer_guard_to_watchdog(
++    sender: std::sync::mpsc::SyncSender<HostGuard>,
++    guard: HostGuard,
++    child: &mut crate::SandboxedChild,
++) -> io::Result<()> {
++    if let Err(error) = sender.send(guard) {
++        let mut guard = error.0;
++        let _ = guard.terminate();
++        // Closing the kill-on-close guard is the fallback if explicit
++        // termination itself failed. Reaping is bounded so cleanup cannot park
++        // the transport worker indefinitely.
++        drop(guard);
++        let deadline = Instant::now() + Duration::from_secs(5);
++        loop {
++            if child.try_wait()?.is_some() {
++                break;
++            }
++            if Instant::now() >= deadline {
++                return Err(io::Error::new(
++                    io::ErrorKind::TimedOut,
++                    "contained extension child did not stop",
++                ));
++            }
++            std::thread::sleep(Duration::from_millis(10));
++        }
++        return Err(io::Error::new(
++            io::ErrorKind::BrokenPipe,
++            "extension watchdog stopped before containment transfer",
++        ));
++    }
++    Ok(())
++}
++
+ fn io_error(error: windows::core::Error) -> io::Error {
+     io::Error::from_raw_os_error(error.code().0 & 0xffff)
+ }
+@@ -328,6 +372,45 @@ mod tests {
+             io::ErrorKind::TimedOut
+         );
+     }
++    #[test]
++    fn watchdog_spawn_failure_is_terminal_before_launch() {
++        let ran = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
++        let worker_ran = ran.clone();
++        let result = spawn_transport_watchdog(
++            Box::new(move || worker_ran.store(true, std::sync::atomic::Ordering::SeqCst)),
++            |name, _run| {
++                assert_eq!(name, "bareline-extension-transport-watchdog");
++                Err(io::Error::other("controlled watchdog spawn failure"))
++            },
++        );
++        assert_eq!(result.err().unwrap().kind(), io::ErrorKind::Other);
++        assert!(!ran.load(std::sync::atomic::Ordering::SeqCst));
++    }
++    #[test]
++    #[ignore = "controlled contained subprocess fixture"]
++    fn contained_child_for_guard_transfer_failure() {
++        std::thread::sleep(Duration::from_secs(30));
++    }
++    #[test]
++    fn failed_watchdog_transfer_terminates_and_reaps_contained_child() {
++        use bareline_macros::process::ProcessLauncher;
++        let executable = std::env::current_exe().unwrap();
++        let mut command = std::process::Command::new(executable);
++        command.args([
++            "--ignored",
++            "--exact",
++            "extension_transport::tests::contained_child_for_guard_transfer_failure",
++        ]);
++        let (child, guard) = crate::WindowsProcessLauncher.spawn(&mut command).unwrap();
++        let mut child = crate::SandboxedChild::Std(child);
++        let (sender, receiver) = std::sync::mpsc::sync_channel::<HostGuard>(1);
++        drop(receiver);
++        let started = Instant::now();
++        let error = transfer_guard_to_watchdog(sender, guard, &mut child).unwrap_err();
++        assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
++        assert!(started.elapsed() < Duration::from_secs(5));
++        assert!(child.try_wait().unwrap().is_some());
++    }
+ }
+ 
+ /// Launch evidence is supplied by the verified package manager using owner-pinned
+@@ -450,25 +533,57 @@ fn run_host_process(
+     // Grant the runtime executable and component a RESTRICTED-SID read ACE so the sandboxed
+     // host (SEC-03) can still load exactly those files, then launch it under the restricted
+     // token; a machine that cannot build the token falls back to the job-limited launch.
+-    let (mut child, mut guard) =
+-        crate::SandboxedProcessLauncher::default().spawn_host(&mut command, &[launch.executable, launch.component])?;
+-    let pid = child.id();
+-    observe(HostLifecycle::Started(pid));
+     let (stop_tx, stop_rx) = mpsc::channel();
++    let (guard_tx, guard_rx) = mpsc::sync_channel(1);
+     let abandoned = cancelled.clone();
+     let deadline = Instant::now() + Duration::from_millis(launch.budget.timeout_ms());
+-    let watchdog = std::thread::spawn(move || {
+-        loop {
+-            if cancelled.load(Ordering::Acquire) || Instant::now() >= deadline {
+-                let _ = guard.terminate();
++    // The watchdog must exist before the untrusted process can be created and
++    // resumed. It receives the already-contained job guard after launch.
++    let watchdog = spawn_transport_watchdog(
++        Box::new(move || {
++            let Ok(mut guard) = guard_rx.recv() else {
+                 return;
++            };
++            loop {
++                if cancelled.load(Ordering::Acquire) || Instant::now() >= deadline {
++                    let _ = guard.terminate();
++                    return;
++                }
++                match stop_rx.recv_timeout(Duration::from_millis(10)) {
++                    Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => return,
++                    Err(mpsc::RecvTimeoutError::Timeout) => {}
++                }
+             }
+-            match stop_rx.recv_timeout(Duration::from_millis(10)) {
+-                Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => return,
+-                Err(mpsc::RecvTimeoutError::Timeout) => {}
+-            }
++        }),
++        |name, run| std::thread::Builder::new().name(name).spawn(run),
++    )?;
++    if abandoned.load(Ordering::Acquire) {
++        drop(guard_tx);
++        let _ = stop_tx.send(());
++        let _ = watchdog.join();
++        return Err(io::Error::new(
++            io::ErrorKind::Interrupted,
++            "extension cancelled before launch",
++        ));
++    }
++    let spawned =
++        crate::SandboxedProcessLauncher::default().spawn_host(&mut command, &[launch.executable, launch.component]);
++    let (mut child, guard) = match spawned {
++        Ok(spawned) => spawned,
++        Err(error) => {
++            drop(guard_tx);
++            let _ = stop_tx.send(());
++            let _ = watchdog.join();
++            return Err(error);
+         }
+-    });
++    };
++    let pid = child.id();
++    if let Err(error) = transfer_guard_to_watchdog(guard_tx, guard, &mut child) {
++        let _ = stop_tx.send(());
++        let _ = watchdog.join();
++        return Err(error);
++    }
++    observe(HostLifecycle::Started(pid));
+     let outcome = (|| {
+         let mut pipe = server.accept(child.id(), Duration::from_millis(INTERACTIVE_TIMEOUT_MS))?;
+         observe(HostLifecycle::Authenticated(pid));
+@@ -517,8 +632,12 @@ fn run_host_process(
+     })();
+     // Stop signal drops kill-on-close job before waiting for any surviving child.
+     let _ = stop_tx.send(());
+-    let _ = watchdog.join();
++    let watchdog_stopped = watchdog.join().is_err();
+     let _ = child.wait();
+     observe(HostLifecycle::Drained(pid));
+-    outcome
++    if watchdog_stopped {
++        Err(io::Error::other("extension watchdog stopped"))
++    } else {
++        outcome
++    }
+ }
+diff --git a/docs/implementation/2026-09-12-audit-implementation/PR-T08.md b/docs/implementation/2026-09-12-audit-implementation/PR-T08.md
+new file mode 100644
+index 0000000..d60f470
+--- /dev/null
++++ b/docs/implementation/2026-09-12-audit-implementation/PR-T08.md
+@@ -0,0 +1,46 @@
++# PR-T08 — Fallible extension workers
++
++Baseline: `003ccfd2928e1902939492505f48013b6e05d12e`
++
++## Scope
++
++- Move extension invocation, manager/catalog/package, and inventory export jobs onto bounded shared admission.
++- Keep dedicated extension transport and host watchdog threads separate, named, and fallibly spawned.
++- Make admission, spawn, disconnection, cancellation, and shutdown terminal without resuming an uncontained child or retaining partial ownership.
++- Preserve package verification, sandbox, token, job, pipe identity, environment, and grant boundaries.
++
++## Decisions
++
++- `extensions::extension_worker` is one process-global `BoundedExecutor` with four running slots and one total cap of 32 pending jobs across windows. Invocation is `General`; manager, package, catalog, and inventory work is `Bulk`. Admission remains nonblocking and reports Busy or Closed without setting a pending receiver.
++- Invocation, manager, and inventory jobs own a one-shot result/wake guard. Unwind or rejected admission publishes a sanitized terminal error before waking exactly once. Invocation ownership also calls `InvocationBroker::finish` so grants and staged proposals are revoked.
++- Queued cancellation is checked before work begins. Manager/package code retains its existing cancellation checks at durable publication boundaries; a cancellation after successful publication does not erase the completed receipt. Inventory owns a shell-lifetime cancellation token, checks it before any filesystem work and immediately before the staging-file rename, and uses a process-wide operation sequence in stage names so concurrent windows cannot claim the same path.
++- Temporary cleanup ownership begins only after create_new has successfully opened the stage. An existing stage therefore remains untouched when exclusive creation fails.
++- The extension-host watchdog is a named fallible thread created before component parsing/instantiation. The transport watchdog is a named fallible thread created before child launch. `SandboxedProcessLauncher` continues to create suspended, job-contained children and resumes only after containment. Failed guard transfer terminates the job, drops its kill-on-close handle, boundedly reaps the child, then joins the watchdog.
++- Transport and host watchdogs remain dedicated because they must supervise and interrupt the operation they accompany; queueing them behind extension work would defeat timeout containment. Test-only pipe peers and unrelated actor/service threads remain outside this scoped migration.
++
++## Changed files
++
++- `docs/implementation/2026-09-12-audit-implementation/PR-T08.md`
++- `apps/bareline/src/windows_app/extensions.rs`
++- `apps/bareline/src/windows_app/inventory.rs`
++- `crates/platform-windows/src/extension_transport.rs`
++- `apps/extension-host/src/lib.rs`
++
++## Evidence
++
++- `rustfmt --edition 2024` on the four changed Rust files: PASS.
++- `git diff --check`: PASS (line-ending conversion notices only).
++- Production census over the four named source files: no ordinary `std::thread::spawn` remains; the two dedicated watchdogs use named fallible `Builder::spawn`. The two remaining `thread::spawn` hits in `extension_transport.rs` are existing test-only pipe peers.
++- Review corrections add a preexisting-stage sentinel regression for exclusive-create failure and a gated queued-inventory cancellation regression that observes no target or stage creation.
++- Requested central checks:
++  - `cargo test --offline --locked -p bareline windows_app::extensions::manager_tests -- --test-threads=1`
++  - `cargo test --offline --locked -p bareline windows_app::inventory::worker_tests -- --test-threads=1`
++  - `cargo test --offline --locked -p bareline-platform-windows extension_transport::tests::watchdog_spawn_failure_is_terminal_before_launch -- --exact`
++  - `cargo test --offline --locked -p bareline-platform-windows extension_transport::tests::failed_watchdog_transfer_terminates_and_reaps_contained_child -- --exact`
++  - `cargo test --offline --locked -p bareline-extension-host tests::watchdog_spawn_failure_precedes_component_execution -- --exact`
++  - `cargo test --offline --locked -p bareline-extension-host tests::safe_component_runs_and_cpu_loop_terminates -- --exact`
++  - `cargo test --release --offline --locked -p bareline-extension-host --test first_party`
++
++## Unresolved qualification
++
++- Worker policy prohibits Cargo/native/full gates. All listed central checks, including the real release-profile WASI cases, remain pending.

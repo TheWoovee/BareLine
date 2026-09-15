@@ -63,10 +63,7 @@ mod tests {
             },
             platform,
         };
-        let mut held = source
-            .verified_file(&AtomicBool::new(false))
-            .unwrap()
-            .unwrap();
+        let mut held = source.verified_file(&AtomicBool::new(false)).unwrap().unwrap();
         let mut bytes = vec![];
         held.read_to_end(&mut bytes).unwrap();
         assert_eq!(bytes, b"original");
@@ -89,10 +86,7 @@ impl OriginalSource {
         self.len() == 0
     }
     /// Worker-only: retain the exact opened disk generation, never edited text.
-    pub fn verified_file(
-        &self,
-        cancel: &std::sync::atomic::AtomicBool,
-    ) -> Result<Option<std::fs::File>, String> {
+    pub fn verified_file(&self, cancel: &std::sync::atomic::AtomicBool) -> Result<Option<std::fs::File>, String> {
         use sha2::{Digest, Sha256};
         use std::io::{Read, Seek, SeekFrom};
         let Self::File {
@@ -131,21 +125,17 @@ impl OriginalSource {
 impl Workspace {
     pub fn raw_source_descriptor(&self, index: usize) -> Result<Option<OriginalSource>, String> {
         match self.editors.get(index).ok_or("Document closed")? {
-            WorkspaceEditor::Paged(editor) => Ok(Some(OriginalSource::Paged(
-                editor.read_handle().original_store()?,
-            ))),
-            WorkspaceEditor::Resident(_) => {
-                Ok(self.files.get(index).and_then(Option::as_ref).map(|file| {
-                    file.encoding.as_ref().map_or_else(
-                        || OriginalSource::File {
-                            path: file.path.clone(),
-                            fingerprint: file.fingerprint.clone(),
-                            platform: self.file_system.clone(),
-                        },
-                        |encoding| OriginalSource::Resident(encoding.original_bytes()),
-                    )
-                }))
-            }
+            WorkspaceEditor::Paged(editor) => Ok(Some(OriginalSource::Paged(editor.read_handle().original_store()?))),
+            WorkspaceEditor::Resident(_) => Ok(self.files.get(index).and_then(Option::as_ref).map(|file| {
+                file.encoding.as_ref().map_or_else(
+                    || OriginalSource::File {
+                        path: file.path.clone(),
+                        fingerprint: file.fingerprint.clone(),
+                        platform: self.file_system.clone(),
+                    },
+                    |encoding| OriginalSource::Resident(encoding.original_bytes()),
+                )
+            })),
         }
     }
     pub fn extension_edits_preserve_original(&self, index: usize) -> bool {

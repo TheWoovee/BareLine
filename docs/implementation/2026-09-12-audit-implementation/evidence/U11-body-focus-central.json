@@ -1,0 +1,17 @@
+{
+  "arguments": [
+    "test",
+    "-p",
+    "bareline",
+    "--bin",
+    "bareline",
+    "shared_body_focus_transfer_retires_header_and_shift_tab_returns_to_editor",
+    "--offline",
+    "--locked"
+  ],
+  "completed_utc": "2026-09-12T11:10:47.1571344Z",
+  "integration_snapshot": "f2c7f83374d91367f005cdd1d4e6b56d8dd355e3",
+  "exit_code": 0,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\U11-body-focus-central.log"
+}

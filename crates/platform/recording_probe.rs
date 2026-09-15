@@ -38,10 +38,9 @@ impl Default for Probe {
 impl ApplicationHandler for Probe {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_none() {
-            match event_loop.create_window(
-                Window::default_attributes()
-                    .with_title("Bareline recording probe (no pixel painter)"),
-            ) {
+            match event_loop
+                .create_window(Window::default_attributes().with_title("Bareline recording probe (no pixel painter)"))
+            {
                 Ok(window) => {
                     window.request_redraw();
                     self.window = Some(window);

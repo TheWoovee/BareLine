@@ -83,11 +83,7 @@ impl ForwardLexer {
             },
         }
     }
-    pub fn advance(
-        &mut self,
-        end: TextOffset,
-        cancel: &Cancellation,
-    ) -> Result<SyntaxResult, Error> {
+    pub fn advance(&mut self, end: TextOffset, cancel: &Cancellation) -> Result<SyntaxResult, Error> {
         let result = lex_configured(
             self.source.clone(),
             self.language,
@@ -131,12 +127,7 @@ impl Language {
         let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("");
         catalog::CATALOG
             .iter()
-            .find(|entry| {
-                entry
-                    .extensions
-                    .iter()
-                    .any(|ext| ext.eq_ignore_ascii_case(extension))
-            })
+            .find(|entry| entry.extensions.iter().any(|ext| ext.eq_ignore_ascii_case(extension)))
             .map_or(Self::PlainText, |entry| entry.language)
     }
 }
@@ -341,23 +332,16 @@ fn lex_configured(
         .map_err(|_| Error::InvalidRange)?;
     let mut spans = Vec::new();
     let mut checkpoints = Vec::new();
-    let mut line = options.line_origin
-        + source
-            .line_at(range.start)
-            .map_err(|_| Error::InvalidRange)?;
+    let mut line = options.line_origin + source.line_at(range.start).map_err(|_| Error::InvalidRange)?;
     let mut i = 0;
     let custom = definition.as_deref();
     let custom_keywords: std::collections::BTreeSet<&str> = custom
         .into_iter()
         .flat_map(|d| d.keywords.iter().map(String::as_str))
         .collect();
-    let line_comment = custom.map_or(language.metadata().line_comment, |d| {
-        d.line_comment.as_deref()
-    });
+    let line_comment = custom.map_or(language.metadata().line_comment, |d| d.line_comment.as_deref());
     let block_comment = custom.map_or(language.metadata().block_comment, |d| {
-        d.block_comment
-            .as_ref()
-            .map(|(a, b)| (a.as_str(), b.as_str()))
+        d.block_comment.as_ref().map(|(a, b)| (a.as_str(), b.as_str()))
     });
     while i < text.len() && (language != Language::PlainText || custom.is_some()) {
         cancel.check()?;
@@ -421,9 +405,7 @@ fn lex_configured(
                         i += text[i..].chars().next().unwrap().len_utf8();
                     }
                     Some(StyleKind::Comment)
-                } else if let Some((open, _)) =
-                    block_comment.filter(|(open, _)| rest.starts_with(open))
-                {
+                } else if let Some((open, _)) = block_comment.filter(|(open, _)| rest.starts_with(open)) {
                     i += open.len();
                     state = State::Block(1);
                     Some(StyleKind::Comment)
@@ -435,18 +417,15 @@ fn lex_configured(
                 } else if custom.is_some_and(|d| d.strings.contains(&rest.chars().next().unwrap()))
                     || (custom.is_none()
                         && (rest.starts_with('"')
-                            || (language != Language::Rust
-                                && language != Language::Json
-                                && rest.starts_with('\''))
-                            || (matches!(
-                                language,
-                                Language::JavaScript | Language::TypeScript | Language::Go
-                            ) && rest.starts_with('`'))))
+                            || (language != Language::Rust && language != Language::Json && rest.starts_with('\''))
+                            || (matches!(language, Language::JavaScript | Language::TypeScript | Language::Go)
+                                && rest.starts_with('`'))))
                 {
-                    i += 1;
+                    let delimiter = rest.chars().next().unwrap();
+                    i += delimiter.len_utf8();
                     state = State::Quote {
                         escaped: false,
-                        delimiter: rest.chars().next().unwrap(),
+                        delimiter,
                     };
                     Some(StyleKind::String)
                 } else if language == Language::Rust && char_literal_length(rest).is_some() {
@@ -469,8 +448,7 @@ fn lex_configured(
                                 || (b == b'.'
                                     && !text[i..].starts_with("..")
                                     && text.as_bytes().get(i + 1).is_some_and(u8::is_ascii_digit))
-                                || (matches!(b, b'+' | b'-')
-                                    && matches!(text.as_bytes()[i - 1], b'e' | b'E'));
+                                || (matches!(b, b'+' | b'-') && matches!(text.as_bytes()[i - 1], b'e' | b'E'));
                             if !accepted {
                                 break;
                             }
@@ -488,13 +466,7 @@ fn lex_configured(
                         }
                         let word = &text[start..i];
                         let keyword = custom.map_or_else(
-                            || {
-                                language
-                                    .metadata()
-                                    .keywords
-                                    .split_ascii_whitespace()
-                                    .any(|k| k == word)
-                            },
+                            || language.metadata().keywords.split_ascii_whitespace().any(|k| k == word),
                             |_| custom_keywords.contains(word),
                         );
                         keyword.then_some(StyleKind::Keyword)
@@ -525,26 +497,23 @@ fn lex_configured(
         }
         if let Some(kind) = kind {
             let absolute = TextOffset(range.start.0 + start)..TextOffset(range.start.0 + i);
-            if let Some(last) = spans.last_mut().filter(|last: &&mut StyleSpan| {
-                last.kind == kind && last.range.end == absolute.start
-            }) {
+            if let Some(last) = spans
+                .last_mut()
+                .filter(|last: &&mut StyleSpan| last.kind == kind && last.range.end == absolute.start)
+            {
                 last.range.end = absolute.end;
             } else {
                 if spans.len() == MAX_SPANS {
                     return Err(Error::BudgetExceeded);
                 }
-                spans.push(StyleSpan {
-                    range: absolute,
-                    kind,
-                });
+                spans.push(StyleSpan { range: absolute, kind });
             }
         }
     }
     cancel.check()?;
     let at_boundary = range.end.0 == source.len() || text.ends_with(['\r', '\n']);
-    let fallback_verified = range.start.0 == 0
-        || checkpoint.is_some()
-        || (language == Language::PlainText && definition.is_none());
+    let fallback_verified =
+        range.start.0 == 0 || checkpoint.is_some() || (language == Language::PlainText && definition.is_none());
     let checkpoint = (at_boundary && fallback_verified).then(|| Checkpoint {
         source: source.clone(),
         language,
@@ -564,9 +533,7 @@ fn lex_configured(
     {
         let lexer = language.metadata().lexilla;
         let mode = match language {
-            Language::JavaScript | Language::TypeScript => {
-                bareline_lexilla_bridge::CppMode::JavaScript
-            }
+            Language::JavaScript | Language::TypeScript => bareline_lexilla_bridge::CppMode::JavaScript,
             Language::Go => bareline_lexilla_bridge::CppMode::Go,
             Language::Java => bareline_lexilla_bridge::CppMode::Java,
             Language::CSharp => bareline_lexilla_bridge::CppMode::CSharp,
@@ -656,18 +623,10 @@ fn char_literal_length(text: &str) -> Option<usize> {
     let (at, c) = chars.next()?;
     if c == 'u' && text.as_bytes().get(at + 2) == Some(&b'{') {
         let tail = &text[at + 3..];
-        let n = tail
-            .bytes()
-            .take_while(u8::is_ascii_hexdigit)
-            .take(7)
-            .count();
+        let n = tail.bytes().take_while(u8::is_ascii_hexdigit).take(7).count();
         return (n > 0 && n <= 6 && tail[n..].starts_with("}'")).then_some(at + 3 + n + 2);
     }
-    let end = if c == 'x' {
-        at + 4
-    } else {
-        at + 1 + c.len_utf8()
-    };
+    let end = if c == 'x' { at + 4 } else { at + 1 + c.len_utf8() };
     (text.as_bytes().get(end) == Some(&b'\'')).then_some(end + 1)
 }
 const RUST_KEYWORDS: &str = "as async await break const continue crate dyn else enum extern false fn for if impl in let loop match mod move mut pub ref return self Self static struct super trait true type unsafe use where while abstract become box do final macro override priv typeof unsized virtual yield try union gen";
@@ -699,12 +658,8 @@ mod tests {
             LexerPreference::Native,
             Some(definition.clone()),
         );
-        let one = pass
-            .advance(TextOffset(first.len()), &Cancellation::default())
-            .unwrap();
-        let two = pass
-            .advance(TextOffset(text.len()), &Cancellation::default())
-            .unwrap();
+        let one = pass.advance(TextOffset(first.len()), &Cancellation::default()).unwrap();
+        let two = pass.advance(TextOffset(text.len()), &Cancellation::default()).unwrap();
         let mut folds = folding::FoldAccumulator::default();
         folds.advance(&source, &one, 10).unwrap();
         folds.advance(&source, &two, 10).unwrap();
@@ -717,8 +672,9 @@ mod tests {
             }]
         );
         assert!(
-            two.spans.iter().any(|span| span.kind == StyleKind::Comment
-                && span.range.start == TextOffset(first.len()))
+            two.spans
+                .iter()
+                .any(|span| span.kind == StyleKind::Comment && span.range.start == TextOffset(first.len()))
         );
         assert!(matches!(
             lex_udl(
@@ -738,15 +694,8 @@ mod tests {
         }
         let text = "def f():\n    value = 1\n    return value\nother = 2\n";
         let source = document(text).snapshot();
-        let mut pass = ForwardLexer::configured(
-            source.clone(),
-            Language::Python,
-            LexerPreference::Native,
-            None,
-        );
-        let result = pass
-            .advance(TextOffset(text.len()), &Cancellation::default())
-            .unwrap();
+        let mut pass = ForwardLexer::configured(source.clone(), Language::Python, LexerPreference::Native, None);
+        let result = pass.advance(TextOffset(text.len()), &Cancellation::default()).unwrap();
         assert!(result.fold_levels.is_none());
         assert_eq!(
             folding::folds(&source, &result, 10).unwrap(),
@@ -767,6 +716,89 @@ mod tests {
             .filter(|s| s.kind == kind)
             .map(|s| source.read(s.range.clone(), MAX_REQUEST_BYTES).unwrap())
             .collect()
+    }
+    fn curly_quote_definition() -> Arc<udl::Definition> {
+        Arc::new(udl::Definition {
+            version: 1,
+            id: "curly".into(),
+            name: "Curly".into(),
+            extensions: vec!["curly".into()],
+            keywords: vec!["begin".into()],
+            operators: "<>".into(),
+            line_comment: Some("#".into()),
+            block_comment: None,
+            strings: vec!['\u{201c}', '\u{201d}', '\u{ab}', '\u{bb}'],
+            fold_pairs: Vec::new(),
+        })
+    }
+    #[test]
+    fn udl_multibyte_string_delimiters_do_not_split_a_scalar() {
+        let text = "begin \u{201c}hello \u{1f642}\u{201d} tail\n\u{ab}guillemet\u{bb}\n";
+        let source = document(text).snapshot();
+        let result = lex_udl(
+            source.clone(),
+            curly_quote_definition(),
+            TextOffset(0)..TextOffset(text.len()),
+            None,
+            &Cancellation::default(),
+        )
+        .unwrap();
+        let strings = styled(&source, &result, StyleKind::String);
+        assert!(
+            strings.iter().any(|s| s.contains("hello")),
+            "curly-quoted run was not highlighted: {strings:?}"
+        );
+        assert!(strings.iter().any(|s| s.contains("guillemet")), "{strings:?}");
+    }
+    #[cfg(debug_assertions)]
+    #[test]
+    fn udl_tokenizer_survives_random_utf8_inputs() {
+        // Cheap deterministic PRNG; 200 random UTF-8 strings through the
+        // tokenizer must never panic on a mid-scalar slice.
+        let mut state = 0x2545_f491_4f6c_dd1du64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let alphabet = [
+            'a',
+            'b',
+            ' ',
+            '\n',
+            '#',
+            '<',
+            '>',
+            '\\',
+            '"',
+            '\'',
+            '\u{201c}',
+            '\u{201d}',
+            '\u{ab}',
+            '\u{bb}',
+            '\u{1f642}',
+            '\u{301}',
+            '\u{4e2d}',
+            '0',
+            '.',
+            '9',
+        ];
+        let definition = curly_quote_definition();
+        for _ in 0..200 {
+            let length = (next() % 96) as usize;
+            let text: String = (0..length)
+                .map(|_| alphabet[(next() % alphabet.len() as u64) as usize])
+                .collect();
+            let source = document(&text).snapshot();
+            let _ = lex_udl(
+                source,
+                definition.clone(),
+                TextOffset(0)..TextOffset(text.len()),
+                None,
+                &Cancellation::default(),
+            );
+        }
     }
     #[test]
     fn rust_utf8_raw_nested_comments_and_lifetimes() {
@@ -795,12 +827,7 @@ mod tests {
                 .iter()
                 .all(|s| source.is_boundary(s.range.start) && source.is_boundary(s.range.end))
         );
-        assert!(
-            result
-                .spans
-                .windows(2)
-                .all(|s| s[0].range.end <= s[1].range.start)
-        );
+        assert!(result.spans.windows(2).all(|s| s[0].range.end <= s[1].range.start));
     }
     #[test]
     fn verified_multiline_checkpoint_and_stale_rejection() {
@@ -836,10 +863,7 @@ mod tests {
         .unwrap();
         assert_eq!(second.status, Status::Complete);
         assert_eq!(styled(&source, &second, StyleKind::String), ["world\"#"]);
-        assert_eq!(
-            styled(&source, &second, StyleKind::Comment),
-            ["/* first\nsecond */"]
-        );
+        assert_eq!(styled(&source, &second, StyleKind::Comment), ["/* first\nsecond */"]);
         let foreign = document(text).snapshot();
         assert_eq!(
             lex(
@@ -886,21 +910,11 @@ mod tests {
         )
         .unwrap();
         assert_eq!(styled(&source, &result, StyleKind::Number), ["-12.5e+3"]);
-        assert_eq!(
-            styled(&source, &result, StyleKind::Keyword),
-            ["true", "null"]
-        );
+        assert_eq!(styled(&source, &result, StyleKind::Keyword), ["true", "null"]);
         let cancelled = Cancellation::default();
         cancelled.cancel();
         assert_eq!(
-            lex(
-                source.clone(),
-                Language::Json,
-                result.range.clone(),
-                None,
-                &cancelled
-            )
-            .err(),
+            lex(source.clone(), Language::Json, result.range.clone(), None, &cancelled).err(),
             Some(Error::Cancelled)
         );
         assert_eq!(

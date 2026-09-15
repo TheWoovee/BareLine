@@ -1,0 +1,39 @@
+diff --git a/apps/bareline/src/windows_app.rs b/apps/bareline/src/windows_app.rs
+index 7b75ded..b76a6ba 100644
+--- a/apps/bareline/src/windows_app.rs
++++ b/apps/bareline/src/windows_app.rs
+@@ -226,6 +226,7 @@ pub(super) fn command_route(id: &str) -> Option<Route> {
+     if id == "search.folder"
+         || id == "search.scope.selection"
+         || id == "search.scope.current"
++        || matches!(id, "search.mode.literal" | "search.mode.extended" | "search.mode.regex")
+         || id.starts_with("search.mark.")
+         || id.starts_with("search.replaceIn")
+         || id.starts_with("search.replacePreview.")
+diff --git a/apps/bareline/src/windows_app/inventory.rs b/apps/bareline/src/windows_app/inventory.rs
+index 2a28e49..bf6be24 100644
+--- a/apps/bareline/src/windows_app/inventory.rs
++++ b/apps/bareline/src/windows_app/inventory.rs
+@@ -443,6 +443,10 @@ mod route_tests {
+ 
+     #[test]
+     fn a_registered_command_without_a_handler_fails_validation() {
++        for id in ["search.mode.literal", "search.mode.extended", "search.mode.regex"] {
++            assert_eq!(super::super::command_route(id), Some(super::super::Route::Search));
++        }
++        assert_eq!(super::super::command_route("search.mode.unknown"), None);
+         let mut commands = production_registry();
+         // A brand-new command with no route must be reported by the same check
+         // the inventory export runs at startup.
+diff --git a/docs/implementation/2026-09-12-audit-implementation/PR-U04.md b/docs/implementation/2026-09-12-audit-implementation/PR-U04.md
+index 875c853..97b229a 100644
+--- a/docs/implementation/2026-09-12-audit-implementation/PR-U04.md
++++ b/docs/implementation/2026-09-12-audit-implementation/PR-U04.md
+@@ -22,6 +22,7 @@ Shorten the first-level File and Search menus with stable, meaningful submenus w
+ - R1 moves the viewport assertion to the fully registered Shell command model so automatically appended commands are included.
+ - R2 keeps Folder/Open Documents as explicit owners, while Current/Selection projection follows the bound Find query so switching documents immediately retires a document-specific selection scope. Its regression uses the Selection command path and a real `bind_find_to` source switch.
+ - R3 places the shell-registered profile migration retry inside File ▸ Document and Disk ▸ Recovery. This removes the auto-appended fifteenth File row while preserving its command ID, palette category, and recovery-oriented placement.
++- The final inventory correction maps the three explicit search-mode IDs to the Search dispatch route. The route remains exact, so unknown `search.mode.*` IDs still fail inventory validation.
+ 
+ The shell now computes mode/scope/toggle, cancellation, replacement-review, and Save All states from the current runtime snapshot whenever it refreshes native menus, and dispatch rechecks the same shared context. Async search/save transitions already request redraws, so acknowledged state changes trigger another native projection.
+ 

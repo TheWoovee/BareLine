@@ -10,7 +10,9 @@ use bareline_ui::{
 };
 
 const ROW_HEIGHT: f32 = 48.0;
-const MAX_ROWS: usize = 7;
+const MAX_ROWS: usize = 12;
+/// The palette surfaces the best twelve matches with their category and shortcut.
+const RESULT_LIMIT: usize = 12;
 #[derive(Default)]
 pub struct PaletteController {
     pub open: bool,
@@ -55,17 +57,12 @@ impl PaletteController {
         self.field.release(backend);
     }
     /// Refresh after input, keymap edits or app-state changes; retain the selected stable ID.
-    pub fn refresh(
-        &mut self,
-        registry: &CommandRegistry,
-        context: &CommandContext,
-        keymap: &Keymap,
-    ) {
+    pub fn refresh(&mut self, registry: &CommandRegistry, context: &CommandContext, keymap: &Keymap) {
         let selected = self
             .entries
             .get(self.selected)
             .map(|entry| (entry.id, entry.dynamic.clone()));
-        self.entries = registry.palette(self.field.value(), context, keymap, usize::MAX);
+        self.entries = registry.palette(self.field.value(), context, keymap, RESULT_LIMIT);
         self.selected = selected
             .and_then(|(id, dynamic)| {
                 self.entries
@@ -129,11 +126,7 @@ impl PaletteController {
         self.first = self.first.min(self.entries.len().saturating_sub(count));
     }
     /// Activation revalidates current state so a formerly-enabled row cannot dispatch stale state.
-    pub fn activate(
-        &mut self,
-        registry: &CommandRegistry,
-        context: &CommandContext,
-    ) -> Option<CommandId> {
+    pub fn activate(&mut self, registry: &CommandRegistry, context: &CommandContext) -> Option<CommandId> {
         if !self.open || self.field.composing() {
             return None;
         }
@@ -156,20 +149,13 @@ impl PaletteController {
             Err(error) => {
                 self.status = Some(match error {
                     bareline_commands::DispatchError::Disabled(reason) => reason,
-                    bareline_commands::DispatchError::Unknown(_) => {
-                        "Command is no longer available".into()
-                    }
+                    bareline_commands::DispatchError::Unknown(_) => "Command is no longer available".into(),
                 });
                 None
             }
         }
     }
-    pub fn key(
-        &mut self,
-        key: Key,
-        registry: &CommandRegistry,
-        context: &CommandContext,
-    ) -> Option<CommandId> {
+    pub fn key(&mut self, key: Key, registry: &CommandRegistry, context: &CommandContext) -> Option<CommandId> {
         if !self.open {
             return None;
         }
@@ -183,9 +169,7 @@ impl PaletteController {
             Key::Escape => self.dismiss(),
             Key::Enter => return self.activate(registry, context),
             Key::Up => self.selected = self.selected.saturating_sub(1),
-            Key::Down => {
-                self.selected = (self.selected + 1).min(self.entries.len().saturating_sub(1))
-            }
+            Key::Down => self.selected = (self.selected + 1).min(self.entries.len().saturating_sub(1)),
             Key::Left => self.field.horizontal(false, false),
             Key::Right => self.field.horizontal(true, false),
             Key::Home => self.field.edge(false, false),
@@ -223,13 +207,7 @@ impl PaletteController {
         height: f32,
         ops: &mut Vec<DrawOp>,
     ) -> Result<Rect, LayoutError> {
-        self.draw_with_theme(
-            backend,
-            width,
-            height,
-            bareline_ui::theme::UiTheme::default(),
-            ops,
-        )
+        self.draw_with_theme(backend, width, height, bareline_ui::theme::UiTheme::default(), ops)
     }
     pub fn draw_with_theme(
         &mut self,
@@ -245,23 +223,12 @@ impl PaletteController {
         let panel_width = (width - 24.0).clamp(0.0, 560.0);
         let x = (width - panel_width) / 2.0;
         let y = 98.0f32.min((height - 100.0).max(0.0));
-        self.visible_rows =
-            (((height - y - 80.0).max(ROW_HEIGHT) / ROW_HEIGHT) as usize).clamp(1, MAX_ROWS);
+        self.visible_rows = (((height - y - 80.0).max(ROW_HEIGHT) / ROW_HEIGHT) as usize).clamp(1, MAX_ROWS);
         self.reveal();
         let row_count = self.entries.len().clamp(1, self.visible_rows);
-        self.bounds = rect(
-            x,
-            y,
-            panel_width,
-            62.0 + ROW_HEIGHT * row_count as f32 + 28.0,
-        );
+        self.bounds = rect(x, y, panel_width, 62.0 + ROW_HEIGHT * row_count as f32 + 28.0);
         self.input_bounds = rect(x + 10.0, y + 10.0, panel_width - 20.0, 30.0);
-        self.list_bounds = rect(
-            x + 6.0,
-            y + 50.0,
-            panel_width - 12.0,
-            ROW_HEIGHT * row_count as f32,
-        );
+        self.list_bounds = rect(x + 6.0, y + 50.0, panel_width - 12.0, ROW_HEIGHT * row_count as f32);
         ops.push(DrawOp::FillRounded(self.bounds, theme.elevated, 8.0));
         ops.push(DrawOp::StrokeRounded(self.bounds, theme.border, 8.0, 1.0));
         let caret = self
@@ -278,13 +245,7 @@ impl PaletteController {
                 theme.muted,
             );
         }
-        for (row, entry) in self
-            .entries
-            .iter()
-            .skip(self.first)
-            .take(self.visible_rows)
-            .enumerate()
-        {
+        for (row, entry) in self.entries.iter().skip(self.first).take(self.visible_rows).enumerate() {
             let bounds = rect(
                 self.list_bounds.x,
                 self.list_bounds.y + row as f32 * ROW_HEIGHT,
@@ -293,10 +254,7 @@ impl PaletteController {
             );
             if self.first + row == self.selected {
                 ops.push(DrawOp::FillRounded(bounds, theme.border, 4.0));
-                ops.push(DrawOp::Fill(
-                    rect(bounds.x, bounds.y, 4.0, bounds.height),
-                    theme.focus,
-                ));
+                ops.push(DrawOp::Fill(rect(bounds.x, bounds.y, 4.0, bounds.height), theme.focus));
             }
             let hint_width = if entry.shortcut.is_empty() {
                 0.0
@@ -315,11 +273,7 @@ impl PaletteController {
                 bounds.y + 8.0,
                 &entry.title,
                 13.0,
-                if entry.state.enabled {
-                    theme.text
-                } else {
-                    theme.muted
-                },
+                if entry.state.enabled { theme.text } else { theme.muted },
             );
             let subtitle = if entry.state.enabled {
                 &entry.menu_path
@@ -330,14 +284,7 @@ impl PaletteController {
                     .as_deref()
                     .unwrap_or("Unavailable in the current context")
             };
-            text(
-                ops,
-                bounds.x + 14.0,
-                bounds.y + 27.0,
-                subtitle,
-                12.0,
-                theme.muted,
-            );
+            text(ops, bounds.x + 14.0, bounds.y + 27.0, subtitle, 12.0, theme.muted);
             ops.push(DrawOp::PopClip);
             if hint_width > 0.0 {
                 let hint = rect(
@@ -348,14 +295,7 @@ impl PaletteController {
                 );
                 ops.push(DrawOp::StrokeRounded(hint, theme.border, 4.0, 1.0));
                 ops.push(DrawOp::PushClip(hint));
-                text(
-                    ops,
-                    hint.x + 6.0,
-                    hint.y + 5.0,
-                    &entry.shortcut,
-                    12.0,
-                    theme.muted,
-                );
+                text(ops, hint.x + 6.0, hint.y + 5.0, &entry.shortcut, 12.0, theme.muted);
                 ops.push(DrawOp::PopClip);
             }
             ops.push(DrawOp::Fill(
@@ -374,9 +314,7 @@ impl PaletteController {
             ops,
             x + 10.0,
             self.list_bounds.y + self.list_bounds.height + 10.0,
-            self.status
-                .as_deref()
-                .unwrap_or("↑↓ navigate · Enter run · Esc close"),
+            self.status.as_deref().unwrap_or("↑↓ navigate · Enter run · Esc close"),
             12.0,
             theme.muted,
         );
@@ -402,13 +340,7 @@ impl PaletteController {
         .action(SemanticAction::SetValue);
         field.value = Some(self.field.value().into());
         let mut nodes = vec![field];
-        for (row, entry) in self
-            .entries
-            .iter()
-            .skip(self.first)
-            .take(self.visible_rows)
-            .enumerate()
-        {
+        for (row, entry) in self.entries.iter().skip(self.first).take(self.visible_rows).enumerate() {
             let mut node = Semantics::new(
                 ViewId(11001 + (self.first + row) as u64),
                 SemanticRole::ListItem,
@@ -468,10 +400,7 @@ mod tests {
         registry.contributions.remove_owner("fixture");
         assert!(palette.activate(&registry, &context).is_none());
         assert!(palette.open);
-        registry
-            .contributions
-            .replace_owner("fixture", vec![record])
-            .unwrap();
+        registry.contributions.replace_owner("fixture", vec![record]).unwrap();
         assert_eq!(
             palette.activate(&registry, &context),
             Some(CommandId("internal.dynamic.invoke"))
@@ -522,8 +451,20 @@ mod tests {
         assert_eq!(palette.selected(), selected);
         assert!(palette.accessibility_focus(11000));
         let nodes = palette.semantics();
-        assert_eq!(nodes.iter().filter(|node| node.focused).map(|node| node.id).collect::<Vec<_>>(), vec![ViewId(11000)]);
-        assert!(nodes.iter().skip(1).all(|node| !node.actions.contains(&SemanticAction::Focus)));
+        assert_eq!(
+            nodes
+                .iter()
+                .filter(|node| node.focused)
+                .map(|node| node.id)
+                .collect::<Vec<_>>(),
+            vec![ViewId(11000)]
+        );
+        assert!(
+            nodes
+                .iter()
+                .skip(1)
+                .all(|node| !node.actions.contains(&SemanticAction::Focus))
+        );
         palette.dismiss();
         assert!(!palette.accessibility_focus(11000));
         palette.release(&mut backend);
@@ -537,10 +478,9 @@ mod tests {
         palette.show(&registry, &context, &keymap);
         palette.insert("locate", &registry, &context, &keymap);
         assert_eq!(palette.selected(), Some(CommandId("search.find")));
-        context.states.insert(
-            CommandId("search.find"),
-            CommandState::disabled("Document closed"),
-        );
+        context
+            .states
+            .insert(CommandId("search.find"), CommandState::disabled("Document closed"));
         assert_eq!(palette.key(Key::Enter, &registry, &context), None);
         assert_eq!(palette.status.as_deref(), Some("Document closed"));
         assert!(palette.open);

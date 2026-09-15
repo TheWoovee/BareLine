@@ -10,8 +10,7 @@ fn snapshot_fork_has_independent_identity_and_edits_without_copying_text() {
     let bytes = Budget::new(4096);
     let source = Document::from_utf8("saved", bytes.clone(), Budget::new(4096)).unwrap();
     let before = bytes.used();
-    let mut fork =
-        Document::fork_from_snapshot(&source.snapshot(), bytes.clone(), Budget::new(4096)).unwrap();
+    let mut fork = Document::fork_from_snapshot(&source.snapshot(), bytes.clone(), Budget::new(4096)).unwrap();
     assert_eq!(before, bytes.used());
     assert!(!fork.snapshot().same_document(&source.snapshot()));
     let initial_token = fork.snapshot().identity_token();
@@ -66,17 +65,7 @@ fn random_edit_oracle_covers_newline_boundaries_snapshots_and_undo_redo() {
         *seed ^= *seed << 17;
         *seed as usize
     }
-    let samples = [
-        "",
-        "a",
-        "\r",
-        "\n",
-        "\r\n",
-        "ب",
-        "👩🏽‍💻",
-        "e\u{301}",
-        "abc\r\ndef",
-    ];
+    let samples = ["", "a", "\r", "\n", "\r\n", "ب", "👩🏽‍💻", "e\u{301}", "abc\r\ndef"];
     for n in 0..100_000 {
         let boundaries: Vec<_> = expected
             .char_indices()
@@ -93,11 +82,7 @@ fn random_edit_oracle_covers_newline_boundaries_snapshots_and_undo_redo() {
         expected.replace_range(a..b, insert);
         let current = doc.snapshot();
         assert_eq!(read(&current), expected, "edit {n}");
-        assert_eq!(
-            current.line_count(),
-            lines(&expected),
-            "newlines at edit {n}"
-        );
+        assert_eq!(current.line_count(), lines(&expected), "newlines at edit {n}");
         for line in 0..current.line_count() {
             let range = current.line_range(line).unwrap();
             assert_eq!(current.line_at(range.start).unwrap(), line);
@@ -145,10 +130,7 @@ fn failed_batch_and_exhausted_shared_budget_do_not_commit() {
     });
     assert_eq!(result, Err(Error::OverlappingEdits));
     assert_eq!(read(&doc.snapshot()), read(&saved));
-    assert_eq!(
-        edit(&mut doc, 0, 0, &"x".repeat(20)),
-        Err(Error::BudgetExceeded)
-    );
+    assert_eq!(edit(&mut doc, 0, 0, &"x".repeat(20)), Err(Error::BudgetExceeded));
     assert_eq!(doc.snapshot().revision, saved.revision);
     assert_eq!(undo.used(), 0);
     assert_eq!(budget.used(), saved.len());

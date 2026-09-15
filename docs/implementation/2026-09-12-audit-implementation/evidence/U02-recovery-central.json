@@ -1,0 +1,21 @@
+{
+  "arguments": [
+    "test",
+    "-p",
+    "bareline",
+    "--bin",
+    "bareline",
+    "--features",
+    "qa-inventory",
+    "recovery",
+    "--offline",
+    "--locked",
+    "--",
+    "--nocapture"
+  ],
+  "completed_utc": "2026-09-12T12:38:39.6169171Z",
+  "integration_snapshot": "eb144de4023d8b7e8d96f9f4b88c851200c51488",
+  "exit_code": 0,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\U02-recovery-central.log"
+}

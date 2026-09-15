@@ -24,11 +24,7 @@ impl LanguageMetadata {
             id: self.id.into(),
             name: self.label.into(),
             extensions: self.extensions.iter().map(|s| (*s).into()).collect(),
-            keywords: self
-                .keywords
-                .split_ascii_whitespace()
-                .map(str::to_owned)
-                .collect(),
+            keywords: self.keywords.split_ascii_whitespace().map(str::to_owned).collect(),
             operators: "{}[]():;,.+-*/%=!<>|&^?~".into(),
             line_comment: self.line_comment.map(str::to_owned),
             block_comment: self.block_comment.map(|(a, b)| (a.into(), b.into())),
@@ -243,10 +239,7 @@ static PLAIN: LanguageMetadata = LanguageMetadata {
 };
 impl Language {
     pub fn metadata(self) -> &'static LanguageMetadata {
-        CATALOG
-            .iter()
-            .find(|m| m.language == self)
-            .unwrap_or(&PLAIN)
+        CATALOG.iter().find(|m| m.language == self).unwrap_or(&PLAIN)
     }
     pub fn label(self) -> &'static str {
         self.metadata().label
@@ -257,12 +250,7 @@ impl Language {
         }
         CATALOG.iter().find(|m| m.id == id).map(|m| m.language)
     }
-    pub fn detect_with_context(
-        path: &Path,
-        prefix: &str,
-        explicit: Option<Self>,
-        association: Option<Self>,
-    ) -> Self {
+    pub fn detect_with_context(path: &Path, prefix: &str, explicit: Option<Self>, association: Option<Self>) -> Self {
         Self::detect_with_regions(path, prefix, "", explicit, association)
     }
     /// Inputs are bounded before parsing; callers read prefix/suffix on a worker.
@@ -303,9 +291,7 @@ impl Language {
                 if let Some((_, value)) = line.split_once(marker) {
                     let id = value
                         .trim_start()
-                        .split(|c: char| {
-                            !c.is_ascii_alphanumeric() && !matches!(c, '+' | '#' | '-')
-                        })
+                        .split(|c: char| !c.is_ascii_alphanumeric() && !matches!(c, '+' | '#' | '-'))
                         .next()
                         .unwrap_or("");
                     let alias = match id {
@@ -363,10 +349,7 @@ mod tests {
 
 /// Bounded filename glob associations. Explicit names take precedence over
 /// wildcard patterns; malformed/oversized data never broadens a match.
-pub fn association(
-    path: &Path,
-    associations: &std::collections::BTreeMap<String, String>,
-) -> Option<Language> {
+pub fn association(path: &Path, associations: &std::collections::BTreeMap<String, String>) -> Option<Language> {
     let name = path.file_name()?.to_str()?;
     if name.len() > 1024 {
         return None;
@@ -421,18 +404,9 @@ mod association_tests {
         map.insert("*.test.??".into(), "rust".into());
         map.insert("*.txt".into(), "python".into());
         map.insert("special.txt".into(), "json".into());
-        assert_eq!(
-            association(Path::new("thing.test.RS"), &map),
-            Some(Language::Rust)
-        );
-        assert_eq!(
-            association(Path::new("SPECIAL.TXT"), &map),
-            Some(Language::Json)
-        );
-        assert_eq!(
-            association(Path::new("other.txt"), &map),
-            Some(Language::Python)
-        );
+        assert_eq!(association(Path::new("thing.test.RS"), &map), Some(Language::Rust));
+        assert_eq!(association(Path::new("SPECIAL.TXT"), &map), Some(Language::Json));
+        assert_eq!(association(Path::new("other.txt"), &map), Some(Language::Python));
         assert_eq!(association(Path::new("unmatched"), &map), None);
     }
 }

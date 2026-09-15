@@ -42,8 +42,8 @@ impl PendingOpen {
     pub fn live(&self) -> bool {
         Instant::now() < self.deadline
     }
-    pub fn accept(self) {
-        let _ = self.accepted.send(true);
+    pub fn accept(self) -> bool {
+        self.accepted.send(true).is_ok()
     }
 }
 pub struct InstanceServer {
@@ -99,14 +99,7 @@ fn sid(process: HANDLE) -> io::Result<String> {
             return Err(invalid());
         }
         let mut data = vec![0usize; (needed as usize).div_ceil(std::mem::size_of::<usize>())];
-        GetTokenInformation(
-            token.0,
-            TokenUser,
-            Some(data.as_mut_ptr().cast()),
-            needed,
-            &mut needed,
-        )
-        .map_err(err)?;
+        GetTokenInformation(token.0, TokenUser, Some(data.as_mut_ptr().cast()), needed, &mut needed).map_err(err)?;
         let user = &*data.as_ptr().cast::<TOKEN_USER>();
         let mut result = PWSTR::null();
         ConvertSidToStringSidW(user.User.Sid, &mut result).map_err(err)?;
@@ -132,8 +125,7 @@ fn authenticate(pipe: HANDLE, server: bool, user: &str, session: u32) -> io::Res
                 "instance session mismatch",
             ));
         }
-        let process =
-            Handle(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).map_err(err)?);
+        let process = Handle(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).map_err(err)?);
         if sid(process.0)? != user {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
@@ -144,19 +136,9 @@ fn authenticate(pipe: HANDLE, server: bool, user: &str, session: u32) -> io::Res
     }
 }
 fn event() -> io::Result<Handle> {
-    unsafe {
-        CreateEventW(None, true, false, None)
-            .map(Handle)
-            .map_err(err)
-    }
+    unsafe { CreateEventW(None, true, false, None).map(Handle).map_err(err) }
 }
-fn complete(
-    handle: HANDLE,
-    overlapped: &mut OVERLAPPED,
-    event: HANDLE,
-    stop: HANDLE,
-    timeout: u32,
-) -> io::Result<u32> {
+fn complete(handle: HANDLE, overlapped: &mut OVERLAPPED, event: HANDLE, stop: HANDLE, timeout: u32) -> io::Result<u32> {
     unsafe {
         let result = WaitForMultipleObjects(&[event, stop], false, timeout);
         if result != WAIT_OBJECT_0 {
@@ -170,13 +152,7 @@ fn complete(
         Ok(count)
     }
 }
-fn transfer(
-    handle: HANDLE,
-    stop: HANDLE,
-    bytes: &mut [u8],
-    write: bool,
-    deadline: Instant,
-) -> io::Result<()> {
+fn transfer(handle: HANDLE, stop: HANDLE, bytes: &mut [u8], write: bool, deadline: Instant) -> io::Result<()> {
     let mut done = 0;
     while done < bytes.len() {
         let timeout = deadline
@@ -194,12 +170,7 @@ fn transfer(
         let mut count = 0;
         let result = unsafe {
             if write {
-                WriteFile(
-                    handle,
-                    Some(&bytes[done..]),
-                    Some(&mut count),
-                    Some(&mut overlapped),
-                )
+                WriteFile(handle, Some(&bytes[done..]), Some(&mut count), Some(&mut overlapped))
             } else {
                 ReadFile(
                     handle,
@@ -217,10 +188,7 @@ fn transfer(
             Err(error) => return Err(err(error)),
         }
         if count == 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                "instance disconnected",
-            ));
+            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "instance disconnected"));
         }
         done += count as usize;
     }
@@ -255,12 +223,7 @@ fn encode(request: &OpenRequest) -> io::Result<Vec<u8>> {
     Ok(data)
 }
 fn decode(data: &[u8]) -> io::Result<OpenRequest> {
-    if data.len() < 22
-        || data.len() > LIMIT
-        || &data[..4] != b"BLI1"
-        || data[4] & !3 != 0
-        || data[21] > 16
-    {
+    if data.len() < 22 || data.len() > LIMIT || &data[..4] != b"BLI1" || data[4] & !3 != 0 || data[21] > 16 {
         return Err(invalid());
     }
     let line = u64::from_le_bytes(data[5..13].try_into().unwrap());
@@ -283,9 +246,7 @@ fn decode(data: &[u8]) -> io::Result<OpenRequest> {
             .chunks_exact(2)
             .map(|unit| u16::from_le_bytes([unit[0], unit[1]]))
             .collect();
-        request
-            .paths
-            .push(PathBuf::from(std::ffi::OsString::from_wide(&units)));
+        request.paths.push(PathBuf::from(std::ffi::OsString::from_wide(&units)));
     }
     if at != data.len() {
         return Err(invalid());
@@ -318,10 +279,7 @@ pub fn coordinate(
     for unit in scope.as_os_str().encode_wide() {
         digest.update(unit.to_le_bytes());
     }
-    let name = wide(&format!(
-        r"\\.\pipe\bareline-instance-{:x}",
-        digest.finalize()
-    ));
+    let name = wide(&format!(r"\\.\pipe\bareline-instance-{:x}", digest.finalize()));
     let descriptor_text = wide(&format!("D:P(A;;GA;;;{user})"));
     let mut descriptor = PSECURITY_DESCRIPTOR::default();
     unsafe {
@@ -374,12 +332,9 @@ pub fn coordinate(
                     let connect = unsafe { ConnectNamedPipe(handle.0, Some(&mut overlapped)) };
                     let connected = match connect {
                         Ok(()) => true,
-                        Err(error) if error.code().0 as u32 & 0xffff == ERROR_PIPE_CONNECTED.0 => {
-                            true
-                        }
+                        Err(error) if error.code().0 as u32 & 0xffff == ERROR_PIPE_CONNECTED.0 => true,
                         Err(error) if error.code().0 as u32 & 0xffff == ERROR_IO_PENDING.0 => {
-                            complete(handle.0, &mut overlapped, ready.0, worker_stop.0, INFINITE)
-                                .is_ok()
+                            complete(handle.0, &mut overlapped, ready.0, worker_stop.0, INFINITE).is_ok()
                         }
                         Err(_) => false,
                     };
@@ -453,10 +408,7 @@ pub fn coordinate(
                 )
             } {
                 Ok(handle) => break Handle(handle),
-                Err(error)
-                    if matches!(error.code().0 as u32 & 0xffff, 2 | 231)
-                        && Instant::now() < deadline =>
-                {
+                Err(error) if matches!(error.code().0 as u32 & 0xffff, 2 | 231) && Instant::now() < deadline => {
                     std::thread::sleep(Duration::from_millis(2))
                 }
                 Err(error) => return Err(err(error)),
@@ -504,25 +456,34 @@ mod tests {
         assert!(decode(&bad).is_err());
     }
     #[test]
+    fn abandoned_sender_cannot_be_reported_as_accepted() {
+        let (accepted, receiver) = mpsc::sync_channel(1);
+        drop(receiver);
+        let pending = PendingOpen {
+            request: OpenRequest::default(),
+            accepted,
+            deadline: Instant::now() + Duration::from_secs(1),
+        };
+        assert!(!pending.accept());
+    }
+    #[test]
     fn handoff_ack_and_hung_owner_fallback_are_bounded() {
         let scope = std::env::temp_dir().join(format!(
             "bareline-instance-test-{}-{:?}",
             std::process::id(),
             Instant::now()
         ));
-        let Outcome::Primary(server) =
-            coordinate(&scope, OpenRequest::default(), false, Arc::new(|| {})).unwrap()
+        let Outcome::Primary(server) = coordinate(&scope, OpenRequest::default(), false, Arc::new(|| {})).unwrap()
         else {
             panic!("primary");
         };
         let scope2 = scope.clone();
-        let client = std::thread::spawn(move || {
-            coordinate(&scope2, OpenRequest::default(), false, Arc::new(|| {})).unwrap()
-        });
+        let client =
+            std::thread::spawn(move || coordinate(&scope2, OpenRequest::default(), false, Arc::new(|| {})).unwrap());
         let deadline = Instant::now() + Duration::from_secs(2);
         loop {
             if let Some(request) = server.try_recv() {
-                request.accept();
+                assert!(request.accept());
                 break;
             }
             assert!(Instant::now() < deadline);

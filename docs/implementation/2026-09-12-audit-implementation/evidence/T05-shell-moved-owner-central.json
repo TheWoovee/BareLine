@@ -1,0 +1,17 @@
+{
+  "arguments": [
+    "test",
+    "-p",
+    "bareline",
+    "--bin",
+    "bareline",
+    "deferred_close_tests::discard_close_resolves_stable_owner_after_another_tab_moves",
+    "--offline",
+    "--locked"
+  ],
+  "completed_utc": "2026-09-12T10:21:06.0878543Z",
+  "integration_snapshot": "67ee505ba9fc5e9754b237c6b18ea5fd1916d90a",
+  "exit_code": 0,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\T05-shell-moved-owner-central.log"
+}

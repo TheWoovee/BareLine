@@ -68,10 +68,7 @@ impl Drop for SessionTicket {
 }
 impl SessionService {
     /// The Shell calls this only after its first frame, and only if session work is needed.
-    pub fn new(
-        platform: Arc<dyn LocalFileSystem>,
-        notify: Arc<dyn Fn() + Send + Sync>,
-    ) -> io::Result<Self> {
+    pub fn new(platform: Arc<dyn LocalFileSystem>, notify: Arc<dyn Fn() + Send + Sync>) -> io::Result<Self> {
         let (sender, receiver) = mpsc::sync_channel::<Job>(4);
         std::thread::Builder::new()
             .name("bareline-session".into())
@@ -97,21 +94,14 @@ impl SessionService {
         Ok(SessionTicket { receiver, cancel })
     }
 }
-fn execute(
-    request: SessionRequest,
-    cancel: &Cancellation,
-    platform: &dyn LocalFileSystem,
-) -> SessionCompletion {
+fn execute(request: SessionRequest, cancel: &Cancellation, platform: &dyn LocalFileSystem) -> SessionCompletion {
     let allowed = || {
         cancel
             .check()
             .map_err(|_| io::Error::new(io::ErrorKind::Interrupted, "session job cancelled"))
     };
     match request {
-        SessionRequest::ResolvePaths {
-            documents,
-            provider,
-        } => {
+        SessionRequest::ResolvePaths { documents, provider } => {
             let oversized = documents.len() > 2;
             SessionCompletion::Resolved(
                 documents
@@ -127,10 +117,7 @@ fn execute(
                             let path = doc
                                 .path
                                 .ok_or_else(|| {
-                                    io::Error::new(
-                                        io::ErrorKind::InvalidInput,
-                                        "untitled document has no path",
-                                    )
+                                    io::Error::new(io::ErrorKind::InvalidInput, "untitled document has no path")
                                 })?
                                 .to_native()
                                 .map_err(io::Error::other)?;
@@ -150,27 +137,22 @@ fn execute(
                 .take((session::MAX_SESSION_BYTES + 1) as u64)
                 .read_to_end(&mut bytes)?;
             allowed()?;
-            let decoded=session::decode_report(&bytes)?;
+            let decoded = session::decode_report(&bytes)?;
             Ok(LoadedSession {
                 manifest: decoded.manifest,
                 diagnostics: decoded.diagnostics,
                 recovered_previous: false,
             })
         })),
-        SessionRequest::Save { path, manifest } => {
-            SessionCompletion::Written(allowed().and_then(|()| {
-                if let Some(parent) = path
-                    .parent()
-                    .filter(|parent| !parent.as_os_str().is_empty())
-                {
-                    std::fs::create_dir_all(parent)?;
-                }
-                SessionStore::new(path).save(&manifest, platform)
-            }))
+        SessionRequest::Save { path, manifest } => SessionCompletion::Written(allowed().and_then(|()| {
+            if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+                std::fs::create_dir_all(parent)?;
+            }
+            SessionStore::new(path).save(&manifest, platform)
+        })),
+        SessionRequest::Export { path, manifest } => {
+            SessionCompletion::Written(allowed().and_then(|()| SessionStore::new(path).save(&manifest, platform)))
         }
-        SessionRequest::Export { path, manifest } => SessionCompletion::Written(
-            allowed().and_then(|()| SessionStore::new(path).save(&manifest, platform)),
-        ),
     }
 }
 #[cfg(test)]
@@ -226,32 +208,20 @@ mod tests {
                 path: std::env::temp_dir().join("bareline-session-missing-test/none.json"),
             })
             .unwrap();
-        notified
-            .recv_timeout(std::time::Duration::from_secs(2))
-            .unwrap();
-        assert!(matches!(
-            ticket.try_recv().unwrap(),
-            SessionCompletion::Loaded(Err(_))
-        ));
+        notified.recv_timeout(std::time::Duration::from_secs(2)).unwrap();
+        assert!(matches!(ticket.try_recv().unwrap(), SessionCompletion::Loaded(Err(_))));
     }
     #[test]
     fn trust_resolution_is_batched_and_invalid_paths_never_reach_provider() {
         struct Trust(AtomicUsize);
         impl PathTrustProvider for Trust {
-            fn canonicalize(
-                &self,
-                _: &Path,
-                _: PathOrigin,
-            ) -> io::Result<bareline_platform::PathTrust> {
+            fn canonicalize(&self, _: &Path, _: PathOrigin) -> io::Result<bareline_platform::PathTrust> {
                 unreachable!()
             }
             fn open_read(&self, _: &Path, origin: PathOrigin) -> io::Result<TrustedRead> {
                 assert_eq!(origin, PathOrigin::Session);
                 self.0.fetch_add(1, Ordering::Relaxed);
-                Err(io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    "trust denied",
-                ))
+                Err(io::Error::new(io::ErrorKind::PermissionDenied, "trust denied"))
             }
         }
         let provider = Arc::new(Trust(AtomicUsize::new(0)));

@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 //! A lazy worker with one pending request. Dropping tickets cancels their work.
 use crate::{
-    Cancellation, Checkpoint, Error, ForwardLexer, Language, LexerPreference, MAX_REQUEST_BYTES,
-    SyntaxResult,
+    Cancellation, Checkpoint, Error, ForwardLexer, Language, LexerPreference, MAX_REQUEST_BYTES, SyntaxResult,
 };
 use bareline_document::{DocumentSnapshot, TextOffset};
 use std::{
@@ -63,127 +62,122 @@ impl SyntaxWorker {
     pub fn new() -> std::io::Result<Self> {
         let shared = Arc::new(Shared::default());
         let worker = shared.clone();
-        std::thread::Builder::new()
-            .name("syntax".into())
-            .spawn(move || {
-                // Construct and release the !Send native handle on this worker.
-                let mut pass: Option<ForwardLexer> = None;
-                loop {
-                    let request = {
-                        let Ok(mut state) = worker.state.lock() else {
+        std::thread::Builder::new().name("syntax".into()).spawn(move || {
+            // Construct and release the !Send native handle on this worker.
+            let mut pass: Option<ForwardLexer> = None;
+            loop {
+                let request = {
+                    let Ok(mut state) = worker.state.lock() else {
+                        return;
+                    };
+                    while state.pending.is_none() && !state.stop {
+                        let Ok(next) = worker.wake.wait(state) else {
                             return;
                         };
-                        while state.pending.is_none() && !state.stop {
-                            let Ok(next) = worker.wake.wait(state) else {
-                                return;
-                            };
-                            state = next;
-                        }
-                        if state.stop {
-                            return;
-                        }
-                        let request = state.pending.take().unwrap();
-                        state.running = Some(request.cancel.clone());
-                        request
-                    };
-                    let matches_definition = |old: &Option<Arc<crate::udl::Definition>>| match (
-                        old,
-                        &request.definition,
-                    ) {
-                        (None, None) => true,
-                        (Some(a), Some(b)) => Arc::ptr_eq(a, b),
-                        _ => false,
-                    };
-                    let anchor = request
-                        .source
-                        .line_at(request.range.start)
-                        .and_then(|line| request.source.line_range(line))
-                        .map_or(TextOffset(0), |range| range.start);
-                    if !pass.as_ref().is_some_and(|old| {
-                        old.source.same_document(&request.source)
-                            && old.source.revision == request.source.revision
-                            && old.language == request.language
-                            && old.options.preference == request.preference
-                            && matches_definition(&old.options.definition)
-                            && old.next <= anchor
-                            && (old.next.0 == 0 || old.checkpoint.is_some())
-                    }) {
-                        pass = Some(ForwardLexer::configured(
-                            request.source.clone(),
-                            request.language,
-                            request.preference,
-                            request.definition.clone(),
-                        ));
+                        state = next;
                     }
-                    let result = (|| {
-                        if request.range.start > request.range.end
-                            || request.range.end.0 > request.source.len()
-                            || request.range.end.0 - request.range.start.0 > MAX_REQUEST_BYTES
-                        {
-                            return Err(Error::InvalidRange);
-                        }
-                        let pass = pass.as_mut().unwrap();
-                        // Native checkpoints are safe restarts only for the native grammar.
-                        if request.preference == LexerPreference::Native
-                            && let Some(checkpoint) = &request.checkpoint
-                        {
-                            if checkpoint.source.same_document(&request.source)
-                                && checkpoint.source.revision == request.source.revision
-                                && checkpoint.language == request.language
-                                && checkpoint.offset == request.range.start
-                                && matches_definition(&checkpoint.definition)
-                            {
-                                pass.next = checkpoint.offset;
-                                pass.checkpoint = Some(checkpoint.clone());
-                            }
-                        }
-                        loop {
-                            request.cancel.check()?;
-                            let target = if pass.next < anchor {
-                                anchor.0
-                            } else {
-                                request.range.end.0
-                            };
-                            let mut end = target.min(pass.next.0.saturating_add(MAX_REQUEST_BYTES));
-                            if end < request.range.end.0 {
-                                let line = request
-                                    .source
-                                    .line_at(TextOffset(end))
-                                    .map_err(|_| Error::InvalidRange)?;
-                                let boundary = request
-                                    .source
-                                    .line_range(line)
-                                    .map_err(|_| Error::InvalidRange)?
-                                    .start
-                                    .0;
-                                if boundary > pass.next.0 {
-                                    end = boundary;
-                                }
-                            }
-                            while !request.source.is_boundary(TextOffset(end)) {
-                                end -= 1;
-                            }
-                            let result = pass.advance(TextOffset(end), &request.cancel)?;
-                            if end == request.range.end.0 {
-                                return Ok(result);
-                            }
-                            if result.checkpoint.is_none() {
-                                return Err(Error::BudgetExceeded);
-                            }
-                        }
-                    })();
-                    if result.is_err() {
-                        pass = None;
-                    }
-                    let _ = request.reply.try_send(result);
-                    (request.notify)();
-                    if let Ok(mut state) = worker.state.lock() {
-                        state.running = None;
-                    } else {
+                    if state.stop {
                         return;
                     }
+                    let request = state.pending.take().unwrap();
+                    state.running = Some(request.cancel.clone());
+                    request
+                };
+                let matches_definition = |old: &Option<Arc<crate::udl::Definition>>| match (old, &request.definition) {
+                    (None, None) => true,
+                    (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                    _ => false,
+                };
+                let anchor = request
+                    .source
+                    .line_at(request.range.start)
+                    .and_then(|line| request.source.line_range(line))
+                    .map_or(TextOffset(0), |range| range.start);
+                if !pass.as_ref().is_some_and(|old| {
+                    old.source.same_document(&request.source)
+                        && old.source.revision == request.source.revision
+                        && old.language == request.language
+                        && old.options.preference == request.preference
+                        && matches_definition(&old.options.definition)
+                        && old.next <= anchor
+                        && (old.next.0 == 0 || old.checkpoint.is_some())
+                }) {
+                    pass = Some(ForwardLexer::configured(
+                        request.source.clone(),
+                        request.language,
+                        request.preference,
+                        request.definition.clone(),
+                    ));
                 }
-            })?;
+                let result = (|| {
+                    if request.range.start > request.range.end
+                        || request.range.end.0 > request.source.len()
+                        || request.range.end.0 - request.range.start.0 > MAX_REQUEST_BYTES
+                    {
+                        return Err(Error::InvalidRange);
+                    }
+                    let pass = pass.as_mut().unwrap();
+                    // Native checkpoints are safe restarts only for the native grammar.
+                    if request.preference == LexerPreference::Native
+                        && let Some(checkpoint) = &request.checkpoint
+                    {
+                        if checkpoint.source.same_document(&request.source)
+                            && checkpoint.source.revision == request.source.revision
+                            && checkpoint.language == request.language
+                            && checkpoint.offset == request.range.start
+                            && matches_definition(&checkpoint.definition)
+                        {
+                            pass.next = checkpoint.offset;
+                            pass.checkpoint = Some(checkpoint.clone());
+                        }
+                    }
+                    loop {
+                        request.cancel.check()?;
+                        let target = if pass.next < anchor {
+                            anchor.0
+                        } else {
+                            request.range.end.0
+                        };
+                        let mut end = target.min(pass.next.0.saturating_add(MAX_REQUEST_BYTES));
+                        if end < request.range.end.0 {
+                            let line = request
+                                .source
+                                .line_at(TextOffset(end))
+                                .map_err(|_| Error::InvalidRange)?;
+                            let boundary = request
+                                .source
+                                .line_range(line)
+                                .map_err(|_| Error::InvalidRange)?
+                                .start
+                                .0;
+                            if boundary > pass.next.0 {
+                                end = boundary;
+                            }
+                        }
+                        while !request.source.is_boundary(TextOffset(end)) {
+                            end -= 1;
+                        }
+                        let result = pass.advance(TextOffset(end), &request.cancel)?;
+                        if end == request.range.end.0 {
+                            return Ok(result);
+                        }
+                        if result.checkpoint.is_none() {
+                            return Err(Error::BudgetExceeded);
+                        }
+                    }
+                })();
+                if result.is_err() {
+                    pass = None;
+                }
+                let _ = request.reply.try_send(result);
+                (request.notify)();
+                if let Ok(mut state) = worker.state.lock() {
+                    state.running = None;
+                } else {
+                    return;
+                }
+            }
+        })?;
         Ok(Self { shared })
     }
     /// Supersedes running and queued work; no queue growth or UI-thread lexing.

@@ -29,18 +29,15 @@ impl PagedResults {
             if length > MAX_RESULT_BYTES {
                 return Err(ReplaceError::StagingLimit);
             }
-            let original = window(&self.source, edit.range.start.0, length, job, &mut resolve)
-                .map_err(|_| {
-                    if job.is_cancelled() {
-                        ReplaceError::Cancelled
-                    } else {
-                        ReplaceError::Stale
-                    }
-                })?;
+            let original = window(&self.source, edit.range.start.0, length, job, &mut resolve).map_err(|_| {
+                if job.is_cancelled() {
+                    ReplaceError::Cancelled
+                } else {
+                    ReplaceError::Stale
+                }
+            })?;
             edit.insert = preserve_replacement_case(original.text(), &edit.insert);
-            used = used
-                .saturating_add(length)
-                .saturating_add(edit.insert.len());
+            used = used.saturating_add(length).saturating_add(edit.insert.len());
             if used > MAX_RESULT_BYTES {
                 return Err(ReplaceError::StagingLimit);
             }
@@ -115,10 +112,7 @@ impl PagedResults {
                 },
                 |captures| {
                     let prepare = (|| -> Result<(), ReplaceError> {
-                        let range = captures
-                            .first()
-                            .and_then(Clone::clone)
-                            .ok_or(ReplaceError::Stale)?;
+                        let range = captures.first().and_then(Clone::clone).ok_or(ReplaceError::Stale)?;
                         if range.start < selection.start || range.end > selection.end {
                             return Ok(());
                         }
@@ -142,24 +136,10 @@ impl PagedResults {
                                 })
                             })
                             .ok_or(ReplaceError::StagingLimit)?;
-                        let remaining = MAX_RESULT_BYTES
-                            .checked_sub(used)
-                            .ok_or(ReplaceError::StagingLimit)?;
-                        let insert = regex::expand_ranges(
-                            &template,
-                            &captures,
-                            &names,
-                            remaining,
-                            |range, limit| {
-                                read_capture_range(
-                                    current,
-                                    range,
-                                    limit,
-                                    job,
-                                    &mut **resolver.borrow_mut(),
-                                )
-                            },
-                        )?;
+                        let remaining = MAX_RESULT_BYTES.checked_sub(used).ok_or(ReplaceError::StagingLimit)?;
+                        let insert = regex::expand_ranges(&template, &captures, &names, remaining, |range, limit| {
+                            read_capture_range(current, range, limit, job, &mut **resolver.borrow_mut())
+                        })?;
                         used += insert.len();
                         edits.reserve_exact(1);
                         edits.push(Edit { range, insert });
@@ -196,39 +176,28 @@ impl PagedResults {
             }
             let mut subject = String::with_capacity(current.len());
             while subject.len() < current.len() {
-                let part =
-                    window(current, subject.len(), WINDOW, job, &mut resolve).map_err(|_| {
-                        if job.is_cancelled() {
-                            ReplaceError::Cancelled
-                        } else {
-                            ReplaceError::Stale
-                        }
-                    })?;
+                let part = window(current, subject.len(), WINDOW, job, &mut resolve).map_err(|_| {
+                    if job.is_cancelled() {
+                        ReplaceError::Cancelled
+                    } else {
+                        ReplaceError::Stale
+                    }
+                })?;
                 if part.text().is_empty() {
                     return Err(ReplaceError::Stale);
                 }
                 subject.push_str(part.text());
             }
-            let document = Document::from_utf8(
-                &subject,
-                Budget::new(regex::CONTEXT_LIMIT * 2),
-                Budget::new(1),
-            )
-            .map_err(|_| ReplaceError::StagingLimit)?;
+            let document = Document::from_utf8(&subject, Budget::new(regex::CONTEXT_LIMIT * 2), Budget::new(1))
+                .map_err(|_| ReplaceError::StagingLimit)?;
             drop(subject);
             let snapshot = document.snapshot();
             let found = scan(&snapshot, &self.query, job, |_| {});
             if found.matches() != self.matches {
                 return Err(ReplaceError::Stale);
             }
-            let mut transaction = found.prepare_replace_ranges(
-                &snapshot,
-                &template,
-                MAX_RESULT_BYTES,
-                scope,
-                job,
-                include_inverse,
-            )?;
+            let mut transaction =
+                found.prepare_replace_ranges(&snapshot, &template, MAX_RESULT_BYTES, scope, job, include_inverse)?;
             transaction.base_revision = current.revision;
             return Ok(transaction);
         }
@@ -275,11 +244,7 @@ fn read_capture_range(
     job: &SearchJob,
     resolve: &mut impl FnMut(PageTicket) -> Result<bool, String>,
 ) -> Result<String, ReplaceError> {
-    let length = range
-        .end
-        .0
-        .checked_sub(range.start.0)
-        .ok_or(ReplaceError::Stale)?;
+    let length = range.end.0.checked_sub(range.start.0).ok_or(ReplaceError::Stale)?;
     if length > limit {
         return Err(ReplaceError::StagingLimit);
     }
@@ -364,8 +329,7 @@ pub fn scan_paged(
             return Err(Completeness::InvalidQuery);
         }
         if query.mode == SearchMode::Regex && regex::streamable(query) {
-            let capacity =
-                query.results_ram_bytes.min(MAX_RESULT_BYTES) / std::mem::size_of::<SearchMatch>();
+            let capacity = query.results_ram_bytes.min(MAX_RESULT_BYTES) / std::mem::size_of::<SearchMatch>();
             regex::scan_stream(
                 snapshot.len(),
                 query,
@@ -378,9 +342,7 @@ pub fn scan_paged(
                     Ok(part.text().into())
                 },
                 |captures| {
-                    let range = captures[0]
-                        .clone()
-                        .ok_or(Completeness::UnsupportedStreaming)?;
+                    let range = captures[0].clone().ok_or(Completeness::UnsupportedStreaming)?;
                     if range.start < selection.start || range.end > selection.end {
                         return Ok(());
                     }
@@ -413,12 +375,8 @@ pub fn scan_paged(
                 }
                 subject.push_str(part.text());
             }
-            let document = Document::from_utf8(
-                &subject,
-                Budget::new(regex::CONTEXT_LIMIT * 2),
-                Budget::new(1),
-            )
-            .map_err(|_| Completeness::Unsupported)?;
+            let document = Document::from_utf8(&subject, Budget::new(regex::CONTEXT_LIMIT * 2), Budget::new(1))
+                .map_err(|_| Completeness::Unsupported)?;
             drop(subject);
             let found = scan(&document.snapshot(), query, job, |_| {});
             result.count = found.count();
@@ -439,8 +397,7 @@ pub fn scan_paged(
             return Err(Completeness::InvalidQuery);
         }
         let mut next = selection.start.0;
-        let capacity =
-            query.results_ram_bytes.min(MAX_RESULT_BYTES) / std::mem::size_of::<SearchMatch>();
+        let capacity = query.results_ram_bytes.min(MAX_RESULT_BYTES) / std::mem::size_of::<SearchMatch>();
         while next <= selection.end.0 {
             if job.is_cancelled() {
                 return Err(Completeness::Cancelled);
@@ -461,15 +418,10 @@ pub fn scan_paged(
             if end < next || (end == next && end < snapshot.len()) {
                 return Err(Completeness::Unsupported);
             }
-            let document = Document::from_utf8(
-                text.text(),
-                Budget::new(size.saturating_mul(2).max(1)),
-                Budget::new(1),
-            )
-            .map_err(|_| Completeness::Unsupported)?;
+            let document = Document::from_utf8(text.text(), Budget::new(size.saturating_mul(2).max(1)), Budget::new(1))
+                .map_err(|_| Completeness::Unsupported)?;
             let mut local = query.clone();
-            local.selection =
-                Some(TextOffset(next - base)..TextOffset(selection.end.0.min(end) - base));
+            local.selection = Some(TextOffset(next - base)..TextOffset(selection.end.0.min(end) - base));
             local.results_ram_bytes = MAX_RESULT_BYTES;
             local.count_beyond_limit = false;
             let matches = scan(&document.snapshot(), &local, job, |_| {});
@@ -486,8 +438,7 @@ pub fn scan_paged(
             }
             let mut advance = next;
             for found in matches.matches() {
-                let range =
-                    TextOffset(found.range.start.0 + base)..TextOffset(found.range.end.0 + base);
+                let range = TextOffset(found.range.start.0 + base)..TextOffset(found.range.end.0 + base);
                 if range.start.0 >= cutoff && end != snapshot.len() {
                     break;
                 }
@@ -550,10 +501,7 @@ mod tests {
                 let start = ticket.page as usize * page_size;
                 let end = (start + page_size).min(length);
                 let mut page = vec![b'x'; end - start];
-                for (at, marker) in [
-                    (begin, b"BEGIN\n".as_slice()),
-                    (finish, b"\nEND".as_slice()),
-                ] {
+                for (at, marker) in [(begin, b"BEGIN\n".as_slice()), (finish, b"\nEND".as_slice())] {
                     for (offset, byte) in marker.iter().enumerate() {
                         let global = at + offset;
                         if global >= start && global < end {
@@ -572,10 +520,7 @@ mod tests {
         assert_eq!(result.completeness, Completeness::Complete);
         assert!(result.count_complete);
         assert_eq!(result.count, 1);
-        assert_eq!(
-            result.matches[0].range,
-            TextOffset(begin)..TextOffset(finish + 4)
-        );
+        assert_eq!(result.matches[0].range, TextOffset(begin)..TextOffset(finish + 4));
         assert!(supplied >= length);
     }
     #[test]
@@ -600,10 +545,7 @@ mod tests {
             let mut bytes = vec![b'x'; page_size.min(length - base)];
             for (start, value) in [(first, b"ABC".as_slice()), (second, b"AC".as_slice())] {
                 for (index, byte) in value.iter().enumerate() {
-                    if let Some(local) = (start + index)
-                        .checked_sub(base)
-                        .filter(|local| *local < bytes.len())
-                    {
+                    if let Some(local) = (start + index).checked_sub(base).filter(|local| *local < bytes.len()) {
                         bytes[local] = *byte;
                     }
                 }
@@ -615,13 +557,7 @@ mod tests {
         };
         let mut query = SearchQuery::literal("(A)(B?)C");
         query.mode = SearchMode::Regex;
-        let result = scan_paged(
-            &snapshot,
-            &query,
-            &SearchJob::default(),
-            &mut resolve,
-            |_| {},
-        );
+        let result = scan_paged(&snapshot, &query, &SearchJob::default(), &mut resolve, |_| {});
         assert_eq!(result.completeness, Completeness::Complete);
         assert_eq!(result.matches.len(), 2);
         let transaction = result
@@ -650,13 +586,9 @@ mod tests {
         let cancelled = SearchJob::default();
         cancelled.cancel();
         assert!(matches!(
-            result.prepare_replace_streaming(
-                &snapshot,
-                "$0",
-                ReplaceScope::All,
-                &cancelled,
-                |_| panic!("cancelled replacement must not read")
-            ),
+            result.prepare_replace_streaming(&snapshot, "$0", ReplaceScope::All, &cancelled, |_| panic!(
+                "cancelled replacement must not read"
+            )),
             Err(ReplaceError::Cancelled)
         ));
     }
@@ -697,10 +629,7 @@ mod tests {
             |_| {},
         );
         assert_eq!(result.completeness, Completeness::Complete);
-        assert_eq!(
-            result.matches[0].range,
-            TextOffset(WINDOW - 2)..TextOffset(WINDOW + 5)
-        );
+        assert_eq!(result.matches[0].range, TextOffset(WINDOW - 2)..TextOffset(WINDOW + 5));
         assert_eq!(result.count, 1);
         assert!(result.count_complete);
     }
@@ -746,14 +675,8 @@ pub fn stage_source_replacement(
         let start = builder.len();
         let mut cursor = edit.range.start.0;
         while cursor < edit.range.end.0 {
-            let part = window(
-                source,
-                cursor,
-                WINDOW.min(edit.range.end.0 - cursor),
-                job,
-                &mut resolve,
-            )
-            .map_err(|error| format!("{error:?}"))?;
+            let part = window(source, cursor, WINDOW.min(edit.range.end.0 - cursor), job, &mut resolve)
+                .map_err(|error| format!("{error:?}"))?;
             let length = part.text().len().min(edit.range.end.0 - cursor);
             if length == 0 {
                 return Err("Source made no progress".into());
@@ -764,9 +687,7 @@ pub fn stage_source_replacement(
             cursor += length;
         }
         let inverse = start..builder.len();
-        let inserted = builder
-            .append_utf8(&edit.insert)
-            .map_err(|error| error.to_string())?;
+        let inserted = builder.append_utf8(&edit.insert).map_err(|error| error.to_string())?;
         ranges.push((edit.range, inverse, inserted));
     }
     let owned = builder.finish().map_err(|error| error.to_string())?;
@@ -803,11 +724,7 @@ pub fn stage_source_replacement(
             SourceTransactionPoll::Ready(prepared) => return Ok(prepared),
             SourceTransactionPoll::Progress => {}
             SourceTransactionPoll::Pending(ticket) => {
-                if !request
-                    .resolve_owned(ticket)
-                    .map_err(|error| format!("{error:?}"))?
-                    && !resolve(ticket)?
-                {
+                if !request.resolve_owned(ticket).map_err(|error| format!("{error:?}"))? && !resolve(ticket)? {
                     std::thread::yield_now();
                 }
             }

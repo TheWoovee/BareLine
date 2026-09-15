@@ -3,7 +3,8 @@
 import argparse
 from pathlib import Path
 import sys
-from perf_suite import digest, write_new, validate_fixture_size
+from perf_suite import (SOURCE_IDENTITY_TOOL, digest, read_json, t09_source_identity,
+                        validate_fixture_size, validate_qualification_environment, write_new)
 
 COMMON = ('open_10mb', 'open_100mb', 'open_1gb', 'open_5gb', 'long_line',
           'scroll', 'edit_to_paint', 'literal_search', 'regex_search', 'result_jump', 'save', 'warm_launch', 'cold_launch', 'empty_idle')
@@ -24,7 +25,11 @@ def main():
     parser.add_argument('--extension-inventory')
     parser.add_argument('--extension-command')
     parser.add_argument('--machine-id', required=True)
-    parser.add_argument('--configuration', required=True, help='reviewed OS/CPU/display/DPI/theme/font/wrap/syntax/power settings identity')
+    parser.add_argument('--configuration', required=True, help='stable reviewed profile identifier')
+    parser.add_argument('--qualification-environment', required=True,
+                        help='JSON pinning hardware, OS, power, DPI, fonts, editor options, acquisition and cold method')
+    parser.add_argument('--source-root', default=str(Path(__file__).resolve().parents[2]),
+                        help='Git worktree recorded with the PR-T09 source identity algorithm')
     parser.add_argument('--renderer', choices=('hardware', 'software'), default='hardware')
     parser.add_argument('--repetitions', type=int, default=5)
     parser.add_argument('--destination', required=True)
@@ -37,11 +42,22 @@ def main():
     if not 1 <= args.repetitions <= 100 or args.expected_text_bytes < 0:
         raise ValueError('invalid repetition count or text-view length')
     directory = Path(__file__).resolve().parent
+    destination = Path(args.destination).resolve()
+    environment_path = Path(args.qualification_environment).resolve()
+    qualification_environment = validate_qualification_environment(read_json(environment_path), environment_path.parent)
+    for font in qualification_environment['fonts']:
+        font['path'] = str((environment_path.parent / font['path']).resolve())
+    source_root = Path(args.source_root).resolve()
+    source_before = t09_source_identity(source_root, (destination,))
+    if source_before.get('available') is not True:
+        raise ValueError('source identity unavailable: ' + source_before.get('reason', 'unknown reason'))
     fixture = Path(args.fixture).resolve()
     fixture_hash = digest(fixture)
     python = str(Path(sys.executable).resolve())
     support = [{"path": str(directory / name), "sha256": digest(directory / name)} for name in
                ('perf_suite.py', 'bareline_driver.py', 'notepadpp_driver.py', 'windows_process_metrics.py', 'cache_protocol.py', 'disk_metrics.py')]
+    support += [{"path": str(SOURCE_IDENTITY_TOOL), "sha256": digest(SOURCE_IDENTITY_TOOL)},
+                {"path": str(environment_path), "sha256": digest(environment_path)}]
     applications = {}
     for name in names:
         executable = Path(getattr(args, name)).resolve()
@@ -84,8 +100,11 @@ def main():
             "cache_plan_sha256": digest(args.cache_plan) if scenario == 'cold_launch' else None,
             "renderer": args.renderer, "fixtures": [{"path": str(fixture), "sha256": fixture_hash}],
             "comparable_metrics": ['save_to_clean_ack_us'] if scenario == 'save' and len(names) == 2 else [], "drivers": drivers})
-    write_new(args.destination, {"schema_version": 1, "series": "local", "machine_id": args.machine_id,
+    write_new(destination, {"schema_version": 2, "series": "local", "machine_id": args.machine_id,
         "configuration": args.configuration, "repetitions": args.repetitions,
+        "qualification_environment": qualification_environment,
+        "source_identity": {"algorithm": "t09-run-test-evidence-v1", "root": str(source_root),
+                            "excluded_paths": [str(destination)], "before": source_before},
         "applications": applications, "scenarios": scenarios,
         "comparison_review": "Only Save command-to-clean acknowledgement has a shared default endpoint and identical PERF_SAVE edit. This is not a durability/paint comparison. Native presented/whole-find and Scintilla roundtrip endpoints otherwise differ; review identical work and sampling boundaries before listing further comparable_metrics."})
 

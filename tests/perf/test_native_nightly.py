@@ -3,6 +3,7 @@
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 from disk_metrics import DiskSampler, snapshot, isolated_environment
 import native_nightly
@@ -21,21 +22,52 @@ class NativeContracts(unittest.TestCase):
     def test_missing_plan_records_every_case_without_launch(self):
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory) / 'run'
-            native_nightly.run('', '', 'does-not-exist.exe', target)
+            self.assertEqual(native_nightly.run('', '', 'does-not-exist.exe', target), 1)
             report = perf_suite.read_json(target / 'native-report.json')
+            self.assertEqual(report['schema_version'], 2)
             self.assertEqual(len(report['coverage']), len(native_nightly.required_cases()))
             self.assertTrue(all(case['status'] == 'unavailable' and case['reason'] for case in report['coverage']))
+            self.assertEqual(len({case['id'] for case in report['coverage']}), len(report['coverage']))
+            self.assertIsNone(report['provenance']['manifest']['application']['sha256'])
+            self.assertIn('comparator application is absent', report['ineligibility_reasons'])
             self.assertEqual(report['rows'], [])
             self.assertFalse(report['claims_eligible'])
 
+    def test_cli_propagates_unavailable_qualification_as_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / 'run'
+            argv = ['native_nightly.py', '--application', 'does-not-exist.exe',
+                    '--destination', str(target)]
+            with mock.patch('sys.argv', argv):
+                self.assertEqual(native_nightly.main(), 1)
+            self.assertTrue((target / 'native-report.json').is_file())
+
     def test_failed_or_incomplete_samples_never_enter_rolling_baseline(self):
-        report = {'observations': [{'application': 'bareline', 'metric': 'operation_us',
-                  'sample_count': 3, 'p50': 100, 'p95': 110}], 'failures': [], 'missing_trials': 0}
+        identity = {'available': True, 'head': 'fixture', 'working_tree_dirty': False,
+                    'source_manifest_sha256': 'a' * 64}
+        report = {'provenance': {'source_before': identity, 'source_after': identity,
+                  'source_changed_during_run': False},
+                  'observations': [{'application': 'bareline', 'metric': 'operation_us',
+                  'sample_count': 3, 'p50': 100, 'p95': 110, 'status': 'measured'}],
+                  'failures': [], 'missing_trials': 0}
         rows = native_nightly.regression_rows(report, 'scroll', 'software', 3)
         self.assertEqual(rows[0]['scenario'], 'scroll@software')
         self.assertEqual(native_nightly.regression_rows({**report, 'missing_trials': 1}, 'scroll', 'software', 3), [])
         self.assertEqual(native_nightly.regression_rows({**report, 'failures': ['timeout']}, 'scroll', 'software', 3), [])
         self.assertEqual(native_nightly.regression_rows(report, 'scroll', 'software', 4), [])
+        unqualified = {**report, 'observations': [{**report['observations'][0], 'status': 'unqualified'}]}
+        self.assertEqual(native_nightly.regression_rows(unqualified, 'scroll', 'software', 3), [])
+
+    def test_source_change_rejects_rows_and_success_exit(self):
+        before = {'available': True, 'head': 'fixture', 'working_tree_dirty': False,
+                  'source_manifest_sha256': 'a' * 64}
+        after = {**before, 'source_manifest_sha256': 'b' * 64}
+        report = {'provenance': {'source_before': before, 'source_after': after,
+                  'source_changed_during_run': True}, 'observations': [],
+                  'failures': [], 'missing_trials': 0}
+        self.assertEqual(native_nightly.regression_rows(report, 'scroll', 'hardware', 3), [])
+        self.assertEqual(native_nightly.qualification_exit_code(before, after,
+                         [{'status': 'measured'}]), 1)
 
     def test_disk_peak_growth_and_release_use_actual_owned_files(self):
         with tempfile.TemporaryDirectory() as directory:

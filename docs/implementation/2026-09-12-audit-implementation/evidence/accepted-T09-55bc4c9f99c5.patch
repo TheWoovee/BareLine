@@ -1,0 +1,1202 @@
+diff --git a/docs/implementation/2026-09-12-audit-implementation/PR-T09-R5.md b/docs/implementation/2026-09-12-audit-implementation/PR-T09-R5.md
+new file mode 100644
+index 0000000..a7723c0
+--- /dev/null
++++ b/docs/implementation/2026-09-12-audit-implementation/PR-T09-R5.md
+@@ -0,0 +1,11 @@
++# PR-T09 R5 — Native journey prerequisites
++
++- Base: `861522334c777282bbce79cb8aa66048a3ce980c`
++- Scope: correct P0-3 consent accounting, discover the actual editor UIA provider, and retain measured native input delivery before evaluating P0-7/P4-4.
++- Retained reproduction: run `14532-1789228400489603200` remains 10/13. P0-3 showed a dirty editor and recovery preparation without a prompt or consent; P0-7 queried the focused top-level Window rather than the editor provider; P4-4 retained an empty post-input screenshot while direct native input rendered the intended emoji.
++- Product dependency: T05 separately owns retaining Close/Exit intent while recovery I/O is busy. This harness issues one command and observes its terminal result rather than reinjecting it.
++- P0-3 records the one posted command, prompt tree and screenshot, explicit Don't Save click and successful process exit. It validates any physically retained journal with `recovery::inspect`: only `Discarded` is terminal, while inspection errors and every other status remain discoverable failures. The same isolated profile is restarted and checked again for zero production discovery candidates and no restored discarded text. Physical purge completion is reported separately because durable tombstone publication precedes garbage collection.
++- UIA activation uses a bounded Control View tree walk and accepts only an enabled, focusable, in-process Edit provider whose stable `Pane <number>` identity exposes TextPattern and nonempty bounds. The receipt retains the provider name, identity, automation id, process, focus, bounds, traversal count and rejected Edit candidates; modal text fields cannot become the input target.
++- Input derives the exact replacement from the provider's single UIA selection/caret in UTF-16 units. It records posted units/errors, foreground/editor focus before and after, one provider focus correction, SendInput inserted count/error, and the exact expected TextPattern transition. Partial delivery is polled to the deadline and never retried; only text still unchanged after that deadline can receive one fallback attempt. Every prerequisite failure writes provider/target/attempt/screenshot evidence. P4-4 samples the first rows inside the observed provider bounds and retains its stable-frame and saturated-glyph requirements.
++- Both P0-3 Exit and P0-7 Close are injected once; the harness waits for the product-owned deferred intent instead of masking it with repeated commands.
++- Root verification: focused xtask helper tests followed by isolated P0-3, P0-7 and P4-4 against the integrated native binary.
+diff --git a/xtask/src/journey.rs b/xtask/src/journey.rs
+index b56ad84..c77ce6d 100644
+--- a/xtask/src/journey.rs
++++ b/xtask/src/journey.rs
+@@ -10,6 +10,7 @@
+ //! mirror the acceptance checks in `docs/implementation/PLAN-20260908-REVIEW-FIXES.md`.
+ #![cfg(windows)]
+ 
++use std::collections::VecDeque;
+ use std::ffi::c_void;
+ use std::io::Read;
+ use std::path::{Path, PathBuf};
+@@ -18,7 +19,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+ 
+ use sha2::{Digest, Sha256};
+ 
+-use windows::Win32::Foundation::{HWND, LPARAM, RECT, WPARAM};
++use windows::Win32::Foundation::{GetLastError, HWND, LPARAM, RECT, WPARAM};
+ use windows::Win32::Graphics::Gdi::{
+     BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DIB_RGB_COLORS, DeleteDC,
+     DeleteObject, GetDC, GetDIBits, GetDeviceCaps, LOGPIXELSX, ReleaseDC, SRCCOPY, SelectObject,
+@@ -29,7 +30,7 @@ use windows::Win32::System::Com::{
+ use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
+ use windows::Win32::UI::Accessibility::{
+     CUIAutomation8, IUIAutomation, IUIAutomationTextPattern, TextPatternRangeEndpoint_End,
+-    TextPatternRangeEndpoint_Start, UIA_TextPatternId,
++    TextPatternRangeEndpoint_Start, UIA_EditControlTypeId, UIA_TextPatternId,
+ };
+ use windows::Win32::UI::Input::KeyboardAndMouse::{
+     INPUT, INPUT_KEYBOARD, KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, SendInput, SetFocus,
+@@ -452,6 +453,19 @@ impl Session {
+         }
+     }
+ 
++    fn restart(&mut self, env: &Env) -> Result<HWND, String> {
++        let mut command = Command::new(&env.exe);
++        command.args(["--software", "--no-session", "--no-extensions", "--new-instance"]);
++        isolate(&mut command, &self.home);
++        command.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
++        self.child = command
++            .spawn()
++            .map_err(|error| format!("restart spawn failed: {error}"))?;
++        self.pid = self.child.id();
++        self.hwnd = None;
++        self.wait_window(Duration::from_secs(20))
++    }
++
+     /// Give the editor time to settle a frame after an input.
+     fn settle(&self) {
+         std::thread::sleep(Duration::from_millis(450));
+@@ -491,6 +505,92 @@ impl Session {
+         walk(&self.data_root.join("recovery"), &mut count);
+         count
+     }
++
++    fn recovery_terminal_state(&self) -> serde_json::Value {
++        let root = self.data_root.join("recovery");
++        let mut entries = Vec::new();
++        let children = match std::fs::read_dir(&root) {
++            Ok(children) => children,
++            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
++                return serde_json::json!({
++                    "physical_directories": 0,
++                    "production_discovery_candidates": 0,
++                    "entries": entries,
++                });
++            }
++            Err(error) => {
++                return serde_json::json!({
++                    "physical_directories": "unknown",
++                    "production_discovery_candidates": 1,
++                    "root_inspection_error": error.to_string(),
++                    "entries": entries,
++                });
++            }
++        };
++        for child in children {
++            let child = match child {
++                Ok(child) => child,
++                Err(error) => {
++                    entries.push(serde_json::json!({
++                        "entry_error": error.to_string(),
++                        "production_discovery_candidate": true,
++                        "retirement_blocks_restore": "unknown",
++                    }));
++                    continue;
++                }
++            };
++            let name = child.file_name();
++            if !name.to_string_lossy().starts_with("paged-") {
++                continue;
++            }
++            let path = child.path();
++            let (plain_directory, metadata_error) = match std::fs::symlink_metadata(&path) {
++                Ok(metadata) => (metadata.is_dir() && !metadata.file_type().is_symlink(), None),
++                Err(error) => (false, Some(error.to_string())),
++            };
++            if !plain_directory {
++                entries.push(serde_json::json!({
++                    "directory": path,
++                    "plain_directory": false,
++                    "metadata_error": metadata_error,
++                    "production_discovery_candidate": true,
++                    "retirement_blocks_restore": "unknown",
++                }));
++                continue;
++            }
++            match bareline_file_io::recovery::inspect(&path, &bareline_file_io::cancellation::Cancellation::default()) {
++                Ok(inspection) => {
++                    let discarded = inspection.status == bareline_file_io::recovery::RecoveryStatus::Discarded;
++                    entries.push(serde_json::json!({
++                        "directory": path,
++                        "inspection_status": format!("{:?}", inspection.status),
++                        "durable_receipt": inspection.last_durable.map(|receipt| serde_json::json!({
++                            "revision": receipt.revision,
++                            "protected_unix_ms": receipt.protected_unix_ms,
++                        })),
++                        "complete_baseline": inspection.complete_baseline,
++                        "production_discovery_candidate": !discarded,
++                        "retirement_blocks_restore": discarded,
++                    }));
++                }
++                Err(error) => entries.push(serde_json::json!({
++                    "directory": path,
++                    "inspection_error": error.to_string(),
++                    "production_discovery_candidate": true,
++                    "retirement_blocks_restore": "unknown",
++                })),
++            }
++        }
++        let candidates = entries
++            .iter()
++            .filter(|entry| entry["production_discovery_candidate"].as_bool() != Some(false))
++            .count();
++        serde_json::json!({
++            "physical_directories": entries.len(),
++            "production_discovery_candidates": candidates,
++            "entries": entries,
++        })
++    }
+ }
+ 
+ // --------------------------------------------------------------- window search
+@@ -638,7 +738,44 @@ fn window_evidence(session: &Session, hwnd: HWND) -> serde_json::Value {
+     })
+ }
+ 
+-fn uia_provider_snapshot(hwnd: HWND) -> serde_json::Value {
++fn text_pattern_snapshot(pattern: &IUIAutomationTextPattern) -> windows::core::Result<serde_json::Value> {
++    const TEXT_LIMIT_UTF16: usize = 65_536;
++    const QUERY_LIMIT: i32 = 65_537;
++    let document = unsafe { pattern.DocumentRange() }?;
++    let document_text = unsafe { document.GetText(QUERY_LIMIT) }?.to_string();
++    let document_utf16 = document_text.encode_utf16().count();
++    let selection = unsafe { pattern.GetSelection() }?;
++    let selection_count = unsafe { selection.Length() }?;
++    let selected = if selection_count > 0 {
++        let range = unsafe { selection.GetElement(0) }?;
++        let selected_text = unsafe { range.GetText(QUERY_LIMIT) }?.to_string();
++        let prefix = unsafe { document.Clone() }?;
++        unsafe {
++            prefix.MoveEndpointByRange(TextPatternRangeEndpoint_End, &range, TextPatternRangeEndpoint_Start)?;
++        }
++        let prefix_text = unsafe { prefix.GetText(QUERY_LIMIT) }?.to_string();
++        let caret_start_utf16 = prefix_text.encode_utf16().count();
++        let selection_utf16 = selected_text.encode_utf16().count();
++        Some(serde_json::json!({
++            "caret_start_utf16": caret_start_utf16,
++            "selection_utf16": selection_utf16,
++            "selected_text": selected_text,
++        }))
++    } else {
++        None
++    };
++    Ok(serde_json::json!({
++        "available": true,
++        "document_text": document_text,
++        "document_text_utf16": document_utf16,
++        "document_text_limit_utf16": TEXT_LIMIT_UTF16,
++        "bounded_complete": document_utf16 <= TEXT_LIMIT_UTF16,
++        "selection_count": selection_count,
++        "selection": selected,
++    }))
++}
++
++fn uia_provider_snapshot_once(hwnd: HWND, focus_editor: bool) -> serde_json::Value {
+     // SAFETY: this function balances a successful COM initialization before
+     // returning and holds every UIA interface only within that interval.
+     let initialized = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.ok();
+@@ -659,45 +796,124 @@ fn uia_provider_snapshot(hwnd: HWND) -> serde_json::Value {
+         let root_process_id = unsafe { root.CurrentProcessId() }?;
+         let focused_process_id = unsafe { focused.CurrentProcessId() }?;
+         let control_type = unsafe { focused.CurrentControlType() }?.0;
+-        let text = match unsafe { focused.GetCurrentPatternAs::<IUIAutomationTextPattern>(UIA_TextPatternId) } {
+-            Ok(pattern) => {
+-                let document = unsafe { pattern.DocumentRange() }?;
+-                let document_text = unsafe { document.GetText(65_536) }?.to_string();
+-                let selection = unsafe { pattern.GetSelection() }?;
+-                let selection_count = unsafe { selection.Length() }?;
+-                let selected = if selection_count > 0 {
+-                    let range = unsafe { selection.GetElement(0) }?;
+-                    let selected_text = unsafe { range.GetText(65_536) }?.to_string();
+-                    let prefix = unsafe { document.Clone() }?;
+-                    unsafe {
+-                        prefix.MoveEndpointByRange(
+-                            TextPatternRangeEndpoint_End,
+-                            &range,
+-                            TextPatternRangeEndpoint_Start,
+-                        )?;
+-                    }
+-                    let caret_start_utf16 = unsafe { prefix.GetText(65_536) }?.to_string().encode_utf16().count();
+-                    Some(serde_json::json!({
+-                        "caret_start_utf16": caret_start_utf16,
+-                        "selection_utf16": selected_text.encode_utf16().count(),
+-                        "selected_text": selected_text,
+-                    }))
+-                } else {
+-                    None
+-                };
+-                serde_json::json!({
++        let walker = unsafe { automation.ControlViewWalker() }?;
++        let window = window_rect(hwnd);
++        let mut inspected = Vec::new();
++        let mut editor = None;
++        let mut editor_element = None;
++        let mut editor_candidate_count = 0usize;
++        let mut focused_editor_found = false;
++        let mut pending = VecDeque::new();
++        if let Ok(first) = unsafe { walker.GetFirstChildElement(&root) } {
++            pending.push_back(first);
++        }
++        let mut visited = 0usize;
++        const VISIT_LIMIT: usize = 1024;
++        while visited < VISIT_LIMIT {
++            let Some(element) = pending.pop_front() else {
++                break;
++            };
++            visited += 1;
++            if let Ok(child) = unsafe { walker.GetFirstChildElement(&element) } {
++                pending.push_back(child);
++            }
++            if let Ok(sibling) = unsafe { walker.GetNextSiblingElement(&element) } {
++                pending.push_back(sibling);
++            }
++            let Ok(process_id) = (unsafe { element.CurrentProcessId() }) else {
++                continue;
++            };
++            let Ok(control_type) = (unsafe { element.CurrentControlType() }) else {
++                continue;
++            };
++            let control_type = control_type.0;
++            if process_id != root_process_id || control_type != UIA_EditControlTypeId.0 {
++                continue;
++            }
++            let name = unsafe { element.CurrentName() }
++                .map(|name| name.to_string())
++                .unwrap_or_else(|_| "<unavailable>".into());
++            let automation_id = unsafe { element.CurrentAutomationId() }
++                .map(|id| id.to_string())
++                .unwrap_or_default();
++            let enabled = unsafe { element.CurrentIsEnabled() }
++                .map(|enabled| enabled.as_bool())
++                .unwrap_or(false);
++            let keyboard_focusable = unsafe { element.CurrentIsKeyboardFocusable() }
++                .map(|focusable| focusable.as_bool())
++                .unwrap_or(false);
++            let provider_identity = name.split(',').next().unwrap_or_default().trim().to_owned();
++            let Ok(bounds) = (unsafe { element.CurrentBoundingRectangle() }) else {
++                continue;
++            };
++            let has_keyboard_focus = unsafe { element.CurrentHasKeyboardFocus() }
++                .map(|focused| focused.as_bool())
++                .unwrap_or(false);
++            let text = unsafe { element.GetCurrentPatternAs::<IUIAutomationTextPattern>(UIA_TextPatternId) }
++                .and_then(|pattern| text_pattern_snapshot(&pattern));
++            let text_error = text.as_ref().err().map(ToString::to_string);
++            inspected.push(serde_json::json!({
++                "name": &name,
++                "automation_id": &automation_id,
++                "provider_identity": &provider_identity,
++                "control_type": control_type,
++                "process_id": process_id,
++                "enabled": enabled,
++                "keyboard_focusable": keyboard_focusable,
++                "has_keyboard_focus": has_keyboard_focus,
++                "screen_bounds": [bounds.left, bounds.top, bounds.right, bounds.bottom],
++                "text_pattern_available": text.is_ok(),
++                "text_pattern_error": text_error,
++            }));
++            if provider_identity
++                .strip_prefix("Pane ")
++                .is_some_and(|pane| !pane.is_empty() && pane.bytes().all(|byte| byte.is_ascii_digit()))
++                && enabled
++                && keyboard_focusable
++                && let Ok(text_pattern) = text
++                && bounds.right > bounds.left
++                && bounds.bottom > bounds.top
++            {
++                editor_candidate_count += 1;
++                let screenshot_bounds = window.map(|window| {
++                    [
++                        bounds.left - window.left,
++                        bounds.top - window.top,
++                        bounds.right - window.left,
++                        bounds.bottom - window.top,
++                    ]
++                });
++                let candidate = serde_json::json!({
+                     "available": true,
+-                    "document_text": document_text,
+-                    "document_text_limit_utf16": 65_536,
+-                    "selection_count": selection_count,
+-                    "selection": selected,
+-                })
++                    "name": name,
++                    "automation_id": automation_id,
++                    "provider_identity": provider_identity,
++                    "control_type": control_type,
++                    "process_id": process_id,
++                    "has_keyboard_focus": has_keyboard_focus,
++                    "screen_bounds": [bounds.left, bounds.top, bounds.right, bounds.bottom],
++                    "screenshot_bounds": screenshot_bounds,
++                    "focus_correction": null,
++                    "text_pattern": text_pattern,
++                });
++                if has_keyboard_focus || (!focused_editor_found && editor_candidate_count == 1) {
++                    editor = Some(candidate);
++                    editor_element = Some(element.clone());
++                    focused_editor_found = has_keyboard_focus;
++                }
+             }
+-            Err(error) => serde_json::json!({
+-                "available": false,
+-                "reason": format!("focused provider has no TextPattern: {error}"),
+-            }),
+-        };
++        }
++        let provider_walk_limit_reached = !pending.is_empty();
++        if provider_walk_limit_reached || (editor_candidate_count > 1 && !focused_editor_found) {
++            editor = None;
++            editor_element = None;
++        }
++        if focus_editor && let (Some(editor), Some(element)) = (editor.as_mut(), editor_element) {
++            editor["focus_correction"] = match unsafe { element.SetFocus() } {
++                Ok(()) => serde_json::json!({"requested": true}),
++                Err(error) => serde_json::json!({"requested": false, "error": error.to_string()}),
++            };
++        }
+         Ok(serde_json::json!({
+             "available": true,
+             "root_name": root_name,
+@@ -706,7 +922,22 @@ fn uia_provider_snapshot(hwnd: HWND) -> serde_json::Value {
+             "focused_process_id": focused_process_id,
+             "focused_element_in_window_process": root_process_id == focused_process_id,
+             "focused_control_type": control_type,
+-            "text_pattern": text,
++            "provider_walk_visited": visited,
++            "provider_walk_limit": VISIT_LIMIT,
++            "provider_walk_limit_reached": provider_walk_limit_reached,
++            "editor_candidate_count": editor_candidate_count,
++            "focused_editor_found": focused_editor_found,
++            "inspected_editor_candidates": inspected,
++            "editor": editor.unwrap_or_else(|| serde_json::json!({
++                "available": false,
++                "reason": if provider_walk_limit_reached {
++                    "bounded UIA walk reached its limit before an enabled Pane editor exposed TextPattern"
++                } else if editor_candidate_count > 1 && !focused_editor_found {
++                    "multiple Pane editors exposed TextPattern but none owned keyboard focus"
++                } else {
++                    "no enabled in-process Pane editor exposed TextPattern"
++                },
++            })),
+             "dirty_state": {
+                 "available": false,
+                 "reason": "provider exposes document text/caret but no dirty property",
+@@ -723,9 +954,24 @@ fn uia_provider_snapshot(hwnd: HWND) -> serde_json::Value {
+     })
+ }
+ 
++fn uia_provider_snapshot(hwnd: HWND) -> serde_json::Value {
++    let deadline = Instant::now() + Duration::from_secs(2);
++    let mut attempts = 0usize;
++    loop {
++        attempts += 1;
++        let mut snapshot = uia_provider_snapshot_once(hwnd, false);
++        snapshot["activation_attempts"] = serde_json::json!(attempts);
++        if observed_uia_text(&snapshot).is_some() || Instant::now() >= deadline {
++            return snapshot;
++        }
++        std::thread::sleep(Duration::from_millis(50));
++    }
++}
++
+ fn observed_uia_text(snapshot: &serde_json::Value) -> Option<&str> {
+-    (snapshot["uia_provider"]["focused_element_in_window_process"].as_bool() == Some(true))
+-        .then(|| snapshot["uia_provider"]["text_pattern"]["document_text"].as_str())
++    let provider = snapshot.get("uia_provider").unwrap_or(snapshot);
++    (provider["editor"]["process_id"] == provider["root_process_id"])
++        .then(|| provider["editor"]["text_pattern"]["document_text"].as_str())
+         .flatten()
+ }
+ 
+@@ -882,97 +1128,357 @@ fn unicode_input(unit: u16, up: bool) -> INPUT {
+     input
+ }
+ 
+-fn send(inputs: &[INPUT]) {
++fn send(inputs: &[INPUT]) -> serde_json::Value {
+     // SAFETY: `inputs` is a valid slice; size matches the struct.
+-    unsafe {
+-        SendInput(inputs, std::mem::size_of::<INPUT>() as i32);
+-    }
++    let inserted = unsafe { SendInput(inputs, std::mem::size_of::<INPUT>() as i32) };
++    let error = (inserted as usize != inputs.len()).then(|| unsafe { GetLastError().0 });
++    serde_json::json!({
++        "requested_events": inputs.len(),
++        "inserted_events": inserted,
++        "last_error": error,
++    })
+ }
+ 
+ /// Type Unicode text into the app window as posted `WM_CHAR` messages. Posting
+ /// needs no foreground ownership (SendInput can leak into another application
+ /// when activation races) and winit translates `WM_CHAR` into the same text /
+ /// IME-commit events the editor and overlays already handle.
+-fn type_text(hwnd: HWND, text: &str) {
+-    // winit only consumes WM_CHAR for the focused window.
+-    focus(hwnd);
++fn type_text(hwnd: HWND, text: &str) -> serde_json::Value {
++    // The caller has already established and recorded foreground ownership.
++    let mut posted = 0usize;
++    let mut errors = Vec::new();
+     for ch in text.chars() {
+         let mut units = [0u16; 2];
+         for unit in ch.encode_utf16(&mut units) {
+             // SAFETY: `hwnd` is a live window; the message is well-formed.
+-            unsafe {
+-                let _ = PostMessageW(Some(hwnd), WM_CHAR, WPARAM(*unit as usize), LPARAM(0));
++            match unsafe { PostMessageW(Some(hwnd), WM_CHAR, WPARAM(*unit as usize), LPARAM(0)) } {
++                Ok(()) => posted += 1,
++                Err(error) => errors.push(error.to_string()),
+             }
+         }
+         std::thread::sleep(Duration::from_millis(6));
+     }
++    serde_json::json!({
++        "channel": "WM_CHAR",
++        "requested_units": text.encode_utf16().count(),
++        "posted_units": posted,
++        "errors": errors,
++    })
+ }
+ 
+-/// Fallback typing path: SendInput Unicode into the focused window. Posted
+-/// `WM_CHAR` is not always consumed right after launch, so the dirty-critical
+-/// journeys alternate channels until the tab strip changes.
+-fn type_text_sendinput(text: &str) {
++/// One fallback typing path after the editor provider has accepted focus.
++/// The caller verifies the inserted event count and exact TextPattern result.
++fn type_text_sendinput(text: &str) -> serde_json::Value {
++    let mut inputs = Vec::with_capacity(text.encode_utf16().count() * 2);
+     for ch in text.chars() {
+         let mut units = [0u16; 2];
+         for unit in ch.encode_utf16(&mut units) {
+-            send(&[unicode_input(*unit, false), unicode_input(*unit, true)]);
++            inputs.extend([unicode_input(*unit, false), unicode_input(*unit, true)]);
+         }
+-        std::thread::sleep(Duration::from_millis(6));
+     }
++    let mut receipt = send(&inputs);
++    receipt["channel"] = serde_json::json!("SendInput Unicode");
++    receipt["utf16_units"] = serde_json::json!(text.encode_utf16().count());
++    receipt
++}
++
++#[derive(Clone, Copy, Debug, Eq, PartialEq)]
++enum TextDelivery {
++    Delivered,
++    Unchanged,
++    Diverged,
++}
++
++fn text_delivery(before: &str, after: &str, expected: &str) -> TextDelivery {
++    if after == expected {
++        TextDelivery::Delivered
++    } else if after == before {
++        TextDelivery::Unchanged
++    } else {
++        TextDelivery::Diverged
++    }
++}
++
++fn retain_partial_delivery(previous: TextDelivery, current: TextDelivery) -> TextDelivery {
++    match (previous, current) {
++        (_, TextDelivery::Delivered) => TextDelivery::Delivered,
++        (TextDelivery::Diverged, TextDelivery::Unchanged) => TextDelivery::Diverged,
++        (_, current) => current,
++    }
++}
++
++fn replace_utf16(text: &str, start: usize, length: usize, intended: &str) -> Option<String> {
++    let mut units: Vec<u16> = text.encode_utf16().collect();
++    let end = start.checked_add(length)?;
++    if end > units.len() {
++        return None;
++    }
++    units.splice(start..end, intended.encode_utf16());
++    String::from_utf16(&units).ok()
++}
++
++fn expected_text_transition(provider: &serde_json::Value, intended: &str) -> Result<(String, String), String> {
++    if provider["editor"]["available"].as_bool() != Some(true) {
++        let reason = provider["editor"]["reason"]
++            .as_str()
++            .unwrap_or("editor TextPattern unavailable");
++        return Err(format!("UIA prerequisite: {reason}"));
++    }
++    let text = &provider["editor"]["text_pattern"];
++    if text["bounded_complete"].as_bool() != Some(true) {
++        return Err("UIA prerequisite: editor text exceeds the bounded evidence limit".into());
++    }
++    if text["selection_count"].as_i64() != Some(1) {
++        return Err("UIA prerequisite: editor must expose exactly one selection or caret".into());
++    }
++    let before = text["document_text"]
++        .as_str()
++        .ok_or_else(|| "UIA prerequisite: editor document text unavailable".to_string())?
++        .to_owned();
++    let selection = &text["selection"];
++    let start = selection["caret_start_utf16"]
++        .as_u64()
++        .and_then(|value| usize::try_from(value).ok())
++        .ok_or_else(|| "UIA prerequisite: selection start unavailable".to_string())?;
++    let length = selection["selection_utf16"]
++        .as_u64()
++        .and_then(|value| usize::try_from(value).ok())
++        .ok_or_else(|| "UIA prerequisite: selection length unavailable".to_string())?;
++    let expected = replace_utf16(&before, start, length, intended)
++        .ok_or_else(|| "UIA prerequisite: selection is outside UTF-16 document bounds".to_string())?;
++    Ok((before, expected))
++}
++
++fn wait_for_text_delivery(
++    hwnd: HWND,
++    before: &str,
++    expected: &str,
++    timeout: Duration,
++) -> (TextDelivery, serde_json::Value) {
++    let deadline = Instant::now() + timeout;
++    let mut last_delivery = TextDelivery::Unchanged;
++    loop {
++        let snapshot = uia_provider_snapshot_once(hwnd, false);
++        if let Some(after) = observed_uia_text(&snapshot) {
++            last_delivery = retain_partial_delivery(last_delivery, text_delivery(before, after, expected));
++            if last_delivery == TextDelivery::Delivered || Instant::now() >= deadline {
++                return (last_delivery, snapshot);
++            }
++        } else if Instant::now() >= deadline {
++            return (last_delivery, snapshot);
++        }
++        std::thread::sleep(Duration::from_millis(50));
++    }
++}
++
++fn wait_for_editor_focus(hwnd: HWND, timeout: Duration) -> serde_json::Value {
++    let deadline = Instant::now() + timeout;
++    loop {
++        let snapshot = uia_provider_snapshot_once(hwnd, false);
++        if snapshot["editor"]["has_keyboard_focus"].as_bool() == Some(true) || Instant::now() >= deadline {
++            return snapshot;
++        }
++        std::thread::sleep(Duration::from_millis(50));
++    }
++}
++
++fn input_target_state(hwnd: HWND, provider: &serde_json::Value) -> serde_json::Value {
++    let foreground = unsafe { GetForegroundWindow() };
++    serde_json::json!({
++        "target_hwnd": hwnd.0 as usize,
++        "foreground_hwnd": foreground.0 as usize,
++        "target_is_foreground": foreground == hwnd,
++        "editor_process_id": provider["editor"]["process_id"],
++        "editor_has_keyboard_focus": provider["editor"]["has_keyboard_focus"],
++        "editor_screen_bounds": provider["editor"]["screen_bounds"],
++        "editor_screenshot_bounds": provider["editor"]["screenshot_bounds"],
++    })
++}
++
++fn editor_glyph_region(window: &serde_json::Value, image: &Image) -> Option<(i32, i32, i32, i32)> {
++    let bounds = window["uia_provider"]["editor"]["screenshot_bounds"].as_array()?;
++    if bounds.len() != 4 {
++        return None;
++    }
++    let left = bounds[0].as_i64()? as i32;
++    let top = bounds[1].as_i64()? as i32;
++    let right = bounds[2].as_i64()? as i32;
++    let bottom = bounds[3].as_i64()? as i32;
++    let region = (
++        (left + 4).clamp(0, image.width),
++        (top + 2).clamp(0, image.height),
++        right.min(left + 600).clamp(0, image.width),
++        bottom.min(top + 180).clamp(0, image.height),
++    );
++    (region.2 > region.0 && region.3 > region.1).then_some(region)
+ }
+ 
+-/// Type until pixels in the first editor line visibly change, alternating the
+-/// posted and SendInput channels. This is an input-attempt receipt only; callers
+-/// query the UI Automation TextPattern before claiming text delivery or state.
++fn bounded_editor_region(provider: &serde_json::Value, image: &Image) -> Option<(i32, i32, i32, i32)> {
++    let bounds = provider["editor"]["screenshot_bounds"].as_array()?;
++    if bounds.len() != 4 {
++        return None;
++    }
++    let region = (
++        (bounds[0].as_i64()? as i32).clamp(0, image.width),
++        (bounds[1].as_i64()? as i32).clamp(0, image.height),
++        (bounds[2].as_i64()? as i32).clamp(0, image.width),
++        (bounds[3].as_i64()? as i32).clamp(0, image.height),
++    );
++    (region.2 > region.0 && region.3 > region.1).then_some(region)
++}
++
++fn retain_input_prerequisite_failure(
++    session: &Session,
++    hwnd: HWND,
++    detail: &str,
++    provider: serde_json::Value,
++    input_attempted: bool,
++    attempts: serde_json::Value,
++) -> String {
++    let screenshot_path = session.home.join("shots/input-prerequisite-failed.bmp");
++    let screenshot = match shot(session, hwnd, "input-prerequisite-failed") {
++        Ok(_) => serde_json::json!({"available": true, "path": screenshot_path}),
++        Err(error) => serde_json::json!({"available": false, "error": error}),
++    };
++    let foreground = unsafe { GetForegroundWindow() };
++    let receipt = serde_json::json!({
++        "checkpoint": "input prerequisite failed before verified delivery",
++        "detail": detail,
++        "input_attempted": input_attempted,
++        "input_attempts": attempts,
++        "target_hwnd": hwnd.0 as usize,
++        "foreground_hwnd": foreground.0 as usize,
++        "target_is_foreground": foreground == hwnd,
++        "provider": provider,
++        "isolated_home": &session.home,
++        "isolated_data_root": &session.data_root,
++        "screenshot": screenshot,
++    });
++    match write_session_evidence(session, "input-prerequisite-failed", &receipt) {
++        Ok(path) => format!("{detail}; evidence={}", path.display()),
++        Err(error) => format!("{detail}; evidence write failed: {error}"),
++    }
++}
++
++/// Submit one posted-text attempt, then at most one measured SendInput attempt
++/// after the actual editor provider accepts focus. Exact TextPattern content,
++/// rather than pixels or enqueue success, proves delivery.
+ fn type_text_until_observed_change(
+     session: &Session,
+     hwnd: HWND,
+     text: &str,
+     timeout: Duration,
+ ) -> Result<serde_json::Value, String> {
+-    let before = capture(hwnd)?;
+-    // Measure the editor body where typed text must appear. The tab strip is not
+-    // used: focus chrome can change it without any edit.
+-    // A tight window over the first text line (below the tab strip) makes a
+-    // single character a large fraction, while focus chrome and repaint noise
+-    // stay far below the threshold. `diff_fraction` takes (x0, y0, x1, y1).
+-    let top = (before.height / 10).max(70);
+-    let body = (40, top, 240, top + 60);
+-    let deadline = Instant::now() + timeout;
+-    let mut sendinput = false;
+-    let mut attempts = 0usize;
+-    loop {
+-        attempts += 1;
+-        if sendinput {
+-            focus(hwnd);
+-            type_text_sendinput(text);
+-        } else {
+-            type_text(hwnd, text);
+-        }
+-        session.settle();
+-        let after = capture(hwnd)?;
+-        // A real edit paints a line of text; repaint/focus artifacts are far
+-        // smaller, so require a clearly visible body change.
+-        let body_diff = after.diff_fraction(&before, body);
+-        if body_diff >= 0.005 {
+-            let mut hash = Sha256::new();
+-            hash.update(text.as_bytes());
+-            return Ok(serde_json::json!({
+-                "pixel_change_observed": true,
+-                "body_region": [body.0, body.1, body.2, body.3],
+-                "body_diff_fraction": body_diff,
+-                "attempts": attempts,
+-                "last_input_channel": if sendinput { "SendInput Unicode" } else { "WM_CHAR" },
+-                "utf16_units_per_attempt": text.encode_utf16().count(),
+-                "text_sha256": format!("{:x}", hash.finalize()),
+-                "window_title_after": window_title(hwnd),
+-            }));
++    focus(hwnd);
++    let before_provider = uia_provider_snapshot(hwnd);
++    let before_image = capture(hwnd).map_err(|detail| {
++        retain_input_prerequisite_failure(
++            session,
++            hwnd,
++            &detail,
++            before_provider.clone(),
++            false,
++            serde_json::json!([]),
++        )
++    })?;
++    let (before_text, expected_text) = expected_text_transition(&before_provider, text).map_err(|detail| {
++        retain_input_prerequisite_failure(
++            session,
++            hwnd,
++            &detail,
++            before_provider.clone(),
++            false,
++            serde_json::json!([]),
++        )
++    })?;
++    let before_target = input_target_state(hwnd, &before_provider);
++    if before_target["target_is_foreground"].as_bool() != Some(true) {
++        return Err(retain_input_prerequisite_failure(
++            session,
++            hwnd,
++            "input target does not own the foreground",
++            before_provider,
++            false,
++            serde_json::json!([]),
++        ));
++    }
++    let posted = type_text(hwnd, text);
++    let mut attempts = vec![posted.clone()];
++    let (mut delivery, mut after_provider) = wait_for_text_delivery(hwnd, &before_text, &expected_text, timeout);
++    let mut focus_correction = None;
++    let mut sendinput = None;
++    if delivery == TextDelivery::Unchanged {
++        let correction = uia_provider_snapshot_once(hwnd, true);
++        focus_correction = Some(correction.clone());
++        let focused = wait_for_editor_focus(hwnd, Duration::from_secs(2));
++        let foreground = unsafe { GetForegroundWindow() };
++        if let Some(current) = observed_uia_text(&focused) {
++            delivery = text_delivery(&before_text, current, &expected_text);
+         }
+-        if Instant::now() >= deadline {
+-            let _ = shot(session, hwnd, "typing-failed");
+-            return Err("typing never reached the editor".into());
++        if delivery == TextDelivery::Unchanged
++            && focused["editor"]["has_keyboard_focus"].as_bool() == Some(true)
++            && foreground == hwnd
++        {
++            let sent = type_text_sendinput(text);
++            attempts.push(sent.clone());
++            sendinput = Some(sent);
++            (delivery, after_provider) =
++                wait_for_text_delivery(hwnd, &before_text, &expected_text, timeout.min(Duration::from_secs(5)));
++        } else {
++            after_provider = focused;
+         }
+-        sendinput = !sendinput;
++    }
++    session.settle();
++    let after_image = capture(hwnd).map_err(|detail| {
++        retain_input_prerequisite_failure(
++            session,
++            hwnd,
++            &detail,
++            after_provider.clone(),
++            true,
++            serde_json::json!(attempts),
++        )
++    })?;
++    let body = bounded_editor_region(&before_provider, &before_image).ok_or_else(|| {
++        retain_input_prerequisite_failure(
++            session,
++            hwnd,
++            "UIA prerequisite: editor provider has no usable screenshot bounds",
++            after_provider.clone(),
++            true,
++            serde_json::json!(attempts),
++        )
++    })?;
++    let body_diff = after_image.diff_fraction(&before_image, body);
++    let after_target = input_target_state(hwnd, &after_provider);
++    let mut hash = Sha256::new();
++    hash.update(text.as_bytes());
++    let receipt = serde_json::json!({
++        "delivery": format!("{delivery:?}"),
++        "body_region": [body.0, body.1, body.2, body.3],
++        "body_diff_fraction": body_diff,
++        "posted_input": posted,
++        "input_attempts": attempts,
++        "focus_correction": focus_correction,
++        "sendinput": sendinput,
++        "before_target": before_target,
++        "before_provider": before_provider,
++        "expected_text": expected_text,
++        "after_target": after_target,
++        "after_provider": after_provider,
++        "text_sha256": format!("{:x}", hash.finalize()),
++        "utf16_units": text.encode_utf16().count(),
++        "window_title_after": window_title(hwnd),
++    });
++    if delivery == TextDelivery::Delivered {
++        Ok(receipt)
++    } else {
++        let _ = shot(session, hwnd, "typing-failed");
++        let evidence = write_session_evidence(session, "typing-failed", &receipt)?;
++        Err(format!(
++            "input delivery was {delivery:?}; evidence={}",
++            evidence.display()
++        ))
+     }
+ }
+ 
+@@ -1147,7 +1653,7 @@ fn menu_command_id(hwnd: HWND, path: &[&str]) -> Option<u32> {
+ 
+ /// Invoke a menu command by path. Posts `WM_COMMAND` with the resolved id and
+ /// `lParam == 0`, exactly the shape the app decodes as a menu selection.
+-fn invoke_menu(hwnd: HWND, path: &[&str]) -> Result<(), String> {
++fn invoke_menu(hwnd: HWND, path: &[&str]) -> Result<serde_json::Value, String> {
+     // The native menu is rebuilt when the visible command set changes, so a
+     // lookup can land between destroy and re-create; retry briefly.
+     let deadline = Instant::now() + Duration::from_secs(1);
+@@ -1167,7 +1673,13 @@ fn invoke_menu(hwnd: HWND, path: &[&str]) -> Result<(), String> {
+     unsafe {
+         PostMessageW(Some(hwnd), WM_COMMAND, WPARAM(id as usize), LPARAM(0))
+             .map_err(|e| format!("PostMessage WM_COMMAND failed: {e}"))
+-    }
++    }?;
++    Ok(serde_json::json!({
++        "path": path,
++        "command_id": id,
++        "target_hwnd": hwnd.0 as usize,
++        "post_message_succeeded": true,
++    }))
+ }
+ 
+ /// Wait for an owned save prompt to exist *and* expose its buttons. Dialog
+@@ -1407,7 +1919,8 @@ fn journey_smoke(env: &Env) -> Result<(), String> {
+ }
+ 
+ /// P0-3: typing into an Untitled document keeps at most two recovery directories;
+-/// discarding on exit removes them.
++/// discarding on exit durably retires every remaining generation. Physical purge
++/// may finish later after the content-free tombstone becomes authoritative.
+ fn journey_p0_3(env: &Env) -> Result<(), String> {
+     let mut session = Session::launch(env, "p0-3", &[], &[])?;
+     let hwnd = session.wait_window(Duration::from_secs(20))?;
+@@ -1428,46 +1941,127 @@ fn journey_p0_3(env: &Env) -> Result<(), String> {
+         ));
+     }
+     let _ = shot(&session, hwnd, "p0-3-edited");
+-    // Discard on exit: File > Exit, then answer the prompt with "Don't Save".
+-    // App exit is the P0-3 acceptance path and removes every unsaved journal.
+-    let mut dialog = None;
+-    let attempt_deadline = Instant::now() + Duration::from_secs(15);
+-    while dialog.is_none() && Instant::now() < attempt_deadline {
+-        invoke_menu(hwnd, &["File", "Exit"])?;
+-        dialog = await_save_prompt(&session, hwnd, Duration::from_secs(2));
+-    }
+-    let mut click_note = String::from("no prompt listed");
+-    if dialog.is_none() {
+-        let listed: Vec<String> = auxiliary_windows(session.pid, hwnd)
+-            .into_iter()
+-            .map(|(handle, _, _)| format!("{}:{:?}", window_class(handle), window_title(handle)))
+-            .collect();
+-        click_note = format!("no prompt listed; windows={listed:?}; main={:?}", window_title(hwnd));
+-    }
+-    if let Some(dialog) = dialog {
+-        // Click "Don't Save" by matching the button text.
+-        let mut texts = child_texts(dialog);
+-        texts.iter_mut().for_each(|t| *t = t.replace('&', "").to_lowercase());
+-        click_note = match click_button(dialog, &["don't save", "dont save", "discard"]) {
+-            Ok(()) => format!("clicked; buttons {:?}", texts.join(" | ")),
+-            Err(error) => format!("click failed: {error}; buttons {:?}", texts.join(" | ")),
+-        };
+-    }
+-    // Journal deletion is asynchronous; poll instead of assuming a fixed delay.
+-    let _ = shot(&session, hwnd, "p0-3-after-close");
+-    let discard_deadline = Instant::now() + Duration::from_secs(3);
+-    loop {
+-        if session.recovery_dir_count() == 0 || Instant::now() >= discard_deadline {
+-            break;
++    // Issue exactly one Exit request. If recovery is busy, the product owns
++    // retaining and resuming that intent; reinjection would hide a lost request.
++    let command = invoke_menu(hwnd, &["File", "Exit"])?;
++    let Some(dialog) = await_save_prompt(&session, hwnd, Duration::from_secs(15)) else {
++        let _ = shot(&session, hwnd, "p0-3-prompt-missing");
++        let failure = serde_json::json!({
++            "checkpoint": "discard consent prerequisite",
++            "command": command,
++            "window": window_evidence(&session, hwnd),
++            "recovery_directories": session.recovery_dir_count(),
++            "screenshot": session.home.join("shots/p0-3-prompt-missing.bmp"),
++            "consent_observed": false,
++            "discard_requested": false,
++        });
++        let evidence = write_session_evidence(&session, "p0-3-prompt-missing", &failure)?;
++        return Err(format!(
++            "timeout waiting for save prompt after one Exit command; no discard consent was performed; evidence={}",
++            evidence.display()
++        ));
++    };
++    let buttons = child_texts(dialog);
++    let _ = shot(&session, hwnd, "p0-3-consent");
++    let consent = serde_json::json!({
++        "checkpoint": "discard consent observed",
++        "command": command,
++        "dialog_hwnd": dialog.0 as usize,
++        "dialog_buttons": &buttons,
++        "window": window_evidence(&session, hwnd),
++        "recovery_directories": session.recovery_dir_count(),
++        "consent_observed": true,
++        "screenshot": session.home.join("shots/p0-3-consent.bmp"),
++    });
++    let _ = write_session_evidence(&session, "p0-3-consent", &consent)?;
++    click_button(dialog, &["don't save", "dont save", "discard"])?;
++    let exit_deadline = Instant::now() + Duration::from_secs(15);
++    let exit_status = loop {
++        if let Some(status) = session.child.try_wait().map_err(|error| error.to_string())? {
++            break status;
++        }
++        if Instant::now() >= exit_deadline {
++            let failure = serde_json::json!({
++                "checkpoint": "discard consent terminal result",
++                "command": command,
++                "dialog_buttons": buttons,
++                "window": window_evidence(&session, hwnd),
++                "recovery_directories": session.recovery_dir_count(),
++                "consent_observed": true,
++                "discard_requested": true,
++                "application_exited": false,
++            });
++            let evidence = write_session_evidence(&session, "p0-3-exit-pending", &failure)?;
++            return Err(format!(
++                "timeout waiting for application exit after observed Don't Save consent; evidence={}",
++                evidence.display()
++            ));
+         }
+         std::thread::sleep(Duration::from_millis(100));
++    };
++    if !exit_status.success() {
++        return Err(format!(
++            "application exited unsuccessfully after discard consent: {exit_status}"
++        ));
++    }
++    let terminal_recovery = session.recovery_terminal_state();
++    let terminal_diagnostics = session.diagnostics();
++    let terminal = serde_json::json!({
++        "checkpoint": "discard terminal result",
++        "command": command,
++        "dialog_buttons": buttons,
++        "exit_status": exit_status.to_string(),
++        "exit_success": exit_status.success(),
++        "recovery": terminal_recovery,
++        "diagnostics_tail": terminal_diagnostics.iter().rev().take(32).cloned().collect::<Vec<_>>(),
++        "consent_observed": true,
++        "discard_requested": true,
++        "application_exited": true,
++    });
++    let terminal_evidence = write_session_evidence(&session, "p0-3-terminal", &terminal)?;
++    if terminal["recovery"]["production_discovery_candidates"].as_u64() != Some(0) {
++        return Err(format!(
++            "discarded recovery remained discoverable after successful exit; evidence={}",
++            terminal_evidence.display()
++        ));
+     }
+-    let remaining = session.recovery_dir_count();
+-    if remaining != 0 {
++
++    // Restart against the same isolated profile. The production inspector's
++    // Discarded state is the recovery UI's exclusion rule; also verify the new
++    // editor did not silently restore discarded text.
++    let restarted = session.restart(env)?;
++    let restart_window = window_evidence(&session, restarted);
++    let restart_recovery = session.recovery_terminal_state();
++    let restart_diagnostics = session.diagnostics();
++    let restart = serde_json::json!({
++        "checkpoint": "discarded recovery after restart",
++        "window": restart_window,
++        "recovery": restart_recovery,
++        "diagnostics_tail": restart_diagnostics.iter().rev().take(32).cloned().collect::<Vec<_>>(),
++        "production_discovery_rule": "only successfully inspected non-Discarded generations are listed",
++    });
++    let restart_evidence = write_session_evidence(&session, "p0-3-restart", &restart)?;
++    if restart["recovery"]["production_discovery_candidates"].as_u64() != Some(0) {
+         return Err(format!(
+-            "expected 0 recovery directories after discard, found {remaining} ({click_note})"
++            "discarded recovery became discoverable after restart; evidence={}",
++            restart_evidence.display()
+         ));
+     }
++    match observed_uia_text(&restart["window"]) {
++        Some("") => {}
++        Some(_) => {
++            return Err(format!(
++                "discarded recovery content was restored after restart; evidence={}",
++                restart_evidence.display()
++            ));
++        }
++        None => {
++            return Err(format!(
++                "UIA prerequisite unavailable while checking discarded recovery after restart; evidence={}",
++                restart_evidence.display()
++            ));
++        }
++    }
+     Ok(())
+ }
+ 
+@@ -1563,11 +2157,17 @@ fn journey_p0_7(env: &Env) -> Result<(), String> {
+     )?;
+     let frame = wait_until_stable(hwnd, Duration::from_secs(8));
+     let window = window_evidence(&session, hwnd);
++    let screenshot_path = session.home.join("shots/p0-7-before-close.bmp");
++    let screenshot = match shot(&session, hwnd, "p0-7-before-close") {
++        Ok(_) => serde_json::json!({"available": true, "path": screenshot_path}),
++        Err(error) => serde_json::json!({"available": false, "error": error}),
++    };
+     let before_close = serde_json::json!({
+         "checkpoint": "input and provider prerequisites before close command",
+         "typing_receipt": typing,
+         "frame_receipt": frame,
+         "window": window,
++        "screenshot": screenshot,
+         "command_injection": "native menu File > Close via WM_COMMAND",
+     });
+     let evidence = write_session_evidence(&session, "p0-7-before-close", &before_close)?;
+@@ -1583,31 +2183,24 @@ fn journey_p0_7(env: &Env) -> Result<(), String> {
+             evidence.display()
+         ));
+     };
+-    if !provider_text.contains("unsaved edit for the close prompt") {
++    if provider_text != "unsaved edit for the close prompt\n" {
+         return Err(format!(
+             "UIA prerequisite did not observe the posted close-prompt text; evidence={}",
+             evidence.display()
+         ));
+     }
+-    // A posted WM_COMMAND can be dropped while the menu rebuilds; retry until
+-    // the owned prompt appears.
+-    let mut prompt = None;
+-    let attempt_deadline = Instant::now() + Duration::from_secs(15);
+-    while prompt.is_none() && Instant::now() < attempt_deadline {
+-        // The owned prompt only activates when the app can take the foreground;
+-        // assert it before each attempt.
+-        focus(hwnd);
+-        invoke_menu(hwnd, &["File", "Close"])?;
+-        prompt = await_save_prompt(&session, hwnd, Duration::from_secs(2));
+-    }
+-    let dialog = match prompt {
++    // Issue one Close request. Reinjecting it while recovery is busy can hide a
++    // lost deferred document-close intent in the product.
++    focus(hwnd);
++    let command = invoke_menu(hwnd, &["File", "Close"])?;
++    let dialog = match await_save_prompt(&session, hwnd, Duration::from_secs(15)) {
+         Some(dialog) => dialog,
+         None => {
+             let _ = shot(&session, hwnd, "p0-7-no-prompt");
+             let failure = serde_json::json!({
+                 "checkpoint": "save prompt timeout",
+                 "window": window_evidence(&session, hwnd),
+-                "command_injection": "native menu File > Close via WM_COMMAND",
++                "command": command,
+             });
+             let evidence = write_session_evidence(&session, "p0-7-no-prompt", &failure)?;
+             let listed: Vec<String> = auxiliary_windows(session.pid, hwnd)
+@@ -1625,6 +2218,7 @@ fn journey_p0_7(env: &Env) -> Result<(), String> {
+     let prompt_evidence = serde_json::json!({
+         "checkpoint": "save prompt observed",
+         "window": window_evidence(&session, hwnd),
++        "command": command,
+         "dialog_hwnd": dialog.0 as usize,
+         "dialog_children": child_texts(dialog),
+     });
+@@ -1847,17 +2441,23 @@ fn journey_p4_4(env: &Env) -> Result<(), String> {
+     let hwnd = session.wait_window(Duration::from_secs(20))?;
+     session.settle();
+     let before = shot(&session, hwnd, "p4-4-before")?;
+-    // The editor text starts below the tab strip; sample its first lines.
+-    let region = (
+-        40,
+-        (before.height / 8).max(40),
+-        before.width.min(600),
+-        (before.height / 3).max(120),
+-    );
++    let before_window = window_evidence(&session, hwnd);
++    // Sample the first rows inside the actual in-process editor provider. UIA
++    // reports screen bounds, normalized above to the captured window.
++    let region = editor_glyph_region(&before_window, &before).ok_or_else(|| {
++        retain_input_prerequisite_failure(
++            &session,
++            hwnd,
++            "UIA prerequisite: editor TextPattern provider has no usable glyph bounds",
++            before_window["uia_provider"].clone(),
++            false,
++            serde_json::json!([]),
++        )
++    })?;
+     let before_sat = before.max_saturation(region);
+     let before_evidence = serde_json::json!({
+         "checkpoint": "before emoji input",
+-        "window": window_evidence(&session, hwnd),
++        "window": before_window,
+         "sample_region": [region.0, region.1, region.2, region.3],
+         "max_saturation": before_sat,
+         "screenshot": session.home.join("shots/p4-4-before.bmp"),
+@@ -1892,7 +2492,7 @@ fn journey_p4_4(env: &Env) -> Result<(), String> {
+             evidence.display()
+         ));
+     };
+-    if !provider_text.contains("🎉🎊🌈") {
++    if provider_text != "🎉🎊🌈" {
+         return Err(format!(
+             "UIA prerequisite did not observe the intended emoji text; evidence={}",
+             evidence.display()
+@@ -1936,9 +2536,8 @@ fn click_button(dialog: HWND, candidates: &[&str]) -> Result<(), String> {
+         let text = window_title(control).replace('&', "").to_lowercase();
+         if !text.is_empty() && candidates.iter().any(|c| text.contains(c)) {
+             // SAFETY: `control` is a live child control handle.
+-            unsafe {
+-                let _ = PostMessageW(Some(control), BM_CLICK, WPARAM(0), LPARAM(0));
+-            }
++            unsafe { PostMessageW(Some(control), BM_CLICK, WPARAM(0), LPARAM(0)) }
++                .map_err(|error| format!("PostMessage BM_CLICK failed: {error}"))?;
+             return Ok(());
+         }
+     }
+@@ -2013,6 +2612,51 @@ mod evidence_tests {
+         assert_source_identity_parity(&repo.0);
+     }
+ 
++    #[test]
++    fn input_delivery_uses_the_exact_utf16_selection_transition() {
++        let intended = "🎉e\u{301}";
++        let insertion = serde_json::json!({
++            "editor": {"available": true, "text_pattern": {
++                "bounded_complete": true,
++                "selection_count": 1,
++                "document_text": "ab",
++                "selection": {"caret_start_utf16": 1, "selection_utf16": 0}
++            }}
++        });
++        let (before, expected) = expected_text_transition(&insertion, intended).unwrap();
++        assert_eq!(before, "ab");
++        assert_eq!(expected, "a🎉e\u{301}b");
++        assert_eq!(text_delivery(&before, &before, &expected), TextDelivery::Unchanged);
++        assert_eq!(text_delivery(&before, &expected, &expected), TextDelivery::Delivered);
++
++        let replacement = serde_json::json!({
++            "editor": {"available": true, "text_pattern": {
++                "bounded_complete": true,
++                "selection_count": 1,
++                "document_text": "a😀zb",
++                "selection": {"caret_start_utf16": 1, "selection_utf16": 3}
++            }}
++        });
++        let (_, expected) = expected_text_transition(&replacement, intended).unwrap();
++        assert_eq!(expected, "a🎉e\u{301}b");
++        assert_eq!(text_delivery("ab", "a🎉", &expected), TextDelivery::Diverged);
++        assert_eq!(
++            text_delivery("ab", "a🎉e\u{301}🎉e\u{301}b", &expected),
++            TextDelivery::Diverged
++        );
++        assert_eq!(
++            retain_partial_delivery(TextDelivery::Diverged, TextDelivery::Unchanged),
++            TextDelivery::Diverged,
++            "a partial observation must prevent fallback even if a later poll is stale"
++        );
++        assert_eq!(
++            retain_partial_delivery(TextDelivery::Diverged, TextDelivery::Delivered),
++            TextDelivery::Delivered,
++            "queued input may finish after an intermediate partial observation"
++        );
++        assert!(replace_utf16("😀", 1, 0, "x").is_none());
++    }
++
+     #[test]
+     fn failure_classification_keeps_timeout_harness_and_product_results_distinct() {
+         assert_eq!(classify_failure("timed out waiting for prompt"), "timeout");

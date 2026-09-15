@@ -1,0 +1,189 @@
+diff --git a/.github/workflows/clippy-baseline.json b/.github/workflows/clippy-baseline.json
+index 97f89a4..3e81284 100644
+--- a/.github/workflows/clippy-baseline.json
++++ b/.github/workflows/clippy-baseline.json
+@@ -860,29 +860,6 @@
+           "priority": "style-design",
+           "justification": "At `crates\\file-io\\src\\lifecycle.rs:1735`, `impl IoService::fn new` propagates `FileError` through this file operation. The 256-byte maximum is `ConflictAfterCommit`, a fixed recovery record of four `PathBuf` handles and two fixed fingerprints; it never embeds file contents, and boxing would add allocation across the shared I/O API, so this is bounded error-layout debt."
+         },
+-        {
+-          "id": "1d9febb7768dc79680d28b504d4462d82d7b6d4e5f722ac5190b58549133f227",
+-          "lint": "clippy::needless_range_loop",
+-          "owner_id": "impl ViewsRuntime",
+-          "item_id": "fn install_views",
+-          "source_id": "05843ec487623fb775e051014749eebafd8722520dc1e1fc3edeebd8aa58e289",
+-          "diagnostic": "the loop variable `pane` is used to index `ids`",
+-          "context": [
+-            "},",
+-            "];",
+-            "for pane in 0..2 {",
+-            "if ids[pane] == self.loaded_tabs[pane] {",
+-            "continue;"
+-          ],
+-          "evidence": {
+-            "path": "apps\\bareline\\src\\windows_app\\views.rs",
+-            "line": 1806,
+-            "column": 21
+-          },
+-          "count": 2,
+-          "priority": "style-design",
+-          "justification": "install_views uses a fixed two-pane index to install matching workspace views; iterator enumeration is equivalent and does not fix a bounds defect."
+-        },
+         {
+           "id": "1e53fa54c45a8581a6ebc66bc39c2ec8d2fb4aefe2887d5216bc568a3c5e6ac2",
+           "lint": "clippy::collapsible_if",
+@@ -906,29 +883,6 @@
+           "priority": "style-design",
+           "justification": "impl Shell::fn search_replace_key: `!self.search.replace.busy()` is the state gate for `let Some(preview) = &mut self.search.replace.preview`; combining the predicates preserves short-circuit order and the guarded action, so this is style debt."
+         },
+-        {
+-          "id": "2027f28b7ada11e4fe146708edb9c4d6cc3e9a3628fdb0d075cbc353b688b586",
+-          "lint": "clippy::collapsible_if",
+-          "owner_id": "impl ViewsRuntime",
+-          "item_id": "fn collapse",
+-          "source_id": "b57d72ed468aadbee25e28545e8e708c394645e7c0191defd584ae44b1cd0d95",
+-          "diagnostic": "this `if` statement can be collapsed",
+-          "context": [
+-            "self.save_current(workspace);",
+-            "if let Some(controller) = &mut self.controller {",
+-            "if keep_secondary {",
+-            "if let Some(id) = controller.active_tab(1) {",
+-            "let _ = controller.activate(id);"
+-          ],
+-          "evidence": {
+-            "path": "apps\\bareline\\src\\windows_app\\views.rs",
+-            "line": 2613,
+-            "column": 13
+-          },
+-          "count": 2,
+-          "priority": "style-design",
+-          "justification": "impl ViewsRuntime::fn collapse: `keep_secondary` is the state gate for `let Some(id) = controller.active_tab(1)`; combining the predicates preserves short-circuit order and the guarded action, so this is style debt."
+-        },
+         {
+           "id": "2192e22fc442cf8e09df3a9f980c7a4014aa6cef70d7326bc306aea605030f82",
+           "lint": "clippy::too_many_arguments",
+@@ -7646,29 +7600,6 @@
+           "priority": "style-design",
+           "justification": "impl Runtime::fn draw: `self.captured == Some(pane)` is the state gate for `let Some(previous) = &self.bars[pane]`; combining the predicates preserves short-circuit order and the guarded action, so this is style debt."
+         },
+-        {
+-          "id": "dbc2ba6fab34988b437998b8f38231c3e07ae27290c858ab2d726a2aab98a18c",
+-          "lint": "clippy::collapsible_if",
+-          "owner_id": "impl ViewsRuntime",
+-          "item_id": "fn activate",
+-          "source_id": "832393cf2ab683282bdefe866d3cdc658a9f4a0463e9c76853673c8a7641cf44",
+-          "diagnostic": "this `if` statement can be collapsed",
+-          "context": [
+-            "}",
+-            "pub(super) fn activate(&mut self, workspace: &mut Workspace, app: &mut App, pane: u32) {",
+-            "if let Some(controller) = &mut self.controller {",
+-            "if let Some(id) = controller.active_tab(pane) {",
+-            "let _ = controller.activate(id);"
+-          ],
+-          "evidence": {
+-            "path": "apps\\bareline\\src\\windows_app\\views.rs",
+-            "line": 2689,
+-            "column": 9
+-          },
+-          "count": 2,
+-          "priority": "style-design",
+-          "justification": "impl ViewsRuntime::fn activate: `let Some(id) = controller.active_tab(pane)` is evaluated only after `let Some(controller) = &mut self.controller` establishes the required value/state; a combined let-chain preserves binding scope and evaluation order, so this is style debt."
+-        },
+         {
+           "id": "dbe0a3acb1b2df3791966c72a4535b8464580cd5ff9609a5554ac872241da04a",
+           "lint": "clippy::collapsible_if",
+diff --git a/apps/bareline/src/windows_app/views.rs b/apps/bareline/src/windows_app/views.rs
+index cef8444..05cf5f0 100644
+--- a/apps/bareline/src/windows_app/views.rs
++++ b/apps/bareline/src/windows_app/views.rs
+@@ -1962,15 +1962,13 @@ impl ViewsRuntime {
+                 None
+             },
+         ];
+-        for pane in 0..2 {
+-            let stale_secondary = pane == 1 && ids[pane].is_none() && self.secondary.is_some();
+-            if ids[pane] == self.loaded_tabs[pane] && !stale_secondary {
++        for (pane, id) in ids.into_iter().enumerate() {
++            let stale_secondary = pane == 1 && id.is_none() && self.secondary.is_some();
++            if id == self.loaded_tabs[pane] && !stale_secondary {
+                 continue;
+             }
+             self.applied_spacers[pane] = None;
+-            let tab = ids[pane]
+-                .and_then(|id| self.controller.as_ref().unwrap().tab(id))
+-                .cloned();
++            let tab = id.and_then(|id| self.controller.as_ref().unwrap().tab(id)).cloned();
+             let index = tab
+                 .as_ref()
+                 .and_then(|tab| self.document_index(workspace, tab.document_id));
+@@ -2685,26 +2683,27 @@ impl ViewsRuntime {
+         let primary_busy = self
+             .primary_index(workspace)
+             .is_some_and(|i| workspace.editors[i].busy());
+-        if !primary_busy && !self.secondary.as_ref().is_some_and(WorkspaceEditor::busy) {
+-            if let Some(queued) = self.queued.pop_front() {
+-                self.move_resident_history_to(workspace, queued.pane);
+-                if queued.pane == 0 {
+-                    if let Some(index) = self.primary_index(workspace) {
+-                        if queued.document.matches(&workspace.editors[index]) {
+-                            workspace.editors[index].enqueue(queued.input);
+-                        } else {
+-                            workspace.message = Some("The view changed before queued input could be applied.".into());
+-                        }
+-                    }
+-                } else if let Some(editor) = &mut self.secondary {
+-                    if queued.document.matches(editor) {
+-                        editor.enqueue(queued.input);
++        if !primary_busy
++            && !self.secondary.as_ref().is_some_and(WorkspaceEditor::busy)
++            && let Some(queued) = self.queued.pop_front()
++        {
++            self.move_resident_history_to(workspace, queued.pane);
++            if queued.pane == 0 {
++                if let Some(index) = self.primary_index(workspace) {
++                    if queued.document.matches(&workspace.editors[index]) {
++                        workspace.editors[index].enqueue(queued.input);
+                     } else {
+                         workspace.message = Some("The view changed before queued input could be applied.".into());
+                     }
+                 }
+-                changed = true;
++            } else if let Some(editor) = &mut self.secondary {
++                if queued.document.matches(editor) {
++                    editor.enqueue(queued.input);
++                } else {
++                    workspace.message = Some("The view changed before queued input could be applied.".into());
++                }
+             }
++            changed = true;
+         }
+         changed |= self.flush_sync_scroll(workspace);
+         changed
+@@ -2779,10 +2778,8 @@ impl ViewsRuntime {
+         self.save_current(workspace);
+         self.move_resident_history_to(workspace, 0);
+         if let Some(controller) = &mut self.controller {
+-            if keep_secondary {
+-                if let Some(id) = controller.active_tab(1) {
+-                    let _ = controller.activate(id);
+-                }
++            if keep_secondary && let Some(id) = controller.active_tab(1) {
++                let _ = controller.activate(id);
+             }
+             controller.collapse();
+         }
+@@ -2856,10 +2853,10 @@ impl ViewsRuntime {
+     }
+     pub(super) fn activate(&mut self, workspace: &mut Workspace, app: &mut App, pane: u32) {
+         self.move_resident_history_to(workspace, pane);
+-        if let Some(controller) = &mut self.controller {
+-            if let Some(id) = controller.active_tab(pane) {
+-                let _ = controller.activate(id);
+-            }
++        if let Some(controller) = &mut self.controller
++            && let Some(id) = controller.active_tab(pane)
++        {
++            let _ = controller.activate(id);
+         }
+         if let Some(index) = if pane == 0 {
+             self.primary_index(workspace)

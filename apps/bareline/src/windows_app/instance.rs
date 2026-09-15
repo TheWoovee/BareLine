@@ -14,13 +14,16 @@ pub(super) fn prepare(
     config: &mut launch::LaunchConfig,
     notify: std::sync::Arc<dyn Fn() + Send + Sync>,
 ) -> Result<Option<InstanceRuntime>, Box<dyn std::error::Error>> {
-    if config.smoke || config.perf || config.prototype || config.performance.is_some() {
+    if bypass_single_instance(
+        config.mode,
+        config.smoke,
+        config.perf,
+        config.prototype,
+        config.diag_handles,
+    ) {
         return Ok(Some(InstanceRuntime::default()));
     }
-    let scope = config
-        .settings_path
-        .clone()
-        .unwrap_or(std::env::current_exe()?);
+    let scope = config.settings_path.clone().unwrap_or(std::env::current_exe()?);
     let request = OpenRequest {
         paths: config.paths.clone(),
         line: config.line,
@@ -56,6 +59,36 @@ pub(super) fn prepare(
     })
 }
 
+fn bypass_single_instance(
+    mode: launch::LaunchMode,
+    smoke: bool,
+    perf: bool,
+    prototype: bool,
+    diag_handles: bool,
+) -> bool {
+    smoke
+        || perf
+        || prototype
+        || diag_handles
+        || matches!(mode, launch::LaunchMode::Diagnostic | launch::LaunchMode::Performance)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn portable_handle_diagnostics_stay_out_of_single_instance_forwarding() {
+        assert!(bypass_single_instance(
+            launch::LaunchMode::Portable,
+            false,
+            false,
+            false,
+            true,
+        ));
+    }
+}
+
 impl Shell {
     pub(super) fn instance_pump(&mut self, el: &ActiveEventLoop) {
         if !self.first_frame {
@@ -69,38 +102,41 @@ impl Shell {
             }
         }
         let requests: Vec<_> = (0..16)
-            .filter_map(|_| {
-                self.instance
-                    .server
-                    .as_ref()
-                    .and_then(InstanceServer::try_recv)
-            })
+            .filter_map(|_| self.instance.server.as_ref().and_then(InstanceServer::try_recv))
             .collect();
         for pending in requests {
             if !pending.live() || self.session.closing() {
                 continue;
             }
+            let mut request_ids = Vec::new();
             if !pending.request.paths.is_empty() {
-                if !self.ensure_workspace(el) || !self.launch.queue(&pending.request) {
+                if !self.ensure_workspace(el) {
                     continue;
                 }
-                let workspace = self.workspace.as_mut().unwrap();
-                for path in &pending.request.paths {
-                    if let Some(index) = (0..workspace.editors.len())
-                        .find(|&index| workspace.path(index) == Some(path.as_path()))
-                    {
-                        self.app.active = index;
-                    } else if !workspace.path_loading(path) {
-                        workspace.open(path.clone());
+                let Some(accepted) = self.launch.queue(&pending.request) else {
+                    if let Some(workspace) = &mut self.workspace {
+                        workspace.message =
+                            Some("Open request rejected: 256 launch operations are still outstanding.".into());
                     }
-                }
+                    continue;
+                };
+                request_ids = accepted;
+            }
+            if !pending.accept() {
+                self.launch.cancel_requests(&request_ids);
+                continue;
+            }
+            if !request_ids.is_empty() {
+                self.launch_pump();
             }
             if let Some(window) = &self.window {
+                // Unhide before un-minimizing: a window parked in the tray is
+                // hidden, and focus does not restore a hidden window.
+                window.set_visible(true);
                 window.set_minimized(false);
                 window.focus_window();
                 window.request_redraw();
             }
-            pending.accept();
         }
     }
 }

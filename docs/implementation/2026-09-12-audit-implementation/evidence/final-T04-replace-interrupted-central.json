@@ -1,0 +1,17 @@
+{
+  "arguments": [
+    "test",
+    "-p",
+    "bareline-search",
+    "--lib",
+    "replace_disk::tests::interrupted_commit_reconciles_by_hash_without_reapplying",
+    "--locked",
+    "--",
+    "--exact"
+  ],
+  "completed_utc": "2026-09-12T14:10:03.3882401Z",
+  "integration_snapshot": "127e99ed7bcc477015c4c698bc34347db433c53f",
+  "exit_code": 0,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\final-T04-replace-interrupted-central.log"
+}

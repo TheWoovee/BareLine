@@ -1,0 +1,33 @@
+diff --git a/apps/bareline/src/windows_app/macros.rs b/apps/bareline/src/windows_app/macros.rs
+index ffbc6aa..5b315e0 100644
+--- a/apps/bareline/src/windows_app/macros.rs
++++ b/apps/bareline/src/windows_app/macros.rs
+@@ -1389,7 +1389,10 @@ mod tests {
+             "Example".into(),
+             bareline_app::macros::model::Macro {
+                 name: "Example".into(),
+-                events: Vec::new(),
++                events: vec![bareline_app::macros::model::MacroEvent::Command {
++                    id: "edit.insert_text".into(),
++                    arguments: std::collections::BTreeMap::from([("text".into(), "x".into())]),
++                }],
+             },
+         );
+         selected.controller.selected = Some("Example".into());
+@@ -1414,10 +1417,12 @@ mod tests {
+         assert_open_close_enabled(&recording, "recording");
+ 
+         let mut playback = selected;
+-        playback
+-            .controller
+-            .play(Repeat::Once, &bareline_commands::CommandRegistry::default())
+-            .unwrap();
++        let mut registry = bareline_commands::shell_commands();
++        bareline_app::macros::register_commands(&mut registry);
++        playback.controller.play(Repeat::Once, &registry).unwrap();
++        assert!(playback.controller.playback.as_ref().is_some_and(|playback| {
++            matches!(playback.state(), PlaybackState::Running | PlaybackState::Waiting(_))
++        }));
+         playback.controller.show_manager();
+         assert_open_close_enabled(&playback, "playback");
+     }

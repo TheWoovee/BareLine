@@ -1,0 +1,72 @@
+diff --git a/crates/platform-windows/src/native.rs b/crates/platform-windows/src/native.rs
+index 200c87b..d6685bb 100644
+--- a/crates/platform-windows/src/native.rs
++++ b/crates/platform-windows/src/native.rs
+@@ -426,6 +426,7 @@ impl WindowsPlatform {
+     /// Caller must retain that window until this adapter and renderer are dropped.
+     pub unsafe fn new(raw: isize, registry: &CommandRegistry, model: MenuModel) -> windows::core::Result<Self> {
+         let hwnd = HWND(raw as *mut _);
++        initialize_common_controls()?;
+         // The title bar and the menus follow the editor theme. The first frame
+         // corrects this once the resolved theme is known.
+         crate::dark_mode::apply(hwnd, true);
+@@ -817,6 +818,20 @@ impl WindowsPlatform {
+     }
+ }
+ 
++fn initialize_common_controls() -> windows::core::Result<()> {
++    use windows::Win32::UI::Controls::*;
++    let controls = INITCOMMONCONTROLSEX {
++        dwSize: std::mem::size_of::<INITCOMMONCONTROLSEX>() as u32,
++        dwICC: ICC_STANDARD_CLASSES,
++    };
++    // SAFETY: the immutable descriptor remains live for the synchronous call.
++    if unsafe { InitCommonControlsEx(&controls) }.as_bool() {
++        Ok(())
++    } else {
++        Err(windows::core::Error::from_win32())
++    }
++}
++
+ /// Monotonic high-resolution timestamp in nanoseconds from
+ /// `QueryPerformanceCounter`, the same process-independent clock
+ /// `perf_counter_ns` uses on Windows. Returns `None` if the counter or its
+@@ -970,6 +985,12 @@ fn projected_item_type(radio: bool, owner_draw: bool) -> MENU_ITEM_TYPE {
+ mod menu_state_tests {
+     use super::*;
+ 
++    #[test]
++    fn common_controls_initialization_is_idempotent() {
++        initialize_common_controls().unwrap();
++        initialize_common_controls().unwrap();
++    }
++
+     #[test]
+     fn command_ingress_preserves_owner_and_rejects_controls() {
+         let hwnd = HWND(7usize as *mut std::ffi::c_void);
+diff --git a/docs/implementation/2026-09-12-audit-implementation/PR-T05-R8.md b/docs/implementation/2026-09-12-audit-implementation/PR-T05-R8.md
+new file mode 100644
+index 0000000..b30f59c
+--- /dev/null
++++ b/docs/implementation/2026-09-12-audit-implementation/PR-T05-R8.md
+@@ -0,0 +1,20 @@
++# PR-T05 R8: Visible owned save-consent dialogs
++
++- **Baseline:** `8eca399e663156d9ff2b74be86a57f46ee13f39a`
++- **Confirmed defect:** A successfully dispatched dirty Close enters `TaskDialogIndirect`, disables the owner and creates the expected owned dialog/buttons, but the dialog and every descendant retain `visible:false` for at least 15 seconds.
++- **Source finding:** The executable embeds the required Common-Controls v6 manifest, but the process never calls `InitCommonControlsEx`. Microsoft documents that an application must call it before creating a common control. Bareline initializes COM in `WindowsPlatform::new` and later enters `TaskDialogIndirect`, but it omitted that separate Common-Controls registration prerequisite. No product code changes `WS_VISIBLE`, calls `ShowWindow`, or subclasses the owned TaskDialog; the menu theme subclass is bound only to the main HWND.
++- **Scope:** Initialize the standard common-control classes before any platform dialog can be created, propagate initialization failure through the existing platform-startup error path, and leave T05 close/discard behavior unchanged.
++
++## Evidence
++
++- Added `initialize_common_controls`, using a fully sized `INITCOMMONCONTROLSEX` with `ICC_STANDARD_CLASSES`, at the start of `WindowsPlatform::new`. Initialization occurs before the menu adapter, COM dialogs, or TaskDialog calls.
++- Added a contained idempotence regression for the Windows initialization boundary. Microsoft specifies that repeated `InitCommonControlsEx` calls are cumulative, so a second adapter/test initialization remains safe.
++- Primary API contract: <https://learn.microsoft.com/en-us/windows/win32/api/commctrl/nf-commctrl-initcommoncontrolsex>.
++
++Root-owned focused command:
++
++```text
++cargo test -p bareline-platform-windows common_controls_initialization_is_idempotent --offline --locked
++```
++
++Native qualification remains required: launch one fresh process, make one exact dirty edit, invoke one Close, and prove the owned `#32770` TaskDialog plus its Save / Don't Save / Cancel controls are visible and actionable without an unrelated input. Preserve the R7 command trace to show ingress, ready state, dialog entry, and selected native ID.

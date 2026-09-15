@@ -1,0 +1,22 @@
+diff --git a/apps/bareline/src/windows_app/inventory.rs b/apps/bareline/src/windows_app/inventory.rs
+index 31b6575..0da540a 100644
+--- a/apps/bareline/src/windows_app/inventory.rs
++++ b/apps/bareline/src/windows_app/inventory.rs
+@@ -392,7 +392,7 @@ mod worker_tests {
+                 path: target.clone(),
+                 commit: "a".repeat(40),
+             },
+-            BTreeSet::new(),
++            "{}".into(),
+             cancel,
+             move || signal.store(true, std::sync::atomic::Ordering::Release),
+         );
+@@ -435,7 +435,7 @@ mod worker_tests {
+                 path: target.clone(),
+                 commit: "a".repeat(40),
+             },
+-            "{}".into(),
++            BTreeSet::new(),
+             cancel.clone(),
+             Arc::new(|| {}),
+         )

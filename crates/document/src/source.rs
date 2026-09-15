@@ -139,11 +139,7 @@ impl MemorySource {
     /// Retains private backing-store ownership for every snapshot containing this source.
     /// Attach before publishing the source; a second owner is refused.
     pub fn has_owned_loader(&self) -> bool {
-        self.0
-            .loader
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .is_some()
+        self.0.loader.lock().unwrap_or_else(|p| p.into_inner()).is_some()
     }
     pub fn attach_owned_loader(&self, loader: Arc<dyn OwnedPageLoader>) -> Result<(), Error> {
         let mut slot = self.0.loader.lock().unwrap_or_else(|p| p.into_inner());
@@ -159,12 +155,7 @@ impl MemorySource {
         if ticket.generation != self.0.generation {
             return Err(Error::StaleRevision);
         }
-        let loader = self
-            .0
-            .loader
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .clone();
+        let loader = self.0.loader.lock().unwrap_or_else(|p| p.into_inner()).clone();
         let Some(loader) = loader else {
             return Ok(false);
         };
@@ -282,11 +273,7 @@ impl SourcePublisher {
         })
     }
     /// Transfers the prepared allocation into the cache without a second page copy.
-    pub fn publish_buffer(
-        &self,
-        buffer: SourcePageBuffer,
-        verified: Generation,
-    ) -> Result<(), Error> {
+    pub fn publish_buffer(&self, buffer: SourcePageBuffer, verified: Generation) -> Result<(), Error> {
         if !Arc::ptr_eq(&buffer.source, &self.0) || verified != self.0.generation {
             return Err(Error::StaleRevision);
         }
@@ -319,12 +306,7 @@ impl SourcePublisher {
         Ok(())
     }
     /// Caller verifies source identity before and after the read and passes that generation.
-    pub fn publish(
-        &self,
-        ticket: PageTicket,
-        bytes: &[u8],
-        verified: Generation,
-    ) -> Result<(), Error> {
+    pub fn publish(&self, ticket: PageTicket, bytes: &[u8], verified: Generation) -> Result<(), Error> {
         if ticket.generation != self.0.generation
             || verified != self.0.generation
             || self.0.changed.load(Ordering::Acquire)
@@ -336,9 +318,7 @@ impl SourcePublisher {
             .page
             .checked_mul(self.0.page_size as u64)
             .ok_or(Error::OutOfBounds)?;
-        if start >= self.0.length
-            || bytes.len() != (self.0.length - start).min(self.0.page_size as u64) as usize
-        {
+        if start >= self.0.length || bytes.len() != (self.0.length - start).min(self.0.page_size as u64) as usize {
             return Err(Error::OutOfBounds);
         }
         let mut pages = self.0.pages.lock().map_err(|_| Error::StaleRevision)?;
@@ -452,8 +432,7 @@ mod tests {
     #[test]
     fn resident_seals_only_after_full_verified_fill() {
         let (source, publisher) =
-            MemorySource::new(8, Generation(1), SourceKind::Resident, 4, 8, Budget::new(8))
-                .unwrap();
+            MemorySource::new(8, Generation(1), SourceKind::Resident, 4, 8, Budget::new(8)).unwrap();
         publisher
             .publish(
                 PageTicket {
@@ -471,8 +450,7 @@ mod tests {
             SourceRead::Unavailable(Unavailable::SourceChanged)
         ));
         let (source, publisher) =
-            MemorySource::new(4, Generation(2), SourceKind::Resident, 4, 4, Budget::new(4))
-                .unwrap();
+            MemorySource::new(4, Generation(2), SourceKind::Resident, 4, 4, Budget::new(4)).unwrap();
         publisher
             .publish(
                 PageTicket {

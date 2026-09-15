@@ -62,9 +62,7 @@ impl Definition {
                 return Err(Error::InvalidRange);
             }
         }
-        if self.strings.iter().any(|c| c.is_control())
-            || self.operators.contains(['\r', '\n', '\0'])
-        {
+        if self.strings.iter().any(|c| c.is_control()) || self.operators.contains(['\r', '\n', '\0']) {
             return Err(Error::InvalidRange);
         }
         Ok(())
@@ -99,17 +97,12 @@ impl Registry {
         Ok(())
     }
 }
-pub fn lex(
-    text: &str,
-    definition: &Definition,
-    cancel: &Cancellation,
-) -> Result<Vec<StyleSpan>, Error> {
+pub fn lex(text: &str, definition: &Definition, cancel: &Cancellation) -> Result<Vec<StyleSpan>, Error> {
     definition.validate()?;
     if text.len() > MAX_REQUEST_BYTES {
         return Err(Error::BudgetExceeded);
     }
-    let keywords: std::collections::BTreeSet<_> =
-        definition.keywords.iter().map(String::as_str).collect();
+    let keywords: std::collections::BTreeSet<_> = definition.keywords.iter().map(String::as_str).collect();
     let mut spans = Vec::new();
     let mut i = 0;
     while i < text.len() {
@@ -133,9 +126,7 @@ pub fn lex(
             .filter(|(a, _)| rest.starts_with(a.as_str()))
         {
             i += open.len();
-            i += text[i..]
-                .find(close)
-                .map_or(text.len() - i, |n| n + close.len());
+            i += text[i..].find(close).map_or(text.len() - i, |n| n + close.len());
             Some(StyleKind::Comment)
         } else if definition.strings.contains(&c) {
             i += c.len_utf8();
@@ -158,24 +149,17 @@ pub fn lex(
                 }
                 i += next.len_utf8();
             }
-            keywords
-                .contains(&text[start..i])
-                .then_some(StyleKind::Keyword)
+            keywords.contains(&text[start..i]).then_some(StyleKind::Keyword)
         } else if c.is_ascii_digit() {
             i += 1;
-            while i < text.len()
-                && (text.as_bytes()[i].is_ascii_alphanumeric()
-                    || b"._".contains(&text.as_bytes()[i]))
+            while i < text.len() && (text.as_bytes()[i].is_ascii_alphanumeric() || b"._".contains(&text.as_bytes()[i]))
             {
                 i += 1;
             }
             Some(StyleKind::Number)
         } else {
             i += c.len_utf8();
-            definition
-                .operators
-                .contains(c)
-                .then_some(StyleKind::Operator)
+            definition.operators.contains(c).then_some(StyleKind::Operator)
         };
         if let Some(kind) = kind {
             if spans.len() >= MAX_SPANS {
@@ -207,18 +191,18 @@ mod tests {
             fold_pairs: vec![('{', '}')],
         };
         let mut registry = Registry::default();
-        registry
-            .replace_json(&definition.to_json().unwrap())
-            .unwrap();
+        registry.replace_json(&definition.to_json().unwrap()).unwrap();
         assert!(registry.replace_json(r#"{"version":2}"#).is_err());
         let d = registry.get("custom").unwrap();
         let text = "hello 🦀 # comment";
         let spans = lex(text, d, &Cancellation::default()).unwrap();
         assert_eq!(spans[0].kind, StyleKind::Keyword);
         assert_eq!(spans.last().unwrap().kind, StyleKind::Comment);
-        assert!(spans.iter().all(
-            |s| text.is_char_boundary(s.range.start.0) && text.is_char_boundary(s.range.end.0)
-        ));
+        assert!(
+            spans
+                .iter()
+                .all(|s| text.is_char_boundary(s.range.start.0) && text.is_char_boundary(s.range.end.0))
+        );
     }
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -286,9 +270,7 @@ pub fn import_notepad_xml(xml: &str) -> Result<(Definition, Vec<Mapping>), Error
             {
                 let value = xml_unescape(&xml[begin..start])?;
                 if name.starts_with("Keywords") {
-                    definition
-                        .keywords
-                        .extend(value.split_whitespace().map(str::to_owned));
+                    definition.keywords.extend(value.split_whitespace().map(str::to_owned));
                     report.push(Mapping {
                         field: name,
                         kind: MappingKind::Imported,
@@ -305,8 +287,7 @@ pub fn import_notepad_xml(xml: &str) -> Result<(Definition, Vec<Mapping>), Error
                     report.push(Mapping {
                         field: name,
                         kind: MappingKind::Unsupported,
-                        reason: "Encoded delimiter/comment/folding rules require manual mapping"
-                            .into(),
+                        reason: "Encoded delimiter/comment/folding rules require manual mapping".into(),
                     });
                 }
             }
@@ -396,10 +377,7 @@ fn xml_attributes(mut text: &str) -> Result<std::collections::BTreeMap<String, S
             .ok_or(Error::InvalidRange)?;
         text = &text[1..];
         let end = text.find(quote).ok_or(Error::InvalidRange)?;
-        if attrs
-            .insert(name.into(), xml_unescape(&text[..end])?)
-            .is_some()
-        {
+        if attrs.insert(name.into(), xml_unescape(&text[..end])?).is_some() {
             return Err(Error::InvalidRange);
         }
         text = &text[end + 1..];

@@ -74,13 +74,7 @@ impl ToolbarController {
         self.first = 0;
         self.customizing = true;
     }
-    pub fn refresh(
-        &mut self,
-        registry: &CommandRegistry,
-        context: &CommandContext,
-        keymap: &Keymap,
-        width: f32,
-    ) {
+    pub fn refresh(&mut self, registry: &CommandRegistry, context: &CommandContext, keymap: &Keymap, width: f32) {
         self.width = width;
         let focused_id = self.focus.and_then(|i| self.buttons.get(i)).map(|b| b.0);
         let pressed_id = self
@@ -135,11 +129,7 @@ impl ToolbarController {
             ));
             x += width + 4.;
         }
-        self.focus = focused_id.and_then(|id| {
-            self.buttons
-                .iter()
-                .position(|b| b.0 == id && !b.1.state.disabled)
-        });
+        self.focus = focused_id.and_then(|id| self.buttons.iter().position(|b| b.0 == id && !b.1.state.disabled));
         self.reveal_focus();
     }
     fn reveal_focus(&mut self) {
@@ -161,10 +151,7 @@ impl ToolbarController {
             } else if self.model.commands.len() < 32 {
                 self.model.commands.push(*id);
             } else {
-                self.status = Some(
-                    "Toolbar supports at most 32 commands. Remove one before adding another."
-                        .into(),
-                );
+                self.status = Some("Toolbar supports at most 32 commands. Remove one before adding another.".into());
             }
         }
     }
@@ -176,9 +163,7 @@ impl ToolbarController {
         if self.customizing {
             match key {
                 Key::Up => self.selected = self.selected.saturating_sub(1),
-                Key::Down => {
-                    self.selected = (self.selected + 1).min(self.catalog.len().saturating_sub(1))
-                }
+                Key::Down => self.selected = (self.selected + 1).min(self.catalog.len().saturating_sub(1)),
                 Key::Home => self.selected = 0,
                 Key::End => self.selected = self.catalog.len().saturating_sub(1),
                 Key::Enter | Key::Space => self.toggle_selected(),
@@ -290,21 +275,8 @@ impl ToolbarController {
         ops.push(DrawOp::FillRounded(self.popup, theme.elevated, 6.));
         ops.push(DrawOp::StrokeRounded(self.popup, theme.border, 6., 1.));
         ops.push(DrawOp::PushClip(self.popup));
-        text(
-            ops,
-            self.popup.x + 12.,
-            62.,
-            "Customize toolbar",
-            15.,
-            theme.text,
-        );
-        for (row, (id, title)) in self
-            .catalog
-            .iter()
-            .skip(self.first)
-            .take(self.rows)
-            .enumerate()
-        {
+        text(ops, self.popup.x + 12., 62., "Customize toolbar", 15., theme.text);
+        for (row, (id, title)) in self.catalog.iter().skip(self.first).take(self.rows).enumerate() {
             let bounds = rect(self.popup.x + 8., 94. + row as f32 * 28., w - 16., 28.);
             if self.selected == self.first + row {
                 ops.push(DrawOp::Fill(bounds, theme.selection));
@@ -431,10 +403,9 @@ mod tests {
         strip.refresh(&registry, &context, &keymap, 800.);
         assert_eq!(strip.pointer(point, false), Some(CommandId("file.new")));
         strip.pointer(point, true);
-        context.states.insert(
-            CommandId("file.new"),
-            bareline_commands::CommandState::disabled("Busy"),
-        );
+        context
+            .states
+            .insert(CommandId("file.new"), bareline_commands::CommandState::disabled("Busy"));
         strip.refresh(&registry, &context, &keymap, 800.);
         assert_eq!(strip.pointer(point, false), None);
     }
@@ -460,12 +431,6 @@ mod tests {
         assert_eq!(strip.model.commands.contains(&id), !before);
         strip.key(Key::Escape, false);
         assert!(!strip.focused());
-        assert!(
-            strip
-                .model
-                .commands
-                .iter()
-                .all(|id| registry.dispatch(*id).is_some())
-        );
+        assert!(strip.model.commands.iter().all(|id| registry.dispatch(*id).is_some()));
     }
 }

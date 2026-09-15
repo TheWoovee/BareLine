@@ -24,8 +24,55 @@ const COLOR_CONTROLS: [(&str, &str); 15] = [
     ("compare.accentCurrent", "diff.current.overview"),
     ("compare.gutterCurrent", "diff.current.gutter"),
 ];
-fn compare_input(editor:&bareline_app::workspace::WorkspaceEditor)->CompareInput {
-    match editor {bareline_app::workspace::WorkspaceEditor::Resident(e)=>CompareInput::Resident(e.snapshot().clone()),bareline_app::workspace::WorkspaceEditor::Paged(e)=>if e.surface.user_read_only{CompareInput::CapturedPaged(e.snapshot().clone(),e.read_handle())}else{CompareInput::Paged(e.read_handle())}}
+const MODAL_CONTROL_IDS: &[&str] = &[
+    "compare.themeLight",
+    "compare.themeDark",
+    "compare.themeSystem",
+    "compare.colorAdded",
+    "compare.accentAdded",
+    "compare.gutterAdded",
+    "compare.colorRemoved",
+    "compare.accentRemoved",
+    "compare.gutterRemoved",
+    "compare.colorChanged",
+    "compare.accentChanged",
+    "compare.gutterChanged",
+    "compare.colorMoved",
+    "compare.accentMoved",
+    "compare.gutterMoved",
+    "compare.colorCurrent",
+    "compare.accentCurrent",
+    "compare.gutterCurrent",
+    "compare.resetAdded",
+    "compare.resetRemoved",
+    "compare.resetChanged",
+    "compare.resetMoved",
+    "compare.resetCurrent",
+    "compare.colorblind",
+    "compare.trimEdges",
+    "compare.ignoreWhitespace",
+    "compare.ignoreBlank",
+    "compare.ignoreCase",
+    "compare.ignoreEol",
+    "compare.ignoreBom",
+    "compare.normalizeTabs",
+    "compare.pauseAutomatic",
+    "compare.copyLeftToRight",
+    "compare.copyRightToLeft",
+    "compare.defaults",
+    "compare.applyColor",
+];
+fn compare_input(editor: &bareline_app::workspace::WorkspaceEditor) -> CompareInput {
+    match editor {
+        bareline_app::workspace::WorkspaceEditor::Resident(e) => CompareInput::Resident(e.snapshot().clone()),
+        bareline_app::workspace::WorkspaceEditor::Paged(e) => {
+            if e.viewport().user_read_only {
+                CompareInput::CapturedPaged(e.snapshot().clone(), e.read_handle())
+            } else {
+                CompareInput::Paged(e.read_handle())
+            }
+        }
+    }
 }
 
 pub(super) fn register(registry: &mut CommandRegistry) {
@@ -81,7 +128,7 @@ pub(super) fn register(registry: &mut CommandRegistry) {
         let _ = registry.set_presentation(
             id,
             CommandPresentation {
-                menu_path: format!("Tools > Compare > {title}"),
+                menu_path: "Tools > Compare".into(),
                 accessible_name: Some(title.into()),
                 ..Default::default()
             },
@@ -93,50 +140,142 @@ pub(super) fn register(registry: &mut CommandRegistry) {
 pub(super) struct CompareRuntime {
     controller: Option<CompareController>,
     documents: Option<[CompareInput; 2]>,
-    options_open: bool,
+    pub(super) options_open: bool,
     hits: Vec<(Rect, &'static str)>,
     focus: usize,
+    dock_focused: bool,
     colors_tab: bool,
-    active_color: Option<&'static str>,
-    color_field: bareline_ui::text_field::TextField,
-    color_bounds: Option<Rect>,
-    color_focus: bool,
+    pub(super) active_color: Option<&'static str>,
+    pub(super) color_field: bareline_ui::text_field::TextField,
+    pub(super) color_bounds: Option<Rect>,
+    pub(super) color_focus: bool,
     color_blind: bool,
     saved: Vec<(DocumentSnapshot, String)>,
-    saved_paged: Vec<(bareline_editor_surface::paged_view::PagedReadHandle,String)>,
+    saved_paged: Vec<(bareline_editor_surface::paged_view::PagedReadHandle, String)>,
     pending_source: Option<PendingSource>,
-    overview: [Option<Rect>;2],
+    overview: [Option<Rect>; 2],
     pending_merge: Option<PendingMerge>,
     merge_receipt: Option<bareline_editor_surface::TrackedEditReceipt>,
     merge_promotion: Option<MergePromotion>,
 }
-enum PreparedMerge { Text(bareline_document::EditTransaction), Source(bareline_document::paged::PreparedSourceTransaction) }
-struct MergePromotion {indices:[usize;2],inputs:[CompareInput;2],side:usize,ranges:[std::ops::Range<bareline_document::TextOffset>;2],hunk:Option<bareline_diff::DiffHunk>,metadata:bareline_document::history::EditMetadata}
-fn merge_metadata(before:bareline_editor_surface::Selection,start:usize,inserted:usize)->bareline_document::history::EditMetadata {
-    use bareline_document::{TextOffset,history::{EditMetadata,Selection}};
-    EditMetadata{before:vec![Selection{anchor:TextOffset(before.anchor),caret:TextOffset(before.caret)}],after:vec![Selection{anchor:TextOffset(start),caret:TextOffset(start.saturating_add(inserted))}],..Default::default()}
+enum PreparedMerge {
+    Text(bareline_document::EditTransaction),
+    Source(bareline_document::paged::PreparedSourceTransaction),
 }
-struct PendingMerge {source:CompareInput,inputs:[CompareInput;2],cancel:bareline_diff::CancelToken,result:std::sync::mpsc::Receiver<Result<PreparedMerge,bareline_diff::ApplyError>>}
-impl Drop for PendingMerge{fn drop(&mut self){self.cancel.cancel();}}
+struct MergePromotion {
+    indices: [usize; 2],
+    inputs: [CompareInput; 2],
+    side: usize,
+    ranges: [std::ops::Range<bareline_document::TextOffset>; 2],
+    hunk: Option<bareline_diff::DiffHunk>,
+    metadata: bareline_document::history::EditMetadata,
+}
+fn merge_metadata(
+    before: bareline_editor_surface::Selection,
+    start: usize,
+    inserted: usize,
+) -> bareline_document::history::EditMetadata {
+    use bareline_document::{
+        TextOffset,
+        history::{EditMetadata, Selection},
+    };
+    EditMetadata {
+        before: vec![Selection {
+            anchor: TextOffset(before.anchor),
+            caret: TextOffset(before.caret),
+        }],
+        after: vec![Selection {
+            anchor: TextOffset(start),
+            caret: TextOffset(start.saturating_add(inserted)),
+        }],
+        ..Default::default()
+    }
+}
+struct PendingMerge {
+    source: CompareInput,
+    inputs: [CompareInput; 2],
+    cancel: bareline_diff::CancelToken,
+    result: std::sync::mpsc::Receiver<Result<PreparedMerge, bareline_diff::ApplyError>>,
+}
+impl Drop for PendingMerge {
+    fn drop(&mut self) {
+        self.cancel.cancel();
+    }
+}
 struct PendingSource {
     left: CompareInput,
     path: PathBuf,
     previous: Vec<CompareInput>,
     origin: CompareOrigin,
 }
+#[allow(clippy::too_many_arguments)]
+fn dock_button(
+    ops: &mut Vec<DrawOp>,
+    hits: &mut Vec<(Rect, &'static str)>,
+    theme: bareline_ui::theme::UiTheme,
+    dock: Rect,
+    row_height: f32,
+    x: &mut f32,
+    y: &mut f32,
+    label: String,
+    id: &'static str,
+    width: f32,
+) {
+    if *x + width > dock.x + dock.width - 8.0 && *x > dock.x + 8.0 {
+        *x = dock.x + 8.0;
+        *y += row_height;
+    }
+    let bounds = rect(*x, *y, width, (row_height - 4.0).max(18.0));
+    *x += width + 6.0;
+    ops.push(DrawOp::StrokeRounded(bounds, theme.border, 4.0, 1.0));
+    ops.push(DrawOp::PushClip(bounds));
+    text(ops, bounds.x + 8.0, bounds.y + 6.0, label, 12.0, theme.text);
+    ops.push(DrawOp::PopClip);
+    hits.push((bounds, id));
+}
+
 impl CompareRuntime {
+    pub(super) fn set_dock_focused(&mut self, focused: bool) {
+        self.dock_focused = focused;
+        if focused {
+            self.focus = 0;
+        }
+    }
+    pub(super) fn set_dock_focused_preserving(&mut self, focused: bool) {
+        self.dock_focused = focused;
+    }
+    #[cfg(test)]
+    pub(super) fn dock_has_focus(&self) -> bool {
+        self.dock_focused
+    }
+    pub(super) fn dock_state(&self, workspace: &Workspace) -> super::dock::DockSurfaceState {
+        use std::hash::{Hash, Hasher};
+        let Some(controller) = &self.controller else {
+            return super::dock::DockSurfaceState::default();
+        };
+        let mut hash = std::collections::hash_map::DefaultHasher::new();
+        format!("{:?}", controller.state).hash(&mut hash);
+        controller.counter().hash(&mut hash);
+        if let Some(indices) = self.indices(workspace) {
+            for index in indices {
+                workspace.editors[index].snapshot().identity_token().hash(&mut hash);
+            }
+        }
+        super::dock::DockSurfaceState {
+            available: self.indices(workspace).is_some(),
+            busy: controller.state == CompareState::Running
+                || self.pending_merge.is_some()
+                || self.merge_promotion.is_some(),
+            revision: hash.finish(),
+        }
+    }
     pub(super) fn capture(
         &self,
         workspace: &Workspace,
         document_ids: &[(usize, u64)],
     ) -> Option<bareline_file_io::session::SessionCompare> {
         let indices = self.indices(workspace)?;
-        let id = |index| {
-            document_ids
-                .iter()
-                .find(|(i, _)| *i == index)
-                .map(|(_, id)| *id)
-        };
+        let id = |index| document_ids.iter().find(|(i, _)| *i == index).map(|(_, id)| *id);
         Some(bareline_file_io::session::SessionCompare {
             version: 1,
             left_document: id(indices[0])?,
@@ -162,8 +301,8 @@ impl CompareRuntime {
         let pair = [index(state.left_document)?, index(state.right_document)?];
         let saved = bareline_app::compare::CompareSession::from_json(&state.options_json)
             .map_err(|e| format!("Invalid compare session: {e:?}"))?;
-        let mut controller = CompareController::restore(saved)
-            .map_err(|e| format!("Invalid compare session: {e:?}"))?;
+        let mut controller =
+            CompareController::restore(saved).map_err(|e| format!("Invalid compare session: {e:?}"))?;
         if !views.compare_pair(workspace, pair[0], pair[1]) {
             return Err("Compare sources are not ready".into());
         }
@@ -221,14 +360,10 @@ impl CompareRuntime {
                 None
             };
             if let Some(reason) = reason {
-                context
-                    .states
-                    .insert(CommandId(id), CommandState::disabled(reason));
+                context.states.insert(CommandId(id), CommandState::disabled(reason));
             }
         }
-        if let (Some(workspace), Some(indices), Some(controller)) =
-            (workspace, indices, &self.controller)
-        {
+        if let (Some(workspace), Some(indices), Some(controller)) = (workspace, indices, &self.controller) {
             let hunk = controller.current_hunk();
             let fresh = hunk.is_some_and(|h| {
                 h.left_revision == compare_input(&workspace.editors[indices[0]]).revision()
@@ -253,9 +388,7 @@ impl CompareRuntime {
                 ("compare.copySelectionLeftToRight", 1),
                 ("compare.copySelectionRightToLeft", 0),
             ] {
-                if workspace.editors[indices[side]].busy()
-                    || workspace.editors[indices[side]].read_only()
-                {
+                if workspace.editors[indices[side]].busy() || workspace.editors[indices[side]].read_only() {
                     context.states.insert(
                         CommandId(id),
                         CommandState::disabled("Destination is busy or read-only"),
@@ -280,91 +413,275 @@ impl CompareRuntime {
 }
 
 impl Shell {
+    #[cfg(test)]
+    pub(super) fn compare_is_active(&self) -> bool {
+        self.compare.controller.is_some()
+    }
     /// Command identity plus visible occurrence keeps duplicate actions distinct.
     /// Compare chrome has at most two occurrences of any command; reserve sixteen.
-    fn compare_accessibility_hit_id(&self,hit:usize)->Option<u64> {
-        let (_,id)=self.compare.hits.get(hit)?;
-        let occurrence=self.compare.hits[..hit].iter().filter(|(_,candidate)|candidate==id).count();
-        if *id=="compare.copySelectionLeftToRight"{return Some(59_000+occurrence as u64);}
-        if *id=="compare.copySelectionRightToLeft"{return Some(59_016+occurrence as u64);}
-        let command=self.app.commands.entries().filter(|command|command.id.0.starts_with("compare.")&&!command.id.0.starts_with("compare.copySelection")).position(|command|command.id.0==*id)?;
-        Some(50_000+command as u64*16+occurrence as u64)
-    }
-    pub(super) fn compare_accessibility_nodes(&self)->Vec<bareline_platform::accessibility::AccessibilityNode> {
-        use bareline_platform::accessibility::{AccessibilityNode,AccessibilityRole};
-        let offset=self.editor_bounds();
-        let mut context=bareline_commands::CommandContext::default();
-        self.compare.annotate_context(&mut context,self.workspace.as_ref());
-        let mut nodes:Vec<_>=self.compare.hits.iter().enumerate().filter_map(|(hit,(bounds,id))| {
-            let command=self.app.commands.entries().find(|command|command.id.0==*id)?;
-            let mut role=AccessibilityRole::Button;let mut selected=false;let mut value=None;
-            if let Some(controller)=&self.compare.controller {
-                let options=controller.options();
-                let checked=match *id {
-                    "compare.trimEdges"=>Some(options.whitespace==Whitespace::TrimEdges),
-                    "compare.ignoreWhitespace"=>Some(options.whitespace==Whitespace::IgnoreAll),
-                    "compare.ignoreBlank"=>Some(options.ignore_blank_lines),
-                    "compare.ignoreCase"=>Some(options.ignore_case),
-                    "compare.ignoreEol"=>Some(options.ignore_eol_style),
-                    "compare.ignoreBom"=>Some(options.ignore_encoding_bom),
-                    "compare.normalizeTabs"=>Some(options.normalize_tabs),
-                    "compare.pauseAutomatic"=>Some(controller.pause_automatic),
-                    "compare.syncHorizontal"=>Some(controller.sync_horizontal),
-                    "compare.colorblind"=>Some(self.compare.color_blind),_=>None,
-                };
-                if let Some(checked)=checked{role=AccessibilityRole::Checkbox;selected=checked;value=Some(if checked{"On"}else{"Off"}.into());}
-                match *id {
-                    "compare.whitespace"=>{role=AccessibilityRole::Combo;value=Some(match options.whitespace{Whitespace::Significant=>"Significant",Whitespace::TrimEdges=>"Trim edges",Whitespace::IgnoreAll=>"Ignore all"}.into());},
-                    "compare.leftSource"=>value=Some(controller.sources[0].label.clone()),
-                    "compare.rightSource"=>value=Some(controller.sources[1].label.clone()),
-                    "compare.next" if self.compare.hits[..hit].iter().any(|(_,candidate)|*candidate=="compare.next")=>{let (current,total)=controller.counter();value=Some(format!("Difference {current} of {total}"));},_=>{},
-                }
-            }
+    fn compare_accessibility_hit_id(&self, hit: usize) -> Option<u64> {
+        let (_, id) = self.compare.hits.get(hit)?;
+        if self
+            .modal
+            .is_some_and(|modal| modal.surface == modal::ModalSurface::CompareOptions)
+        {
             match *id {
-                "compare.generalTab"|"compare.colorsTab"=>{role=AccessibilityRole::Tab;selected=(*id=="compare.colorsTab")==self.compare.colors_tab;},
-                "compare.themeLight"|"compare.themeDark"|"compare.themeSystem"=>{role=AccessibilityRole::Radio;selected=matches!((*id,self.settings.effective().theme),("compare.themeLight",bareline_settings::ThemeMode::Light)|("compare.themeDark",bareline_settings::ThemeMode::Dark)|("compare.themeSystem",bareline_settings::ThemeMode::System));value=Some(if selected{"Selected"}else{"Not selected"}.into());},_=>{},
+                "compare.generalTab" => return Some(modal::COMPARE_GENERAL_ID),
+                "compare.colorsTab" => return Some(modal::COMPARE_COLORS_ID),
+                "compare.options" => return Some(modal::COMPARE_DONE_ID),
+                _ => {}
             }
-            if let Some((_,key))=COLOR_CONTROLS.iter().find(|(candidate,_)|candidate==id){value=self.settings.theme_color(key).map(|color|format!("#{:06X}",color.0));}
-            Some(AccessibilityNode{id:self.compare_accessibility_hit_id(hit)?,parent:1,role,name:command.title.into(),value,
-                bounds:[(bounds.x+offset.x) as f64,(bounds.y+offset.y) as f64,bounds.width as f64,bounds.height as f64],
-                disabled:context.states.get(&command.id).is_some_and(|state|!state.enabled),selected,expanded:None,focusable:true,invokable:true})
-        }).collect();
-        if self.compare.active_color.is_some(){if let Some(bounds)=self.compare.color_bounds{nodes.push(AccessibilityNode{id:59_999,parent:1,role:AccessibilityRole::TextField,name:"Compare color hexadecimal value".into(),value:Some(self.compare.color_field.value().into()),bounds:[(bounds.x+offset.x) as f64,(bounds.y+offset.y) as f64,bounds.width as f64,bounds.height as f64],disabled:false,selected:false,expanded:None,focusable:true,invokable:false});}}nodes
+            return MODAL_CONTROL_IDS
+                .iter()
+                .position(|candidate| candidate == id)
+                .map(|index| 91_001_000 + index as u64);
+        }
+        let occurrence = self.compare.hits[..hit]
+            .iter()
+            .filter(|(_, candidate)| candidate == id)
+            .count();
+        if *id == "compare.copySelectionLeftToRight" {
+            return Some(59_000 + occurrence as u64);
+        }
+        if *id == "compare.copySelectionRightToLeft" {
+            return Some(59_016 + occurrence as u64);
+        }
+        let command = self
+            .app
+            .commands
+            .entries()
+            .filter(|command| {
+                command.id.0.starts_with("compare.") && !command.id.0.starts_with("compare.copySelection")
+            })
+            .position(|command| command.id.0 == *id)?;
+        Some(50_000 + command as u64 * 16 + occurrence as u64)
     }
-    pub(super) fn compare_accessibility_focus(&self)->Option<u64> {
-        if !self.compare.options_open{return None;}
-        if self.compare.active_color.is_some()&&self.compare.color_focus{return Some(59_999);}
+    pub(super) fn compare_accessibility_nodes(&self) -> Vec<bareline_platform::accessibility::AccessibilityNode> {
+        use bareline_platform::accessibility::{AccessibilityNode, AccessibilityRole};
+        let offset = self.editor_bounds();
+        let mut context = bareline_commands::CommandContext::default();
+        self.compare.annotate_context(&mut context, self.workspace.as_ref());
+        let mut nodes: Vec<_> = self
+            .compare
+            .hits
+            .iter()
+            .enumerate()
+            .filter_map(|(hit, (bounds, id))| {
+                let command = self.app.commands.entries().find(|command| command.id.0 == *id)?;
+                let mut role = AccessibilityRole::Button;
+                let mut selected = false;
+                let mut value = None;
+                if let Some(controller) = &self.compare.controller {
+                    let options = controller.options();
+                    let checked = match *id {
+                        "compare.trimEdges" => Some(options.whitespace == Whitespace::TrimEdges),
+                        "compare.ignoreWhitespace" => Some(options.whitespace == Whitespace::IgnoreAll),
+                        "compare.ignoreBlank" => Some(options.ignore_blank_lines),
+                        "compare.ignoreCase" => Some(options.ignore_case),
+                        "compare.ignoreEol" => Some(options.ignore_eol_style),
+                        "compare.ignoreBom" => Some(options.ignore_encoding_bom),
+                        "compare.normalizeTabs" => Some(options.normalize_tabs),
+                        "compare.pauseAutomatic" => Some(controller.pause_automatic),
+                        "compare.syncHorizontal" => Some(controller.sync_horizontal),
+                        "compare.colorblind" => Some(self.compare.color_blind),
+                        _ => None,
+                    };
+                    if let Some(checked) = checked {
+                        role = AccessibilityRole::Checkbox;
+                        selected = checked;
+                        value = Some(if checked { "On" } else { "Off" }.into());
+                    }
+                    match *id {
+                        "compare.whitespace" => {
+                            role = AccessibilityRole::Combo;
+                            value = Some(
+                                match options.whitespace {
+                                    Whitespace::Significant => "Significant",
+                                    Whitespace::TrimEdges => "Trim edges",
+                                    Whitespace::IgnoreAll => "Ignore all",
+                                }
+                                .into(),
+                            );
+                        }
+                        "compare.leftSource" => value = Some(controller.sources[0].label.clone()),
+                        "compare.rightSource" => value = Some(controller.sources[1].label.clone()),
+                        "compare.next"
+                            if self.compare.hits[..hit]
+                                .iter()
+                                .any(|(_, candidate)| *candidate == "compare.next") =>
+                        {
+                            let (current, total) = controller.counter();
+                            value = Some(format!("Difference {current} of {total}"));
+                        }
+                        _ => {}
+                    }
+                }
+                match *id {
+                    "compare.generalTab" | "compare.colorsTab" => {
+                        role = AccessibilityRole::Tab;
+                        selected = (*id == "compare.colorsTab") == self.compare.colors_tab;
+                    }
+                    "compare.themeLight" | "compare.themeDark" | "compare.themeSystem" => {
+                        role = AccessibilityRole::Radio;
+                        selected = matches!(
+                            (*id, self.settings.effective().theme),
+                            ("compare.themeLight", bareline_settings::ThemeMode::Light)
+                                | ("compare.themeDark", bareline_settings::ThemeMode::Dark)
+                                | ("compare.themeSystem", bareline_settings::ThemeMode::System)
+                        );
+                        value = Some(if selected { "Selected" } else { "Not selected" }.into());
+                    }
+                    _ => {}
+                }
+                if let Some((_, key)) = COLOR_CONTROLS.iter().find(|(candidate, _)| candidate == id) {
+                    value = self.settings.theme_color(key).map(|color| format!("#{:06X}", color.0));
+                }
+                Some(AccessibilityNode {
+                    id: self.compare_accessibility_hit_id(hit)?,
+                    parent: 1,
+                    role,
+                    name: if self
+                        .modal
+                        .is_some_and(|modal| modal.surface == modal::ModalSurface::CompareOptions)
+                        && *id == "compare.options"
+                    {
+                        "Done".into()
+                    } else {
+                        command.title.into()
+                    },
+                    value,
+                    bounds: [
+                        (bounds.x + offset.x) as f64,
+                        (bounds.y + offset.y) as f64,
+                        bounds.width as f64,
+                        bounds.height as f64,
+                    ],
+                    disabled: context.states.get(&command.id).is_some_and(|state| !state.enabled),
+                    selected,
+                    expanded: None,
+                    focusable: true,
+                    invokable: true,
+                })
+            })
+            .collect();
+        if self.compare.active_color.is_some() {
+            if let Some(bounds) = self.compare.color_bounds {
+                nodes.push(AccessibilityNode {
+                    id: 59_999,
+                    parent: 1,
+                    role: AccessibilityRole::TextField,
+                    name: "Compare color hexadecimal value".into(),
+                    value: Some(self.compare.color_field.value().into()),
+                    bounds: [
+                        (bounds.x + offset.x) as f64,
+                        (bounds.y + offset.y) as f64,
+                        bounds.width as f64,
+                        bounds.height as f64,
+                    ],
+                    disabled: false,
+                    selected: false,
+                    expanded: None,
+                    focusable: true,
+                    invokable: false,
+                });
+            }
+        }
+        nodes
+    }
+    pub(super) fn compare_accessibility_focus(&self) -> Option<u64> {
+        if !self.compare.options_open {
+            return (self.dock.active() == Some(super::dock::DockTab::Compare) && self.compare.dock_focused)
+                .then(|| self.compare_accessibility_hit_id(self.compare.focus))
+                .flatten();
+        }
+        if self.compare.active_color.is_some() && self.compare.color_focus {
+            return Some(59_999);
+        }
         self.compare_accessibility_hit_id(self.compare.focus)
     }
-    pub(super) fn compare_accessibility(&mut self,el:&ActiveEventLoop,action:&bareline_platform::accessibility::AccessibilityAction)->bool {
+    pub(super) fn compare_accessibility(
+        &mut self,
+        el: &ActiveEventLoop,
+        action: &bareline_platform::accessibility::AccessibilityAction,
+    ) -> bool {
         use bareline_platform::accessibility::AccessibilityAction;
-        if self.compare.active_color.is_some(){match action{AccessibilityAction::SetValue{id:59_999,value}=>{if value.len()<=9&&value.chars().all(|c|c=='#'||c.is_ascii_hexdigit()){self.compare.color_field.select_all();self.compare.color_field.insert(value);self.compare.color_focus=true;self.compare_redraw();}return true;},AccessibilityAction::Focus(59_999)=>{self.compare.color_focus=true;self.compare_redraw();return true;},_=>{}}}
-        let (id,invoke)=match action{AccessibilityAction::Focus(id)=>(*id,false),AccessibilityAction::Invoke(id)=>(*id,true),_=>return false};
-        let Some(node)=self.compare_accessibility_nodes().into_iter().find(|node|node.id==id)else{return false;};
-        if node.disabled{return true;}
-        self.compare.color_focus=false;
-        let Some((index,command))=self.compare.hits.iter().enumerate().find_map(|(index,(_,command))|(self.compare_accessibility_hit_id(index)==Some(id)).then_some((index,*command)))else{return false;};
-        self.compare.focus=index;
-        if invoke{self.compare_dispatch(el,command);}self.compare_redraw();true
+        if self.compare.active_color.is_some() {
+            match action {
+                AccessibilityAction::SetValue { id: 59_999, value } => {
+                    if value.len() <= 9 && value.chars().all(|c| c == '#' || c.is_ascii_hexdigit()) {
+                        self.compare.color_field.select_all();
+                        self.compare.color_field.insert(value);
+                        self.compare.color_focus = true;
+                        self.compare_redraw();
+                    }
+                    return true;
+                }
+                AccessibilityAction::Focus(59_999) => {
+                    self.compare.color_focus = true;
+                    self.compare_redraw();
+                    return true;
+                }
+                _ => {}
+            }
+        }
+        let (id, invoke) = match action {
+            AccessibilityAction::Focus(id) => (*id, false),
+            AccessibilityAction::Invoke(id) => (*id, true),
+            _ => return false,
+        };
+        let Some(node) = self
+            .compare_accessibility_nodes()
+            .into_iter()
+            .find(|node| node.id == id)
+        else {
+            return false;
+        };
+        if node.disabled {
+            return true;
+        }
+        self.compare.color_focus = false;
+        let Some((index, command)) = self.compare.hits.iter().enumerate().find_map(|(index, (_, command))| {
+            (self.compare_accessibility_hit_id(index) == Some(id)).then_some((index, *command))
+        }) else {
+            return false;
+        };
+        self.compare.focus = index;
+        self.dock.blur_focus();
+        self.compare.dock_focused = true;
+        if invoke {
+            self.compare_dispatch(el, command);
+        }
+        self.compare_redraw();
+        true
     }
     /// Both indices must refer to actual loaded sources. Recovery Center owns their
     /// asynchronous opening; this bridge never compares a viewport prefix.
-    pub(super) fn compare_recovery_pair(&mut self,recovered_index:usize,disk_index:usize) {
-        if self.workspace.as_ref().is_none_or(|w|recovered_index>=w.editors.len()||disk_index>=w.editors.len()||recovered_index==disk_index){return;}
-        if !self.compare_start_pair(recovered_index,disk_index){return;}
-        if let Some(controller)=&mut self.compare.controller {
-            controller.sources=[CompareSource{label:"Recovered copy".into(),origin:CompareOrigin::Recovery("Recovered copy".into())},CompareSource{label:"Current disk".into(),origin:CompareOrigin::Disk("Current disk".into())}];
+    pub(super) fn compare_recovery_pair(&mut self, recovered_index: usize, disk_index: usize) {
+        if self.workspace.as_ref().is_none_or(|w| {
+            recovered_index >= w.editors.len() || disk_index >= w.editors.len() || recovered_index == disk_index
+        }) {
+            return;
+        }
+        if !self.compare_start_pair(recovered_index, disk_index) {
+            return;
+        }
+        if let Some(controller) = &mut self.compare.controller {
+            controller.sources = [
+                CompareSource {
+                    label: "Recovered copy".into(),
+                    origin: CompareOrigin::Recovery("Recovered copy".into()),
+                },
+                CompareSource {
+                    label: "Current disk".into(),
+                    origin: CompareOrigin::Disk("Current disk".into()),
+                },
+            ];
         }
         self.compare_redraw();
     }
     /// Recovery/conflict controllers can supply an immutable source; adoption never
     /// copies the complete text and never gives a preview a writable file identity.
-    pub(super) fn compare_snapshot_source(
-        &mut self,
-        snapshot: DocumentSnapshot,
-        label: String,
-        origin: CompareOrigin,
-    ) {
+    pub(super) fn compare_snapshot_source(&mut self, snapshot: DocumentSnapshot, label: String, origin: CompareOrigin) {
         let left = self.app.active;
         let Some(workspace) = &mut self.workspace else {
             return;
@@ -376,17 +693,15 @@ impl Shell {
                     c.sources[1].origin = origin;
                 }
             }
-            Err(error) => {
-                workspace.message = Some(format!("Compare source unavailable: {error:?}"))
-            }
+            Err(error) => workspace.message = Some(format!("Compare source unavailable: {error:?}")),
         }
     }
-    fn compare_start_pair(&mut self, left: usize, right: usize)->bool {
+    pub(super) fn compare_start_pair(&mut self, left: usize, right: usize) -> bool {
         let Some(workspace) = &mut self.workspace else {
             return false;
         };
         if !self.views.compare_pair(workspace, left, right) {
-            workspace.message=Some("Compare panes are not ready; retry after both sources finish opening".into());
+            workspace.message = Some("Compare panes are not ready; retry after both sources finish opening".into());
             return false;
         }
         let titles = workspace.titles();
@@ -421,28 +736,44 @@ impl Shell {
             return false;
         }
         if id == "compare.lastSaved" {
-            if let Some(workspace)=&mut self.workspace {
-                if let Some(bareline_app::workspace::WorkspaceEditor::Paged(editor))=workspace.editors.get(self.app.active) {
-                    let captured=self.compare.saved_paged.iter().find(|(handle,_)|handle.snapshot().same_document(editor.snapshot())).cloned();
-                    if let Some((handle,label))=captured {
-                        match workspace.add_paged_snapshot_preview(self.app.active,&handle,format!("{label} (last saved)")) {
-                            Ok(right)=>{let left=self.app.active;if self.compare_start_pair(left,right){if let Some(c)=&mut self.compare.controller{c.sources[1].origin=CompareOrigin::LastSaved(label);}}},
-                            Err(error)=>workspace.message=Some(error),
+            if let Some(workspace) = &mut self.workspace {
+                if let Some(bareline_app::workspace::WorkspaceEditor::Paged(editor)) =
+                    workspace.editors.get(self.app.active)
+                {
+                    let captured = self
+                        .compare
+                        .saved_paged
+                        .iter()
+                        .find(|(handle, _)| handle.snapshot().same_document(editor.snapshot()))
+                        .cloned();
+                    if let Some((handle, label)) = captured {
+                        match workspace.add_paged_snapshot_preview(
+                            self.app.active,
+                            &handle,
+                            format!("{label} (last saved)"),
+                        ) {
+                            Ok(right) => {
+                                let left = self.app.active;
+                                if self.compare_start_pair(left, right) {
+                                    if let Some(c) = &mut self.compare.controller {
+                                        c.sources[1].origin = CompareOrigin::LastSaved(label);
+                                    }
+                                }
+                            }
+                            Err(error) => workspace.message = Some(error),
                         }
-                    }else{workspace.message=Some("The last saved source is not available yet".into());}
-                    self.compare_redraw();return true;
+                    } else {
+                        workspace.message = Some("The last saved source is not available yet".into());
+                    }
+                    self.compare_redraw();
+                    return true;
                 }
             }
             let saved = self
                 .workspace
                 .as_ref()
                 .and_then(|w| w.editors.get(self.app.active))
-                .and_then(|e| {
-                    self.compare
-                        .saved
-                        .iter()
-                        .find(|(s, _)| s.same_document(e.snapshot()))
-                })
+                .and_then(|e| self.compare.saved.iter().find(|(s, _)| s.same_document(e.snapshot())))
                 .cloned();
             if let Some((snapshot, label)) = saved {
                 self.compare_snapshot_source(
@@ -458,26 +789,18 @@ impl Shell {
         }
         if matches!(id, "compare.disk" | "compare.external") {
             let path = if id == "compare.disk" {
-                self.platform
-                    .as_ref()
-                    .and_then(|p| p.open_file().ok().flatten())
+                self.platform.as_ref().and_then(|p| p.open_file().ok().flatten())
             } else {
                 self.workspace
                     .as_ref()
                     .and_then(|w| w.path(self.app.active).map(PathBuf::from))
             };
             if let (Some(path), Some(workspace)) = (path, &mut self.workspace)
-                && let Some(left) = workspace
-                    .editors
-                    .get(self.app.active)
+                && let Some(left) = workspace.editors.get(self.app.active)
             {
                 self.compare.pending_source = Some(PendingSource {
                     left: compare_input(left),
-                    previous: workspace
-                        .editors
-                        .iter()
-                        .map(compare_input)
-                        .collect(),
+                    previous: workspace.editors.iter().map(compare_input).collect(),
                     origin: if id == "compare.external" {
                         CompareOrigin::ExternalConflict(path.display().to_string())
                     } else {
@@ -492,7 +815,8 @@ impl Shell {
         }
         if let Some((_, key)) = COLOR_CONTROLS.iter().find(|(command, _)| *command == id) {
             self.compare.active_color = Some(key);
-            self.compare.color_focus=true;
+            self.compare.color_focus = true;
+            self.modal_text_owner(modal::ModalSurface::CompareOptions, Some(59_999));
             self.compare.color_field.select_all();
             let color = self.settings.theme_color(key).map_or(0, |c| c.0);
             self.compare.color_field.insert(&format!("#{color:06X}"));
@@ -500,9 +824,25 @@ impl Shell {
             self.compare_redraw();
             return true;
         }
-        if let Some(prefix)=match id{"compare.resetAdded"=>Some("diff.added"),"compare.resetRemoved"=>Some("diff.removed"),"compare.resetChanged"=>Some("diff.changed"),"compare.resetMoved"=>Some("diff.moved"),"compare.resetCurrent"=>Some("diff.current"),_=>None} {
-            let mut overrides=self.settings.effective().theme_overrides;overrides.retain(|key,_|key!=prefix&&!key.starts_with(&format!("{prefix}.")));
-            let result=self.settings.controller.edit("theme.overrides",bareline_settings::SettingValue::Map(overrides));if let Some(workspace)=&mut self.workspace{workspace.message=result.err();}self.compare_redraw();return true;
+        if let Some(prefix) = match id {
+            "compare.resetAdded" => Some("diff.added"),
+            "compare.resetRemoved" => Some("diff.removed"),
+            "compare.resetChanged" => Some("diff.changed"),
+            "compare.resetMoved" => Some("diff.moved"),
+            "compare.resetCurrent" => Some("diff.current"),
+            _ => None,
+        } {
+            let mut overrides = self.settings.effective().theme_overrides;
+            overrides.retain(|key, _| key != prefix && !key.starts_with(&format!("{prefix}.")));
+            let result = self
+                .settings
+                .controller
+                .edit("theme.overrides", bareline_settings::SettingValue::Map(overrides));
+            if let Some(workspace) = &mut self.workspace {
+                workspace.message = result.err();
+            }
+            self.compare_redraw();
+            return true;
         }
         if matches!(
             id,
@@ -518,17 +858,15 @@ impl Shell {
                 if let Some(key) = self.compare.active_color {
                     overrides.insert(key.into(), self.compare.color_field.value().into());
                 }
-                self.settings.controller.edit(
-                    "theme.overrides",
-                    bareline_settings::SettingValue::Map(overrides),
-                )
+                self.settings
+                    .controller
+                    .edit("theme.overrides", bareline_settings::SettingValue::Map(overrides))
             } else if id == "compare.defaults" {
                 overrides.retain(|key, _| !key.starts_with("diff."));
                 self.compare.color_blind = false;
-                self.settings.controller.edit(
-                    "theme.overrides",
-                    bareline_settings::SettingValue::Map(overrides),
-                )
+                self.settings
+                    .controller
+                    .edit("theme.overrides", bareline_settings::SettingValue::Map(overrides))
             } else if id == "compare.colorblind" {
                 self.compare.color_blind = !self.compare.color_blind;
                 for (key, value) in [
@@ -543,10 +881,9 @@ impl Shell {
                         overrides.remove(key);
                     }
                 }
-                self.settings.controller.edit(
-                    "theme.overrides",
-                    bareline_settings::SettingValue::Map(overrides),
-                )
+                self.settings
+                    .controller
+                    .edit("theme.overrides", bareline_settings::SettingValue::Map(overrides))
             } else {
                 self.settings.controller.edit(
                     "theme.mode",
@@ -560,11 +897,10 @@ impl Shell {
                     ),
                 )
             };
-            self.compare
-                .color_field
-                .set_validation(edit.as_ref().err().cloned());
+            self.compare.color_field.set_validation(edit.as_ref().err().cloned());
             if edit.is_ok() {
                 self.compare.active_color = None;
+                self.modal_text_owner(modal::ModalSurface::CompareOptions, None);
             }
             if let Some(workspace) = &mut self.workspace {
                 workspace.message = edit.err();
@@ -580,19 +916,17 @@ impl Shell {
         if id == "compare.open" {
             if let Some(workspace) = &self.workspace {
                 let left = self.app.active;
-                if let Some(right) = (0..workspace.editors.len())
-                    .find(|i| *i != left)
-                {
+                if let Some(right) = (0..workspace.editors.len()).find(|i| *i != left) {
                     self.compare_start_pair(left, right);
                 } else if let Some(workspace) = &mut self.workspace {
-                    workspace.message =
-                        Some("Open two text documents, then choose Compare documents.".into());
+                    workspace.message = Some("Open two text documents, then choose Compare documents.".into());
                 }
             }
             self.compare_redraw();
             return true;
         }
         if id == "compare.close" {
+            self.dismiss_modal(modal::ModalSurface::CompareOptions);
             if let Some(workspace) = &mut self.workspace {
                 self.views.close_compare(workspace);
             }
@@ -600,7 +934,7 @@ impl Shell {
                 self.compare.color_field.release(renderer);
             }
             let saved = std::mem::take(&mut self.compare.saved);
-            let saved_paged=std::mem::take(&mut self.compare.saved_paged);
+            let saved_paged = std::mem::take(&mut self.compare.saved_paged);
             self.compare = CompareRuntime {
                 saved,
                 saved_paged,
@@ -609,17 +943,22 @@ impl Shell {
             self.compare_redraw();
             return true;
         }
-        let Some(indices) = self
-            .workspace
-            .as_ref()
-            .and_then(|w| self.compare.indices(w))
-        else {
+        if id == "compare.options" {
+            if self.compare.options_open {
+                self.dismiss_modal(modal::ModalSurface::CompareOptions);
+            } else {
+                self.activate_modal(modal::ModalSurface::CompareOptions);
+                self.compare.options_open = true;
+                self.compare.focus = 0;
+                self.compare.colors_tab = true;
+            }
+            self.compare_redraw();
+            return true;
+        }
+        let Some(indices) = self.workspace.as_ref().and_then(|w| self.compare.indices(w)) else {
             return true;
         };
-        if matches!(
-            id,
-            "compare.leftSource" | "compare.rightSource" | "compare.swap"
-        ) {
+        if matches!(id, "compare.leftSource" | "compare.rightSource" | "compare.swap") {
             let mut pair = indices;
             if id == "compare.swap" {
                 pair.swap(0, 1);
@@ -641,40 +980,116 @@ impl Shell {
         };
         let snapshots = indices.map(|i| workspace.editors[i].snapshot().clone());
         let inputs = indices.map(|i| compare_input(&workspace.editors[i]));
-        let selections=self.views.compare_selections(workspace);
+        let selections = self.views.compare_selections(workspace);
         let Some(controller) = &mut self.compare.controller else {
             return true;
         };
         match id {
-            "compare.copySelectionLeftToRight"|"compare.copySelectionRightToLeft"=>{
-                if self.compare.pending_merge.is_some()||self.compare.merge_receipt.is_some()||self.compare.merge_promotion.is_some(){return true;}
-                let side=usize::from(id=="compare.copySelectionLeftToRight");
-                let Some(selections)=selections else{return true;};
-                let ranges=selections.map(|s|bareline_document::TextOffset(s.anchor.min(s.caret))..bareline_document::TextOffset(s.anchor.max(s.caret)));
-                if ranges[1-side].is_empty(){workspace.message=Some("Select source text to copy first".into());return true;}
-                if workspace.editors[indices[side]].read_only()||workspace.editors[indices[side]].busy(){workspace.message=Some("Destination is busy or read-only".into());return true;}
-                let captured=inputs[side].clone();let quota=workspace.transcode_quota_bytes;let budget=workspace.source_edit_budget();
-                let metadata=merge_metadata(selections[side],ranges[side].start.0,ranges[1-side].end.0-ranges[1-side].start.0);
-                if let CompareInput::Resident(snapshot)=&inputs[side] {
-                    if ranges[1-side].end.0-ranges[1-side].start.0>1024*1024||ranges[side].end.0-ranges[side].start.0>1024*1024 {
-                        match workspace.promote_resident_for_source_edit(indices[side],snapshot.identity_token()){
-                            Ok(_)=>{self.compare.merge_promotion=Some(MergePromotion{indices,inputs,side,ranges,hunk:None,metadata});controller.invalidate();controller.state=CompareState::Running;workspace.message=Some("Preparing destination storage for selected-range copy…".into());},
-                            Err(error)=>workspace.message=Some(error),
+            "compare.copySelectionLeftToRight" | "compare.copySelectionRightToLeft" => {
+                if self.compare.pending_merge.is_some()
+                    || self.compare.merge_receipt.is_some()
+                    || self.compare.merge_promotion.is_some()
+                {
+                    return true;
+                }
+                let side = usize::from(id == "compare.copySelectionLeftToRight");
+                let Some(selections) = selections else {
+                    return true;
+                };
+                let ranges = selections.map(|s| {
+                    bareline_document::TextOffset(s.anchor.min(s.caret))
+                        ..bareline_document::TextOffset(s.anchor.max(s.caret))
+                });
+                if ranges[1 - side].is_empty() {
+                    workspace.message = Some("Select source text to copy first".into());
+                    return true;
+                }
+                if workspace.editors[indices[side]].read_only() || workspace.editors[indices[side]].busy() {
+                    workspace.message = Some("Destination is busy or read-only".into());
+                    return true;
+                }
+                let captured = inputs[side].clone();
+                let quota = workspace.transcode_quota_bytes;
+                let budget = workspace.source_edit_budget();
+                let metadata = merge_metadata(
+                    selections[side],
+                    ranges[side].start.0,
+                    ranges[1 - side].end.0 - ranges[1 - side].start.0,
+                );
+                if let CompareInput::Resident(snapshot) = &inputs[side] {
+                    if ranges[1 - side].end.0 - ranges[1 - side].start.0 > 1024 * 1024
+                        || ranges[side].end.0 - ranges[side].start.0 > 1024 * 1024
+                    {
+                        match workspace.promote_resident_for_source_edit(indices[side], snapshot.identity_token()) {
+                            Ok(_) => {
+                                self.compare.merge_promotion = Some(MergePromotion {
+                                    indices,
+                                    inputs,
+                                    side,
+                                    ranges,
+                                    hunk: None,
+                                    metadata,
+                                });
+                                controller.invalidate();
+                                controller.state = CompareState::Running;
+                                workspace.message =
+                                    Some("Preparing destination storage for selected-range copy…".into());
+                            }
+                            Err(error) => workspace.message = Some(error),
                         }
                         return true;
                     }
                 }
-                let cancel=bareline_diff::CancelToken::default();let worker_cancel=cancel.clone();let notify=self.notify.clone();let (send,result)=std::sync::mpsc::sync_channel(1);
-                let captured_inputs=inputs.clone();
-                let spawned=std::thread::Builder::new().name("compare-selected-copy".into()).spawn(move||{
-                    let result=if matches!(inputs[side],CompareInput::Resident(_)){
-                        bareline_app::compare::prepare_input_range_copy(&inputs[1-side],ranges[1-side].clone(),&inputs[side],ranges[side].clone(),1024*1024,&worker_cancel).map(PreparedMerge::Text)
-                    }else{
-                        bareline_app::compare::prepare_streamed_range_copy(&inputs[1-side],ranges[1-side].clone(),&inputs[side],ranges[side].clone(),metadata,budget,&std::env::temp_dir().join("Bareline-compare-staging"),quota,std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),&worker_cancel).map(PreparedMerge::Source)
-                    };let _=send.send(result);notify();
-                });
-                if spawned.is_ok(){controller.invalidate();controller.state=CompareState::Running;self.compare.pending_merge=Some(PendingMerge{source:captured,inputs:captured_inputs,cancel,result});workspace.message=Some("Preparing explicit selected-range copy · Cancel stops staging".into());}else{workspace.message=Some("Could not start copy worker; retry".into());}
-            },
+                let cancel = bareline_diff::CancelToken::default();
+                let worker_cancel = cancel.clone();
+                let notify = self.notify.clone();
+                let (send, result) = std::sync::mpsc::sync_channel(1);
+                let captured_inputs = inputs.clone();
+                let spawned = std::thread::Builder::new()
+                    .name("compare-selected-copy".into())
+                    .spawn(move || {
+                        let result = if matches!(inputs[side], CompareInput::Resident(_)) {
+                            bareline_app::compare::prepare_input_range_copy(
+                                &inputs[1 - side],
+                                ranges[1 - side].clone(),
+                                &inputs[side],
+                                ranges[side].clone(),
+                                1024 * 1024,
+                                &worker_cancel,
+                            )
+                            .map(PreparedMerge::Text)
+                        } else {
+                            bareline_app::compare::prepare_streamed_range_copy(
+                                &inputs[1 - side],
+                                ranges[1 - side].clone(),
+                                &inputs[side],
+                                ranges[side].clone(),
+                                metadata,
+                                budget,
+                                &std::env::temp_dir().join("Bareline-compare-staging"),
+                                quota,
+                                std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+                                &worker_cancel,
+                            )
+                            .map(PreparedMerge::Source)
+                        };
+                        let _ = send.send(result);
+                        notify();
+                    });
+                if spawned.is_ok() {
+                    controller.invalidate();
+                    controller.state = CompareState::Running;
+                    self.compare.pending_merge = Some(PendingMerge {
+                        source: captured,
+                        inputs: captured_inputs,
+                        cancel,
+                        result,
+                    });
+                    workspace.message = Some("Preparing explicit selected-range copy · Cancel stops staging".into());
+                } else {
+                    workspace.message = Some("Could not start copy worker; retry".into());
+                }
+            }
             "compare.next" | "compare.previous" => {
                 if let Some(hunk) = controller.navigate(id == "compare.previous") {
                     self.views
@@ -682,63 +1097,142 @@ impl Shell {
                 }
             }
             "compare.recompare" => {
-                let _ = controller.start_inputs(
-                    inputs[0].clone(),
-                    inputs[1].clone(),
-                    self.notify.clone(),
-                );
+                let _ = controller.start_inputs(inputs[0].clone(), inputs[1].clone(), self.notify.clone());
             }
-            "compare.cancel" => {controller.cancel();self.compare.pending_merge=None;self.compare.merge_promotion=None;},
-            "compare.options" => {
-                self.compare.options_open = !self.compare.options_open;
-                if !self.compare.options_open
-                    && let Some(renderer) = &mut self.renderer
-                {
-                    self.compare.color_field.release(renderer);
-                }
-                self.compare.focus = 0;
-                self.compare.colors_tab = true;
+            "compare.cancel" => {
+                controller.cancel();
+                self.compare.pending_merge = None;
+                self.compare.merge_promotion = None;
             }
             "compare.pauseAutomatic" => controller.pause_automatic = !controller.pause_automatic,
             "compare.syncHorizontal" => controller.sync_horizontal = !controller.sync_horizontal,
             "compare.copyLeftToRight" | "compare.copyRightToLeft" => {
                 let side = usize::from(id == "compare.copyLeftToRight");
-                if self.compare.pending_merge.is_some()||self.compare.merge_promotion.is_some()||self.compare.merge_receipt.is_some(){return true;}
-                if workspace.editors[indices[side]].read_only()||workspace.editors[indices[side]].busy(){workspace.message=Some("Destination is busy or read-only".into());return true;}
+                if self.compare.pending_merge.is_some()
+                    || self.compare.merge_promotion.is_some()
+                    || self.compare.merge_receipt.is_some()
+                {
+                    return true;
+                }
+                if workspace.editors[indices[side]].read_only() || workspace.editors[indices[side]].busy() {
+                    workspace.message = Some("Destination is busy or read-only".into());
+                    return true;
+                }
                 let direction = if side == 1 {
                     Direction::LeftToRight
                 } else {
                     Direction::RightToLeft
                 };
-                controller.visible_input_hunks(&inputs[0],&inputs[1]);
-                if let (CompareInput::Resident(snapshot),Some(hunk))=(&inputs[side],controller.current_hunk().cloned()) {
-                    if hunk.left.end.0-hunk.left.start.0>1024*1024||hunk.right.end.0-hunk.right.start.0>1024*1024 {
-                        let ranges=[hunk.left.clone(),hunk.right.clone()];
-                        let metadata=merge_metadata(selections.map(|s|s[side]).unwrap_or_default(),ranges[side].start.0,ranges[1-side].end.0-ranges[1-side].start.0);
-                        match workspace.promote_resident_for_source_edit(indices[side],snapshot.identity_token()){
-                            Ok(_)=>{self.compare.merge_promotion=Some(MergePromotion{indices,inputs,side,ranges,hunk:Some(hunk),metadata});controller.invalidate();controller.state=CompareState::Running;workspace.message=Some("Preparing destination storage for large difference…".into());},Err(error)=>workspace.message=Some(error),
+                controller.visible_input_hunks(&inputs[0], &inputs[1]);
+                if let (CompareInput::Resident(snapshot), Some(hunk)) =
+                    (&inputs[side], controller.current_hunk().cloned())
+                {
+                    if hunk.left.end.0 - hunk.left.start.0 > 1024 * 1024
+                        || hunk.right.end.0 - hunk.right.start.0 > 1024 * 1024
+                    {
+                        let ranges = [hunk.left.clone(), hunk.right.clone()];
+                        let metadata = merge_metadata(
+                            selections.map(|s| s[side]).unwrap_or_default(),
+                            ranges[side].start.0,
+                            ranges[1 - side].end.0 - ranges[1 - side].start.0,
+                        );
+                        match workspace.promote_resident_for_source_edit(indices[side], snapshot.identity_token()) {
+                            Ok(_) => {
+                                self.compare.merge_promotion = Some(MergePromotion {
+                                    indices,
+                                    inputs,
+                                    side,
+                                    ranges,
+                                    hunk: Some(hunk),
+                                    metadata,
+                                });
+                                controller.invalidate();
+                                controller.state = CompareState::Running;
+                                workspace.message = Some("Preparing destination storage for large difference…".into());
+                            }
+                            Err(error) => workspace.message = Some(error),
                         }
                         return true;
                     }
                 }
-                if inputs.iter().any(|input|!matches!(input,CompareInput::Resident(_))) {
-                    if self.compare.pending_merge.is_some(){return true;}
-                    controller.visible_input_hunks(&inputs[0],&inputs[1]);
-                    let Some(hunk)=controller.current_hunk().cloned()else{return true;};
-                    if workspace.editors[indices[side]].read_only()||workspace.editors[indices[side]].busy(){workspace.message=Some("Destination is read-only or busy".into());return true;}
-                    let options=controller.options().clone();let cancel=bareline_diff::CancelToken::default();let worker_cancel=cancel.clone();let captured=inputs[side].clone();let notify=self.notify.clone();let (send,result)=std::sync::mpsc::sync_channel(1);
-                    let quota=workspace.transcode_quota_bytes;let budget=workspace.source_edit_budget();
-                    let (destination_range,source_range)=if side==1{(&hunk.right,&hunk.left)}else{(&hunk.left,&hunk.right)};
-                    let metadata=merge_metadata(selections.map(|s|s[side]).unwrap_or_default(),destination_range.start.0,source_range.end.0-source_range.start.0);
-                    let captured_inputs=inputs.clone();
-                    let spawned=std::thread::Builder::new().name("compare-merge".into()).spawn(move||{
-                        let large=hunk.left.end.0.saturating_sub(hunk.left.start.0)>1024*1024||hunk.right.end.0.saturating_sub(hunk.right.start.0)>1024*1024;
-                        let result=if large {
-                            bareline_app::compare::prepare_streamed_hunk_merge(&inputs[0],&inputs[1],&hunk,direction,MergePolicy::PreserveIgnoredDestination,metadata,budget,&std::env::temp_dir().join("Bareline-compare-staging"),quota,std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),&worker_cancel).map(PreparedMerge::Source)
-                        } else {bareline_app::compare::prepare_input_merge(&inputs[0],&inputs[1],&hunk,direction,&options,MergePolicy::PreserveIgnoredDestination,1024*1024,&worker_cancel).map(PreparedMerge::Text)};
-                        let _=send.send(result);notify();
+                if inputs.iter().any(|input| !matches!(input, CompareInput::Resident(_))) {
+                    if self.compare.pending_merge.is_some() {
+                        return true;
+                    }
+                    controller.visible_input_hunks(&inputs[0], &inputs[1]);
+                    let Some(hunk) = controller.current_hunk().cloned() else {
+                        return true;
+                    };
+                    if workspace.editors[indices[side]].read_only() || workspace.editors[indices[side]].busy() {
+                        workspace.message = Some("Destination is read-only or busy".into());
+                        return true;
+                    }
+                    let options = controller.options().clone();
+                    let cancel = bareline_diff::CancelToken::default();
+                    let worker_cancel = cancel.clone();
+                    let captured = inputs[side].clone();
+                    let notify = self.notify.clone();
+                    let (send, result) = std::sync::mpsc::sync_channel(1);
+                    let quota = workspace.transcode_quota_bytes;
+                    let budget = workspace.source_edit_budget();
+                    let (destination_range, source_range) = if side == 1 {
+                        (&hunk.right, &hunk.left)
+                    } else {
+                        (&hunk.left, &hunk.right)
+                    };
+                    let metadata = merge_metadata(
+                        selections.map(|s| s[side]).unwrap_or_default(),
+                        destination_range.start.0,
+                        source_range.end.0 - source_range.start.0,
+                    );
+                    let captured_inputs = inputs.clone();
+                    let spawned = std::thread::Builder::new().name("compare-merge".into()).spawn(move || {
+                        let large = hunk.left.end.0.saturating_sub(hunk.left.start.0) > 1024 * 1024
+                            || hunk.right.end.0.saturating_sub(hunk.right.start.0) > 1024 * 1024;
+                        let result = if large {
+                            bareline_app::compare::prepare_streamed_hunk_merge(
+                                &inputs[0],
+                                &inputs[1],
+                                &hunk,
+                                direction,
+                                MergePolicy::PreserveIgnoredDestination,
+                                metadata,
+                                budget,
+                                &std::env::temp_dir().join("Bareline-compare-staging"),
+                                quota,
+                                std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+                                &worker_cancel,
+                            )
+                            .map(PreparedMerge::Source)
+                        } else {
+                            bareline_app::compare::prepare_input_merge(
+                                &inputs[0],
+                                &inputs[1],
+                                &hunk,
+                                direction,
+                                &options,
+                                MergePolicy::PreserveIgnoredDestination,
+                                1024 * 1024,
+                                &worker_cancel,
+                            )
+                            .map(PreparedMerge::Text)
+                        };
+                        let _ = send.send(result);
+                        notify();
                     });
-                    if spawned.is_ok(){controller.invalidate();controller.state=CompareState::Running;self.compare.pending_merge=Some(PendingMerge{source:captured,inputs:captured_inputs,cancel,result});workspace.message=Some("Preparing difference · Cancel stops staging".into());}else{workspace.message=Some("Could not start merge worker; retry".into());}
+                    if spawned.is_ok() {
+                        controller.invalidate();
+                        controller.state = CompareState::Running;
+                        self.compare.pending_merge = Some(PendingMerge {
+                            source: captured,
+                            inputs: captured_inputs,
+                            cancel,
+                            result,
+                        });
+                        workspace.message = Some("Preparing difference · Cancel stops staging".into());
+                    } else {
+                        workspace.message = Some("Could not start merge worker; retry".into());
+                    }
                     return true;
                 }
                 match controller.merge(
@@ -750,20 +1244,13 @@ impl Shell {
                 ) {
                     Ok(transaction) => {
                         workspace.message = Some(
-                            match workspace.editors[indices[side]]
-                                .apply_prepared(&snapshots[side], transaction)
-                            {
-                                Ok(()) => {
-                                    "Difference applied · Undo restores the destination".into()
-                                }
+                            match workspace.editors[indices[side]].apply_prepared(&snapshots[side], transaction) {
+                                Ok(()) => "Difference applied · Undo restores the destination".into(),
                                 Err(e) => e.into(),
                             },
                         );
                     }
-                    Err(error) => {
-                        workspace.message =
-                            Some(format!("Difference could not be applied: {error:?}"))
-                    }
+                    Err(error) => workspace.message = Some(format!("Difference could not be applied: {error:?}")),
                 }
             }
             _ => {
@@ -791,22 +1278,14 @@ impl Shell {
                         }
                     }
                     "compare.ignoreCase" => options.ignore_case = !options.ignore_case,
-                    "compare.ignoreBlank" => {
-                        options.ignore_blank_lines = !options.ignore_blank_lines
-                    }
+                    "compare.ignoreBlank" => options.ignore_blank_lines = !options.ignore_blank_lines,
                     "compare.ignoreEol" => options.ignore_eol_style = !options.ignore_eol_style,
-                    "compare.ignoreBom" => {
-                        options.ignore_encoding_bom = !options.ignore_encoding_bom
-                    }
+                    "compare.ignoreBom" => options.ignore_encoding_bom = !options.ignore_encoding_bom,
                     "compare.normalizeTabs" => options.normalize_tabs = !options.normalize_tabs,
                     _ => return true,
                 }
                 controller.set_options(options);
-                let _ = controller.start_inputs(
-                    inputs[0].clone(),
-                    inputs[1].clone(),
-                    self.notify.clone(),
-                );
+                let _ = controller.start_inputs(inputs[0].clone(), inputs[1].clone(), self.notify.clone());
             }
         }
         self.compare_redraw();
@@ -821,89 +1300,260 @@ impl Shell {
         let Some(workspace) = &mut self.workspace else {
             return;
         };
-        if let Some(promotion)=&self.compare.merge_promotion {
-            let identity=match &promotion.inputs[promotion.side]{CompareInput::Resident(snapshot)=>snapshot.identity_token(),_=>unreachable!()};
-            match workspace.promote_resident_for_source_edit(promotion.indices[promotion.side],identity){
-                Ok(false)=>return,
-                Err(error)=>{self.compare.merge_promotion=None;workspace.message=Some(format!("Merge was not applied: {error}"));if let Some(controller)=&mut self.compare.controller{controller.invalidate();}return;},
-                Ok(true)=>{},
+        if let Some(promotion) = &self.compare.merge_promotion {
+            let identity = match &promotion.inputs[promotion.side] {
+                CompareInput::Resident(snapshot) => snapshot.identity_token(),
+                _ => unreachable!(),
+            };
+            match workspace.promote_resident_for_source_edit(promotion.indices[promotion.side], identity) {
+                Ok(false) => return,
+                Err(error) => {
+                    self.compare.merge_promotion = None;
+                    workspace.message = Some(format!("Merge was not applied: {error}"));
+                    if let Some(controller) = &mut self.compare.controller {
+                        controller.invalidate();
+                    }
+                    return;
+                }
+                Ok(true) => {}
             }
-            let Some(other)=workspace.editors.get(promotion.indices[1-promotion.side])else{self.compare.merge_promotion=None;workspace.message=Some("Source closed; merge was not applied".into());if let Some(controller)=&mut self.compare.controller{controller.invalidate();}return;};
-            if promotion.indices[0]!=promotion.indices[1]&&!promotion.inputs[1-promotion.side].current(&compare_input(other)){
-                self.compare.merge_promotion=None;workspace.message=Some("Source changed while preparing destination; merge was not applied".into());if let Some(controller)=&mut self.compare.controller{controller.invalidate();}return;
+            let Some(other) = workspace.editors.get(promotion.indices[1 - promotion.side]) else {
+                self.compare.merge_promotion = None;
+                workspace.message = Some("Source closed; merge was not applied".into());
+                if let Some(controller) = &mut self.compare.controller {
+                    controller.invalidate();
+                }
+                return;
+            };
+            if promotion.indices[0] != promotion.indices[1]
+                && !promotion.inputs[1 - promotion.side].current(&compare_input(other))
+            {
+                self.compare.merge_promotion = None;
+                workspace.message = Some("Source changed while preparing destination; merge was not applied".into());
+                if let Some(controller) = &mut self.compare.controller {
+                    controller.invalidate();
+                }
+                return;
             }
-            if !self.views.compare_pair(workspace,promotion.indices[0],promotion.indices[1]){return;}
-            let mut promotion=self.compare.merge_promotion.take().unwrap();
-            promotion.inputs=promotion.indices.map(|i|compare_input(&workspace.editors[i]));
-            self.compare.documents=Some(promotion.inputs.clone());
-            let captured=promotion.inputs[promotion.side].clone();let quota=workspace.transcode_quota_bytes;let budget=workspace.source_edit_budget();
-            let cancel=bareline_diff::CancelToken::default();let worker_cancel=cancel.clone();let notify=self.notify.clone();let (send,result)=std::sync::mpsc::sync_channel(1);
-            let captured_inputs=promotion.inputs.clone();
-            let spawned=std::thread::Builder::new().name("compare-promoted-merge".into()).spawn(move||{
-                let cache=std::env::temp_dir().join("Bareline-compare-staging");let platform=std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem);
-                let result=if let Some(hunk)=promotion.hunk{
-                    bareline_app::compare::prepare_streamed_hunk_merge(&promotion.inputs[0],&promotion.inputs[1],&hunk,if promotion.side==1{Direction::LeftToRight}else{Direction::RightToLeft},MergePolicy::PreserveIgnoredDestination,promotion.metadata,budget,&cache,quota,platform,&worker_cancel)
-                }else{bareline_app::compare::prepare_streamed_range_copy(&promotion.inputs[1-promotion.side],promotion.ranges[1-promotion.side].clone(),&promotion.inputs[promotion.side],promotion.ranges[promotion.side].clone(),promotion.metadata,budget,&cache,quota,platform,&worker_cancel)};
-                let _=send.send(result.map(PreparedMerge::Source));notify();
-            });
-            if spawned.is_ok(){self.compare.pending_merge=Some(PendingMerge{source:captured,inputs:captured_inputs,cancel,result});workspace.message=Some("Preparing streamed merge · Cancel stops staging".into());}else{workspace.message=Some("Could not start merge worker; retry".into());if let Some(controller)=&mut self.compare.controller{controller.invalidate();}}
+            if !self
+                .views
+                .compare_pair(workspace, promotion.indices[0], promotion.indices[1])
+            {
+                return;
+            }
+            let mut promotion = self.compare.merge_promotion.take().unwrap();
+            promotion.inputs = promotion.indices.map(|i| compare_input(&workspace.editors[i]));
+            self.compare.documents = Some(promotion.inputs.clone());
+            let captured = promotion.inputs[promotion.side].clone();
+            let quota = workspace.transcode_quota_bytes;
+            let budget = workspace.source_edit_budget();
+            let cancel = bareline_diff::CancelToken::default();
+            let worker_cancel = cancel.clone();
+            let notify = self.notify.clone();
+            let (send, result) = std::sync::mpsc::sync_channel(1);
+            let captured_inputs = promotion.inputs.clone();
+            let spawned = std::thread::Builder::new()
+                .name("compare-promoted-merge".into())
+                .spawn(move || {
+                    let cache = std::env::temp_dir().join("Bareline-compare-staging");
+                    let platform = std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem);
+                    let result = if let Some(hunk) = promotion.hunk {
+                        bareline_app::compare::prepare_streamed_hunk_merge(
+                            &promotion.inputs[0],
+                            &promotion.inputs[1],
+                            &hunk,
+                            if promotion.side == 1 {
+                                Direction::LeftToRight
+                            } else {
+                                Direction::RightToLeft
+                            },
+                            MergePolicy::PreserveIgnoredDestination,
+                            promotion.metadata,
+                            budget,
+                            &cache,
+                            quota,
+                            platform,
+                            &worker_cancel,
+                        )
+                    } else {
+                        bareline_app::compare::prepare_streamed_range_copy(
+                            &promotion.inputs[1 - promotion.side],
+                            promotion.ranges[1 - promotion.side].clone(),
+                            &promotion.inputs[promotion.side],
+                            promotion.ranges[promotion.side].clone(),
+                            promotion.metadata,
+                            budget,
+                            &cache,
+                            quota,
+                            platform,
+                            &worker_cancel,
+                        )
+                    };
+                    let _ = send.send(result.map(PreparedMerge::Source));
+                    notify();
+                });
+            if spawned.is_ok() {
+                self.compare.pending_merge = Some(PendingMerge {
+                    source: captured,
+                    inputs: captured_inputs,
+                    cancel,
+                    result,
+                });
+                workspace.message = Some("Preparing streamed merge · Cancel stops staging".into());
+            } else {
+                workspace.message = Some("Could not start merge worker; retry".into());
+                if let Some(controller) = &mut self.compare.controller {
+                    controller.invalidate();
+                }
+            }
         }
-        if let Some(pending)=&self.compare.pending_merge {
+        if let Some(pending) = &self.compare.pending_merge {
             // Promotion and viewport changes may leave a read or selection check
             // pending. Keep the prepared token in its channel until admission is
             // available, then perform the existing captured-source validation.
-            if workspace.editors.iter().any(|editor|pending.source.same_document(&compare_input(editor))&&editor.busy()){return;}
-            let received=match pending.result.try_recv(){Ok(result)=>Some(result),Err(std::sync::mpsc::TryRecvError::Empty)=>None,Err(_)=>Some(Err(bareline_diff::ApplyError::Unavailable))};
-            if let Some(received)=received {
-                let pending=self.compare.pending_merge.take().unwrap();
-                let received=if pending.inputs.iter().all(|input|workspace.editors.iter().any(|editor|input.current(&compare_input(editor)))){received}else{Err(bareline_diff::ApplyError::Stale)};
-                let result=received.map_err(|e|format!("Merge could not be staged: {e:?}. Ignored-content preservation requires an exact supported range; explicit selected-range copy uses the selected bytes."));
-                let message=match result {
-                    Ok(PreparedMerge::Source(prepared))=>match workspace.editors.iter_mut().find(|e|compare_input(e).same_document(&pending.source)) {
-                        Some(bareline_app::workspace::WorkspaceEditor::Paged(editor))=>{
-                            editor.set_streaming_quota(workspace.transcode_quota_bytes);
-                            let source=match &pending.source {CompareInput::Paged(handle)=>Some(handle.snapshot()),CompareInput::CapturedPaged(snapshot,_)=>Some(snapshot),_=>None};
-                            match source.ok_or_else(||"Destination changed".to_string()).and_then(|source|editor.apply_prepared_source_tracked(source,prepared)){
-                                Ok(receipt)=>{self.compare.merge_receipt=Some(receipt);"Applying difference and recording recovery…".into()},Err(error)=>error,
-                            }
-                        },_=>"Destination changed; difference was not applied".into(),
-                    },
-                    Ok(PreparedMerge::Text(transaction))=>match workspace.editors.iter_mut().find(|e|compare_input(e).same_document(&pending.source)) {
-                        Some(editor)=>match (editor,&pending.source){(bareline_app::workspace::WorkspaceEditor::Resident(editor),CompareInput::Resident(source))=>editor.apply_prepared(source,transaction).map_err(String::from),(bareline_app::workspace::WorkspaceEditor::Paged(editor),CompareInput::Paged(source))=>editor.apply_prepared(source.snapshot(),transaction),(bareline_app::workspace::WorkspaceEditor::Paged(editor),CompareInput::CapturedPaged(source,_))=>editor.apply_prepared(source,transaction),_=>Err("Destination changed".into())}.map_or_else(|e|e,|()|"Difference queued as one undoable edit; destination remains unsaved".into()),
-                        None=>"Destination closed; difference was not applied".into(),
-                    },Err(e)=>e,
-                };
-                workspace.message=Some(message);if let Some(controller)=&mut self.compare.controller{controller.invalidate();}
-            }
-        }
-        if let Some(receipt)=&self.compare.merge_receipt {
-            if let Some(result)=receipt.terminal(){
-                // Durable worker completion precedes delivery of its new snapshot
-                // to the UI surface. Let that reply settle before reporting it.
-                if workspace.editors.iter().any(|editor|{
-                    let identity=match editor{bareline_app::workspace::WorkspaceEditor::Resident(editor)=>editor.snapshot().identity_token(),bareline_app::workspace::WorkspaceEditor::Paged(editor)=>editor.snapshot().identity_token()};
-                    identity.0==receipt.captured_identity_token.0&&editor.busy()
-                }){return;}
-                workspace.message=Some(result.map_or_else(|error|format!("Merge was not applied: {error}"),|_|"Difference applied as one undoable edit with recovery recorded; destination remains unsaved".into()));
-                self.compare.merge_receipt=None;
-                if let Some(controller)=&mut self.compare.controller{controller.invalidate();}
-            }
-        }
-        self.compare.saved_paged.retain(|(saved,_)|workspace.editors.iter().any(|e|match e{bareline_app::workspace::WorkspaceEditor::Paged(p)=>p.snapshot().same_document(saved.snapshot()),_=>false}));
-        let paged_titles=workspace.titles();
-        for (index,editor) in workspace.editors.iter().enumerate(){if let bareline_app::workspace::WorkspaceEditor::Paged(paged)=editor{if workspace.path(index).is_some()&&!paged.dirty()&&!paged.busy(){if let Some((saved,_))=self.compare.saved_paged.iter_mut().find(|(saved,_)|saved.snapshot().same_document(paged.snapshot())){*saved=paged.read_handle();}else if self.compare.saved_paged.len()<4096{self.compare.saved_paged.push((paged.read_handle(),paged_titles[index].clone()));}}}}
-        self.compare.saved.retain(|(saved, _)| {
-            workspace
+            if workspace
                 .editors
                 .iter()
-                .any(|e| e.snapshot().same_document(saved))
+                .any(|editor| pending.source.same_document(&compare_input(editor)) && editor.busy())
+            {
+                return;
+            }
+            let received = match pending.result.try_recv() {
+                Ok(result) => Some(result),
+                Err(std::sync::mpsc::TryRecvError::Empty) => None,
+                Err(_) => Some(Err(bareline_diff::ApplyError::Unavailable)),
+            };
+            if let Some(received) = received {
+                let pending = self.compare.pending_merge.take().unwrap();
+                let received = if pending.inputs.iter().all(|input| {
+                    workspace
+                        .editors
+                        .iter()
+                        .any(|editor| input.current(&compare_input(editor)))
+                }) {
+                    received
+                } else {
+                    Err(bareline_diff::ApplyError::Stale)
+                };
+                let result=received.map_err(|e|format!("Merge could not be staged: {e:?}. Ignored-content preservation requires an exact supported range; explicit selected-range copy uses the selected bytes."));
+                let message = match result {
+                    Ok(PreparedMerge::Source(prepared)) => match workspace
+                        .editors
+                        .iter_mut()
+                        .find(|e| compare_input(e).same_document(&pending.source))
+                    {
+                        Some(bareline_app::workspace::WorkspaceEditor::Paged(editor)) => {
+                            editor.set_streaming_quota(workspace.transcode_quota_bytes);
+                            let source = match &pending.source {
+                                CompareInput::Paged(handle) => Some(handle.snapshot()),
+                                CompareInput::CapturedPaged(snapshot, _) => Some(snapshot),
+                                _ => None,
+                            };
+                            match source
+                                .ok_or_else(|| "Destination changed".to_string())
+                                .and_then(|source| editor.apply_prepared_source_tracked(source, prepared))
+                            {
+                                Ok(receipt) => {
+                                    self.compare.merge_receipt = Some(receipt);
+                                    "Applying difference and recording recovery…".into()
+                                }
+                                Err(error) => error,
+                            }
+                        }
+                        _ => "Destination changed; difference was not applied".into(),
+                    },
+                    Ok(PreparedMerge::Text(transaction)) => match workspace
+                        .editors
+                        .iter_mut()
+                        .find(|e| compare_input(e).same_document(&pending.source))
+                    {
+                        Some(editor) => match (editor, &pending.source) {
+                            (
+                                bareline_app::workspace::WorkspaceEditor::Resident(editor),
+                                CompareInput::Resident(source),
+                            ) => editor.apply_prepared(source, transaction).map_err(String::from),
+                            (bareline_app::workspace::WorkspaceEditor::Paged(editor), CompareInput::Paged(source)) => {
+                                editor.apply_prepared(source.snapshot(), transaction)
+                            }
+                            (
+                                bareline_app::workspace::WorkspaceEditor::Paged(editor),
+                                CompareInput::CapturedPaged(source, _),
+                            ) => editor.apply_prepared(source, transaction),
+                            _ => Err("Destination changed".into()),
+                        }
+                        .map_or_else(
+                            |e| e,
+                            |()| "Difference queued as one undoable edit; destination remains unsaved".into(),
+                        ),
+                        None => "Destination closed; difference was not applied".into(),
+                    },
+                    Err(e) => e,
+                };
+                workspace.message = Some(message);
+                if let Some(controller) = &mut self.compare.controller {
+                    controller.invalidate();
+                }
+            }
+        }
+        if let Some(receipt) = &self.compare.merge_receipt {
+            if let Some(result) = receipt.terminal() {
+                // Durable worker completion precedes delivery of its new snapshot
+                // to the UI surface. Let that reply settle before reporting it.
+                if workspace.editors.iter().any(|editor| {
+                    let identity = match editor {
+                        bareline_app::workspace::WorkspaceEditor::Resident(editor) => {
+                            editor.snapshot().identity_token()
+                        }
+                        bareline_app::workspace::WorkspaceEditor::Paged(editor) => editor.snapshot().identity_token(),
+                    };
+                    identity.0 == receipt.captured_identity_token.0 && editor.busy()
+                }) {
+                    return;
+                }
+                workspace.message = Some(result.map_or_else(
+                    |error| format!("Merge was not applied: {error}"),
+                    |_| {
+                        "Difference applied as one undoable edit with recovery recorded; destination remains unsaved"
+                            .into()
+                    },
+                ));
+                self.compare.merge_receipt = None;
+                if let Some(controller) = &mut self.compare.controller {
+                    controller.invalidate();
+                }
+            }
+        }
+        self.compare.saved_paged.retain(|(saved, _)| {
+            workspace.editors.iter().any(|e| match e {
+                bareline_app::workspace::WorkspaceEditor::Paged(p) => p.snapshot().same_document(saved.snapshot()),
+                _ => false,
+            })
         });
+        let paged_titles = workspace.titles();
+        for (index, editor) in workspace.editors.iter().enumerate() {
+            if let bareline_app::workspace::WorkspaceEditor::Paged(paged) = editor {
+                if workspace.path(index).is_some() && !paged.dirty() && !paged.busy() {
+                    if let Some((saved, _)) = self
+                        .compare
+                        .saved_paged
+                        .iter_mut()
+                        .find(|(saved, _)| saved.snapshot().same_document(paged.snapshot()))
+                    {
+                        *saved = paged.read_handle();
+                    } else if self.compare.saved_paged.len() < 4096 {
+                        self.compare
+                            .saved_paged
+                            .push((paged.read_handle(), paged_titles[index].clone()));
+                    }
+                }
+            }
+        }
+        self.compare
+            .saved
+            .retain(|(saved, _)| workspace.editors.iter().any(|e| e.snapshot().same_document(saved)));
         let titles = workspace.titles();
         for (index, editor) in workspace.editors.iter().enumerate() {
-            if !editor.paged()
-                && editor.snapshot().is_complete()
-                && !editor.dirty()
-                && workspace.path(index).is_some()
+            if !editor.paged() && editor.snapshot().is_complete() && !editor.dirty() && workspace.path(index).is_some()
             {
                 if let Some((saved, _)) = self
                     .compare
@@ -927,10 +1577,7 @@ impl Shell {
                 .find(|(index, e)| {
                     workspace.path(*index) == Some(pending.path.as_path())
                         && (e.paged() || e.snapshot().is_complete())
-                        && !pending
-                            .previous
-                            .iter()
-                            .any(|old| old.same_document(&compare_input(e)))
+                        && !pending.previous.iter().any(|old| old.same_document(&compare_input(e)))
                 })
                 .map(|(i, _)| i);
             let left = workspace
@@ -955,6 +1602,12 @@ impl Shell {
         let Some(indices) = self.compare.indices(workspace) else {
             if self.compare.controller.is_some() {
                 self.views.close_compare(workspace);
+                if self
+                    .modal
+                    .is_some_and(|modal| modal.surface == modal::ModalSurface::CompareOptions)
+                {
+                    self.dismiss_modal(modal::ModalSurface::CompareOptions);
+                }
                 self.compare = Default::default();
             }
             return;
@@ -967,42 +1620,86 @@ impl Shell {
             && !controller.pause_automatic
             && indices.iter().all(|i| !workspace.editors[*i].busy())
         {
-            let _ = controller.start_inputs_debounced(
-                snapshots[0].clone(),
-                snapshots[1].clone(),
-                self.notify.clone(),
-            );
+            let _ = controller.start_inputs_debounced(snapshots[0].clone(), snapshots[1].clone(), self.notify.clone());
             changed = true;
         }
         if changed {
-            self.views
-                .set_compare_alignment(controller.alignment().cloned());
+            self.views.set_compare_alignment(controller.alignment().cloned());
             workspace.message = Some(controller.status_text());
             self.compare_redraw();
         }
     }
     pub(super) fn compare_event(&mut self, el: &ActiveEventLoop, event: &WindowEvent) -> bool {
-        if self.compare.controller.is_none() {
+        if self.compare.controller.is_none() || self.palette.open {
             return false;
         }
         match event {
+            WindowEvent::Ime(ime)
+                if self.compare.options_open
+                    && self.compare.active_color.is_some()
+                    && self.modal.is_some_and(|modal| modal.active_text_owner == Some(59_999)) =>
+            {
+                match ime {
+                    Ime::Preedit(value, cursor) => self.compare.color_field.preedit(value.clone(), *cursor),
+                    Ime::Commit(value) => {
+                        if value.chars().all(|c| c == '#' || c.is_ascii_hexdigit()) {
+                            self.compare.color_field.commit(value);
+                        } else {
+                            self.compare.color_field.cancel();
+                        }
+                    }
+                    Ime::Disabled => self.compare.color_field.cancel(),
+                    Ime::Enabled => {}
+                }
+                self.compare_redraw();
+                return true;
+            }
             WindowEvent::MouseInput {
                 state: ElementState::Pressed,
                 button: MouseButton::Left,
                 ..
             } => {
                 let pointer = self.editor_pointer();
-                if self.compare.active_color.is_some()&&self.compare.color_bounds.is_some_and(|bounds|bounds.contains(pointer)) {self.compare.color_focus=true;if let Some(renderer)=&self.renderer{let _=self.compare.color_field.click(renderer,pointer,self.modifiers.shift_key());}self.compare_redraw();return true;}
+                if self.compare.active_color.is_some()
+                    && self.compare.color_bounds.is_some_and(|bounds| bounds.contains(pointer))
+                {
+                    self.compare.color_focus = true;
+                    if let Some(renderer) = &self.renderer {
+                        let _ = self
+                            .compare
+                            .color_field
+                            .click(renderer, pointer, self.modifiers.shift_key());
+                    }
+                    self.compare_redraw();
+                    return true;
+                }
                 if !self.compare.options_open {
-                    if let Some((side,bounds))=self.compare.overview.iter().enumerate().find_map(|(i,r)|r.filter(|r|r.contains(pointer)).map(|r|(i,r))) {
-                        if let Some(workspace)=&mut self.workspace {
-                            if let Some(indices)=self.compare.indices(workspace) {
-                                let length=compare_input(&workspace.editors[indices[side]]).len();
-                                let offset=bareline_document::TextOffset((((pointer.y-bounds.y)/bounds.height).clamp(0.0,1.0) as f64*length as f64) as usize);
-                                if let Some(h)=self.compare.controller.as_mut().and_then(|c|c.navigate_offset(side==1,offset)) {self.views.compare_navigate(workspace,h.left.start,h.right.start);}
+                    if let Some((side, bounds)) = self
+                        .compare
+                        .overview
+                        .iter()
+                        .enumerate()
+                        .find_map(|(i, r)| r.filter(|r| r.contains(pointer)).map(|r| (i, r)))
+                    {
+                        if let Some(workspace) = &mut self.workspace {
+                            if let Some(indices) = self.compare.indices(workspace) {
+                                let length = compare_input(&workspace.editors[indices[side]]).len();
+                                let offset = bareline_document::TextOffset(
+                                    (((pointer.y - bounds.y) / bounds.height).clamp(0.0, 1.0) as f64 * length as f64)
+                                        as usize,
+                                );
+                                if let Some(h) = self
+                                    .compare
+                                    .controller
+                                    .as_mut()
+                                    .and_then(|c| c.navigate_offset(side == 1, offset))
+                                {
+                                    self.views.compare_navigate(workspace, h.left.start, h.right.start);
+                                }
                             }
                         }
-                        self.compare_redraw();return true;
+                        self.compare_redraw();
+                        return true;
                     }
                 }
                 if let Some((index, (_, id))) = self
@@ -1014,38 +1711,45 @@ impl Shell {
                 {
                     let id = *id;
                     self.compare.focus = index;
+                    self.focus_dock_body(super::dock::DockTab::Compare);
                     return self.compare_dispatch(el, id);
                 }
             }
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
                 if self.compare.active_color.is_some() {
                     match &event.logical_key {
-                        Key::Named(NamedKey::Tab)=>{self.compare.color_focus=!self.compare.color_focus;self.compare.focus=0;},
+                        Key::Named(NamedKey::Tab) => {
+                            self.compare.color_focus = !self.compare.color_focus;
+                            self.compare.focus = 0;
+                        }
                         Key::Named(NamedKey::Enter) => {
                             return self.compare_dispatch(el, "compare.applyColor");
                         }
-                        Key::Named(NamedKey::Escape) => self.compare.active_color = None,
+                        Key::Named(NamedKey::Escape) => {
+                            if self.compare.color_field.composing() {
+                                self.compare.color_field.cancel();
+                            } else {
+                                self.dismiss_modal(modal::ModalSurface::CompareOptions);
+                            }
+                        }
                         Key::Named(NamedKey::Backspace) if self.compare.color_focus => {
                             self.compare.color_field.delete(false);
                         }
                         Key::Named(NamedKey::Delete) if self.compare.color_focus => {
                             self.compare.color_field.delete(true);
                         }
-                        Key::Named(NamedKey::ArrowLeft) if self.compare.color_focus => self
-                            .compare
-                            .color_field
-                            .horizontal(false, self.modifiers.shift_key()),
-                        Key::Named(NamedKey::ArrowRight) if self.compare.color_focus => self
-                            .compare
-                            .color_field
-                            .horizontal(true, self.modifiers.shift_key()),
-                        Key::Character(value)
-                            if self.modifiers.control_key() && value.eq_ignore_ascii_case("a") =>
-                        {
+                        Key::Named(NamedKey::ArrowLeft) if self.compare.color_focus => {
+                            self.compare.color_field.horizontal(false, self.modifiers.shift_key())
+                        }
+                        Key::Named(NamedKey::ArrowRight) if self.compare.color_focus => {
+                            self.compare.color_field.horizontal(true, self.modifiers.shift_key())
+                        }
+                        Key::Character(value) if self.modifiers.control_key() && value.eq_ignore_ascii_case("a") => {
                             self.compare.color_field.select_all()
                         }
                         _ => {
-                            if self.compare.color_focus && let Some(value) = &event.text
+                            if self.compare.color_focus
+                                && let Some(value) = &event.text
                                 && value.chars().all(|c| c == '#' || c.is_ascii_hexdigit())
                             {
                                 self.compare.color_field.insert(value);
@@ -1057,16 +1761,44 @@ impl Shell {
                 }
                 match &event.logical_key {
                     Key::Named(NamedKey::Tab | NamedKey::ArrowDown | NamedKey::ArrowUp)
+                        if self.dock.active() == Some(super::dock::DockTab::Compare) && self.compare.dock_focused =>
+                    {
+                        let count = self.compare.hits.len();
+                        if count > 0 {
+                            let backward =
+                                self.modifiers.shift_key() || event.logical_key == Key::Named(NamedKey::ArrowUp);
+                            let tab = event.logical_key == Key::Named(NamedKey::Tab);
+                            if tab && backward && self.compare.focus == 0 {
+                                self.deactivate_dock_focus();
+                                self.dock.focus_active();
+                            } else if tab && !backward && self.compare.focus >= count - 1 {
+                                self.blur_dock_ownership();
+                            } else {
+                                self.compare.focus =
+                                    (self.compare.focus.min(count - 1) + if backward { count - 1 } else { 1 }) % count;
+                            }
+                            self.compare_redraw();
+                        }
+                        return true;
+                    }
+                    Key::Named(NamedKey::Enter | NamedKey::Space)
+                        if self.dock.active() == Some(super::dock::DockTab::Compare) && self.compare.dock_focused =>
+                    {
+                        if let Some((_, id)) = self.compare.hits.get(self.compare.focus) {
+                            return self.compare_dispatch(el, id);
+                        }
+                        return true;
+                    }
+                    Key::Named(NamedKey::Tab | NamedKey::ArrowDown | NamedKey::ArrowUp)
                         if self.compare.options_open =>
                     {
                         let first = 0;
                         let count = self.compare.hits.len().saturating_sub(first);
                         if count > 0 {
-                            let backward = self.modifiers.shift_key()
-                                || event.logical_key == Key::Named(NamedKey::ArrowUp);
+                            let backward =
+                                self.modifiers.shift_key() || event.logical_key == Key::Named(NamedKey::ArrowUp);
                             let current = self.compare.focus.saturating_sub(first).min(count - 1);
-                            self.compare.focus =
-                                first + (current + if backward { count - 1 } else { 1 }) % count;
+                            self.compare.focus = first + (current + if backward { count - 1 } else { 1 }) % count;
                             self.compare_redraw();
                         }
                         return true;
@@ -1078,8 +1810,7 @@ impl Shell {
                         return true;
                     }
                     Key::Named(NamedKey::Escape) if self.compare.options_open => {
-                        self.compare.options_open = false;
-                        self.compare_redraw();
+                        self.dismiss_modal(modal::ModalSurface::CompareOptions);
                         return true;
                     }
                     Key::Named(NamedKey::F7) => {
@@ -1100,9 +1831,7 @@ impl Shell {
         self.compare.options_open
             && matches!(
                 event,
-                WindowEvent::KeyboardInput { .. }
-                    | WindowEvent::MouseInput { .. }
-                    | WindowEvent::MouseWheel { .. }
+                WindowEvent::KeyboardInput { .. } | WindowEvent::MouseInput { .. } | WindowEvent::MouseWheel { .. }
             )
     }
 }
@@ -1115,8 +1844,8 @@ impl CompareRuntime {
         views: &mut views::ViewsRuntime,
         settings: &settings::SettingsRuntime,
         renderer: &mut impl TextBackend,
-        width: f32,
-        height: f32,
+        _width: f32,
+        _height: f32,
         ops: &mut Vec<DrawOp>,
     ) -> Result<(), LayoutError> {
         let Some(indices) = self.indices(workspace) else {
@@ -1124,10 +1853,9 @@ impl CompareRuntime {
         };
         let inputs = indices.map(|i| compare_input(&workspace.editors[i]));
         let geometry = views.compare_geometry();
-        let line_height =
-            (settings.effective().editor_font_size_pt.clamp(6.0, 72.0) * 96.0 / 72.0 * 1.2) as f32;
+        let line_height = (settings.effective().editor_font_size_pt.clamp(6.0, 72.0) * 96.0 / 72.0 * 1.2) as f32;
         let theme = settings.ui_theme();
-        self.color_bounds=None;
+        self.color_bounds = None;
         let colors = [
             "diff.added",
             "diff.removed",
@@ -1144,12 +1872,15 @@ impl CompareRuntime {
         let mut painted = Vec::with_capacity(ops.len() + hunks.len().min(256) * 4);
         for op in ops.drain(..) {
             if let DrawOp::Layout { origin, layout, .. } = &op
-                && let Some(side) = geometry
-                    .iter()
-                    .position(|r| r.is_some_and(|r| r.contains(*origin)))
+                && let Some(side) = geometry.iter().position(|r| r.is_some_and(|r| r.contains(*origin)))
             {
                 let bounds = geometry[side].unwrap();
-                if let Some(line) = views.compare_source_layout_range(workspace,side,*layout) {
+                let text_left = if side == 0 {
+                    workspace.editors[indices[0]].text_left()
+                } else {
+                    views.secondary.as_ref().map_or(64.0, |editor| editor.text_left())
+                };
+                if let Some(line) = views.compare_source_layout_range(workspace, side, *layout) {
                     for hunk in hunks {
                         let range = if side == 0 { &hunk.left } else { &hunk.right };
                         if range.start < line.end && range.end > line.start {
@@ -1160,12 +1891,17 @@ impl CompareRuntime {
                                 _ => 2,
                             }];
                             painted.push(DrawOp::Fill(
-                                rect(bounds.x + 49.0, origin.y, bounds.width - 65.0, line_height),
+                                rect(
+                                    bounds.x + text_left - 15.0,
+                                    origin.y,
+                                    (bounds.width - text_left - 1.0).max(0.0),
+                                    line_height,
+                                ),
                                 color,
                             ));
                             text(
                                 &mut painted,
-                                bounds.x + 35.0,
+                                bounds.x + text_left - 29.0,
                                 origin.y,
                                 match hunk.kind {
                                     DiffKind::Added => "+",
@@ -1174,7 +1910,14 @@ impl CompareRuntime {
                                     _ => "~",
                                 },
                                 12.0,
-                                settings.theme_color(match hunk.kind{DiffKind::Added=>"diff.added.gutter",DiffKind::Removed=>"diff.removed.gutter",DiffKind::MovedAligned=>"diff.moved.gutter",_=>"diff.changed.gutter"}).unwrap_or(theme.text),
+                                settings
+                                    .theme_color(match hunk.kind {
+                                        DiffKind::Added => "diff.added.gutter",
+                                        DiffKind::Removed => "diff.removed.gutter",
+                                        DiffKind::MovedAligned => "diff.moved.gutter",
+                                        _ => "diff.changed.gutter",
+                                    })
+                                    .unwrap_or(theme.text),
                             );
                             if Some(hunk.stable_id) == current {
                                 painted.push(DrawOp::Stroke(
@@ -1188,10 +1931,8 @@ impl CompareRuntime {
                                 let start = span.start.0.max(line.start.0);
                                 let end = span.end.0.min(line.end.0);
                                 if start < end
-                                    && let Ok(rectangles) = renderer.range_rects(
-                                        *layout,
-                                        start - line.start.0..end - line.start.0,
-                                    )
+                                    && let Ok(rectangles) =
+                                        renderer.range_rects(*layout, start - line.start.0..end - line.start.0)
                                 {
                                     for r in rectangles {
                                         painted.push(DrawOp::Stroke(
@@ -1209,75 +1950,208 @@ impl CompareRuntime {
             painted.push(op);
         }
         *ops = painted;
-        self.overview=[None,None];
+        self.overview = [None, None];
         for side in 0..2 {
-            if let Some(pane)=geometry[side] {
-                let track=rect(pane.x+pane.width-10.0,pane.y+TAB_HEIGHT,8.0,(pane.height-TAB_HEIGHT).max(1.0));
-                self.overview[side]=Some(track);
-                ops.push(DrawOp::Fill(track,theme.chrome));
-                let length=inputs[side].len().max(1) as f64;
+            if let Some(pane) = geometry[side] {
+                let track = rect(
+                    pane.x + pane.width - 10.0,
+                    pane.y + TAB_HEIGHT,
+                    8.0,
+                    (pane.height - TAB_HEIGHT).max(1.0),
+                );
+                self.overview[side] = Some(track);
+                ops.push(DrawOp::Fill(track, theme.chrome));
+                let length = inputs[side].len().max(1) as f64;
                 for h in hunks.iter().take(4096) {
-                    let range=if side==0{&h.left}else{&h.right};
-                    let kind=match h.kind{DiffKind::Added=>0,DiffKind::Removed=>1,DiffKind::MovedAligned=>3,_=>2};
-                    let key=["diff.added.overview","diff.removed.overview","diff.changed.overview","diff.moved.overview"][kind];
-                    let y=track.y+(range.start.0 as f64/length*track.height as f64) as f32;
-                    let size=((range.end.0.saturating_sub(range.start.0) as f64/length*track.height as f64) as f32).max(3.0).min(track.height);
-                    let marker=rect(track.x,y.min(track.y+track.height-size),track.width,size);
-                    ops.push(DrawOp::Fill(marker,settings.theme_color(key).unwrap_or(colors[kind])));
-                    if Some(h.stable_id)==current{ops.push(DrawOp::Stroke(marker,colors[4],1.0));}
+                    let range = if side == 0 { &h.left } else { &h.right };
+                    let kind = match h.kind {
+                        DiffKind::Added => 0,
+                        DiffKind::Removed => 1,
+                        DiffKind::MovedAligned => 3,
+                        _ => 2,
+                    };
+                    let key = [
+                        "diff.added.overview",
+                        "diff.removed.overview",
+                        "diff.changed.overview",
+                        "diff.moved.overview",
+                    ][kind];
+                    let y = track.y + (range.start.0 as f64 / length * track.height as f64) as f32;
+                    let size = ((range.end.0.saturating_sub(range.start.0) as f64 / length * track.height as f64)
+                        as f32)
+                        .max(3.0)
+                        .min(track.height);
+                    let marker = rect(track.x, y.min(track.y + track.height - size), track.width, size);
+                    ops.push(DrawOp::Fill(marker, settings.theme_color(key).unwrap_or(colors[kind])));
+                    if Some(h.stable_id) == current {
+                        ops.push(DrawOp::Stroke(marker, colors[4], 1.0));
+                    }
                 }
             }
         }
         self.hits.clear();
-        ops.push(DrawOp::Fill(
-            rect(0.0, TAB_HEIGHT, width, 44.0),
-            theme.chrome,
-        ));
-        let source_width = ((width - 710.0) / 2.0).max(72.0);
-        let mut x = 8.0;
-        let mut button = |label: String, id: &'static str, w: f32| {
-            let bounds = rect(x, TAB_HEIGHT + 6.0, w, 32.0);
-            x += w + 6.0;
-            ops.push(DrawOp::StrokeRounded(bounds, theme.border, 4.0, 1.0));
-            ops.push(DrawOp::PushClip(bounds));
-            text(
-                ops,
-                bounds.x + 9.0,
-                bounds.y + 8.0,
-                &label,
-                12.0,
-                theme.text,
-            );
-            ops.push(DrawOp::PopClip);
-            self.hits.push((bounds, id));
+        Ok(())
+    }
+    pub(super) fn draw_options_overlay(
+        &mut self,
+        settings: &settings::SettingsRuntime,
+        renderer: &mut impl TextBackend,
+        width: f32,
+        height: f32,
+        ops: &mut Vec<DrawOp>,
+    ) -> Result<(), LayoutError> {
+        if self.options_open {
+            self.draw_options(settings, renderer, width, height, ops)?;
+        }
+        Ok(())
+    }
+    pub(super) fn draw_dock(&mut self, settings: &settings::SettingsRuntime, bounds: Rect, ops: &mut Vec<DrawOp>) {
+        self.hits.clear();
+        let Some(controller) = &self.controller else { return };
+        let theme = settings.ui_theme();
+        ops.push(DrawOp::PushClip(bounds));
+        let compact = bounds.width < 900.0 || bounds.height < 140.0;
+        let row_height = if compact { 26.0 } else { 34.0 };
+        let source_width = if compact {
+            ((bounds.width - 64.0) / 2.0).max(40.0)
+        } else {
+            ((bounds.width - 710.0) / 2.0).max(100.0)
         };
-        button(
+        let mut x = bounds.x + 8.0;
+        let mut y = bounds.y + 7.0;
+        dock_button(
+            ops,
+            &mut self.hits,
+            theme,
+            bounds,
+            row_height,
+            &mut x,
+            &mut y,
             controller.sources[0].label.clone(),
             "compare.leftSource",
             source_width,
         );
-        button("⇄".into(), "compare.swap", 32.0);
-        button(
+        dock_button(
+            ops,
+            &mut self.hits,
+            theme,
+            bounds,
+            row_height,
+            &mut x,
+            &mut y,
+            "⇄".into(),
+            "compare.swap",
+            32.0,
+        );
+        dock_button(
+            ops,
+            &mut self.hits,
+            theme,
+            bounds,
+            row_height,
+            &mut x,
+            &mut y,
             controller.sources[1].label.clone(),
             "compare.rightSource",
             source_width,
         );
-        button(
-            match controller.options().whitespace {
-                Whitespace::Significant => "Whitespace significant",
-                Whitespace::TrimEdges => "Trim edges",
-                Whitespace::IgnoreAll => "Ignore whitespace",
+        if compact {
+            x = bounds.x + 8.0;
+            y += row_height;
+        }
+        for (label, id, width) in [
+            (
+                if compact { "L → R" } else { "Copy left → right" },
+                "compare.copyLeftToRight",
+                if compact { 50.0 } else { 132.0 },
+            ),
+            (
+                if compact { "R → L" } else { "Copy right → left" },
+                "compare.copyRightToLeft",
+                if compact { 50.0 } else { 132.0 },
+            ),
+            (
+                if compact { "‹" } else { "Previous" },
+                "compare.previous",
+                if compact { 26.0 } else { 70.0 },
+            ),
+            (
+                if compact { "›" } else { "Next" },
+                "compare.next",
+                if compact { 26.0 } else { 52.0 },
+            ),
+        ] {
+            dock_button(
+                ops,
+                &mut self.hits,
+                theme,
+                bounds,
+                row_height,
+                &mut x,
+                &mut y,
+                label.into(),
+                id,
+                width,
+            );
+        }
+        let (index, total) = controller.counter();
+        dock_button(
+            ops,
+            &mut self.hits,
+            theme,
+            bounds,
+            row_height,
+            &mut x,
+            &mut y,
+            format!("{index} / {total}"),
+            "compare.next",
+            if compact { 36.0 } else { 62.0 },
+        );
+        if compact {
+            x = bounds.x + 8.0;
+            y += row_height;
+        }
+        dock_button(
+            ops,
+            &mut self.hits,
+            theme,
+            bounds,
+            row_height,
+            &mut x,
+            &mut y,
+            if compact {
+                "Whitespace"
+            } else {
+                match controller.options().whitespace {
+                    Whitespace::Significant => "Whitespace significant",
+                    Whitespace::TrimEdges => "Trim edges",
+                    Whitespace::IgnoreAll => "Ignore whitespace",
+                }
             }
             .into(),
             "compare.whitespace",
-            155.0,
+            if compact { 62.0 } else { 155.0 },
         );
-        button("Options".into(), "compare.options", 66.0);
-        button("←".into(), "compare.previous", 32.0);
-        button("→".into(), "compare.next", 32.0);
-        let (index, total) = controller.counter();
-        button(format!("{index} / {total}"), "compare.next", 62.0);
-        button(
+        dock_button(
+            ops,
+            &mut self.hits,
+            theme,
+            bounds,
+            row_height,
+            &mut x,
+            &mut y,
+            "Options".into(),
+            "compare.options",
+            if compact { 40.0 } else { 66.0 },
+        );
+        dock_button(
+            ops,
+            &mut self.hits,
+            theme,
+            bounds,
+            row_height,
+            &mut x,
+            &mut y,
             if controller.state == CompareState::Running {
                 "Cancel"
             } else {
@@ -1289,13 +2163,29 @@ impl CompareRuntime {
             } else {
                 "compare.recompare"
             },
-            88.0,
+            if compact { 54.0 } else { 88.0 },
         );
-        button("Close".into(), "compare.close", 60.0);
-        if self.options_open {
-            self.draw_options(settings, renderer, width, height, ops)?;
-        }
-        Ok(())
+        dock_button(
+            ops,
+            &mut self.hits,
+            theme,
+            bounds,
+            row_height,
+            &mut x,
+            &mut y,
+            if compact { "Close" } else { "Close comparison" }.into(),
+            "compare.close",
+            if compact { 40.0 } else { 112.0 },
+        );
+        text(
+            ops,
+            bounds.x + 10.0,
+            (y + row_height + 8.0).min(bounds.y + bounds.height - 18.0),
+            format!("{:?} · {total} differences", controller.state),
+            12.0,
+            theme.muted,
+        );
+        ops.push(DrawOp::PopClip);
     }
     fn draw_options(
         &mut self,
@@ -1306,23 +2196,20 @@ impl CompareRuntime {
         ops: &mut Vec<DrawOp>,
     ) -> Result<(), LayoutError> {
         let theme = settings.ui_theme();
-        let scale = ((height - 24.0) / 780.0)
-            .min((width - 24.0) / 550.0)
-            .clamp(0.45, 1.0);
+        let available_height = (height - 24.0).max(0.0);
+        if available_height == 0.0 || width <= 24.0 {
+            return Ok(());
+        }
+        let scale = (available_height / 780.0)
+            .min((width - 24.0).max(0.0) / 550.0)
+            .clamp(0.0, 1.0);
         let panel = rect(
             (width - 550.0 * scale) / 2.0,
-            (height - 780.0 * scale) / 2.0,
+            (available_height - 780.0 * scale) / 2.0,
             550.0 * scale,
             780.0 * scale,
         );
-        let r = |x: f32, y: f32, w: f32, h: f32| {
-            rect(
-                panel.x + x * scale,
-                panel.y + y * scale,
-                w * scale,
-                h * scale,
-            )
-        };
+        let r = |x: f32, y: f32, w: f32, h: f32| rect(panel.x + x * scale, panel.y + y * scale, w * scale, h * scale);
         let label = |ops: &mut Vec<DrawOp>, x: f32, y: f32, value: &str, size: f32| {
             text(
                 ops,
@@ -1354,12 +2241,7 @@ impl CompareRuntime {
             theme,
         );
         ops.push(DrawOp::Fill(
-            r(
-                if self.colors_tab { 124.0 } else { 24.0 },
-                101.0,
-                100.0,
-                3.0,
-            ),
+            r(if self.colors_tab { 124.0 } else { 24.0 }, 101.0, 100.0, 3.0),
             theme.focus,
         ));
         let options = self.controller.as_ref().unwrap().options();
@@ -1374,17 +2256,9 @@ impl CompareRuntime {
                 options.whitespace == Whitespace::IgnoreAll,
                 "compare.ignoreWhitespace",
             ),
-            (
-                "Ignore blank lines",
-                options.ignore_blank_lines,
-                "compare.ignoreBlank",
-            ),
+            ("Ignore blank lines", options.ignore_blank_lines, "compare.ignoreBlank"),
             ("Ignore case", options.ignore_case, "compare.ignoreCase"),
-            (
-                "Ignore EOL style",
-                options.ignore_eol_style,
-                "compare.ignoreEol",
-            ),
+            ("Ignore EOL style", options.ignore_eol_style, "compare.ignoreEol"),
         ];
         if self.colors_tab {
             for (i, (name, id)) in [
@@ -1416,10 +2290,9 @@ impl CompareRuntime {
             {
                 let y = 192.0 + row as f32 * 52.0;
                 label(ops, 28.0, y + 10.0, name, 14.0);
-                for (column, (caption, x)) in
-                    [("Background", 120.0), ("Accent", 265.0), ("Gutter", 380.0)]
-                        .into_iter()
-                        .enumerate()
+                for (column, (caption, x)) in [("Background", 120.0), ("Accent", 265.0), ("Gutter", 380.0)]
+                    .into_iter()
+                    .enumerate()
                 {
                     label(ops, x, y + 10.0, caption, 13.0);
                     let bounds = r(x + if column == 0 { 90.0 } else { 58.0 }, y, 30.0, 30.0);
@@ -1439,7 +2312,20 @@ impl CompareRuntime {
                     }
                     self.hits.push((bounds, id));
                 }
-                option_button(ops,&mut self.hits,r(482.0,y,30.0,30.0),"↶",["compare.resetAdded","compare.resetRemoved","compare.resetChanged","compare.resetMoved","compare.resetCurrent"][row],theme);
+                option_button(
+                    ops,
+                    &mut self.hits,
+                    r(482.0, y, 30.0, 30.0),
+                    "↶",
+                    [
+                        "compare.resetAdded",
+                        "compare.resetRemoved",
+                        "compare.resetChanged",
+                        "compare.resetMoved",
+                        "compare.resetCurrent",
+                    ][row],
+                    theme,
+                );
             }
             ops.push(DrawOp::Fill(r(24.0, 458.0, 502.0, 1.0), theme.border));
             option_button(
@@ -1522,14 +2408,9 @@ impl CompareRuntime {
             ops.push(DrawOp::FillRounded(popup, theme.elevated, 8.0));
             ops.push(DrawOp::StrokeRounded(popup, theme.focus, 8.0, 2.0));
             label(ops, 62.0, 315.0, &format!("Color: {key}"), 16.0);
-            self.color_bounds=Some(r(62.0,349.0,265.0,38.0));
-            self.color_field.draw_with_theme(
-                renderer,
-                r(62.0, 349.0, 265.0, 38.0),
-                self.color_focus,
-                theme,
-                ops,
-            )?;
+            self.color_bounds = Some(r(62.0, 349.0, 265.0, 38.0));
+            self.color_field
+                .draw_with_theme(renderer, r(62.0, 349.0, 265.0, 38.0), self.color_focus, theme, ops)?;
             option_button(
                 ops,
                 &mut self.hits,
@@ -1575,75 +2456,232 @@ fn option_button(
 }
 
 #[cfg(test)]
-pub(super) fn accessibility_test_setup(shell:&mut Shell,scenario:&str) {
+pub(super) fn accessibility_test_setup(shell: &mut Shell, scenario: &str) {
     register(&mut shell.app.commands);
-    shell.compare=CompareRuntime::default();
-    if scenario=="closed"{return;}
-    shell.views=views::ViewsRuntime::default();
-    let notify:std::sync::Arc<dyn Fn()+Send+Sync>=std::sync::Arc::new(||{});
-    let mut workspace=Workspace::new(notify,std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem)).expect("compare fixture workspace");
-    workspace.new_document().unwrap();workspace.new_document().unwrap();
+    shell.compare = CompareRuntime::default();
+    if scenario == "closed" {
+        return;
+    }
+    shell.views = views::ViewsRuntime::default();
+    let notify: std::sync::Arc<dyn Fn() + Send + Sync> = std::sync::Arc::new(|| {});
+    let mut workspace = Workspace::new(
+        notify,
+        std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+    )
+    .expect("compare fixture workspace");
+    workspace.new_document().unwrap();
+    workspace.new_document().unwrap();
     workspace.editors[0].enqueue(Input::Insert("anchor\nleft 🙂\nend\n".into()));
     workspace.editors[1].enqueue(Input::Insert("anchor\nright 🙂\nend\n".into()));
-    let deadline=std::time::Instant::now()+std::time::Duration::from_secs(5);
-    while workspace.editors.iter().any(|editor|editor.busy()){assert!(std::time::Instant::now()<deadline,"fixture editor completion");workspace.pump();std::thread::yield_now();}
-    shell.workspace=Some(workspace);shell.app.active=0;
-    assert!(shell.compare_start_pair(0,1));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while workspace.editors.iter().any(|editor| editor.busy()) {
+        assert!(std::time::Instant::now() < deadline, "fixture editor completion");
+        workspace.pump();
+        std::thread::yield_now();
+    }
+    shell.workspace = Some(workspace);
+    shell.app.active = 0;
+    assert!(shell.compare_start_pair(0, 1));
     {
-        let workspace=shell.workspace.as_ref().unwrap();let inputs=[compare_input(&workspace.editors[0]),compare_input(&workspace.editors[1])];
-        let controller=shell.compare.controller.as_mut().unwrap();
-        while !controller.poll_inputs(&inputs[0],&inputs[1]){assert!(std::time::Instant::now()<deadline,"fixture comparison completion");std::thread::yield_now();}
-        assert!(matches!(controller.state,CompareState::Exact|CompareState::Coarse(_)));
+        let workspace = shell.workspace.as_ref().unwrap();
+        let inputs = [
+            compare_input(&workspace.editors[0]),
+            compare_input(&workspace.editors[1]),
+        ];
+        let controller = shell.compare.controller.as_mut().unwrap();
+        while !controller.poll_inputs(&inputs[0], &inputs[1]) {
+            assert!(std::time::Instant::now() < deadline, "fixture comparison completion");
+            std::thread::yield_now();
+        }
+        assert!(matches!(
+            controller.state,
+            CompareState::Exact | CompareState::Coarse(_)
+        ));
     }
+    // Match the production frame order: the dock reserves editor height before
+    // split-pane layout publishes the bounds consumed by accessibility.
+    shell.sync_bottom_dock(1000.0, 800.0);
     match scenario {
-        "open"|"populated"=>{},
-        "options"=>{shell.compare.options_open=true;shell.compare.colors_tab=false;},
-        "colors"=>{shell.compare.options_open=true;shell.compare.colors_tab=true;},
-        "focus"=>{shell.compare.options_open=true;shell.compare.colors_tab=true;shell.compare.focus=2;},
-        "value"=>{shell.compare.options_open=true;shell.compare.colors_tab=true;shell.compare.active_color=Some("diff.added");shell.compare.color_focus=true;shell.compare.color_field.insert("#123456");},
-        _=>panic!("unknown compare accessibility fixture: {scenario}"),
+        "open" | "populated" => {}
+        "options" => {
+            shell.compare.options_open = true;
+            shell.compare.colors_tab = false;
+        }
+        "colors" => {
+            shell.compare.options_open = true;
+            shell.compare.colors_tab = true;
+        }
+        "focus" => {
+            shell.compare.options_open = true;
+            shell.compare.colors_tab = true;
+            shell.compare.focus = 2;
+        }
+        "value" => {
+            shell.compare.options_open = true;
+            shell.compare.colors_tab = true;
+            shell.compare.active_color = Some("diff.added");
+            shell.compare.color_focus = true;
+            shell.compare.color_field.insert("#123456");
+        }
+        _ => panic!("unknown compare accessibility fixture: {scenario}"),
     }
-    let mut renderer=bareline_renderer_recording::RecordingBackend::default();let mut ops=Vec::new();
-    let workspace=shell.workspace.as_mut().unwrap();
-    shell.views.draw(workspace,&mut shell.app,&mut renderer,1000.0,800.0,&mut ops,shell.notify.clone()).unwrap();
-    shell.compare.draw(workspace,&mut shell.views,&shell.settings,&mut renderer,1000.0,800.0,&mut ops).unwrap();
+    let mut renderer = bareline_renderer_recording::RecordingBackend::default();
+    let mut ops = Vec::new();
+    {
+        let workspace = shell.workspace.as_mut().unwrap();
+        shell
+            .views
+            .draw(
+                workspace,
+                &mut shell.app,
+                &mut renderer,
+                1000.0,
+                800.0,
+                &mut ops,
+                shell.notify.clone(),
+            )
+            .unwrap();
+        shell
+            .compare
+            .draw(
+                workspace,
+                &mut shell.views,
+                &shell.settings,
+                &mut renderer,
+                1000.0,
+                800.0,
+                &mut ops,
+            )
+            .unwrap();
+    }
+    let body = shell.dock.current_layout().unwrap().body;
+    shell.compare.draw_dock(&shell.settings, body, &mut ops);
+    shell
+        .compare
+        .draw_options_overlay(&shell.settings, &mut renderer, 1000.0, 800.0, &mut ops)
+        .unwrap();
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
+    fn compact_dock_keeps_merge_directions_and_close_inside_body() {
+        let source = |label: &str| CompareSource {
+            label: label.into(),
+            origin: CompareOrigin::OpenDocument(label.into()),
+        };
+        let mut runtime = CompareRuntime {
+            controller: Some(CompareController::new(source("left"), source("right"))),
+            ..Default::default()
+        };
+        let body = rect(20.0, 300.0, 240.0, 101.0);
+        let mut ops = Vec::new();
+        runtime.draw_dock(&settings::SettingsRuntime::default(), body, &mut ops);
+        for id in ["compare.copyLeftToRight", "compare.copyRightToLeft", "compare.close"] {
+            assert!(runtime.hits.iter().any(|(_, command)| *command == id));
+        }
+        assert!(runtime.hits.iter().all(|(bounds, _)| {
+            bounds.x >= body.x
+                && bounds.y >= body.y
+                && bounds.x + bounds.width <= body.x + body.width
+                && bounds.y + bounds.height <= body.y + body.height
+        }));
+    }
+    #[test]
     fn large_selected_copy_promotes_exact_destination_and_waits_for_durable_actor() {
-        use bareline_document::{Budget,Document,TextOffset,paged::WindowPoll};
-        let platform=std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem);
-        let mut workspace=Workspace::new(std::sync::Arc::new(||{}),platform.clone()).unwrap();
-        workspace.new_document().unwrap();workspace.editors[0].enqueue(Input::Insert("old\n".into()));
-        let deadline=Instant::now()+Duration::from_secs(30);
-        while workspace.editors[0].busy(){assert!(Instant::now()<deadline);workspace.pump();std::thread::yield_now();}
-        let identity=workspace.editors[0].snapshot().identity_token();
-        while !workspace.promote_resident_for_source_edit(0,identity).unwrap(){assert!(Instant::now()<deadline);workspace.pump();std::thread::yield_now();}
+        use bareline_document::{Budget, Document, TextOffset, paged::WindowPoll};
+        let platform = std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem);
+        let mut workspace = Workspace::new(std::sync::Arc::new(|| {}), platform.clone()).unwrap();
+        workspace.new_document().unwrap();
+        workspace.editors[0].enqueue(Input::Insert("old\n".into()));
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while workspace.editors[0].busy() {
+            assert!(Instant::now() < deadline);
+            workspace.pump();
+            std::thread::yield_now();
+        }
+        let identity = workspace.editors[0].snapshot().identity_token();
+        while !workspace.promote_resident_for_source_edit(0, identity).unwrap() {
+            assert!(Instant::now() < deadline);
+            workspace.pump();
+            std::thread::yield_now();
+        }
         // Promotion attaches the actor before its initial viewport read completes.
-        while workspace.editors[0].busy(){assert!(Instant::now()<deadline);workspace.pump();std::thread::yield_now();}
-        let text=format!("{}tail\n","αβγ\n".repeat(170000));
-        assert!(text.len()>1024*1024);
-        let source=Document::from_utf8(&text,Budget::new(8*1024*1024),Budget::new(0)).unwrap();
-        let captured=compare_input(&workspace.editors[0]);
-        let prepared=bareline_app::compare::prepare_streamed_range_copy(&CompareInput::Resident(source.snapshot()),TextOffset(0)..TextOffset(text.len()),&captured,TextOffset(0)..TextOffset(4),Default::default(),workspace.source_edit_budget(),&std::env::temp_dir().join("Bareline-compare-test-staging"),64*1024*1024,platform,&bareline_diff::CancelToken::default()).unwrap();
-        let bareline_app::workspace::WorkspaceEditor::Paged(editor)=&mut workspace.editors[0]else{panic!("target was not promoted")};
-        let snapshot=editor.snapshot().clone();let receipt=editor.apply_prepared_source_tracked(&snapshot,prepared).unwrap();
-        while receipt.terminal().is_none(){assert!(Instant::now()<deadline);workspace.pump();std::thread::yield_now();}
+        while workspace.editors[0].busy() {
+            assert!(Instant::now() < deadline);
+            workspace.pump();
+            std::thread::yield_now();
+        }
+        let text = format!("{}tail\n", "αβγ\n".repeat(170000));
+        assert!(text.len() > 1024 * 1024);
+        let source = Document::from_utf8(&text, Budget::new(8 * 1024 * 1024), Budget::new(0)).unwrap();
+        let captured = compare_input(&workspace.editors[0]);
+        let prepared = bareline_app::compare::prepare_streamed_range_copy(
+            &CompareInput::Resident(source.snapshot()),
+            TextOffset(0)..TextOffset(text.len()),
+            &captured,
+            TextOffset(0)..TextOffset(4),
+            Default::default(),
+            workspace.source_edit_budget(),
+            &std::env::temp_dir().join("Bareline-compare-test-staging"),
+            64 * 1024 * 1024,
+            platform,
+            &bareline_diff::CancelToken::default(),
+        )
+        .unwrap();
+        let bareline_app::workspace::WorkspaceEditor::Paged(editor) = &mut workspace.editors[0] else {
+            panic!("target was not promoted")
+        };
+        let snapshot = editor.snapshot().clone();
+        let receipt = editor.apply_prepared_source_tracked(&snapshot, prepared).unwrap();
+        while receipt.terminal().is_none() {
+            assert!(Instant::now() < deadline);
+            workspace.pump();
+            std::thread::yield_now();
+        }
         assert!(receipt.terminal().unwrap().is_ok());
         // Receipt means durable actor publication; pump its UI snapshot reply too.
-        while workspace.editors[0].busy(){assert!(Instant::now()<deadline);workspace.pump();std::thread::yield_now();}
-        let bareline_app::workspace::WorkspaceEditor::Paged(editor)=&workspace.editors[0]else{unreachable!()};
-        assert_eq!(editor.snapshot().len(),text.len());
-        let handle=editor.read_handle();
-        let mut request=handle.snapshot().begin_read(TextOffset(text.len()-5)..TextOffset(text.len()),16,&Budget::new(1024*1024)).unwrap();
-        loop{match request.poll(){WindowPoll::Ready(window)=>{assert_eq!(window.text(),"tail\n");break;},WindowPoll::Pending(ticket)=>{handle.resolve_page(ticket).unwrap();},_=>panic!("merged source unavailable")}}
+        while workspace.editors[0].busy() {
+            assert!(Instant::now() < deadline);
+            workspace.pump();
+            std::thread::yield_now();
+        }
+        let bareline_app::workspace::WorkspaceEditor::Paged(editor) = &workspace.editors[0] else {
+            unreachable!()
+        };
+        assert_eq!(editor.snapshot().len(), text.len());
+        let handle = editor.read_handle();
+        let mut request = handle
+            .snapshot()
+            .begin_read(
+                TextOffset(text.len() - 5)..TextOffset(text.len()),
+                16,
+                &Budget::new(1024 * 1024),
+            )
+            .unwrap();
+        loop {
+            match request.poll() {
+                WindowPoll::Ready(window) => {
+                    assert_eq!(window.text(), "tail\n");
+                    break;
+                }
+                WindowPoll::Pending(ticket) => {
+                    handle.resolve_page(ticket).unwrap();
+                }
+                _ => panic!("merged source unavailable"),
+            }
+        }
         workspace.editors[0].enqueue(Input::Undo);
-        while workspace.editors[0].busy(){assert!(Instant::now()<deadline);workspace.pump();std::thread::yield_now();}
-        let bareline_app::workspace::WorkspaceEditor::Paged(editor)=&workspace.editors[0]else{unreachable!()};
-        assert_eq!(editor.snapshot().len(),4);
+        while workspace.editors[0].busy() {
+            assert!(Instant::now() < deadline);
+            workspace.pump();
+            std::thread::yield_now();
+        }
+        let bareline_app::workspace::WorkspaceEditor::Paged(editor) = &workspace.editors[0] else {
+            unreachable!()
+        };
+        assert_eq!(editor.snapshot().len(), 4);
     }
     #[test]
     fn native_compare_merges_through_document_actor_and_undo() {
@@ -1695,9 +2733,7 @@ mod tests {
                 MergePolicy::PreserveIgnoredDestination,
             )
             .unwrap();
-        workspace.editors[1]
-            .apply_prepared(&snapshots[1], transaction)
-            .unwrap();
+        workspace.editors[1].apply_prepared(&snapshots[1], transaction).unwrap();
         while workspace.editors[1].busy() {
             assert!(Instant::now() < deadline);
             workspace.pump();

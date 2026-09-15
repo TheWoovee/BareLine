@@ -1,0 +1,14 @@
+{
+  "arguments": [
+    "test",
+    "-p",
+    "bareline-app",
+    "--lib",
+    "short_replace_view_uses_summary_or_hides_without_covering_a_field"
+  ],
+  "completed_utc": "2026-09-12T09:27:45.0227526Z",
+  "integration_snapshot": "56b71f73d288959e513ca49b8ca95177613cbd13",
+  "exit_code": 0,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\U12-short-replace-corrected-central.log"
+}

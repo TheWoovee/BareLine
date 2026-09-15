@@ -77,9 +77,7 @@ impl InvocationBroker {
         message: Envelope,
         original: impl FnMut(u64, RawRange) -> Result<Vec<u8>, String>,
     ) -> BrokerResponse {
-        self.request_with_text(message, original, |_| {
-            Err("External text reader unavailable".into())
-        })
+        self.request_with_text(message, original, |_| Err("External text reader unavailable".into()))
     }
     pub fn request_with_text(
         &mut self,
@@ -89,9 +87,7 @@ impl InvocationBroker {
     ) -> BrokerResponse {
         let request_id = message.request_id;
         let result = (|| {
-            self.session
-                .authorize(&message)
-                .map_err(|e| format!("{e:?}"))?;
+            self.session.authorize(&message).map_err(|e| format!("{e:?}"))?;
             if self.seen.len() >= 65536 || !self.seen.insert(request_id) {
                 return Err("Request replay or invocation request limit".into());
             }
@@ -102,9 +98,7 @@ impl InvocationBroker {
                     revision,
                     range,
                 } => {
-                    if *document != self.invocation.document
-                        || *revision != self.invocation.revision
-                    {
+                    if *document != self.invocation.document || *revision != self.invocation.revision {
                         return Err("Stale text snapshot".into());
                     }
                     if range.start > range.end
@@ -155,9 +149,7 @@ impl InvocationBroker {
                     Ok(BrokerValue::Transaction(request_id))
                 }
                 Request::AppendChunk { .. } => {
-                    self.session
-                        .append(&message, now)
-                        .map_err(|e| format!("{e:?}"))?;
+                    self.session.append(&message, now).map_err(|e| format!("{e:?}"))?;
                     Ok(BrokerValue::Acknowledged)
                 }
                 Request::CommitEdits { .. } => {
@@ -167,9 +159,7 @@ impl InvocationBroker {
                     let source = &self.source;
                     self.edits = Some(
                         self.session
-                            .commit_checked(&message, self.invocation.revision, now, |edits| {
-                                validate(source, edits)
-                            })
+                            .commit_checked(&message, self.invocation.revision, now, |edits| validate(source, edits))
                             .map_err(|e| format!("{e:?}"))?,
                     );
                     Ok(BrokerValue::Acknowledged)
@@ -337,9 +327,7 @@ mod tests {
                 Ok(vec![0x9f, 0x99])
             },
         );
-        assert!(
-            matches!(response.result.unwrap(),BrokerValue::Bytes(bytes) if bytes==vec![0x9f,0x99])
-        );
+        assert!(matches!(response.result.unwrap(),BrokerValue::Bytes(bytes) if bytes==vec![0x9f,0x99]));
         let stale = broker.request_with_text(
             envelope(
                 2,
@@ -371,8 +359,7 @@ mod tests {
     }
     #[test]
     fn byte_chunks_cross_unicode_and_failed_child_discards_edits() {
-        let document =
-            Document::from_utf8("a🙂z", Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+        let document = Document::from_utf8("a🙂z", Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
         let source = document.snapshot();
         assert_eq!(
             read_bytes(&source, &TextRange { start: 2, end: 4 }).unwrap(),
@@ -421,10 +408,7 @@ mod tests {
         assert!(response.result.is_ok());
         assert!(broker.finish(Err("host crash".into())).is_err());
         assert_eq!(
-            document
-                .snapshot()
-                .read(TextOffset(0)..TextOffset(6), 6)
-                .unwrap(),
+            document.snapshot().read(TextOffset(0)..TextOffset(6), 6).unwrap(),
             "a🙂z"
         );
     }

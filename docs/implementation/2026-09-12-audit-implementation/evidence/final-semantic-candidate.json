@@ -1,0 +1,18 @@
+{
+  "arguments": [
+    "test",
+    "--locked",
+    "-p",
+    "bareline",
+    "--bin",
+    "bareline",
+    "windows_app::accessibility::tests::complete_native_semantic_json_golden",
+    "--",
+    "--nocapture"
+  ],
+  "completed_utc": "2026-09-12T13:25:24.0139087Z",
+  "integration_snapshot": "16e763043b000d09e1b0650bd857785c4b5cfa13",
+  "exit_code": 101,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\final-semantic-candidate.log"
+}

@@ -1,0 +1,20 @@
+{
+  "arguments": [
+    "test",
+    "--offline",
+    "--locked",
+    "-p",
+    "bareline",
+    "--bin",
+    "bareline",
+    "windows_app::watch::tests::launch_follow_resolves_its_workspace_document_when_secondary_is_active",
+    "--",
+    "--exact",
+    "--test-threads=1"
+  ],
+  "completed_utc": "2026-09-12T08:16:06.5722839Z",
+  "integration_snapshot": "4c746299a9cf066236a08713fd88b415695b6257",
+  "exit_code": 0,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\T18-follow-central.log"
+}

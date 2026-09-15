@@ -1,0 +1,908 @@
+diff --git a/apps/bareline/src/windows_app.rs b/apps/bareline/src/windows_app.rs
+index 89bea89..10028bf 100644
+--- a/apps/bareline/src/windows_app.rs
++++ b/apps/bareline/src/windows_app.rs
+@@ -90,6 +90,7 @@ struct Shell {
+     modifiers: ModifiersState,
+     software: bool,
+     first_frame: bool,
++    profile_initialization: launch::ProfileInitializationRuntime,
+     smoke: bool,
+     failed: bool,
+     prototype: Option<TextPrototype>,
+@@ -411,23 +412,25 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
+     let mut ledger = StartupLedger::default();
+     let args: Vec<_> = std::env::args_os().skip(1).collect();
+     let (args, inventory_request) = inventory::parse(args)?;
+-    let mut launch = {
++    let parsed = {
+         let _phase = bareline_diagnostics::startup_span(StartupAction::ParseCli);
+         launch::parse(&args, &mut ledger)?
+     };
+-    if inventory_request.is_some() && !launch.paths.is_empty() {
++    if inventory_request.is_some() && parsed.has_paths() {
+         return Err("Command inventory export does not open documents".into());
+     }
+-    if launch.help {
+-        println!(
+-            "Bareline [--line N] [--column N] [--read-only] [--monitor] [--no-session] [--no-extensions] [--new-instance] [--] [files...]"
+-        );
+-        return Ok(());
+-    }
+-    if launch.version {
+-        println!("Bareline {}", env!("CARGO_PKG_VERSION"));
+-        return Ok(());
++    match parsed.mode() {
++        launch::LaunchMode::Help => {
++            println!("{}", launch::HELP);
++            return Ok(());
++        }
++        launch::LaunchMode::Version => {
++            println!("Bareline {}", env!("CARGO_PKG_VERSION"));
++            return Ok(());
++        }
++        _ => {}
+     }
++    let mut launch = launch::prepare(parsed, &mut ledger)?;
+     let settings_document = match launch.settings_path.as_ref() {
+         Some(path) => match ledger.read_config(path, StartupAction::ReadSettings, 64 * 1024)? {
+             Some(bytes) => bareline_settings::SettingsDocument::parse(&bytes, bareline_settings::Scope::User)?,
+@@ -491,6 +494,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
+         modifiers: ModifiersState::empty(),
+         software,
+         first_frame: false,
++        profile_initialization: launch::ProfileInitializationRuntime::new(launch.profile_initialization.take()),
+         smoke,
+         failed: false,
+         prototype: prototype.then(TextPrototype::mixed_script),
+@@ -591,6 +595,17 @@ struct Handler {
+ }
+ impl ApplicationHandler<Wake> for Handler {
+     fn user_event(&mut self, el: &ActiveEventLoop, wake: Wake) {
++        if self.shell.profile_initialization.pump() {
++            match self.shell.profile_initialization.completion() {
++                Some(Ok(result)) => eprintln!(
++                    "event=profile_initialization_completed migrated_entries={} removed_caches={}",
++                    result.migrated_entries.len(),
++                    result.removed_caches
++                ),
++                Some(Err(error)) => eprintln!("event=profile_initialization_failed reason={error}"),
++                None => {}
++            }
++        }
+         // Always-on work: accessibility, acknowledged inputs, and the workspace
+         // editor pump (paged/resident document workers). The `wake.runs(..)`
+         // guards below skip every feature pump except the one whose worker woke
+@@ -3678,6 +3693,9 @@ impl Shell {
+                 if !self.first_frame {
+                     let micros = self.ledger.presented();
+                     self.first_frame = true;
++                    if let Err(error) = self.profile_initialization.schedule(self.notify.clone()) {
++                        eprintln!("event=profile_initialization_failed reason={error}");
++                    }
+                     if !self.smoke && !self.perf && !self.performance.enabled() {
+                         if let Err(error) = bareline_platform_windows::shell_integration::initialize_jump_list(
+                             self.shell_integration.portable,
+diff --git a/apps/bareline/src/windows_app/accessibility.rs b/apps/bareline/src/windows_app/accessibility.rs
+index 8ab4ce4..5f629f4 100644
+--- a/apps/bareline/src/windows_app/accessibility.rs
++++ b/apps/bareline/src/windows_app/accessibility.rs
+@@ -797,7 +797,9 @@ mod tests {
+ 
+     fn headless_shell() -> Shell {
+         let launch = launch::LaunchConfig {
++            mode: launch::LaunchMode::Installed,
+             performance: None,
++            profile_initialization: Default::default(),
+             portable: false,
+             settings_path: None,
+             session_path: None,
+@@ -812,8 +814,6 @@ mod tests {
+             no_session: true,
+             no_extensions: true,
+             new_instance: true,
+-            help: false,
+-            version: false,
+             software: true,
+             hardware: false,
+             smoke: false,
+@@ -836,6 +836,7 @@ mod tests {
+             modifiers: Default::default(),
+             software: true,
+             first_frame: false,
++            profile_initialization: Default::default(),
+             smoke: false,
+             failed: false,
+             prototype: None,
+diff --git a/apps/bareline/src/windows_app/instance.rs b/apps/bareline/src/windows_app/instance.rs
+index 9965eac..23671b0 100644
+--- a/apps/bareline/src/windows_app/instance.rs
++++ b/apps/bareline/src/windows_app/instance.rs
+@@ -14,7 +14,13 @@ pub(super) fn prepare(
+     config: &mut launch::LaunchConfig,
+     notify: std::sync::Arc<dyn Fn() + Send + Sync>,
+ ) -> Result<Option<InstanceRuntime>, Box<dyn std::error::Error>> {
+-    if config.smoke || config.perf || config.prototype || config.performance.is_some() {
++    if bypass_single_instance(
++        config.mode,
++        config.smoke,
++        config.perf,
++        config.prototype,
++        config.diag_handles,
++    ) {
+         return Ok(Some(InstanceRuntime::default()));
+     }
+     let scope = config.settings_path.clone().unwrap_or(std::env::current_exe()?);
+@@ -53,6 +59,36 @@ pub(super) fn prepare(
+     })
+ }
+ 
++fn bypass_single_instance(
++    mode: launch::LaunchMode,
++    smoke: bool,
++    perf: bool,
++    prototype: bool,
++    diag_handles: bool,
++) -> bool {
++    smoke
++        || perf
++        || prototype
++        || diag_handles
++        || matches!(mode, launch::LaunchMode::Diagnostic | launch::LaunchMode::Performance)
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn portable_handle_diagnostics_stay_out_of_single_instance_forwarding() {
++        assert!(bypass_single_instance(
++            launch::LaunchMode::Portable,
++            false,
++            false,
++            false,
++            true,
++        ));
++    }
++}
++
+ impl Shell {
+     pub(super) fn instance_pump(&mut self, el: &ActiveEventLoop) {
+         if !self.first_frame {
+diff --git a/apps/bareline/src/windows_app/launch.rs b/apps/bareline/src/windows_app/launch.rs
+index fa3b079..3b3667d 100644
+--- a/apps/bareline/src/windows_app/launch.rs
++++ b/apps/bareline/src/windows_app/launch.rs
+@@ -256,8 +256,134 @@ fn launch_position(snapshot: &bareline_document::DocumentSnapshot, line: u64, co
+             .map_or(content.len(), |(offset, _)| offset))
+ }
+ 
++#[derive(Clone, Copy, Debug, Eq, PartialEq)]
++pub(super) enum LaunchMode {
++    Help,
++    Version,
++    Diagnostic,
++    Portable,
++    Installed,
++    Performance,
++}
++
++pub(super) const HELP: &str = "Bareline [--line N] [--column N] [--read-only] [--monitor] [--no-session] [--no-extensions] [--new-instance] [--diagnostic-root PATH] [--] [files...]\nDiagnostic modes require an isolated root containing an empty regular .bareline-diagnostic marker (or a portable executable).";
++
++pub(super) struct ParsedLaunch {
++    mode: LaunchMode,
++    performance: Option<super::performance::PerformanceOptions>,
++    options: bareline_distribution::cli::LaunchOptions,
++    software: bool,
++    hardware: bool,
++    smoke: bool,
++    prototype: bool,
++    perf: bool,
++    diag_handles: bool,
++    diagnostic_root: Option<PathBuf>,
++}
++impl ParsedLaunch {
++    pub(super) fn mode(&self) -> LaunchMode {
++        self.mode
++    }
++    pub(super) fn has_paths(&self) -> bool {
++        !self.options.paths.is_empty()
++    }
++}
++
++#[derive(Clone)]
++pub(super) struct ProfileInitialization {
++    roaming: Option<PathBuf>,
++    local: Option<PathBuf>,
++    temp: PathBuf,
++}
++
++#[derive(Clone, Debug, Eq, PartialEq)]
++pub(super) struct ProfileInitializationResult {
++    pub(super) profile_root: Option<PathBuf>,
++    pub(super) migrated_entries: Vec<&'static str>,
++    pub(super) removed_caches: usize,
++}
++
++#[derive(Default)]
++pub(super) struct ProfileInitializationRuntime {
++    pending: Option<ProfileInitialization>,
++    worker: Option<std::sync::mpsc::Receiver<Result<ProfileInitializationResult, String>>>,
++    completion: Option<Result<ProfileInitializationResult, String>>,
++}
++impl ProfileInitializationRuntime {
++    pub(super) fn new(pending: Option<ProfileInitialization>) -> Self {
++        Self {
++            pending,
++            worker: None,
++            completion: None,
++        }
++    }
++
++    pub(super) fn schedule(&mut self, notify: std::sync::Arc<dyn Fn() + Send + Sync>) -> Result<bool, String> {
++        let Some(initialization) = self.pending.take() else {
++            return Ok(false);
++        };
++        let retry = initialization.clone();
++        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
++        match std::thread::Builder::new()
++            .name("bareline-profile-initialize".into())
++            .spawn(move || {
++                let profile_root = initialization.local.clone();
++                let migrated_entries = initialization.local.as_deref().map_or_else(Vec::new, |local| {
++                    migrate_from_roaming(initialization.roaming.as_deref(), local)
++                });
++                let removed_caches = sweep_temp_caches(&initialization.temp, &process_alive);
++                let _ = sender.send(Ok(ProfileInitializationResult {
++                    profile_root,
++                    migrated_entries,
++                    removed_caches,
++                }));
++                notify();
++            }) {
++            Ok(_) => {
++                self.worker = Some(receiver);
++                self.completion = None;
++                Ok(true)
++            }
++            Err(error) => {
++                let error = format!("Cannot schedule profile initialization: {error}");
++                self.pending = Some(retry);
++                self.completion = Some(Err(error.clone()));
++                Err(error)
++            }
++        }
++    }
++
++    pub(super) fn pump(&mut self) -> bool {
++        let Some(worker) = self.worker.as_ref() else {
++            return false;
++        };
++        let completion = match worker.try_recv() {
++            Ok(result) => result,
++            Err(std::sync::mpsc::TryRecvError::Empty) => return false,
++            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
++                Err("Profile initialization worker stopped without a result".into())
++            }
++        };
++        self.worker = None;
++        self.completion = Some(completion);
++        true
++    }
++
++    /// Retained completion receipt for PR-T02 to reconcile migrated settings and
++    /// session state against revisions created after the first frame.
++    pub(super) fn completion(&self) -> Option<&Result<ProfileInitializationResult, String>> {
++        self.completion.as_ref()
++    }
++
++    pub(super) fn take_completion(&mut self) -> Option<Result<ProfileInitializationResult, String>> {
++        self.completion.take()
++    }
++}
++
+ pub struct LaunchConfig {
++    pub(super) mode: LaunchMode,
+     pub performance: Option<super::performance::PerformanceConfig>,
++    pub(super) profile_initialization: Option<ProfileInitialization>,
+     pub portable: bool,
+     pub settings_path: Option<PathBuf>,
+     pub session_path: Option<PathBuf>,
+@@ -272,8 +398,6 @@ pub struct LaunchConfig {
+     pub no_session: bool,
+     pub no_extensions: bool,
+     pub new_instance: bool,
+-    pub help: bool,
+-    pub version: bool,
+     pub software: bool,
+     pub hardware: bool,
+     pub smoke: bool,
+@@ -282,7 +406,7 @@ pub struct LaunchConfig {
+     pub diag_handles: bool,
+ }
+ 
+-pub fn parse(args: &[OsString], ledger: &mut StartupLedger) -> Result<LaunchConfig, Box<dyn std::error::Error>> {
++pub(super) fn parse(args: &[OsString], ledger: &mut StartupLedger) -> Result<ParsedLaunch, Box<dyn std::error::Error>> {
+     ledger.record(StartupAction::ParseCli);
+     let (filtered, performance) = super::performance::parse_args(args)?;
+     let args = &filtered;
+@@ -290,16 +414,24 @@ pub fn parse(args: &[OsString], ledger: &mut StartupLedger) -> Result<LaunchConf
+     let (mut software, mut hardware, mut smoke, mut prototype, mut perf) = (false, false, false, false, false);
+     let mut after_separator = false;
+     let mut diag: Option<OsString> = None;
++    let mut diagnostic_root: Option<PathBuf> = None;
+     let mut args_iter = args.iter();
+     while let Some(arg) = args_iter.next() {
+         if !after_separator && arg == "--diag" {
+-            diag = args_iter.next().cloned();
++            diag = Some(args_iter.next().ok_or("Missing diagnostic option value")?.clone());
+             continue;
+         }
+         if !after_separator && arg == "--diag=handles" {
+             diag = Some(OsString::from("handles"));
+             continue;
+         }
++        if !after_separator && arg == "--diagnostic-root" {
++            let value = args_iter.next().ok_or("Missing diagnostic root")?;
++            if diagnostic_root.replace(PathBuf::from(value)).is_some() {
++                return Err("Duplicate diagnostic root".into());
++            }
++            continue;
++        }
+         if !after_separator && arg == "--" {
+             after_separator = true;
+             product.push(arg.clone());
+@@ -330,101 +462,184 @@ pub fn parse(args: &[OsString], ledger: &mut StartupLedger) -> Result<LaunchConf
+         product.push(arg.clone());
+     }
+     let options = bareline_distribution::cli::parse(product)?;
++    if options.help && options.version {
++        return Err("Choose either --help or --version".into());
++    }
++    if software && hardware {
++        return Err("Choose either --software or --hardware".into());
++    }
++    if diag.as_deref().is_some_and(|value| value != "handles") {
++        return Err("Unknown diagnostic option".into());
++    }
+     if performance.is_some() && !options.paths.is_empty() {
+         return Err("Performance workloads reject ordinary document paths".into());
+     }
+     if options.paths.len() > 16 || (!options.paths.is_empty() && (smoke || perf || prototype)) {
+         return Err("Open up to 16 paths; diagnostic modes do not accept document paths.".into());
+     }
++    let diagnostic_count = usize::from(smoke) + usize::from(perf) + usize::from(prototype);
++    if diagnostic_count > 1 {
++        return Err("Choose one diagnostic mode".into());
++    }
++    if performance.is_some() && (diagnostic_count != 0 || diag.is_some()) {
++        return Err("Performance workload cannot be combined with diagnostic modes".into());
++    }
++    let mode = if options.help {
++        LaunchMode::Help
++    } else if options.version {
++        LaunchMode::Version
++    } else if performance.is_some() {
++        LaunchMode::Performance
++    } else if diagnostic_count != 0 || diag.is_some() {
++        LaunchMode::Diagnostic
++    } else {
++        LaunchMode::Installed
++    };
++    if diagnostic_root.is_some() && mode != LaunchMode::Diagnostic {
++        return Err("--diagnostic-root requires a diagnostic mode".into());
++    }
++    Ok(ParsedLaunch {
++        mode,
++        performance,
++        options,
++        software,
++        hardware,
++        smoke,
++        prototype,
++        perf,
++        diag_handles: diag.is_some(),
++        diagnostic_root,
++    })
++}
++
++pub(super) fn prepare(
++    parsed: ParsedLaunch,
++    ledger: &mut StartupLedger,
++) -> Result<LaunchConfig, Box<dyn std::error::Error>> {
++    debug_assert!(!matches!(parsed.mode, LaunchMode::Help | LaunchMode::Version));
+     let executable = std::env::current_exe()?;
+     let directory = executable.parent().ok_or("executable directory unavailable")?;
+-    // Empty marker is part of settings discovery, bounded/tracked like other config.
+-    let portable = ledger
+-        .read_config(&directory.join("bareline.portable"), StartupAction::ReadSettings, 0)?
+-        .is_some();
+-    // Settings, session, recovery journals and macros are machine-local data:
+-    // unsaved document text must never follow a roaming profile to a server.
+-    let roaming = std::env::var_os("APPDATA").map(|root| PathBuf::from(root).join("Bareline"));
+-    let installed = match std::env::var_os("LOCALAPPDATA").map(|root| PathBuf::from(root).join("Bareline")) {
+-        Some(local) => {
+-            migrate_from_roaming(roaming.as_deref(), &local);
+-            Some(local)
+-        }
+-        None => roaming,
+-    };
+-    let root = if let Some(config) = &performance {
+-        Some(config.root.clone())
+-    } else if portable {
+-        bareline_distribution::data_root(&executable, true, directory)
++    // Capture this before process search hardening changes the process CWD.
++    let cwd = std::env::current_dir()?;
++    let performance = parsed.performance.map(super::performance::prepare).transpose()?;
++    // The portable marker is configuration discovery, so informational and invalid
++    // invocations return before it is read.
++    let portable = matches!(parsed.mode, LaunchMode::Installed | LaunchMode::Diagnostic)
++        && parsed.diagnostic_root.is_none()
++        && ledger
++            .read_config(&directory.join("bareline.portable"), StartupAction::ReadSettings, 0)?
++            .is_some();
++    let mode = select_mode(parsed.mode, portable);
++    let diagnostic_root = parsed
++        .diagnostic_root
++        .map(|root| validate_diagnostic_root(&root))
++        .transpose()?;
++    // Settings, session, recovery journals and macros are machine-local data.
++    // Installed locations are not even discovered for an isolated launch.
++    let (roaming, local) = if mode == LaunchMode::Installed {
++        (
++            std::env::var_os("APPDATA").map(|root| PathBuf::from(root).join("Bareline")),
++            std::env::var_os("LOCALAPPDATA").map(|root| PathBuf::from(root).join("Bareline")),
++        )
+     } else {
+-        installed
++        (None, None)
+     };
+-    let cwd = std::env::current_dir()?;
++    let installed = local.clone().or_else(|| roaming.clone());
++    let root = match mode {
++        LaunchMode::Performance => performance.as_ref().map(|config| config.root.clone()),
++        LaunchMode::Portable => bareline_distribution::data_root(&executable, true, directory),
++        LaunchMode::Diagnostic => {
++            Some(diagnostic_root.ok_or("Diagnostic mode requires --diagnostic-root or a portable executable")?)
++        }
++        LaunchMode::Installed => installed,
++        LaunchMode::Help | LaunchMode::Version => unreachable!(),
++    };
++    let profile_initialization = profile_initialization(mode, roaming, local, std::env::temp_dir());
+     let config = LaunchConfig {
++        mode,
++        profile_initialization,
+         portable,
+         settings_path: root.as_ref().map(|p| p.join("settings.toml")),
+         session_path: root.as_ref().map(|p| p.join("session.json")),
+         recovery_path: root.as_ref().map(|p| p.join("recovery")),
+         extensions_path: root.as_ref().map(|p| p.join("extensions")),
+-        diagnostics_path: if performance.is_some() {
+-            root.as_ref().map(|p| p.join("diagnostics"))
+-        } else if smoke {
+-            None
+-        } else if portable {
+-            root.as_ref().map(|p| p.join("diagnostics"))
+-        } else {
+-            std::env::var_os("LOCALAPPDATA").map(|p| PathBuf::from(p).join("Bareline/diagnostics"))
+-        },
+-        paths: options
++        diagnostics_path: root.as_ref().map(|path| path.join("diagnostics")),
++        paths: parsed
++            .options
+             .paths
+             .into_iter()
+             .map(|p| if p.is_absolute() { p } else { cwd.join(p) })
+             .collect(),
+-        line: options.line,
+-        column: options.column,
+-        read_only: options.read_only,
+-        monitor: options.monitor,
+-        no_session: options.no_session || performance.is_some(),
+-        no_extensions: options.no_extensions
++        line: parsed.options.line,
++        column: parsed.options.column,
++        read_only: parsed.options.read_only,
++        monitor: parsed.options.monitor,
++        no_session: parsed.options.no_session || performance.is_some(),
++        no_extensions: parsed.options.no_extensions
+             || performance.as_ref().is_some_and(|config| !config.requires_extensions()),
+-        new_instance: options.new_instance || performance.is_some(),
+-        help: options.help,
+-        version: options.version,
+-        software,
+-        hardware,
+-        smoke,
+-        prototype,
+-        perf,
+-        diag_handles: diag.as_deref().is_some_and(|value| value == "handles"),
++        new_instance: parsed.options.new_instance || performance.is_some(),
++        software: parsed.software,
++        hardware: parsed.hardware,
++        smoke: parsed.smoke,
++        prototype: parsed.prototype,
++        perf: parsed.perf,
++        diag_handles: parsed.diag_handles,
+         performance,
+     };
+     // Relative command line paths were resolved against the launch directory above;
+     // from here the process must not search it for executables or DLLs (SEC-01).
+     let _ = bareline_platform_windows::shell_integration::harden_process_search_paths();
+-    sweep_temp_caches(&std::env::temp_dir(), &process_alive);
+-    if diag.as_deref().is_some_and(|value| value == "handles") {
++    if config.diag_handles {
+         log_handle_counters(config.diagnostics_path.as_deref());
+     }
+     Ok(config)
+ }
+ 
++fn validate_diagnostic_root(root: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
++    let root = root.canonicalize()?;
++    let marker = std::fs::symlink_metadata(root.join(".bareline-diagnostic"))?;
++    if !marker.is_file() || marker.file_type().is_symlink() || marker.len() != 0 {
++        return Err("Diagnostic root requires an empty regular .bareline-diagnostic marker".into());
++    }
++    Ok(root)
++}
++
++fn select_mode(requested: LaunchMode, portable_marker: bool) -> LaunchMode {
++    if matches!(requested, LaunchMode::Installed | LaunchMode::Diagnostic) && portable_marker {
++        LaunchMode::Portable
++    } else {
++        requested
++    }
++}
++
++fn profile_initialization(
++    mode: LaunchMode,
++    roaming: Option<PathBuf>,
++    local: Option<PathBuf>,
++    temp: PathBuf,
++) -> Option<ProfileInitialization> {
++    (mode == LaunchMode::Installed).then_some(ProfileInitialization { roaming, local, temp })
++}
++
+ /// Move the previous roaming data directory across once, the first time this
+ /// build starts. Failures are ignored: a fresh local directory is still usable.
+-fn migrate_from_roaming(roaming: Option<&Path>, local: &Path) {
+-    let Some(roaming) = roaming else { return };
++fn migrate_from_roaming(roaming: Option<&Path>, local: &Path) -> Vec<&'static str> {
++    let Some(roaming) = roaming else { return Vec::new() };
+     if roaming == local || !roaming.is_dir() || local.exists() {
+-        return;
++        return Vec::new();
+     }
+     if std::fs::create_dir_all(local).is_err() {
+-        return;
++        return Vec::new();
+     }
++    let mut migrated = Vec::new();
+     for name in ["settings.toml", "session.json", "recovery", "macros", "extensions"] {
+         let from = roaming.join(name);
+         let to = local.join(name);
+-        if from.exists() && !to.exists() {
+-            let _ = std::fs::rename(&from, &to);
++        if from.exists() && !to.exists() && std::fs::rename(&from, &to).is_ok() {
++            migrated.push(name);
+         }
+     }
++    migrated
+ }
+ 
+ /// Private caches are named `<kind>-<pid>-<serial>` inside a `Bareline-*`
+@@ -539,6 +754,159 @@ fn handle_counters() -> (u32, u32, u32) {
+ #[cfg(test)]
+ mod tests {
+     use super::*;
++    #[test]
++    fn parser_returns_typed_modes_without_preparing_paths() {
++        let mut ledger = StartupLedger::default();
++        let help = parse(&[OsString::from("--help")], &mut ledger).unwrap();
++        assert_eq!(help.mode(), LaunchMode::Help);
++
++        let version = parse(&[OsString::from("--version")], &mut ledger).unwrap();
++        assert_eq!(version.mode(), LaunchMode::Version);
++
++        let diagnostic = parse(&[OsString::from("--smoke")], &mut ledger).unwrap();
++        assert_eq!(diagnostic.mode(), LaunchMode::Diagnostic);
++
++        let performance = parse(
++            &[
++                OsString::from("--perf-workload"),
++                OsString::from("launch"),
++                OsString::from("--perf-root"),
++                OsString::from("missing-root-is-not-probed-by-parse"),
++            ],
++            &mut ledger,
++        )
++        .unwrap();
++        assert_eq!(performance.mode(), LaunchMode::Performance);
++
++        let installed = parse(&[], &mut ledger).unwrap();
++        assert_eq!(installed.mode(), LaunchMode::Installed);
++    }
++
++    #[test]
++    fn parser_preserves_option_like_and_non_ascii_paths_after_separator() {
++        let mut ledger = StartupLedger::default();
++        let parsed = parse(
++            &[
++                OsString::from("--"),
++                OsString::from("--version"),
++                OsString::from("文書.txt"),
++            ],
++            &mut ledger,
++        )
++        .unwrap();
++        assert_eq!(parsed.mode(), LaunchMode::Installed);
++        assert_eq!(
++            parsed.options.paths,
++            [PathBuf::from("--version"), PathBuf::from("文書.txt")]
++        );
++    }
++
++    #[test]
++    fn parser_rejects_contradictory_and_invalid_modes() {
++        for args in [
++            vec!["--help", "--version"],
++            vec!["--software", "--hardware"],
++            vec!["--smoke", "--perf"],
++            vec!["--diag"],
++            vec!["--diag", "unknown"],
++        ] {
++            let mut ledger = StartupLedger::default();
++            assert!(parse(&args.into_iter().map(OsString::from).collect::<Vec<_>>(), &mut ledger).is_err());
++        }
++        for diagnostic in [["--smoke"], ["--text-prototype"], ["--perf"], ["--diag=handles"]] {
++            let mut args = ["--perf-workload", "launch", "--perf-root", "unprepared-root"]
++                .into_iter()
++                .map(OsString::from)
++                .collect::<Vec<_>>();
++            args.extend(diagnostic.into_iter().map(OsString::from));
++            let mut ledger = StartupLedger::default();
++            assert!(parse(&args, &mut ledger).is_err());
++        }
++        let mut ledger = StartupLedger::default();
++        assert!(
++            parse(
++                &[
++                    "--perf-workload",
++                    "launch",
++                    "--perf-root",
++                    "unprepared-root",
++                    "--diag",
++                    "handles",
++                ]
++                .into_iter()
++                .map(OsString::from)
++                .collect::<Vec<_>>(),
++                &mut ledger,
++            )
++            .is_err()
++        );
++    }
++
++    #[test]
++    fn only_installed_mode_owns_profile_initialization() {
++        assert_eq!(select_mode(LaunchMode::Installed, true), LaunchMode::Portable);
++        assert_eq!(select_mode(LaunchMode::Diagnostic, true), LaunchMode::Portable);
++        for mode in [
++            LaunchMode::Help,
++            LaunchMode::Version,
++            LaunchMode::Diagnostic,
++            LaunchMode::Portable,
++            LaunchMode::Performance,
++        ] {
++            assert!(profile_initialization(mode, None, None, PathBuf::from("temp")).is_none());
++        }
++        assert!(profile_initialization(LaunchMode::Installed, None, None, PathBuf::from("temp")).is_some());
++    }
++
++    #[test]
++    fn diagnostic_root_requires_an_owned_empty_regular_marker() {
++        let root = std::env::temp_dir().join(format!(
++            "bareline-diagnostic-root-{}-{}",
++            std::process::id(),
++            std::time::SystemTime::now()
++                .duration_since(std::time::UNIX_EPOCH)
++                .unwrap()
++                .as_nanos()
++        ));
++        std::fs::create_dir_all(&root).unwrap();
++        let marker = root.join(".bareline-diagnostic");
++        assert!(validate_diagnostic_root(&root).is_err());
++        std::fs::write(&marker, []).unwrap();
++        assert_eq!(validate_diagnostic_root(&root).unwrap(), root.canonicalize().unwrap());
++        std::fs::write(&marker, b"not-owned").unwrap();
++        assert!(validate_diagnostic_root(&root).is_err());
++        std::fs::remove_dir_all(root).unwrap();
++    }
++
++    #[test]
++    fn installed_initialization_retains_its_completion_receipt() {
++        let temp = std::env::temp_dir().join(format!(
++            "bareline-initialization-{}-{}",
++            std::process::id(),
++            std::time::SystemTime::now()
++                .duration_since(std::time::UNIX_EPOCH)
++                .unwrap()
++                .as_nanos()
++        ));
++        std::fs::create_dir_all(&temp).unwrap();
++        let pending = profile_initialization(LaunchMode::Installed, None, None, temp.clone());
++        let mut runtime = ProfileInitializationRuntime::new(pending);
++        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
++        assert!(
++            runtime
++                .schedule(std::sync::Arc::new(move || {
++                    let _ = sender.send(());
++                }))
++                .unwrap()
++        );
++        receiver.recv_timeout(std::time::Duration::from_secs(2)).unwrap();
++        assert!(runtime.pump());
++        let completion = runtime.completion().unwrap().as_ref().unwrap();
++        assert_eq!(completion.profile_root, None);
++        assert!(completion.migrated_entries.is_empty());
++        std::fs::remove_dir_all(temp).unwrap();
++    }
++
+     #[test]
+     fn temp_sweep_removes_dead_owners_and_keeps_live_ones() {
+         let temp = std::env::temp_dir().join(format!(
+diff --git a/apps/bareline/src/windows_app/performance.rs b/apps/bareline/src/windows_app/performance.rs
+index 012f3c9..2131e3c 100644
+--- a/apps/bareline/src/windows_app/performance.rs
++++ b/apps/bareline/src/windows_app/performance.rs
+@@ -11,6 +11,14 @@ pub(super) struct PerformanceConfig {
+     origin_ns: Option<u128>,
+     extension_command: Option<String>,
+ }
++
++pub(super) struct PerformanceOptions {
++    root: PathBuf,
++    input: Option<PathBuf>,
++    workload: String,
++    origin_ns: Option<u128>,
++    extension_command: Option<String>,
++}
+ impl PerformanceConfig {
+     pub(super) fn requires_extensions(&self) -> bool {
+         self.workload == "extensions-memory"
+@@ -19,7 +27,7 @@ impl PerformanceConfig {
+ 
+ pub(super) fn parse_args(
+     args: &[OsString],
+-) -> Result<(Vec<OsString>, Option<PerformanceConfig>), Box<dyn std::error::Error>> {
++) -> Result<(Vec<OsString>, Option<PerformanceOptions>), Box<dyn std::error::Error>> {
+     let (mut filtered, mut workload, mut root, mut input, mut origin_ns, mut extension_command) =
+         (Vec::new(), None, None, None, None, None);
+     let mut index = 0;
+@@ -84,15 +92,8 @@ pub(super) fn parse_args(
+     {
+         return Err("Unknown performance workload".into());
+     }
+-    let root = PathBuf::from(root.ok_or("--perf-root is required")?).canonicalize()?;
+-    let marker = std::fs::symlink_metadata(root.join(".bareline-perf"))?;
+-    if !marker.is_file() || marker.file_type().is_symlink() || marker.len() != 0 {
+-        return Err("Performance root requires an empty regular .bareline-perf marker".into());
+-    }
+-    let input = input.map(PathBuf::from).map(|p| p.canonicalize()).transpose()?;
+-    if input.as_ref().is_some_and(|p| !p.starts_with(&root) || !p.is_file()) {
+-        return Err("Performance input must be a file within the generated root".into());
+-    }
++    let root = PathBuf::from(root.ok_or("--perf-root is required")?);
++    let input = input.map(PathBuf::from);
+     if !workload.starts_with("tabs-") && !["launch", "idle"].contains(&workload.as_str()) && input.is_none() {
+         return Err("Workload requires --perf-input".into());
+     }
+@@ -126,7 +127,7 @@ pub(super) fn parse_args(
+     }
+     Ok((
+         filtered,
+-        Some(PerformanceConfig {
++        Some(PerformanceOptions {
+             root,
+             input,
+             workload,
+@@ -136,6 +137,28 @@ pub(super) fn parse_args(
+     ))
+ }
+ 
++pub(super) fn prepare(options: PerformanceOptions) -> Result<PerformanceConfig, Box<dyn std::error::Error>> {
++    let root = options.root.canonicalize()?;
++    let marker = std::fs::symlink_metadata(root.join(".bareline-perf"))?;
++    if !marker.is_file() || marker.file_type().is_symlink() || marker.len() != 0 {
++        return Err("Performance root requires an empty regular .bareline-perf marker".into());
++    }
++    let input = options.input.map(|path| path.canonicalize()).transpose()?;
++    if input
++        .as_ref()
++        .is_some_and(|path| !path.starts_with(&root) || !path.is_file())
++    {
++        return Err("Performance input must be a file within the generated root".into());
++    }
++    Ok(PerformanceConfig {
++        root,
++        input,
++        workload: options.workload,
++        origin_ns: options.origin_ns,
++        extension_command: options.extension_command,
++    })
++}
++
+ fn clock_ns() -> Option<u128> {
+     // QPC is the same process-independent clock used by Python perf_counter_ns
+     // on supported Windows. The FFI lives in platform-windows (ARCH-19); fail
+diff --git a/docs/implementation/2026-09-12-audit-implementation/PR-T17.md b/docs/implementation/2026-09-12-audit-implementation/PR-T17.md
+new file mode 100644
+index 0000000..1c87660
+--- /dev/null
++++ b/docs/implementation/2026-09-12-audit-implementation/PR-T17.md
+@@ -0,0 +1,42 @@
++# PR-T17 — Side-effect-free launch parsing
++
++- Issue: TECH-020
++- Baseline source: `3c7f4a1681d676b38b49192b594578b914222212`
++- Audit `cli-side-effects` reproduction binary: SHA-256 `e3f283c8cc61ccae5d1549a1136b899d02abf3cf95a27c9fc7be8a42d7128702`
++- Dependencies: none; this change precedes PR-T01 and PR-T02.
++
++## Scope
++
++Separate argument validation and launch-mode selection from profile discovery and persistent initialization. Informational and invalid invocations must return before profile/cache work. Portable and performance/diagnostic launches must select their authoritative roots before any installed-profile work. Preserve original-launch-CWD path resolution, supported CLI options, instance handoff, and process hardening.
++
++## Decisions
++
++- `parse` now performs only lossless argument interpretation and validation, returning a typed requested mode plus raw paths/options. It does not inspect the executable directory, profiles, TEMP, or performance fixture paths.
++- `prepare` runs only after Help/Version have returned. It validates an explicitly requested performance fixture, captures the original launch CWD, selects Performance/Portable/Diagnostic/Installed ownership, resolves relative document paths, then applies process search hardening.
++- A portable marker can select Portable for either an ordinary or diagnostic launch; it never causes installed-profile maintenance. Performance always owns its declared marked root. A non-portable diagnostic requires `--diagnostic-root` with an empty regular `.bareline-diagnostic` marker, and settings/session/recovery/extensions/diagnostics all stay under that root.
++- Performance workloads reject every legacy diagnostic execution flag and handle-diagnostic request before root preparation. Portable handle diagnostics retain diagnostic intent and bypass normal single-instance forwarding even though Portable owns their data root.
++- Help output documents the diagnostic-root option, its sentinel requirement and the portable-executable alternative.
++- Only Installed mode receives a one-shot maintenance payload. The first successfully presented frame schedules a background worker through a retained runtime. Scheduling failures and disconnected workers become retained errors; successful completion retains the local profile root, exact migrated entry names and cleanup count. PR-T02 can take that receipt to reconcile newly migrated settings/session against live revisions without blindly overwriting changes made since first frame. PR-T01/PR-T02 will replace the existing helper internals with their safe/resumable implementations.
++- Contradictory renderer and legacy diagnostic modes, Help+Version, missing/unknown diagnostics, and existing malformed performance arguments fail during side-effect-free validation.
++
++## Changed files
++
++- `apps/bareline/src/windows_app/launch.rs`
++- `apps/bareline/src/windows_app/performance.rs`
++- `apps/bareline/src/windows_app.rs`
++- `apps/bareline/src/windows_app/instance.rs`
++- `apps/bareline/src/windows_app/accessibility.rs`
++- `xtask/src/journey.rs`
++- `docs/implementation/2026-09-12-audit-implementation/PR-T17.md`
++
++## Checks
++
++- `rustfmt --edition 2024` on the five modified Rust files: PASS.
++- `git diff --check`: PASS (Git reports only the repository's CRLF conversion warning).
++- Root-owned after patch integration: `cargo test -p bareline --bin bareline windows_app::launch::tests --no-default-features --offline --locked`. Cargo is intentionally not run from this isolated worktree because mixed worktree interfaces can contaminate the shared incremental artifacts. The crate's default feature set is empty and all T17 paths are unconditional in the Windows binary module, so the focused command will cover the asserted parser/mode logic on the Windows host; it does not replace native subprocess or first-frame verification.
++- Pending final native subprocess checks for help/version/invalid, portable, diagnostic/performance, and installed first-frame scheduling.
++
++## Unresolved qualification
++
++- PR-T01/PR-T02 own safe/resumable migration and cleanup internals; PR-T17 will only determine when those installed-profile jobs may run.
++- Final native desktop and integrated qualification remain root-owned.
+diff --git a/xtask/src/journey.rs b/xtask/src/journey.rs
+index eea37b1..efcd67c 100644
+--- a/xtask/src/journey.rs
++++ b/xtask/src/journey.rs
+@@ -1001,7 +1001,9 @@ fn invoke_menu_until_change(
+ // -------------------------------------------------------------- the journeys --
+ 
+ fn journey_smoke(env: &Env) -> Result<(), String> {
+-    let (home, _data_root) = env.scratch("smoke")?;
++    let (home, data_root) = env.scratch("smoke")?;
++    std::fs::create_dir_all(&data_root).map_err(|error| error.to_string())?;
++    std::fs::write(data_root.join(".bareline-diagnostic"), []).map_err(|error| error.to_string())?;
+     let mut command = Command::new(&env.exe);
+     command.args([
+         "--smoke",
+@@ -1010,6 +1012,7 @@ fn journey_smoke(env: &Env) -> Result<(), String> {
+         "--no-extensions",
+         "--new-instance",
+     ]);
++    command.arg("--diagnostic-root").arg(&data_root);
+     isolate(&mut command, &home);
+     let capture = crate::capture::run(&mut command, Duration::from_secs(30)).map_err(|e| e.to_string())?;
+     if capture.status != "ok" {

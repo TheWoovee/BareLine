@@ -1,0 +1,25 @@
+diff --git a/crates/editor-surface/src/paged_view.rs b/crates/editor-surface/src/paged_view.rs
+index f5dfca3..059b013 100644
+--- a/crates/editor-surface/src/paged_view.rs
++++ b/crates/editor-surface/src/paged_view.rs
+@@ -2968,7 +2968,7 @@ impl PagedEditorSurface {
+             .submit(
+                 work_kind,
+                 Box::new(move || {
+-                    let completion = JobCompletion::new(sender, notify);
++                    let completion = JobCompletion::new(sender, notify.clone());
+                     let result = (|| {
+                         cancellation.check().map_err(|error| format!("{error:?}"))?;
+                         let mut opened = actor.lock().map_err(|_| "Paged actor stopped.")?;
+diff --git a/docs/implementation/2026-09-12-audit-implementation/PR-T07.md b/docs/implementation/2026-09-12-audit-implementation/PR-T07.md
+index 8e27615..40a9d46 100644
+--- a/docs/implementation/2026-09-12-audit-implementation/PR-T07.md
++++ b/docs/implementation/2026-09-12-audit-implementation/PR-T07.md
+@@ -35,6 +35,7 @@ Baseline: `1708befe0a119506cab01d854467cc8fc4130335`
+ 
+ - `rustc --edition 2024 --test crates/platform/src/executor.rs -o .tmp-pr-t07-executor-tests.exe` followed by `.\\.tmp-pr-t07-executor-tests.exe --test-threads=1`: PASS, 5 passed, 0 failed. Covers idle-worker dispatch, total queue cap and typed closure, failed spawn/reduced capacity, FIFO fairness, and nonblocking drop followed by eventual worker exit. The temporary executable was removed.
+ - `git diff --check`: PASS (line-ending conversion notices only).
++- Central app-task compilation initially failed with E0382 because the main paged completion guard moved `notify` before recovery setup borrowed it. The guard now takes an `Arc` clone; central compilation and paged checks remain pending.
+ - Requested root-run checks after integration:
+   - `cargo test --offline --locked -p bareline-platform executor::tests -- --test-threads=1`
+   - `cargo test --offline --locked -p bareline-app task::tests -- --test-threads=1`

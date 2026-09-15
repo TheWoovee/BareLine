@@ -12,22 +12,40 @@ pub const SUBJECT_LIMIT: usize = 16 * 1024 * 1024;
 /// Complete context budget; no source prefix is discarded and all subject anchors stay exact.
 pub const CONTEXT_LIMIT: usize = 64 * 1024 * 1024;
 pub(super) type Captures = Vec<Option<Range<TextOffset>>>;
-pub(super) fn capture_names(query:&SearchQuery)->Result<Vec<(String,usize)>,Completeness>{
-    if query.pattern.len()>MAX_PATTERN_BYTES{return Err(Completeness::InvalidQuery);}
+pub(super) fn capture_names(query: &SearchQuery) -> Result<Vec<(String, usize)>, Completeness> {
+    if query.pattern.len() > MAX_PATTERN_BYTES {
+        return Err(Completeness::InvalidQuery);
+    }
     Engine::new(query)?.names()
 }
-pub(super) const STREAM_WINDOW:usize=256*1024;
-const PARTIAL_CONTEXT:usize=8*1024*1024;
+pub(super) const STREAM_WINDOW: usize = 256 * 1024;
+const PARTIAL_CONTEXT: usize = 8 * 1024 * 1024;
 /// These constructs can inspect discarded subject context or change start semantics.
 /// Keep them on the exact subject path rather than guessing an overlap distance.
-pub(super) fn streamable(query:&SearchQuery)->bool {
-    if query.whole_word{return false;}
-    let mut pattern=query.pattern.as_str();
-    for flag in ["(?s)","(?m)","(?i)","(?is)","(?si)"]{pattern=pattern.strip_prefix(flag).unwrap_or(pattern);}
-    !pattern.contains("(?")&&!pattern.contains("(*")&&!pattern.contains('^')&&!pattern.contains('$')&&!pattern.contains("[:<:]")&&!pattern.contains("[:>:]")
-        &&!pattern.as_bytes().windows(2).any(|pair|pair[0]==b'\\'&&(pair[1].is_ascii_digit()||b"AbBGKkzgZQEX".contains(&pair[1])))
+pub(super) fn streamable(query: &SearchQuery) -> bool {
+    if query.whole_word {
+        return false;
+    }
+    let mut pattern = query.pattern.as_str();
+    for flag in ["(?s)", "(?m)", "(?i)", "(?is)", "(?si)"] {
+        pattern = pattern.strip_prefix(flag).unwrap_or(pattern);
+    }
+    !pattern.contains("(?")
+        && !pattern.contains("(*")
+        && !pattern.contains('^')
+        && !pattern.contains('$')
+        && !pattern.contains("[:<:]")
+        && !pattern.contains("[:>:]")
+        && !pattern
+            .as_bytes()
+            .windows(2)
+            .any(|pair| pair[0] == b'\\' && (pair[1].is_ascii_digit() || b"AbBGKkzgZQEX".contains(&pair[1])))
 }
-enum PartialMatch { Match(Captures), Partial(usize), None }
+enum PartialMatch {
+    Match(Captures),
+    Partial(usize),
+    None,
+}
 
 // pcre2-sys omits callout bindings. The block is opaque: the callback never dereferences it.
 // Signature is from the bundled pcre2.h; PCRE2 calls synchronously on the matching thread.
@@ -67,27 +85,59 @@ impl Drop for Engine {
     }
 }
 impl Engine {
-    fn partial(&mut self,text:&str,start:usize,state:&mut Interrupt<'_>,eof:bool)->Result<PartialMatch,Completeness>{
+    fn partial(
+        &mut self,
+        text: &str,
+        start: usize,
+        state: &mut Interrupt<'_>,
+        eof: bool,
+    ) -> Result<PartialMatch, Completeness> {
         // SAFETY: allocations are owned by Engine; the UTF-8 subject and synchronous
         // callout state remain live throughout the call and ovector copy.
-        unsafe{
-            pcre2_set_callout_8(self.context,Some(interrupt),(state as *mut Interrupt<'_>).cast());
-            let code=pcre2_match_8(self.code,text.as_ptr(),text.len(),start,if eof{0}else{PCRE2_PARTIAL_HARD},self.data,self.context);
-            if state.job.is_cancelled(){return Err(Completeness::Cancelled);}
-            if Instant::now()>=state.deadline{return Err(Completeness::RegexLimit);}
-            if code==PCRE2_ERROR_NOMATCH{return Ok(PartialMatch::None);}
-            let vector=pcre2_get_ovector_pointer_8(self.data);
-            if code==PCRE2_ERROR_PARTIAL{
-                let at=*vector;
-                if at>text.len()||!text.is_char_boundary(at){return Err(Completeness::UnsupportedStreaming);}
+        unsafe {
+            pcre2_set_callout_8(self.context, Some(interrupt), (state as *mut Interrupt<'_>).cast());
+            let code = pcre2_match_8(
+                self.code,
+                text.as_ptr(),
+                text.len(),
+                start,
+                if eof { 0 } else { PCRE2_PARTIAL_HARD },
+                self.data,
+                self.context,
+            );
+            if state.job.is_cancelled() {
+                return Err(Completeness::Cancelled);
+            }
+            if Instant::now() >= state.deadline {
+                return Err(Completeness::RegexLimit);
+            }
+            if code == PCRE2_ERROR_NOMATCH {
+                return Ok(PartialMatch::None);
+            }
+            let vector = pcre2_get_ovector_pointer_8(self.data);
+            if code == PCRE2_ERROR_PARTIAL {
+                let at = *vector;
+                if at > text.len() || !text.is_char_boundary(at) {
+                    return Err(Completeness::UnsupportedStreaming);
+                }
                 return Ok(PartialMatch::Partial(at));
             }
-            if code<0{return Err(Completeness::RegexLimit);}
-            let values=std::slice::from_raw_parts(vector,pcre2_get_ovector_count_8(self.data) as usize*2);
-            let mut captures=Vec::new();
-            for pair in values.as_chunks::<2>().0{
-                captures.push(if pair[0]==usize::MAX{None}else{
-                    if pair[0]>pair[1]||pair[1]>text.len()||!text.is_char_boundary(pair[0])||!text.is_char_boundary(pair[1]){return Err(Completeness::UnsupportedStreaming);}
+            if code < 0 {
+                return Err(Completeness::RegexLimit);
+            }
+            let values = std::slice::from_raw_parts(vector, pcre2_get_ovector_count_8(self.data) as usize * 2);
+            let mut captures = Vec::new();
+            for pair in values.as_chunks::<2>().0 {
+                captures.push(if pair[0] == usize::MAX {
+                    None
+                } else {
+                    if pair[0] > pair[1]
+                        || pair[1] > text.len()
+                        || !text.is_char_boundary(pair[0])
+                        || !text.is_char_boundary(pair[1])
+                    {
+                        return Err(Completeness::UnsupportedStreaming);
+                    }
                     Some(TextOffset(pair[0])..TextOffset(pair[1]))
                 });
             }
@@ -100,25 +150,12 @@ impl Engine {
             let mut count = 0u32;
             let mut size = 0u32;
             let mut table: *const u8 = ptr::null();
-            pcre2_pattern_info_8(
-                self.code,
-                PCRE2_INFO_NAMECOUNT,
-                (&mut count as *mut u32).cast(),
-            );
-            pcre2_pattern_info_8(
-                self.code,
-                PCRE2_INFO_NAMEENTRYSIZE,
-                (&mut size as *mut u32).cast(),
-            );
-            pcre2_pattern_info_8(
-                self.code,
-                PCRE2_INFO_NAMETABLE,
-                (&mut table as *mut *const u8).cast(),
-            );
+            pcre2_pattern_info_8(self.code, PCRE2_INFO_NAMECOUNT, (&mut count as *mut u32).cast());
+            pcre2_pattern_info_8(self.code, PCRE2_INFO_NAMEENTRYSIZE, (&mut size as *mut u32).cast());
+            pcre2_pattern_info_8(self.code, PCRE2_INFO_NAMETABLE, (&mut table as *mut *const u8).cast());
             let mut names = Vec::with_capacity(count as usize);
             for index in 0..count as usize {
-                let entry =
-                    std::slice::from_raw_parts(table.add(index * size as usize), size as usize);
+                let entry = std::slice::from_raw_parts(table.add(index * size as usize), size as usize);
                 let number = u16::from_be_bytes([entry[0], entry[1]]) as usize;
                 let bytes = entry[2..].split(|b| *b == 0).next().unwrap();
                 let name = std::str::from_utf8(bytes).map_err(|_| Completeness::InvalidQuery)?;
@@ -148,11 +185,7 @@ impl Engine {
                 | PCRE2_UCP
                 | PCRE2_AUTO_CALLOUT
                 | PCRE2_NEVER_BACKSLASH_C
-                | if query.case == Case::Folded {
-                    PCRE2_CASELESS
-                } else {
-                    0
-                };
+                | if query.case == Case::Folded { PCRE2_CASELESS } else { 0 };
             let code = pcre2_compile_8(
                 query.pattern.as_ptr(),
                 query.pattern.len(),
@@ -179,29 +212,12 @@ impl Engine {
             Ok(engine)
         }
     }
-    fn run(
-        &mut self,
-        text: &str,
-        start: usize,
-        state: &mut Interrupt<'_>,
-    ) -> Result<Option<Captures>, Completeness> {
+    fn run(&mut self, text: &str, start: usize, state: &mut Interrupt<'_>) -> Result<Option<Captures>, Completeness> {
         // SAFETY: Engine owns live allocations; subject and state outlive this synchronous
         // non-JIT call. The returned ovector belongs to data and is copied before reuse.
         unsafe {
-            pcre2_set_callout_8(
-                self.context,
-                Some(interrupt),
-                (state as *mut Interrupt<'_>).cast(),
-            );
-            let code = pcre2_match_8(
-                self.code,
-                text.as_ptr(),
-                text.len(),
-                start,
-                0,
-                self.data,
-                self.context,
-            );
+            pcre2_set_callout_8(self.context, Some(interrupt), (state as *mut Interrupt<'_>).cast());
+            let code = pcre2_match_8(self.code, text.as_ptr(), text.len(), start, 0, self.data, self.context);
             if state.job.is_cancelled() {
                 return Err(Completeness::Cancelled);
             }
@@ -212,17 +228,13 @@ impl Engine {
                 return Err(Completeness::RegexLimit);
             }
             let count = pcre2_get_ovector_count_8(self.data) as usize;
-            let values =
-                std::slice::from_raw_parts(pcre2_get_ovector_pointer_8(self.data), count * 2);
+            let values = std::slice::from_raw_parts(pcre2_get_ovector_pointer_8(self.data), count * 2);
             let mut captures = Vec::with_capacity(count);
             for pair in values.as_chunks::<2>().0 {
                 captures.push(if pair[0] == usize::MAX {
                     None
                 } else {
-                    if pair[0] > pair[1]
-                        || !text.is_char_boundary(pair[0])
-                        || !text.is_char_boundary(pair[1])
-                    {
+                    if pair[0] > pair[1] || !text.is_char_boundary(pair[0]) || !text.is_char_boundary(pair[1]) {
                         return Err(Completeness::UnsupportedStreaming);
                     }
                     Some(TextOffset(pair[0])..TextOffset(pair[1]))
@@ -235,44 +247,82 @@ impl Engine {
 /// Retain PCRE2's earliest hard-partial candidate, not an arbitrary fixed overlap.
 /// A candidate exceeding the bounded context fails explicitly; no matches are skipped.
 pub(super) fn scan_stream(
-    length:usize,query:&SearchQuery,job:&SearchJob,
-    mut read:impl FnMut(usize,usize)->Result<String,Completeness>,
-    mut emit:impl FnMut(Captures)->Result<(),Completeness>,
-)->Result<(),Completeness>{
-    if query.pattern.len()>MAX_PATTERN_BYTES{return Err(Completeness::InvalidQuery);}
-    if !streamable(query){return Err(Completeness::UnsupportedStreaming);}
-    let mut engine=Engine::new(query)?;
-    let selection=query.selection.clone().unwrap_or(TextOffset(0)..TextOffset(length));
-    if selection.start>selection.end||selection.end.0>length{return Err(Completeness::InvalidQuery);}
-    let mut text=String::new();let mut base=selection.start.0;let mut next=base;let mut start=0usize;
-    loop{
-        if job.is_cancelled(){return Err(Completeness::Cancelled);}
-        if next<length{
-            let part=read(next,STREAM_WINDOW.min(length-next))?;
-            if part.is_empty()||part.len()>length-next{return Err(Completeness::Unsupported);}
-            if text.len().saturating_add(part.len())>PARTIAL_CONTEXT{return Err(Completeness::UnsupportedStreaming);}
-            next+=part.len();text.push_str(&part);
+    length: usize,
+    query: &SearchQuery,
+    job: &SearchJob,
+    mut read: impl FnMut(usize, usize) -> Result<String, Completeness>,
+    mut emit: impl FnMut(Captures) -> Result<(), Completeness>,
+) -> Result<(), Completeness> {
+    if query.pattern.len() > MAX_PATTERN_BYTES {
+        return Err(Completeness::InvalidQuery);
+    }
+    if !streamable(query) {
+        return Err(Completeness::UnsupportedStreaming);
+    }
+    let mut engine = Engine::new(query)?;
+    let selection = query.selection.clone().unwrap_or(TextOffset(0)..TextOffset(length));
+    if selection.start > selection.end || selection.end.0 > length {
+        return Err(Completeness::InvalidQuery);
+    }
+    let mut text = String::new();
+    let mut base = selection.start.0;
+    let mut next = base;
+    let mut start = 0usize;
+    loop {
+        if job.is_cancelled() {
+            return Err(Completeness::Cancelled);
         }
-        let eof=next==length;
-        let mut state=Interrupt{job,deadline:Instant::now()+Duration::from_secs(2)};
-        let retain=loop{
-            if base+start>selection.end.0{return Ok(());}
-            match engine.partial(&text,start,&mut state,eof)?{
-                PartialMatch::None=>break text.len(),
-                PartialMatch::Partial(at)=>break at,
-                PartialMatch::Match(mut captures)=>{
-                    let range=captures[0].clone().ok_or(Completeness::UnsupportedStreaming)?;
+        if next < length {
+            let part = read(next, STREAM_WINDOW.min(length - next))?;
+            if part.is_empty() || part.len() > length - next {
+                return Err(Completeness::Unsupported);
+            }
+            if text.len().saturating_add(part.len()) > PARTIAL_CONTEXT {
+                return Err(Completeness::UnsupportedStreaming);
+            }
+            next += part.len();
+            text.push_str(&part);
+        }
+        let eof = next == length;
+        let mut state = Interrupt {
+            job,
+            deadline: Instant::now() + Duration::from_secs(2),
+        };
+        let retain = loop {
+            if base + start > selection.end.0 {
+                return Ok(());
+            }
+            match engine.partial(&text, start, &mut state, eof)? {
+                PartialMatch::None => break text.len(),
+                PartialMatch::Partial(at) => break at,
+                PartialMatch::Match(mut captures) => {
+                    let range = captures[0].clone().ok_or(Completeness::UnsupportedStreaming)?;
                     // An empty match at a temporary edge must wait for the next scalar.
-                    if range.is_empty()&&range.end.0==text.len()&&!eof{break range.start.0;}
-                    for capture in captures.iter_mut().flatten(){capture.start.0+=base;capture.end.0+=base;}
+                    if range.is_empty() && range.end.0 == text.len() && !eof {
+                        break range.start.0;
+                    }
+                    for capture in captures.iter_mut().flatten() {
+                        capture.start.0 += base;
+                        capture.end.0 += base;
+                    }
                     emit(captures)?;
-                    start=range.end.0;
-                    if range.is_empty(){if let Some(c)=text[start..].chars().next(){start+=c.len_utf8();}else{break text.len();}}
+                    start = range.end.0;
+                    if range.is_empty() {
+                        if let Some(c) = text[start..].chars().next() {
+                            start += c.len_utf8();
+                        } else {
+                            break text.len();
+                        }
+                    }
                 }
             }
         };
-        if eof{return Ok(());}
-        text.drain(..retain);base+=retain;start=0;
+        if eof {
+            return Ok(());
+        }
+        text.drain(..retain);
+        base += retain;
+        start = 0;
     }
 }
 pub(super) fn scan(
@@ -310,24 +360,53 @@ pub(super) fn scan(
         {
             return Err(Completeness::InvalidQuery);
         }
-        if snapshot.len()>SUBJECT_LIMIT&&streamable(query){
-            result.capture_names=Engine::new(query)?.names()?;
-            let mut used=result.capture_names.iter().map(|(name,_)|name.len()+std::mem::size_of::<(String,usize)>()).sum::<usize>();
-            return scan_stream(snapshot.len(),query,job,|start,size|{
-                let mut end=start.saturating_add(size).min(snapshot.len());
-                while end>start&&!snapshot.is_boundary(TextOffset(end)){end-=1;}
-                snapshot.read(TextOffset(start)..TextOffset(end),size).map_err(|_|Completeness::Unsupported)
-            },|captures|{
-                let range=captures[0].clone().ok_or(Completeness::UnsupportedStreaming)?;
-                if range.end>selection.end{return Ok(());}
-                used=used.saturating_add(std::mem::size_of::<SearchMatch>()+std::mem::size_of::<Captures>()+captures.len()*std::mem::size_of::<Option<Range<TextOffset>>>());
-                if used>query.results_ram_bytes.min(MAX_RESULT_BYTES){return Err(Completeness::ResultLimit);}
-                result.matches.push(SearchMatch{range});result.captures.as_mut().unwrap().push(captures);
-                if result.matches.len()-emitted==BATCH_SIZE{
-                    emit(SearchBatch{job:job.id,revision:snapshot.revision,source:snapshot,matches:&result.matches[emitted..]});emitted=result.matches.len();
-                }
-                Ok(())
-            });
+        if snapshot.len() > SUBJECT_LIMIT && streamable(query) {
+            result.capture_names = Engine::new(query)?.names()?;
+            let mut used = result
+                .capture_names
+                .iter()
+                .map(|(name, _)| name.len() + std::mem::size_of::<(String, usize)>())
+                .sum::<usize>();
+            return scan_stream(
+                snapshot.len(),
+                query,
+                job,
+                |start, size| {
+                    let mut end = start.saturating_add(size).min(snapshot.len());
+                    while end > start && !snapshot.is_boundary(TextOffset(end)) {
+                        end -= 1;
+                    }
+                    snapshot
+                        .read(TextOffset(start)..TextOffset(end), size)
+                        .map_err(|_| Completeness::Unsupported)
+                },
+                |captures| {
+                    let range = captures[0].clone().ok_or(Completeness::UnsupportedStreaming)?;
+                    if range.end > selection.end {
+                        return Ok(());
+                    }
+                    used = used.saturating_add(
+                        std::mem::size_of::<SearchMatch>()
+                            + std::mem::size_of::<Captures>()
+                            + captures.len() * std::mem::size_of::<Option<Range<TextOffset>>>(),
+                    );
+                    if used > query.results_ram_bytes.min(MAX_RESULT_BYTES) {
+                        return Err(Completeness::ResultLimit);
+                    }
+                    result.matches.push(SearchMatch { range });
+                    result.captures.as_mut().unwrap().push(captures);
+                    if result.matches.len() - emitted == BATCH_SIZE {
+                        emit(SearchBatch {
+                            job: job.id,
+                            revision: snapshot.revision,
+                            source: snapshot,
+                            matches: &result.matches[emitted..],
+                        });
+                        emitted = result.matches.len();
+                    }
+                    Ok(())
+                },
+            );
         }
         if snapshot.len() > CONTEXT_LIMIT {
             return Err(Completeness::UnsupportedStreaming);
@@ -364,16 +443,13 @@ pub(super) fn scan(
             let Some(captures) = engine.run(&text, start, &mut state)? else {
                 break;
             };
-            let range = captures[0]
-                .clone()
-                .ok_or(Completeness::UnsupportedStreaming)?;
+            let range = captures[0].clone().ok_or(Completeness::UnsupportedStreaming)?;
             if range.start > selection.end {
                 break;
             }
             if range.end <= selection.end
                 && (!query.whole_word
-                    || word::boundaries(snapshot, range.start.0, range.end.0)
-                        .ok_or(Completeness::Unsupported)?)
+                    || word::boundaries(snapshot, range.start.0, range.end.0).ok_or(Completeness::Unsupported)?)
             {
                 used = used.saturating_add(
                     std::mem::size_of::<SearchMatch>()
@@ -385,9 +461,7 @@ pub(super) fn scan(
                 }
                 result.matches.reserve_exact(1);
                 result.captures.as_mut().unwrap().reserve_exact(1);
-                result.matches.push(SearchMatch {
-                    range: range.clone(),
-                });
+                result.matches.push(SearchMatch { range: range.clone() });
                 result.captures.as_mut().unwrap().push(captures);
                 if result.matches.len() - emitted == BATCH_SIZE {
                     emit(SearchBatch {
@@ -436,14 +510,19 @@ pub(super) fn expand(
     snapshot: &DocumentSnapshot,
     limit: usize,
 ) -> Result<String, ReplaceError> {
-    expand_ranges(template,captures,names,limit,|range,size|snapshot.read(range,size).map_err(|_|ReplaceError::Stale))
+    expand_ranges(template, captures, names, limit, |range, size| {
+        snapshot.read(range, size).map_err(|_| ReplaceError::Stale)
+    })
 }
 /// Expand only referenced capture ranges through the caller's bounded source reader.
 /// Global offsets are preserved; no full document or full match is materialized.
 pub(super) fn expand_ranges(
-    template:&str,captures:&[Option<Range<TextOffset>>],names:&[(String,usize)],limit:usize,
-    mut read:impl FnMut(Range<TextOffset>,usize)->Result<String,ReplaceError>,
-)->Result<String,ReplaceError>{
+    template: &str,
+    captures: &[Option<Range<TextOffset>>],
+    names: &[(String, usize)],
+    limit: usize,
+    mut read: impl FnMut(Range<TextOffset>, usize) -> Result<String, ReplaceError>,
+) -> Result<String, ReplaceError> {
     let mut output = String::new();
     let mut chars = template.chars().peekable();
     while let Some(c) = chars.next() {
@@ -464,28 +543,19 @@ pub(super) fn expand_ranges(
                             _ => return Err(ReplaceError::InvalidReplacement),
                         }
                     }
-                    capture = Some(
-                        if !name.is_empty() && name.bytes().all(|b| b.is_ascii_digit()) {
-                            name.parse::<usize>()
-                                .map_err(|_| ReplaceError::InvalidReplacement)?
-                        } else {
-                            names
-                                .iter()
-                                .find(|(candidate, index)| {
-                                    candidate == &name && captures[*index].is_some()
-                                })
-                                .or_else(|| names.iter().find(|(candidate, _)| candidate == &name))
-                                .map(|(_, index)| *index)
-                                .ok_or(ReplaceError::InvalidReplacement)?
-                        },
-                    );
+                    capture = Some(if !name.is_empty() && name.bytes().all(|b| b.is_ascii_digit()) {
+                        name.parse::<usize>().map_err(|_| ReplaceError::InvalidReplacement)?
+                    } else {
+                        names
+                            .iter()
+                            .find(|(candidate, index)| candidate == &name && captures[*index].is_some())
+                            .or_else(|| names.iter().find(|(candidate, _)| candidate == &name))
+                            .map(|(_, index)| *index)
+                            .ok_or(ReplaceError::InvalidReplacement)?
+                    });
                 } else if next.is_ascii_digit() {
                     let braced = next == '{';
-                    let mut number = if braced {
-                        0
-                    } else {
-                        next as usize - '0' as usize
-                    };
+                    let mut number = if braced { 0 } else { next as usize - '0' as usize };
                     let mut digits = usize::from(!braced);
                     while let Some(d) = chars.peek().copied().filter(char::is_ascii_digit) {
                         chars.next();
@@ -513,16 +583,16 @@ pub(super) fn expand_ranges(
             _ => literal = Some(c),
         }
         if let Some(index) = capture
-            && let Some(range) = captures
-                .get(index)
-                .ok_or(ReplaceError::InvalidReplacement)?
+            && let Some(range) = captures.get(index).ok_or(ReplaceError::InvalidReplacement)?
         {
             let size = range.end.0 - range.start.0;
             if size > limit.saturating_sub(output.len()) {
                 return Err(ReplaceError::StagingLimit);
             }
-            let text=read(range.clone(),size)?;
-            if text.len()!=size{return Err(ReplaceError::Stale);}
+            let text = read(range.clone(), size)?;
+            if text.len() != size {
+                return Err(ReplaceError::Stale);
+            }
             output.push_str(&text);
         }
         if let Some(c) = literal {
@@ -540,49 +610,103 @@ mod tests {
     use super::*;
     use bareline_document::{Budget, Document};
     #[test]
-    fn range_expansion_reads_only_referenced_global_capture_and_checks_budget_first(){
-        let names=capture_names(&query("(?<word>abc)")).unwrap();
-        let at=CONTEXT_LIMIT+17;
-        let captures=vec![Some(TextOffset(at)..TextOffset(at+3)),Some(TextOffset(at)..TextOffset(at+3))];
-        let mut reads=0;
-        let output=expand_ranges("${word}/$1",&captures,&names,7,|range,size|{
-            assert_eq!(range,TextOffset(at)..TextOffset(at+3));assert_eq!(size,3);reads+=1;Ok("abc".into())
-        }).unwrap();
-        assert_eq!(output,"abc/abc");assert_eq!(reads,2);
-        assert!(matches!(expand_ranges("$1",&captures,&names,2,|_,_|panic!("over-budget capture must not read")),Err(ReplaceError::StagingLimit)));
+    fn range_expansion_reads_only_referenced_global_capture_and_checks_budget_first() {
+        let names = capture_names(&query("(?<word>abc)")).unwrap();
+        let at = CONTEXT_LIMIT + 17;
+        let captures = vec![
+            Some(TextOffset(at)..TextOffset(at + 3)),
+            Some(TextOffset(at)..TextOffset(at + 3)),
+        ];
+        let mut reads = 0;
+        let output = expand_ranges("${word}/$1", &captures, &names, 7, |range, size| {
+            assert_eq!(range, TextOffset(at)..TextOffset(at + 3));
+            assert_eq!(size, 3);
+            reads += 1;
+            Ok("abc".into())
+        })
+        .unwrap();
+        assert_eq!(output, "abc/abc");
+        assert_eq!(reads, 2);
+        assert!(matches!(
+            expand_ranges("$1", &captures, &names, 2, |_, _| panic!(
+                "over-budget capture must not read"
+            )),
+            Err(ReplaceError::StagingLimit)
+        ));
     }
     #[test]
-    fn hard_partial_multiline_crosses_windows_and_preserves_capture_offsets(){
-        let text=format!("{}BEGIN\n{}\nEND tail BEGIN\nlast\nEND","x".repeat(STREAM_WINDOW-3),"α\n".repeat(STREAM_WINDOW/3));
-        let mut query=SearchQuery::literal("(?s)BEGIN\\n(.*?)\\nEND");query.mode=SearchMode::Regex;
-        let document=Document::from_utf8(&text,Budget::new(text.len()*4),Budget::new(0)).unwrap();
-        let job=SearchJob::default();let expected=scan(&document.snapshot(),&query,&job,|_|{});
-        assert_eq!(expected.completeness(),Completeness::Complete);
-        let mut actual=Vec::new();let mut reads=0;
-        scan_stream(text.len(),&query,&job,|start,size|{
-            assert!(size<=STREAM_WINDOW);reads+=1;let mut end=(start+size).min(text.len());while !text.is_char_boundary(end){end-=1;}Ok(text[start..end].into())
-        },|captures|{actual.push(captures);Ok(())}).unwrap();
-        assert!(reads>=3);assert_eq!(actual.len(),2);
-        assert_eq!(actual,expected.captures.unwrap());
-        assert_eq!(actual[0][0].as_ref().unwrap().start,TextOffset(STREAM_WINDOW-3));
+    fn hard_partial_multiline_crosses_windows_and_preserves_capture_offsets() {
+        let text = format!(
+            "{}BEGIN\n{}\nEND tail BEGIN\nlast\nEND",
+            "x".repeat(STREAM_WINDOW - 3),
+            "α\n".repeat(STREAM_WINDOW / 3)
+        );
+        let mut query = SearchQuery::literal("(?s)BEGIN\\n(.*?)\\nEND");
+        query.mode = SearchMode::Regex;
+        let document = Document::from_utf8(&text, Budget::new(text.len() * 4), Budget::new(0)).unwrap();
+        let job = SearchJob::default();
+        let expected = scan(&document.snapshot(), &query, &job, |_| {});
+        assert_eq!(expected.completeness(), Completeness::Complete);
+        let mut actual = Vec::new();
+        let mut reads = 0;
+        scan_stream(
+            text.len(),
+            &query,
+            &job,
+            |start, size| {
+                assert!(size <= STREAM_WINDOW);
+                reads += 1;
+                let mut end = (start + size).min(text.len());
+                while !text.is_char_boundary(end) {
+                    end -= 1;
+                }
+                Ok(text[start..end].into())
+            },
+            |captures| {
+                actual.push(captures);
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert!(reads >= 3);
+        assert_eq!(actual.len(), 2);
+        assert_eq!(actual, expected.captures.unwrap());
+        assert_eq!(actual[0][0].as_ref().unwrap().start, TextOffset(STREAM_WINDOW - 3));
     }
     #[test]
-    fn partial_candidate_cap_is_explicit_and_cancellation_is_not_complete(){
-        let mut query=SearchQuery::literal("(?s)BEGIN.*END");query.mode=SearchMode::Regex;
-        let mut first=true;
-        let status=scan_stream(PARTIAL_CONTEXT+STREAM_WINDOW,&query,&SearchJob::default(),|_,size|{let mut part="x".repeat(size);if first{part.replace_range(..5,"BEGIN");first=false;}Ok(part)},|_|panic!("unterminated candidate cannot emit"));
-        assert!(matches!(status,Err(Completeness::UnsupportedStreaming|Completeness::RegexLimit)));
-        let job=SearchJob::default();job.cancel();
-        assert_eq!(scan_stream(1,&query,&job,|_,_|panic!("cancelled read"),|_|Ok(())),Err(Completeness::Cancelled));
-        query.pattern="(?<=prefix)match".into();assert!(!streamable(&query));
+    fn partial_candidate_cap_is_explicit_and_cancellation_is_not_complete() {
+        let mut query = SearchQuery::literal("(?s)BEGIN.*END");
+        query.mode = SearchMode::Regex;
+        let mut first = true;
+        let status = scan_stream(
+            PARTIAL_CONTEXT + STREAM_WINDOW,
+            &query,
+            &SearchJob::default(),
+            |_, size| {
+                let mut part = "x".repeat(size);
+                if first {
+                    part.replace_range(..5, "BEGIN");
+                    first = false;
+                }
+                Ok(part)
+            },
+            |_| panic!("unterminated candidate cannot emit"),
+        );
+        assert!(matches!(
+            status,
+            Err(Completeness::UnsupportedStreaming | Completeness::RegexLimit)
+        ));
+        let job = SearchJob::default();
+        job.cancel();
+        assert_eq!(
+            scan_stream(1, &query, &job, |_, _| panic!("cancelled read"), |_| Ok(())),
+            Err(Completeness::Cancelled)
+        );
+        query.pattern = "(?<=prefix)match".into();
+        assert!(!streamable(&query));
     }
     fn document(text: &str) -> Document {
-        Document::from_utf8(
-            text,
-            Budget::new(128 * 1024 * 1024),
-            Budget::new(128 * 1024 * 1024),
-        )
-        .unwrap()
+        Document::from_utf8(text, Budget::new(128 * 1024 * 1024), Budget::new(128 * 1024 * 1024)).unwrap()
     }
     fn query(pattern: &str) -> SearchQuery {
         let mut q = SearchQuery::literal(pattern);
@@ -617,24 +741,14 @@ mod tests {
         let snapshot = document("xab").snapshot();
         let mut q = query(r"(?<=x)ab");
         q.selection = Some(TextOffset(1)..TextOffset(3));
-        assert_eq!(
-            super::scan(&snapshot, &q, &SearchJob::default(), |_| {}).count(),
-            1
-        );
+        assert_eq!(super::scan(&snapshot, &q, &SearchJob::default(), |_| {}).count(), 1);
     }
     #[test]
     fn captures_expand_before_atomic_transaction_and_obey_budget() {
         let mut doc = document("ab12 ab34");
         let snapshot = doc.snapshot();
-        let result = super::scan(
-            &snapshot,
-            &query(r"(ab)(\d+)"),
-            &SearchJob::default(),
-            |_| {},
-        );
-        let tx = result
-            .prepare_replace(&snapshot, r"$2-${1}-\1-$$", 4096)
-            .unwrap();
+        let result = super::scan(&snapshot, &query(r"(ab)(\d+)"), &SearchJob::default(), |_| {});
+        let tx = result.prepare_replace(&snapshot, r"$2-${1}-\1-$$", 4096).unwrap();
         doc.apply(tx).unwrap();
         assert_eq!(
             doc.snapshot()
@@ -656,9 +770,7 @@ mod tests {
             &SearchJob::default(),
             |_| {},
         );
-        let tx = named
-            .prepare_replace(&snapshot, "${number}:$+{word}", 4096)
-            .unwrap();
+        let tx = named.prepare_replace(&snapshot, "${number}:$+{word}", 4096).unwrap();
         assert_eq!(tx.edits[0].insert, "12:ab");
         assert!(matches!(
             named.prepare_replace(&snapshot, "${missing}", 4096),
@@ -714,16 +826,10 @@ mod tests {
             job: &job,
             deadline: Instant::now() - Duration::from_secs(1),
         };
-        assert_eq!(
-            engine.run("aaaa!", 0, &mut state),
-            Err(Completeness::RegexLimit)
-        );
+        assert_eq!(engine.run("aaaa!", 0, &mut state), Err(Completeness::RegexLimit));
         job.cancel();
         state.deadline = Instant::now() + Duration::from_secs(10);
-        assert_eq!(
-            engine.run("aaaa!", 0, &mut state),
-            Err(Completeness::Cancelled)
-        );
+        assert_eq!(engine.run("aaaa!", 0, &mut state), Err(Completeness::Cancelled));
     }
     #[test]
     fn capped_batches_emit_retained_tail_and_disable_replacement() {

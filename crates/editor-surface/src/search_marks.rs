@@ -4,12 +4,28 @@ use bareline_document::{EditTransaction, TextOffset};
 use std::ops::Range;
 const MAX_MARKS: usize = 65536;
 #[derive(Clone, Default)]
-pub struct SearchMarks { styles: [Vec<Range<TextOffset>>; 5] }
+pub struct SearchMarks {
+    styles: [Vec<Range<TextOffset>>; 5],
+}
 impl SearchMarks {
     pub fn set(&mut self, style: u8, mut ranges: Vec<Range<TextOffset>>) -> Result<(), String> {
-        let index = style.checked_sub(1).filter(|value| *value < 5).ok_or("Mark style must be 1 through 5")? as usize;
-        if ranges.iter().any(|range| range.start > range.end) { return Err("Invalid mark range".into()); }
-        if ranges.len() + self.styles.iter().enumerate().filter(|(i, _)| *i != index).map(|(_, marks)| marks.len()).sum::<usize>() > MAX_MARKS {
+        let index = style
+            .checked_sub(1)
+            .filter(|value| *value < 5)
+            .ok_or("Mark style must be 1 through 5")? as usize;
+        if ranges.iter().any(|range| range.start > range.end) {
+            return Err("Invalid mark range".into());
+        }
+        if ranges.len()
+            + self
+                .styles
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| *i != index)
+                .map(|(_, marks)| marks.len())
+                .sum::<usize>()
+            > MAX_MARKS
+        {
             return Err("Mark decoration limit reached".into());
         }
         ranges.sort_by_key(|range| (range.start, range.end));
@@ -20,7 +36,11 @@ impl SearchMarks {
     pub fn clear(&mut self, style: Option<u8>) {
         match style {
             None => self.styles.iter_mut().for_each(Vec::clear),
-            Some(style) => if let Some(index) = style.checked_sub(1).filter(|value| *value < 5) { self.styles[index as usize].clear(); },
+            Some(style) => {
+                if let Some(index) = style.checked_sub(1).filter(|value| *value < 5) {
+                    self.styles[index as usize].clear();
+                }
+            }
         }
     }
     pub fn mapped(&self, transaction: &EditTransaction) -> Self {
@@ -47,7 +67,10 @@ impl SearchMarks {
         mapped
     }
     pub fn iter(&self) -> impl Iterator<Item = (u8, Range<TextOffset>)> + '_ {
-        self.styles.iter().enumerate().flat_map(|(index, ranges)| ranges.iter().cloned().map(move |range| (index as u8 + 1, range)))
+        self.styles
+            .iter()
+            .enumerate()
+            .flat_map(|(index, ranges)| ranges.iter().cloned().map(move |range| (index as u8 + 1, range)))
     }
 }
 #[cfg(test)]
@@ -57,8 +80,16 @@ mod tests {
     #[test]
     fn independent_styles_map_only_unchanged_matches_and_clear_separately() {
         let mut marks = SearchMarks::default();
-        for style in 1..=5 { marks.set(style, vec![TextOffset(10)..TextOffset(14)]).unwrap(); }
-        let transaction = EditTransaction { base_revision: Revision(0), edits: vec![Edit { range: TextOffset(0)..TextOffset(2), insert: "long".into() }] };
+        for style in 1..=5 {
+            marks.set(style, vec![TextOffset(10)..TextOffset(14)]).unwrap();
+        }
+        let transaction = EditTransaction {
+            base_revision: Revision(0),
+            edits: vec![Edit {
+                range: TextOffset(0)..TextOffset(2),
+                insert: "long".into(),
+            }],
+        };
         let mut moved = marks.mapped(&transaction);
         assert!(moved.iter().all(|(_, range)| range == (TextOffset(12)..TextOffset(16))));
         moved.clear(Some(3));

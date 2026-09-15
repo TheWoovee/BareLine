@@ -74,26 +74,12 @@ impl SurfaceGroup {
                 transaction: edit.transaction,
             });
         }
-        Self::submit(
-            scheduler,
-            views,
-            GroupMutation::Apply(edits),
-            states,
-            Direction::Apply,
-        )
+        Self::submit(scheduler, views, GroupMutation::Apply(edits), states, Direction::Apply)
     }
-    pub fn undo(
-        scheduler: &Scheduler,
-        views: &mut [&mut EditorSurface],
-        group: UndoGroup,
-    ) -> Result<Self, String> {
+    pub fn undo(scheduler: &Scheduler, views: &mut [&mut EditorSurface], group: UndoGroup) -> Result<Self, String> {
         Self::history(scheduler, views, group, false)
     }
-    pub fn redo(
-        scheduler: &Scheduler,
-        views: &mut [&mut EditorSurface],
-        group: UndoGroup,
-    ) -> Result<Self, String> {
+    pub fn redo(scheduler: &Scheduler, views: &mut [&mut EditorSurface], group: UndoGroup) -> Result<Self, String> {
         Self::history(scheduler, views, group, true)
     }
     fn history(
@@ -117,7 +103,11 @@ impl SurfaceGroup {
             .ok_or("Linked undo requires all original documents at the same history boundary.")?;
             states.push(ViewState {
                 folds_before: view.fold_anchors(),
-                folds_after: if redo { entry.folds_after.clone() } else { entry.folds_before.clone() },
+                folds_after: if redo {
+                    entry.folds_after.clone()
+                } else {
+                    entry.folds_before.clone()
+                },
                 snapshot: view.snapshot.clone(),
                 before: view.selection_set(),
                 after: if redo {
@@ -127,7 +117,11 @@ impl SurfaceGroup {
                 },
                 bookmarks_before: view.bookmarks.clone(),
                 marks_before: view.search_marks.clone(),
-                marks_after: if redo {entry.marks_after.clone()}else{entry.marks_before.clone()},
+                marks_after: if redo {
+                    entry.marks_after.clone()
+                } else {
+                    entry.marks_before.clone()
+                },
                 bookmarks_after: if redo {
                     entry.bookmarks_after.clone()
                 } else {
@@ -140,26 +134,16 @@ impl SurfaceGroup {
             });
         }
         let mutation = if redo {
-            GroupMutation::Redo {
-                group,
-                participants,
-            }
+            GroupMutation::Redo { group, participants }
         } else {
-            GroupMutation::Undo {
-                group,
-                participants,
-            }
+            GroupMutation::Undo { group, participants }
         };
         Self::submit(
             scheduler,
             views,
             mutation,
             states,
-            if redo {
-                Direction::Redo
-            } else {
-                Direction::Undo
-            },
+            if redo { Direction::Redo } else { Direction::Undo },
         )
     }
     fn submit(
@@ -188,14 +172,12 @@ impl SurfaceGroup {
         if self.finished {
             return Ok(None);
         }
-        if self.states.iter().any(|state| {
-            !views
-                .iter()
-                .any(|view| view.snapshot.same_document(&state.snapshot))
-        }) {
-            return Err(
-                "A linked document view is missing; retain all views until completion.".into(),
-            );
+        if self
+            .states
+            .iter()
+            .any(|state| !views.iter().any(|view| view.snapshot.same_document(&state.snapshot)))
+        {
+            return Err("A linked document view is missing; retain all views until completion.".into());
         }
         let completion = match self.receiver.try_recv() {
             Ok(completion) => completion,
@@ -227,7 +209,7 @@ impl SurfaceGroup {
                 view.selection = state.after.primary();
                 view.selections = state.after.clone();
                 view.bookmarks = state.bookmarks_after.clone();
-            view.search_marks = state.marks_after.clone();
+                view.search_marks = state.marks_after.clone();
                 view.reveal_caret = true;
                 match self.direction {
                     Direction::Apply => {

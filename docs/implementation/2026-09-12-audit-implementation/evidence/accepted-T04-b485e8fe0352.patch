@@ -1,0 +1,112 @@
+diff --git a/crates/app/src/workspace.rs b/crates/app/src/workspace.rs
+index 0296cad..9f4461c 100644
+--- a/crates/app/src/workspace.rs
++++ b/crates/app/src/workspace.rs
+@@ -3295,6 +3295,29 @@ mod tests {
+             std::fs::rename(staged, target)
+         }
+     }
++    struct DistinctOpenFileSystem;
++    impl LocalFileSystem for DistinctOpenFileSystem {
++        fn guard_directory(&self, path: &std::path::Path) -> std::io::Result<std::sync::Arc<dyn Send + Sync>> {
++            PagedFileSystem.guard_directory(path)
++        }
++        fn available_space(&self, path: &std::path::Path) -> std::io::Result<u64> {
++            PagedFileSystem.available_space(path)
++        }
++        fn open_sealed_read(&self, path: &std::path::Path) -> std::io::Result<std::fs::File> {
++            PagedFileSystem.open_sealed_read(path)
++        }
++        fn identity(&self, file: &std::fs::File) -> std::io::Result<bareline_platform::FileIdentity> {
++            let mut identity = PagedFileSystem.identity(file)?;
++            identity.file = identity.length;
++            Ok(identity)
++        }
++        fn validate_target(&self, path: &std::path::Path) -> std::io::Result<()> {
++            PagedFileSystem.validate_target(path)
++        }
++        fn commit(&self, staged: &std::path::Path, target: &std::path::Path, existed: bool) -> std::io::Result<()> {
++            PagedFileSystem.commit(staged, target, existed)
++        }
++    }
+     struct CleanupFailureFileSystem(std::sync::atomic::AtomicBool);
+     impl LocalFileSystem for CleanupFailureFileSystem {
+         fn guard_directory(&self, path: &std::path::Path) -> std::io::Result<std::sync::Arc<dyn Send + Sync>> {
+@@ -3423,7 +3446,7 @@ mod tests {
+         let second = root.join("second.txt");
+         std::fs::write(&first, b"first").unwrap();
+         std::fs::write(&second, b"second").unwrap();
+-        let mut workspace = Workspace::new(Arc::new(|| {}), Arc::new(PagedFileSystem)).unwrap();
++        let mut workspace = Workspace::new(Arc::new(|| {}), Arc::new(DistinctOpenFileSystem)).unwrap();
+         workspace.open(first.clone());
+         workspace.open(second.clone());
+         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+@@ -3432,6 +3455,12 @@ mod tests {
+             assert!(std::time::Instant::now() < deadline);
+             std::thread::yield_now();
+         }
++        assert_eq!(workspace.editors.len(), 2, "fixture must open two distinct documents");
++        assert_ne!(
++            workspace.editors[0].document_identity(),
++            workspace.editors[1].document_identity(),
++            "selection context requires distinct document identities"
++        );
+         for (transaction, target) in [
+             (root.join("first-a"), first.clone()),
+             (root.join("first-b"), first.clone()),
+diff --git a/crates/platform-windows/src/files.rs b/crates/platform-windows/src/files.rs
+index b00a94b..2568ac9 100644
+--- a/crates/platform-windows/src/files.rs
++++ b/crates/platform-windows/src/files.rs
+@@ -70,6 +70,7 @@ fn write_manifest_held(path: &Path, generation: u128, target: &Path, mode: Commi
+     let target_len = u32::try_from(target.len())
+         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "save target path is too long"))?;
+     let mut file = OpenOptions::new()
++        .write(true)
+         .access_mode(GENERIC_READ.0 | GENERIC_WRITE.0 | DELETE.0)
+         .share_mode(FILE_SHARE_READ.0)
+         .create_new(true)
+@@ -1667,14 +1668,14 @@ mod tests {
+                 after_commit: false,
+             },
+         );
+-        let Err(FileError::ConflictAfterCommit {
+-            proposed,
+-            displaced,
+-            actual_displaced,
+-            ..
+-        }) = result
+-        else {
+-            panic!("the actual displaced version must be reported as a conflict")
++        let (proposed, displaced, actual_displaced) = match result {
++            Err(FileError::ConflictAfterCommit {
++                proposed,
++                displaced,
++                actual_displaced,
++                ..
++            }) => (proposed, displaced, actual_displaced),
++            other => panic!("the actual displaced version must be reported as a conflict: {other:?}"),
+         };
+         assert_eq!(std::fs::read(&target).unwrap(), b"editor bytes");
+         assert_eq!(std::fs::read(&proposed).unwrap(), b"editor bytes");
+@@ -1683,7 +1684,7 @@ mod tests {
+ 
+         std::fs::write(&target, b"approved again").unwrap();
+         let reopened = open_utf8(&target, &WindowsFileSystem, Budget::new(1024), Budget::new(1024)).unwrap();
+-        let result = save_utf8(
++        save_utf8(
+             editor.snapshot(),
+             &target,
+             Some(&reopened.fingerprint),
+@@ -1709,8 +1710,9 @@ mod tests {
+                 after_commit: false,
+             },
+         );
+-        let Err(FileError::ConflictAfterCreate { proposed, .. }) = result else {
+-            panic!("a competing create must fail without replacing either version")
++        let proposed = match result {
++            Err(FileError::ConflictAfterCreate { proposed, .. }) => proposed,
++            other => panic!("a competing create must fail without replacing either version: {other:?}"),
+         };
+         assert_eq!(std::fs::read(&new_target).unwrap(), b"competing create");
+         assert_eq!(std::fs::read(&proposed).unwrap(), b"editor bytes");

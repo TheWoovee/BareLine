@@ -1,0 +1,10 @@
+Manual native observation; isolated scratch profile; copied binary SHA-256 C6B2318BCB92AAA47525320689971C690550C52358FB09CC7716409EB9F4C58F.
+
+1. Opened 3,162,037-byte paged large.txt.
+2. Ctrl+F query `needle` completed: UIA/status `Find results: 3097 matches`.
+3. Switched active tab to resident.txt, whose content had no `needle`.
+4. Opened Replace. Find field and status still showed `needle` / `3097 matches` from large.txt.
+5. With raw key input, changed the visible query to `alpha`.
+6. After waiting and submitting, status remained `3097 matches`; Replace and Replace All stayed disabled for the resident document.
+
+UIA assistive `type_text` was not used to alter the final query because it independently misroutes to the editor (UX-03); raw key events visibly changed the field. No screenshot was retained before the controller session reset.

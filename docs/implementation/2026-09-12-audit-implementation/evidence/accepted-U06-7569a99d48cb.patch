@@ -1,0 +1,22 @@
+diff --git a/apps/bareline/src/windows_app/macros.rs b/apps/bareline/src/windows_app/macros.rs
+index 99776c3..fcdac05 100644
+--- a/apps/bareline/src/windows_app/macros.rs
++++ b/apps/bareline/src/windows_app/macros.rs
+@@ -418,6 +418,7 @@ impl MacrosRuntime {
+             );
+         }
+     }
++    #[cfg(test)]
+     pub fn height(&self) -> f32 {
+         if self.controller.output_open { 200.0 } else { 0.0 }
+     }
+diff --git a/docs/implementation/2026-09-12-audit-implementation/PR-U06.md b/docs/implementation/2026-09-12-audit-implementation/PR-U06.md
+index 1851173..3e9e82f 100644
+--- a/docs/implementation/2026-09-12-audit-implementation/PR-U06.md
++++ b/docs/implementation/2026-09-12-audit-implementation/PR-U06.md
+@@ -22,3 +22,5 @@ Changed files:
+ - `crates/app/src/macros/manager.rs`: unconditional open-manager Close state and shared dismissal effect for pointer, UIA, and Escape.
+ 
+ Worker-side checks are `rustfmt --edition 2024` on both Rust files and `git diff --check`. Root owns contained Cargo and native UIA/mouse/Escape qualification in the integration checkout.
++
++Final release-warning cleanup gates `MacrosRuntime::height` to tests; exhaustive reference inspection found its sole caller in the test-only accessibility snapshot helper. Production dock layout continues to use the existing explicit bounds path.

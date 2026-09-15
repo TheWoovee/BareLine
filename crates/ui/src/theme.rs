@@ -135,4 +135,119 @@ impl UiTheme {
             focus: self.focus,
         }
     }
+    /// Widget palette for dock/list panels, where the selection band and the
+    /// separators both use the border colour. This is the single derivation for
+    /// that palette so panels no longer each build it inline (ARCH-18).
+    pub fn panel(self) -> crate::widgets::Theme {
+        crate::widgets::Theme {
+            surface: self.elevated,
+            text: self.text,
+            muted: self.muted,
+            selection: self.border,
+            border: self.border,
+            focus: self.focus,
+        }
+    }
+    /// Blend `over` toward this theme's editor background by `alpha`/255, so a
+    /// fixed severity hue lands on colours that suit the current background in
+    /// both the light and the dark theme.
+    fn tint(self, over: Color, alpha: u32) -> Color {
+        let mut result = 0;
+        for shift in [16, 8, 0] {
+            let a = (over.0 >> shift) & 255;
+            let b = (self.editor.0 >> shift) & 255;
+            result |= ((a * alpha + b * (255 - alpha) + 127) / 255) << shift;
+        }
+        Color(result)
+    }
+    /// Neutral floating-surface palette (toast, banner, small overlay) taken
+    /// straight from the theme so every custom surface follows it (UX-55).
+    pub fn overlay(self) -> OverlayPalette {
+        OverlayPalette {
+            surface: self.elevated,
+            border: self.border,
+            text: self.text,
+            muted: self.muted,
+            accent: self.focus,
+        }
+    }
+    /// Severity-tinted palette for a toast. The accent hue is fixed per level
+    /// but blended against this theme's background, so the same request yields
+    /// theme-appropriate colours in light and dark.
+    pub fn toast(self, level: ToastLevel) -> OverlayPalette {
+        let mut palette = self.overlay();
+        palette.accent = match level {
+            ToastLevel::Info => self.focus,
+            ToastLevel::Warning => self.tint(Color(0xF5B76B), 216),
+            ToastLevel::Error => self.tint(Color(0xE0605A), 224),
+        };
+        palette
+    }
+}
+/// Severity of a toast, which selects the accent and the dismissal rule.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToastLevel {
+    Info,
+    Warning,
+    Error,
+}
+/// Colours for a floating overlay, every field derived from a [`UiTheme`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct OverlayPalette {
+    pub surface: Color,
+    pub border: Color,
+    pub text: Color,
+    pub muted: Color,
+    pub accent: Color,
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn light() -> UiTheme {
+        UiTheme {
+            editor: Color(0xFFFFFF),
+            chrome: Color(0xF3F3F3),
+            elevated: Color(0xFAFAFA),
+            text: Color(0x1A1A1A),
+            muted: Color(0x606060),
+            border: Color(0xD0D0D0),
+            interactive: Color(0x808080),
+            focus: Color(0x1462B8),
+            selection: Color(0xCCE4FF),
+            caret: Color(0x1462B8),
+        }
+    }
+    #[test]
+    fn overlay_palettes_derive_from_ui_theme_in_both_themes() {
+        for theme in [UiTheme::default(), light()] {
+            let overlay = theme.overlay();
+            // Every neutral field is taken directly from the theme.
+            assert_eq!(overlay.surface, theme.elevated);
+            assert_eq!(overlay.border, theme.border);
+            assert_eq!(overlay.text, theme.text);
+            assert_eq!(overlay.muted, theme.muted);
+            assert_eq!(overlay.accent, theme.focus);
+            // The three severities are visibly distinct within a theme.
+            let info = theme.toast(ToastLevel::Info).accent;
+            let warn = theme.toast(ToastLevel::Warning).accent;
+            let error = theme.toast(ToastLevel::Error).accent;
+            assert_ne!(info, warn);
+            assert_ne!(warn, error);
+            assert_ne!(info, error);
+            // Neutral fields carry through to the severity palette.
+            assert_eq!(theme.toast(ToastLevel::Error).surface, theme.elevated);
+        }
+        // The same request resolves to different colours per theme, proving the
+        // palette is derived from the theme rather than hard-coded.
+        let (dark, light) = (UiTheme::default(), light());
+        assert_ne!(dark.overlay().surface, light.overlay().surface);
+        assert_ne!(
+            dark.toast(ToastLevel::Warning).accent,
+            light.toast(ToastLevel::Warning).accent
+        );
+        assert_ne!(
+            dark.toast(ToastLevel::Error).accent,
+            light.toast(ToastLevel::Error).accent
+        );
+    }
 }

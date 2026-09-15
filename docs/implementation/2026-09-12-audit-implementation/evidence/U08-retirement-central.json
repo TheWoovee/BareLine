@@ -1,0 +1,19 @@
+{
+  "arguments": [
+    "test",
+    "--offline",
+    "--locked",
+    "-p",
+    "bareline",
+    "--bin",
+    "bareline",
+    "closed_view_retires_its_source_generation_without_recycling_the_survivor",
+    "--",
+    "--test-threads=1"
+  ],
+  "completed_utc": "2026-09-12T08:25:57.5429152Z",
+  "integration_snapshot": "190410a7bbd4b0efe2d7e1a8245f672aa3503e2f",
+  "exit_code": 0,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\U08-retirement-central.log"
+}

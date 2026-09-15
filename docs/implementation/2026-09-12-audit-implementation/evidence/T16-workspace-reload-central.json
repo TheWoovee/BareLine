@@ -1,0 +1,18 @@
+{
+  "arguments": [
+    "test",
+    "-p",
+    "bareline-app",
+    "--lib",
+    "readonly_paged_reload_replaces_same_tab_and_preserves_policy",
+    "--offline",
+    "--locked",
+    "--",
+    "--nocapture"
+  ],
+  "completed_utc": "2026-09-12T12:28:48.5799243Z",
+  "integration_snapshot": "537b0534e208a97ebf3a4828d58bfb4286dfcfb6",
+  "exit_code": 0,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\T16-workspace-reload-central.log"
+}

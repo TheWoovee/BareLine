@@ -1,0 +1,38 @@
+diff --git a/apps/bareline/src/windows_app/recovery.rs b/apps/bareline/src/windows_app/recovery.rs
+index 40e4271..7bf028d 100644
+--- a/apps/bareline/src/windows_app/recovery.rs
++++ b/apps/bareline/src/windows_app/recovery.rs
+@@ -242,8 +242,14 @@ impl RecoveryRuntime {
+         }
+     }
+     fn default_command(&self) -> &'static str {
++        if self.confirm_discard.is_some() {
++            return if self.action_enabled("recovery.confirm_discard") {
++                "recovery.confirm_discard"
++            } else {
++                "recovery.keep"
++            };
++        }
+         match &self.content {
+-            RecoveryContent::Ready(_) if self.action_enabled("recovery.confirm_discard") => "recovery.confirm_discard",
+             RecoveryContent::Failed(_) if self.action_enabled("recovery.discovery_retry") => "recovery.discovery_retry",
+             RecoveryContent::Ready(rows) if !rows.is_empty() && self.action_enabled("recovery.restore_selected") => {
+                 "recovery.restore_selected"
+@@ -1424,6 +1430,17 @@ mod tests {
+             Some(recovery_action_id("recovery.confirm_discard"))
+         );
+         assert!(activates_recovery_command(&Key::Named(NamedKey::Enter)));
++
++        runtime.mutation_allowed = false;
++        assert_eq!(runtime.default_command(), "recovery.keep");
++        assert_eq!(runtime.focused_command(), "recovery.keep");
++        assert_eq!(runtime.accessibility_focus(), Some(recovery_action_id("recovery.keep")));
++        runtime.mutation_allowed = true;
++        let (_operation_tx, operation_rx) = mpsc::sync_channel(1);
++        runtime.operation = Some(operation_rx);
++        assert_eq!(runtime.default_command(), "recovery.keep");
++        assert_eq!(runtime.focused_command(), "recovery.keep");
++        assert_eq!(runtime.accessibility_focus(), Some(recovery_action_id("recovery.keep")));
+     }
+     #[test]
+     fn center_preserves_window_lifecycle_and_consumes_text_input() {

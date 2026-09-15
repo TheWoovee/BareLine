@@ -89,10 +89,7 @@ impl EventRouter {
         let mut invalidated = Vec::new();
         let mut handled = false;
         for id in order {
-            if !targets
-                .iter()
-                .any(|t| t.id == id && (t.enabled || losing_focus))
-            {
+            if !targets.iter().any(|t| t.id == id && (t.enabled || losing_focus)) {
                 continue;
             }
             let result = handler(id, event);
@@ -109,10 +106,7 @@ impl EventRouter {
         if matches!(event, UiEvent::PointerUp(_) | UiEvent::Focus(false)) {
             self.pointer_capture = None;
         }
-        RoutedEvent {
-            handled,
-            invalidated,
-        }
+        RoutedEvent { handled, invalidated }
     }
 }
 
@@ -148,11 +142,7 @@ impl FocusChain {
     pub fn set_targets(&mut self, targets: Vec<FocusTarget>) {
         let layer = self.layer_mut();
         layer.targets = targets;
-        if !layer
-            .targets
-            .iter()
-            .any(|t| t.enabled && Some(t.id) == layer.focused)
-        {
+        if !layer.targets.iter().any(|t| t.enabled && Some(t.id) == layer.focused) {
             layer.focused = None;
         }
     }
@@ -167,10 +157,7 @@ impl FocusChain {
     pub fn traverse(&mut self, backwards: bool) -> Option<ViewId> {
         let layer = self.layer_mut();
         let len = layer.targets.len();
-        let current = layer
-            .targets
-            .iter()
-            .position(|t| Some(t.id) == layer.focused);
+        let current = layer.targets.iter().position(|t| Some(t.id) == layer.focused);
         for step in 1..=len {
             let index = match current {
                 Some(i) if backwards => (i + len - step) % len,

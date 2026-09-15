@@ -1,0 +1,12 @@
+diff --git a/crates/platform-windows/src/native.rs b/crates/platform-windows/src/native.rs
+index ee43f69..1a8c045 100644
+--- a/crates/platform-windows/src/native.rs
++++ b/crates/platform-windows/src/native.rs
+@@ -119,6 +119,7 @@ impl WindowsPlatform {
+             pButtons: buttons.as_ptr(),
+             nDefaultButton: IDCLOSE.0,
+             pszFooter: w!("Plain text. Full power. No weight.\nCore: MPL-2.0 · Extension SDK: MIT OR Apache-2.0"),
++            pfCallback: Some(task_dialog_visibility_callback),
+             ..Default::default()
+         };
+         let mut selected = 0;

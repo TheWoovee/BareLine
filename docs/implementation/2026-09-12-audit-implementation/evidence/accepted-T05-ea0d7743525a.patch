@@ -1,0 +1,633 @@
+diff --git a/apps/bareline/src/windows_app.rs b/apps/bareline/src/windows_app.rs
+index 3e1c195..34f324b 100644
+--- a/apps/bareline/src/windows_app.rs
++++ b/apps/bareline/src/windows_app.rs
+@@ -38,10 +38,12 @@ use bareline_app::workspace::{Input, Workspace};
+ use bareline_commands::Action;
+ use bareline_diagnostics::{Event, LocalLog, StartupAction, StartupLedger};
+ use bareline_platform::PlatformServices;
+-use bareline_platform_windows::{SaveChoice, WindowsPlatform, WindowsRenderer};
++use bareline_platform_windows::{SaveChoice, SavePromptOutcome, WindowsPlatform, WindowsRenderer};
+ use bareline_renderer::{FrameStatus, Point, RenderBackend};
+ use bareline_settings::RendererMode;
+ use std::{
++    fs::{File, OpenOptions},
++    io::Write as _,
+     path::PathBuf,
+     sync::OnceLock,
+     time::{Duration, Instant},
+@@ -57,6 +59,70 @@ use winit::{
+     window::{Window, WindowId},
+ };
+ 
++struct QaCommandTrace {
++    file: Option<File>,
++    emitted: u8,
++    seen_transitions: Vec<(u64, &'static str)>,
++}
++impl QaCommandTrace {
++    const LIMIT: u8 = 24;
++    #[cfg(test)]
++    fn disabled() -> Self {
++        Self {
++            file: None,
++            emitted: 0,
++            seen_transitions: Vec::new(),
++        }
++    }
++    fn from_environment() -> Self {
++        let file = std::env::var_os("BARELINE_QA_COMMAND_TRACE")
++            .map(PathBuf::from)
++            .and_then(|path| {
++                if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
++                    std::fs::create_dir_all(parent).ok()?;
++                }
++                OpenOptions::new()
++                    .create(true)
++                    .write(true)
++                    .truncate(true)
++                    .open(path)
++                    .ok()
++            });
++        Self {
++            file,
++            emitted: 0,
++            seen_transitions: Vec::new(),
++        }
++    }
++    fn record(
++        &mut self,
++        ticket: u64,
++        stage: &'static str,
++        detail: &'static str,
++        command_id: usize,
++        hwnd: isize,
++        code: i32,
++    ) {
++        if self.emitted >= Self::LIMIT {
++            return;
++        }
++        let Some(file) = &mut self.file else { return };
++        let _ = writeln!(
++            file,
++            "{{\"event\":\"qa_close_command\",\"ticket\":{ticket},\"stage\":\"{stage}\",\"detail\":\"{detail}\",\"command_id\":{command_id},\"hwnd\":{hwnd},\"code\":{code}}}"
++        );
++        let _ = file.flush();
++        self.emitted += 1;
++    }
++    fn transition(&mut self, ticket: u64, stage: &'static str, detail: &'static str) {
++        if self.file.is_none() || self.emitted >= Self::LIMIT || self.seen_transitions.contains(&(ticket, stage)) {
++            return;
++        }
++        self.seen_transitions.push((ticket, stage));
++        self.record(ticket, stage, detail, 0, 0, 0);
++    }
++}
++
+ #[derive(Clone, Copy)]
+ struct CloseTarget {
+     index: usize,
+@@ -100,6 +166,10 @@ struct Shell {
+     app: App,
+     palette: bareline_app::palette::PaletteController,
+     pending_close: Option<PendingClose>,
++    qa_command_trace: QaCommandTrace,
++    close_trace_serial: u64,
++    dispatch_trace_ticket: Option<u64>,
++    pending_close_trace_ticket: Option<u64>,
+     ui_focus: bareline_ui::focus::FocusChain,
+     ui_router: bareline_ui::focus::EventRouter,
+     modal: Option<modal::ModalDescriptor>,
+@@ -525,8 +595,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
+     let (tray_tx, tray_rx) = std::sync::mpsc::channel();
+     builder.with_msg_hook(move |message| {
+         // SAFETY: winit supplies a valid MSG pointer during the hook invocation.
+-        if let Some(id) = unsafe { WindowsPlatform::command_message(message) } {
+-            let _ = tx.send(id);
++        if let Some(command) = unsafe { WindowsPlatform::command_message(message) } {
++            let _ = tx.send(command);
+         }
+         if let Some(action) = unsafe { bareline_platform_windows::shell_integration::tray_message(message) } {
+             let _ = tray_tx.send(action);
+@@ -564,6 +634,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
+         app: App::default(),
+         palette: Default::default(),
+         pending_close: None,
++        qa_command_trace: QaCommandTrace::from_environment(),
++        close_trace_serial: 0,
++        dispatch_trace_ticket: None,
++        pending_close_trace_ticket: None,
+         ui_focus: Default::default(),
+         ui_router: Default::default(),
+         modal: None,
+@@ -685,7 +759,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
+ // Native commands are drained by about_to_wait, without a worker or timer.
+ struct Handler {
+     shell: Shell,
+-    commands: std::sync::mpsc::Receiver<usize>,
++    commands: std::sync::mpsc::Receiver<bareline_platform_windows::CommandMessage>,
+     tray_actions: std::sync::mpsc::Receiver<bareline_platform_windows::shell_integration::TrayAction>,
+ }
+ impl ApplicationHandler<Wake> for Handler {
+@@ -852,22 +926,38 @@ impl ApplicationHandler<Wake> for Handler {
+                 }
+             }
+         }
+-        while let Ok(id) = self.commands.try_recv() {
+-            if let Some(action) = self
++        while let Ok(message) = self.commands.try_recv() {
++            let ticket = self.shell.trace_command_received(message);
++            let Some((accepted_owner, command_id)) = self
+                 .shell
+                 .platform
+                 .as_ref()
+-                .and_then(|p| p.command_id(id))
+-                .and_then(|id| {
+-                    self.shell
+-                        .app
+-                        .commands
+-                        .dispatch_in(id, &self.shell.command_context())
+-                        .ok()
+-                })
+-            {
+-                self.shell.dispatch(el, action);
+-            }
++                .map(|platform| (platform.accepts_command(&message), platform.command_id(message.id)))
++            else {
++                self.shell.trace_command_rejected(ticket, message, "no-platform");
++                continue;
++            };
++            if !accepted_owner {
++                self.shell.trace_command_rejected(ticket, message, "other-window");
++                continue;
++            }
++            self.shell.trace_command_accepted(ticket, message);
++            let Some(command_id) = command_id else {
++                self.shell.trace_command_rejected(ticket, message, "unknown-id");
++                continue;
++            };
++            let Ok(action) = self
++                .shell
++                .app
++                .commands
++                .dispatch_in(command_id, &self.shell.command_context())
++            else {
++                self.shell.trace_command_rejected(ticket, message, "dispatch-denied");
++                continue;
++            };
++            self.shell.trace_command_resolved(ticket, message, command_id, action);
++            self.shell.dispatch(el, action);
++            self.shell.dispatch_trace_ticket = None;
+         }
+         // Repaint once an info toast reaches its auto-dismiss time so it
+         // clears itself even while the app is otherwise idle (UX-60).
+@@ -1731,10 +1821,61 @@ impl Shell {
+         }
+         true
+     }
++    fn allocate_trace_ticket(&mut self) -> u64 {
++        self.close_trace_serial = self.close_trace_serial.wrapping_add(1).max(1);
++        self.close_trace_serial
++    }
++    fn next_close_trace_ticket(&mut self) -> u64 {
++        self.dispatch_trace_ticket
++            .take()
++            .unwrap_or_else(|| self.allocate_trace_ticket())
++    }
++    fn trace_command_received(&mut self, message: bareline_platform_windows::CommandMessage) -> u64 {
++        let ticket = self.allocate_trace_ticket();
++        self.qa_command_trace
++            .record(ticket, "ingress-received", "wm-command", message.id, message.hwnd, 0);
++        ticket
++    }
++    fn trace_command_accepted(&mut self, ticket: u64, message: bareline_platform_windows::CommandMessage) {
++        self.qa_command_trace
++            .record(ticket, "ingress-owner", "accepted", message.id, message.hwnd, 0);
++    }
++    fn trace_command_rejected(
++        &mut self,
++        ticket: u64,
++        message: bareline_platform_windows::CommandMessage,
++        reason: &'static str,
++    ) {
++        self.qa_command_trace
++            .record(ticket, "ingress-rejected", reason, message.id, message.hwnd, 0);
++    }
++    fn trace_command_resolved(
++        &mut self,
++        ticket: u64,
++        message: bareline_platform_windows::CommandMessage,
++        command: bareline_commands::CommandId,
++        action: Action,
++    ) {
++        let action_detail = match action {
++            Action::Close => "close",
++            Action::Quit => "quit",
++            _ => "other",
++        };
++        self.qa_command_trace
++            .record(ticket, "resolved-command", command.0, message.id, message.hwnd, 0);
++        self.qa_command_trace
++            .record(ticket, "resolved-action", action_detail, message.id, message.hwnd, 0);
++        if matches!(action, Action::Close | Action::Quit) {
++            self.dispatch_trace_ticket = Some(ticket);
++        }
++    }
+     fn request_close(&mut self, _el: &ActiveEventLoop) {
+         self.queue_application_close();
+     }
+     fn queue_application_close(&mut self) {
++        let ticket = self.next_close_trace_ticket();
++        self.pending_close_trace_ticket = Some(ticket);
++        self.qa_command_trace.transition(ticket, "queued", "application");
+         self.pending_close = Some(PendingClose::Application);
+         (self.notify)();
+     }
+@@ -1781,26 +1922,78 @@ impl Shell {
+         if self.workspace.as_ref().is_some_and(|w| w.document_busy(index)) {
+             target.deferred = true;
+             self.pending_close = Some(PendingClose::Document(*target));
++            self.qa_command_trace.transition(
++                self.pending_close_trace_ticket.unwrap_or(0),
++                "deferred",
++                "document-busy",
++            );
+             return false;
+         }
+         if !self.workspace.as_ref().is_some_and(|w| w.editors[index].dirty()) {
+             return true;
+         }
+-        let Some(platform) = &self.platform else { return false };
++        if self.platform.is_none() {
++            return false;
++        }
+         let name = self
+             .app
+             .tabs
+             .get(index)
+             .map_or("this document", String::as_str)
+             .to_string();
+-        // Bind before the match: scrutinee temporaries would keep `self.platform`
+-        // borrowed across the arms that need `&mut self`.
+-        let choice = platform.confirm_save_document(&name);
+-        self.apply_close_choice(index, target, choice)
++        self.qa_command_trace
++            .transition(self.pending_close_trace_ticket.unwrap_or(0), "ready", "document");
++        self.qa_command_trace.record(
++            self.pending_close_trace_ticket.unwrap_or(0),
++            "dialog-enter",
++            "document",
++            0,
++            0,
++            0,
++        );
++        let outcome = self.platform.as_ref().unwrap().confirm_save_document(&name);
++        match outcome {
++            SavePromptOutcome::Choice { choice, selected } => {
++                self.trace_save_choice(self.pending_close_trace_ticket.unwrap_or(0), choice, selected);
++                self.apply_close_choice(index, target, choice)
++            }
++            SavePromptOutcome::Failure(code) => {
++                self.qa_command_trace.record(
++                    self.pending_close_trace_ticket.unwrap_or(0),
++                    "dialog-failure",
++                    "document",
++                    0,
++                    0,
++                    code,
++                );
++                if let Some(workspace) = &mut self.workspace {
++                    workspace.message = Some(format!("Close prompt unavailable (HRESULT {code:#010x})."));
++                }
++                self.pending_close_trace_ticket = None;
++                false
++            }
++        }
++    }
++    fn trace_save_choice(&mut self, ticket: u64, choice: SaveChoice, selected: i32) {
++        self.qa_command_trace.record(
++            ticket,
++            "dialog-return",
++            match choice {
++                SaveChoice::Save => "save",
++                SaveChoice::DontSave => "dont-save",
++                SaveChoice::Cancel => "cancel",
++            },
++            0,
++            0,
++            selected,
++        );
+     }
+     fn apply_close_choice(&mut self, index: usize, target: &mut CloseTarget, choice: SaveChoice) -> bool {
+         match choice {
+-            SaveChoice::Cancel => false,
++            SaveChoice::Cancel => {
++                self.pending_close_trace_ticket = None;
++                false
++            }
+             SaveChoice::DontSave => {
+                 if let Some(editor) = self
+                     .workspace
+@@ -1963,14 +2156,18 @@ impl Shell {
+     /// Retains an accepted exit request while asynchronous state prevents prompting or exit.
+     /// The completing worker already owns the wake that will drain it again.
+     fn application_close_ready(&mut self, pending: PendingClose) -> bool {
++        let ticket = self.pending_close_trace_ticket.unwrap_or(0);
+         if self.settings.keymap_busy() || self.settings.controller.saving() {
+             self.pending_close = Some(pending);
++            self.qa_command_trace.transition(ticket, "deferred", "settings-busy");
+             return false;
+         }
+         if self.workspace.as_ref().is_some_and(|workspace| workspace.io_busy()) {
+             self.pending_close = Some(pending);
++            self.qa_command_trace.transition(ticket, "deferred", "workspace-busy");
+             return false;
+         }
++        self.qa_command_trace.transition(ticket, "ready", "application");
+         true
+     }
+     fn request_close_now(&mut self, el: &ActiveEventLoop, confirmed: bool) {
+@@ -2004,15 +2201,37 @@ impl Shell {
+             None => Vec::new(),
+         };
+         if unsaved.is_empty() {
++            let ticket = self.pending_close_trace_ticket.unwrap_or(0);
++            self.qa_command_trace.transition(ticket, "ready", "application-clean");
+             return true;
+         }
+         let names: Vec<String> = unsaved.iter().map(|(_, name)| name.clone()).collect();
+-        let choice = self.platform.as_ref().unwrap().confirm_save_all(&names);
+-        self.apply_exit_choice(&unsaved, choice)
++        let ticket = self.pending_close_trace_ticket.unwrap_or(0);
++        self.qa_command_trace
++            .record(ticket, "dialog-enter", "application", 0, 0, 0);
++        let outcome = self.platform.as_ref().unwrap().confirm_save_all(&names);
++        match outcome {
++            SavePromptOutcome::Choice { choice, selected } => {
++                self.trace_save_choice(ticket, choice, selected);
++                self.apply_exit_choice(&unsaved, choice)
++            }
++            SavePromptOutcome::Failure(code) => {
++                self.qa_command_trace
++                    .record(ticket, "dialog-failure", "application", 0, 0, code);
++                self.pending_close_trace_ticket = None;
++                if let Some(workspace) = &mut self.workspace {
++                    workspace.message = Some(format!("Exit prompt unavailable (HRESULT {code:#010x})."));
++                }
++                false
++            }
++        }
+     }
+     fn apply_exit_choice(&mut self, unsaved: &[(usize, String)], choice: SaveChoice) -> bool {
+         match choice {
+-            SaveChoice::Cancel => false,
++            SaveChoice::Cancel => {
++                self.pending_close_trace_ticket = None;
++                false
++            }
+             SaveChoice::DontSave => {
+                 let indexes: Vec<_> = unsaved.iter().map(|(index, _)| *index).collect();
+                 self.discard_for_exit_indexes(&indexes)
+@@ -2646,16 +2865,24 @@ impl Shell {
+                 }
+             }
+             Action::Close => {
++                let target = self
++                    .workspace
++                    .as_ref()
++                    .and_then(|workspace| workspace.editors.get(self.app.active))
++                    .map(|editor| (editor.document_identity(), editor.read_only()));
+                 if self.pending_close.is_none()
+-                    && let Some(editor) = self.workspace.as_ref().and_then(|w| w.editors.get(self.app.active))
++                    && let Some((identity, was_read_only)) = target
+                 {
++                    let trace_ticket = self.next_close_trace_ticket();
++                    self.qa_command_trace.transition(trace_ticket, "queued", "document");
++                    self.pending_close_trace_ticket = Some(trace_ticket);
+                     self.pending_close = Some(PendingClose::Document(CloseTarget {
+                         index: self.app.active,
+-                        identity: editor.document_identity(),
++                        identity,
+                         tab: self.active_close_tab(),
+                         saving: false,
+                         discarding: false,
+-                        was_read_only: editor.read_only(),
++                        was_read_only,
+                         deferred: false,
+                     }));
+                     (self.notify)();
+diff --git a/apps/bareline/src/windows_app/accessibility.rs b/apps/bareline/src/windows_app/accessibility.rs
+index 4d0b429..8f0f287 100644
+--- a/apps/bareline/src/windows_app/accessibility.rs
++++ b/apps/bareline/src/windows_app/accessibility.rs
+@@ -1872,6 +1872,10 @@ pub(super) mod tests {
+             app: Default::default(),
+             palette: Default::default(),
+             pending_close: None,
++            qa_command_trace: super::super::QaCommandTrace::disabled(),
++            close_trace_serial: 0,
++            dispatch_trace_ticket: None,
++            pending_close_trace_ticket: None,
+             ui_focus: Default::default(),
+             ui_router: Default::default(),
+             modal: None,
+diff --git a/crates/platform-windows/src/native.rs b/crates/platform-windows/src/native.rs
+index fb8a93e..200c87b 100644
+--- a/crates/platform-windows/src/native.rs
++++ b/crates/platform-windows/src/native.rs
+@@ -40,6 +40,16 @@ pub enum SaveChoice {
+     Cancel,
+ }
+ #[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum SavePromptOutcome {
++    Choice { choice: SaveChoice, selected: i32 },
++    Failure(i32),
++}
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub struct CommandMessage {
++    pub hwnd: isize,
++    pub id: usize,
++}
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+ pub enum AboutAction {
+     License,
+     ThirdPartyNotices,
+@@ -258,16 +268,15 @@ impl WindowsPlatform {
+     /// buttons in display order; a Cancel button is always added so Escape and
+     /// the close button return `IDCANCEL`.
+     ///
+-    /// Returns the selected button id, or `IDCANCEL.0` for any failure, so a
+-    /// dialog that cannot be shown never destroys unsaved work.
+-    pub fn task_dialog(
++    /// Returns the selected button id or the native failure HRESULT.
++    fn task_dialog_result(
+         &self,
+         title: &str,
+         instruction: &str,
+         content: &str,
+         buttons: &[(i32, &str)],
+         default_button: i32,
+-    ) -> i32 {
++    ) -> Result<i32, i32> {
+         use windows::Win32::UI::Controls::*;
+         let title = wide(title);
+         let instruction = wide(instruction);
+@@ -297,25 +306,40 @@ impl WindowsPlatform {
+         let mut selected = IDCANCEL.0;
+         // SAFETY: every string and button record stays live for the synchronous
+         // modal call on the owning UI thread.
+-        if unsafe { TaskDialogIndirect(&config, Some(&mut selected), None, None) }.is_err() {
+-            return IDCANCEL.0;
+-        }
+-        selected
++        unsafe { TaskDialogIndirect(&config, Some(&mut selected), None, None) }
++            .map(|_| selected)
++            .map_err(|error| error.code().0)
++    }
++    pub fn task_dialog(
++        &self,
++        title: &str,
++        instruction: &str,
++        content: &str,
++        buttons: &[(i32, &str)],
++        default_button: i32,
++    ) -> i32 {
++        self.task_dialog_result(title, instruction, content, buttons, default_button)
++            .unwrap_or(IDCANCEL.0)
+     }
+     /// Save / Don't Save / Cancel for one document that is about to close.
+-    pub fn confirm_save_document(&self, name: &str) -> SaveChoice {
++    pub fn confirm_save_document(&self, name: &str) -> SavePromptOutcome {
+         let name = display_title(name);
+-        let selected = self.task_dialog(
++        let selected = self.task_dialog_result(
+             "Bareline",
+             &format!("Save changes to {name}?"),
+             "Your changes will be lost if you don't save them.",
+             &[(SAVE_ID, "&Save"), (DONT_SAVE_ID, "Do&n't Save")],
+             SAVE_ID,
+         );
+-        SaveChoice::from_id(selected)
++        selected
++            .map(|selected| SavePromptOutcome::Choice {
++                choice: SaveChoice::from_id(selected),
++                selected,
++            })
++            .unwrap_or_else(SavePromptOutcome::Failure)
+     }
+     /// Save All / Don't Save / Cancel on exit, listing every unsaved document.
+-    pub fn confirm_save_all(&self, names: &[String]) -> SaveChoice {
++    pub fn confirm_save_all(&self, names: &[String]) -> SavePromptOutcome {
+         let instruction = match names.len() {
+             1 => format!("Save changes to {}?", display_title(&names[0])),
+             count => format!("Save changes to {count} documents?"),
+@@ -328,14 +352,19 @@ impl WindowsPlatform {
+         let content = format!(
+             "These documents have unsaved changes:\n\n{list}\n\nYour changes will be lost if you don't save them."
+         );
+-        let selected = self.task_dialog(
++        let selected = self.task_dialog_result(
+             "Bareline",
+             &instruction,
+             &content,
+             &[(SAVE_ID, "Save &All"), (DONT_SAVE_ID, "Do&n't Save")],
+             SAVE_ID,
+         );
+-        SaveChoice::from_id(selected)
++        selected
++            .map(|selected| SavePromptOutcome::Choice {
++                choice: SaveChoice::from_id(selected),
++                selected,
++            })
++            .unwrap_or_else(SavePromptOutcome::Failure)
+     }
+     pub fn confirm_stop_monitoring(&self) -> bool {
+         unsafe {
+@@ -513,10 +542,19 @@ impl WindowsPlatform {
+     }
+     /// # Safety
+     /// `raw` points to a live Win32 MSG for the duration of this call.
+-    pub unsafe fn command_message(raw: *const std::ffi::c_void) -> Option<usize> {
++    pub unsafe fn command_message(raw: *const std::ffi::c_void) -> Option<CommandMessage> {
+         // SAFETY: guaranteed by the winit Windows message-hook contract.
+         let msg = unsafe { &*(raw as *const MSG) };
+-        (msg.message == WM_COMMAND && msg.lParam.0 == 0).then_some(msg.wParam.0 & 0xffff)
++        if msg.message != WM_COMMAND || msg.lParam.0 != 0 {
++            return None;
++        }
++        Some(CommandMessage {
++            hwnd: msg.hwnd.0 as isize,
++            id: msg.wParam.0 & 0xffff,
++        })
++    }
++    pub fn accepts_command(&self, message: &CommandMessage) -> bool {
++        self.hwnd.0 as isize == message.hwnd
+     }
+     pub fn action(&self, menu_id: usize) -> Option<Action> {
+         menu_id.checked_sub(1).and_then(|i| self.commands.get(i)).copied()
+@@ -932,6 +970,30 @@ fn projected_item_type(radio: bool, owner_draw: bool) -> MENU_ITEM_TYPE {
+ mod menu_state_tests {
+     use super::*;
+ 
++    #[test]
++    fn command_ingress_preserves_owner_and_rejects_controls() {
++        let hwnd = HWND(7usize as *mut std::ffi::c_void);
++        let queued = MSG {
++            hwnd,
++            message: WM_COMMAND,
++            wParam: WPARAM(45),
++            lParam: LPARAM(0),
++            ..Default::default()
++        };
++        assert_eq!(
++            unsafe { WindowsPlatform::command_message((&queued as *const MSG).cast()) },
++            Some(CommandMessage { hwnd: 7, id: 45 })
++        );
++        let control = MSG {
++            hwnd,
++            message: WM_COMMAND,
++            wParam: WPARAM(45),
++            lParam: LPARAM(1),
++            ..Default::default()
++        };
++        assert!(unsafe { WindowsPlatform::command_message((&control as *const MSG).cast()) }.is_none());
++    }
++
+     #[test]
+     fn native_fallback_state_update_does_not_enable_owner_draw() -> windows::core::Result<()> {
+         unsafe {
+diff --git a/docs/implementation/2026-09-12-audit-implementation/PR-T05-R7.md b/docs/implementation/2026-09-12-audit-implementation/PR-T05-R7.md
+new file mode 100644
+index 0000000..7b996d3
+--- /dev/null
++++ b/docs/implementation/2026-09-12-audit-implementation/PR-T05-R7.md
+@@ -0,0 +1,29 @@
++# PR-T05 R7: Close-command and TaskDialog diagnostics
++
++- **Baseline:** `0751cfa082217ecc16d4d11bb18f43a066593398`
++- **Native evidence:** Clean File > Exit, Run > Run, and File > Output > Save Copy all dispatch successfully from the native menu in a durable redirected process. A dirty File > Close/Exit still produced no prompt in the auditor's main-window capture. Save Copy to an existing target became modal until Escape and then reported cancellation, which shows that the current main-window/window-enumeration oracle can miss an owned TaskDialog. Native menu ingress is therefore not identified as the cause.
++- **Source finding:** Prompt failures from `TaskDialogIndirect` were converted to `SaveChoice::Cancel`, making API failure indistinguishable from a real Cancel. The queued command record also discarded its source HWND before app dispatch, so diagnostics could not distinguish a command for the main window from a thread-queue collision.
++
++## Change
++
++- Preserve the queued `WM_COMMAND` HWND and reject control notifications (`lParam != 0`) and other-window messages before command lookup. Existing message-hook dispatch remains unchanged; no menu subclass or private-message bridge is added.
++- Preserve the raw TaskDialog selected ID and keep a failed HRESULT distinct from Cancel. A failure leaves dirty data open and publishes a scoped status.
++- When `BARELINE_QA_COMMAND_TRACE` names a unique absolute file, create its parent and truncate/create the file at process start. Flush at most 24 content-free JSONL records. Records cover raw HWND/ID receipt, owner acceptance or rejection, stable command/action resolution, close queued/deferred/ready transitions, TaskDialog entry, exact selected ID (`1101`, `1102`, or common Cancel `2`), and HRESULT failure. Transition records are deduplicated by request ticket and stage. Tests use an explicitly disabled trace, so they cannot truncate an audit file through inherited environment.
++- The dialog-entry record is flushed immediately before the synchronous `TaskDialogIndirect` call. A trace ending there identifies an in-progress prompt that the harness did not observe; a return or failure record distinguishes the native outcome.
++
++## Focused verification for integration
++
++Root-owned commands:
++
++```text
++cargo test -p bareline-platform-windows command_ingress_preserves_owner_and_rejects_controls --offline --locked
++cargo test -p bareline --bin bareline deferred_close_tests --offline --locked
++```
++
++Static checks in this worktree: scoped rustfmt, `git diff --check`, constructor/caller census for `Shell`, `CloseTarget`, `confirm_save_document`, and `confirm_save_all`.
++
++## Remaining native qualification
++
++Launch one fresh durable process with a unique `BARELINE_QA_COMMAND_TRACE` path, make one dirty edit, invoke one dynamically resolved native Close or Exit command, and preserve the JSONL trace before any Escape. The prompt observer should separately capture foreground/owner HWNDs, main-window enabled state, invisible same-PID top-level windows, descendant class/control ID/text, and DirectUI/UIA controls. Production close behavior must not be changed solely to satisfy a main-window-only capture oracle.
++
++The unrelated `std::io::stdio.rs:1166` panic occurred in a process whose inherited output pipe had closed; the same Run command passed in a durably redirected process. This slice does not change process execution or general stdout/stderr policy.

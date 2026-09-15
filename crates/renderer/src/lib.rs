@@ -8,7 +8,9 @@ pub fn frame_span() -> tracing::span::EnteredSpan {
 pub struct DisabledFrameSpan;
 #[cfg(not(feature = "perf-spans"))]
 #[inline(always)]
-pub fn frame_span() -> DisabledFrameSpan { DisabledFrameSpan }
+pub fn frame_span() -> DisabledFrameSpan {
+    DisabledFrameSpan
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Point {
@@ -38,15 +40,28 @@ pub struct Image {
 }
 impl Image {
     pub fn rgba(width: u32, height: u32, pixels: Vec<u8>) -> Result<Self, LayoutError> {
-        let bytes = u64::from(width).checked_mul(u64::from(height)).and_then(|n| n.checked_mul(4)).ok_or(LayoutError::ResourceLimit)?;
+        let bytes = u64::from(width)
+            .checked_mul(u64::from(height))
+            .and_then(|n| n.checked_mul(4))
+            .ok_or(LayoutError::ResourceLimit)?;
         if width == 0 || height == 0 || bytes > 16 * 1024 * 1024 || bytes != pixels.len() as u64 {
             return Err(LayoutError::ResourceLimit);
         }
-        Ok(Self { width, height, pixels: pixels.into() })
+        Ok(Self {
+            width,
+            height,
+            pixels: pixels.into(),
+        })
     }
-    pub fn width(&self) -> u32 { self.width }
-    pub fn height(&self) -> u32 { self.height }
-    pub fn pixels(&self) -> &[u8] { &self.pixels }
+    pub fn width(&self) -> u32 {
+        self.width
+    }
+    pub fn height(&self) -> u32 {
+        self.height
+    }
+    pub fn pixels(&self) -> &[u8] {
+        &self.pixels
+    }
 }
 #[derive(Clone, Debug, PartialEq)]
 pub enum DrawOp {
@@ -62,8 +77,15 @@ pub enum DrawOp {
     },
     PushClip(Rect),
     PopClip,
-    Image { image: Image, destination: Rect, opacity: f32 },
-    PushLayer { bounds: Rect, opacity: f32 },
+    Image {
+        image: Image,
+        destination: Rect,
+        opacity: f32,
+    },
+    PushLayer {
+        bounds: Rect,
+        opacity: f32,
+    },
     PopLayer,
     Layout {
         origin: Point,
@@ -109,12 +131,26 @@ pub struct TextStyle {
     pub color: Color,
 }
 pub trait TextBackend {
+    fn measure_text(&mut self, text: &str, size: f32) -> Result<(f32, f32), LayoutError> {
+        let layout = self.shape(text, size, 1.0e9)?;
+        let measured = self.layout_size(layout);
+        self.release_layout(layout);
+        measured
+    }
     fn shape_wrapped(&mut self, text: &str, size: f32, width: f32, family: &str) -> Result<LayoutId, LayoutError> {
         self.shape_with_font_family(text, size, width, family)
     }
     fn layout_size(&self, layout: LayoutId) -> Result<(f32, f32), LayoutError>;
-    fn shape_with_font_family(&mut self, text: &str, size: f32, width: f32, family: &str) -> Result<LayoutId, LayoutError> {
-        if !valid_font_family(family) { return Err(LayoutError::InvalidOffset); }
+    fn shape_with_font_family(
+        &mut self,
+        text: &str,
+        size: f32,
+        width: f32,
+        family: &str,
+    ) -> Result<LayoutId, LayoutError> {
+        if !valid_font_family(family) {
+            return Err(LayoutError::InvalidOffset);
+        }
         self.shape(text, size, width)
     }
     fn shape(&mut self, text: &str, size: f32, width: f32) -> Result<LayoutId, LayoutError>;
@@ -124,11 +160,7 @@ pub trait TextBackend {
     fn hit_test(&self, layout: LayoutId, point: Point) -> Result<TextHit, LayoutError>;
     /// UTF-8 byte offset. Returns leading caret bounds in logical pixels.
     fn caret(&self, layout: LayoutId, byte_offset: usize) -> Result<Rect, LayoutError>;
-    fn range_rects(
-        &self,
-        layout: LayoutId,
-        bytes: std::ops::Range<usize>,
-    ) -> Result<Vec<Rect>, LayoutError>;
+    fn range_rects(&self, layout: LayoutId, bytes: std::ops::Range<usize>) -> Result<Vec<Rect>, LayoutError>;
     fn release_layout(&mut self, layout: LayoutId);
 }
 pub fn valid_font_family(family: &str) -> bool {
@@ -138,22 +170,32 @@ pub fn valid_font_family(family: &str) -> bool {
 /// Validate before entering a native draw frame. Prevents stack underflow at FFI boundaries.
 pub fn balanced_clips(ops: &[DrawOp]) -> bool {
     fn valid_rect(r: Rect) -> bool {
-        [r.x, r.y, r.width, r.height, r.x + r.width, r.y + r.height].iter().all(|n| n.is_finite()) && r.width >= 0.0 && r.height >= 0.0
+        [r.x, r.y, r.width, r.height, r.x + r.width, r.y + r.height]
+            .iter()
+            .all(|n| n.is_finite())
+            && r.width >= 0.0
+            && r.height >= 0.0
     }
     let mut stack = Vec::new();
     for op in ops {
         match op {
             DrawOp::PushClip(_) => stack.push(false),
             DrawOp::PushLayer { bounds, opacity } => {
-                if !valid_rect(*bounds) || !opacity.is_finite() || !(0.0..=1.0).contains(opacity) { return false; }
+                if !valid_rect(*bounds) || !opacity.is_finite() || !(0.0..=1.0).contains(opacity) {
+                    return false;
+                }
                 stack.push(true);
             }
             DrawOp::PopClip if stack.pop() != Some(false) => return false,
             DrawOp::PopLayer if stack.pop() != Some(true) => return false,
-            DrawOp::Image { destination, opacity, .. } if !valid_rect(*destination) || !opacity.is_finite() || !(0.0..=1.0).contains(opacity) => return false,
+            DrawOp::Image {
+                destination, opacity, ..
+            } if !valid_rect(*destination) || !opacity.is_finite() || !(0.0..=1.0).contains(opacity) => return false,
             _ => {}
         }
-        if stack.len() > 256 { return false; }
+        if stack.len() > 256 {
+            return false;
+        }
     }
     stack.is_empty()
 }
@@ -166,8 +208,14 @@ pub trait RenderBackend {
     type Error;
     fn resize(&mut self, width: u32, height: u32, scale: f32) -> Result<(), Self::Error>;
     fn render(&mut self, operations: &[DrawOp]) -> Result<FrameStatus, Self::Error>;
-    fn begin_frame(&mut self) -> Painter<'_, Self> where Self: Sized {
-        Painter { backend: self, operations: Vec::new() }
+    fn begin_frame(&mut self) -> Painter<'_, Self>
+    where
+        Self: Sized,
+    {
+        Painter {
+            backend: self,
+            operations: Vec::new(),
+        }
     }
 }
 
@@ -178,7 +226,13 @@ pub struct Painter<'a, B: RenderBackend + ?Sized> {
     operations: Vec<DrawOp>,
 }
 impl<B: RenderBackend + ?Sized> Painter<'_, B> {
-    pub fn draw(&mut self, operation: DrawOp) { self.operations.push(operation); }
-    pub fn extend(&mut self, operations: &[DrawOp]) { self.operations.extend_from_slice(operations); }
-    pub fn finish(self) -> Result<FrameStatus, B::Error> { self.backend.render(&self.operations) }
+    pub fn draw(&mut self, operation: DrawOp) {
+        self.operations.push(operation);
+    }
+    pub fn extend(&mut self, operations: &[DrawOp]) {
+        self.operations.extend_from_slice(operations);
+    }
+    pub fn finish(self) -> Result<FrameStatus, B::Error> {
+        self.backend.render(&self.operations)
+    }
 }

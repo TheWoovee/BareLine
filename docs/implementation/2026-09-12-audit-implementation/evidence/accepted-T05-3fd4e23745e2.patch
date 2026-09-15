@@ -1,0 +1,97 @@
+diff --git a/apps/bareline/src/windows_app.rs b/apps/bareline/src/windows_app.rs
+index 9c97831..3e1c195 100644
+--- a/apps/bareline/src/windows_app.rs
++++ b/apps/bareline/src/windows_app.rs
+@@ -4958,27 +4958,6 @@ mod deferred_close_tests {
+         }
+     }
+ 
+-    struct DiscoveryGate(Arc<WorkerGate>);
+-    impl LocalFileSystem for DiscoveryGate {
+-        fn identity(&self, _: &std::fs::File) -> std::io::Result<bareline_platform::FileIdentity> {
+-            unreachable!()
+-        }
+-        fn validate_target(&self, _: &Path) -> std::io::Result<()> {
+-            unreachable!()
+-        }
+-        fn inspect_commit_transactions(
+-            &self,
+-            _: &Path,
+-            _: &dyn bareline_platform::CommitCancellation,
+-        ) -> std::io::Result<Vec<bareline_platform::CommitRecovery>> {
+-            self.0.enter_and_wait()?;
+-            Ok(Vec::new())
+-        }
+-        fn commit(&self, _: &Path, _: &Path, _: bool) -> std::io::Result<()> {
+-            unreachable!()
+-        }
+-    }
+-
+     struct SaveGate(Arc<WorkerGate>);
+     impl LocalFileSystem for SaveGate {
+         fn guard_directory(&self, path: &Path) -> std::io::Result<Arc<dyn Send + Sync>> {
+@@ -5027,7 +5006,7 @@ mod deferred_close_tests {
+     }
+ 
+     #[test]
+-    fn application_close_intent_survives_busy_worker_wake_and_cancel_is_terminal() {
++    fn application_close_intent_survives_busy_save_wake_and_cancel_is_terminal() {
+         let root = std::env::temp_dir().join(format!(
+             "bareline-exit-busy-{}-{}",
+             std::process::id(),
+@@ -5037,6 +5016,7 @@ mod deferred_close_tests {
+                 .as_nanos()
+         ));
+         std::fs::create_dir(&root).unwrap();
++        let path = root.join("saved.txt");
+         let gate = Arc::new(WorkerGate::default());
+         let _release_on_failure = GateRelease(gate.clone());
+         let (notifier, notified) = std::sync::mpsc::channel();
+@@ -5044,11 +5024,15 @@ mod deferred_close_tests {
+             Arc::new(move || {
+                 let _ = notifier.send(());
+             }),
+-            Arc::new(DiscoveryGate(gate.clone())),
++            Arc::new(SaveGate(gate.clone())),
+         )
+         .unwrap();
+-        assert!(workspace.discover_save_recovery(&root));
++        workspace.new_document().unwrap();
++        workspace.editors[0].enqueue(Input::Insert("save before exit".into()));
++        settle(&mut workspace);
++        assert!(workspace.save(0, path));
+         gate.wait_entered().unwrap();
++        assert!(workspace.io_busy());
+         let mut shell = headless_shell();
+         shell.workspace = Some(workspace);
+         let close_wakes = Arc::new(AtomicUsize::new(0));
+@@ -5142,13 +5126,12 @@ mod deferred_close_tests {
+             Some(PendingClose::Document(CloseTarget { deferred: true, .. }))
+         ));
+         assert_eq!(close_wakes.load(Ordering::SeqCst), 0, "busy pumps must not self-wake");
+-        assert!(shell.workspace.as_mut().unwrap().reorder(&[1, 0]));
+-        shell.app.tabs = shell.workspace.as_ref().unwrap().titles();
+-        shell.app.active = 0;
+-
+         gate.release();
+         notified.recv_timeout(Duration::from_secs(10)).unwrap();
+         settle(shell.workspace.as_mut().unwrap());
++        assert!(shell.workspace.as_mut().unwrap().reorder(&[1, 0]));
++        shell.app.tabs = shell.workspace.as_ref().unwrap().titles();
++        shell.app.active = 0;
+         let PendingClose::Document(target) = shell.pending_close.take().unwrap() else {
+             panic!("busy close lost its stable owner");
+         };
+diff --git a/docs/implementation/2026-09-12-audit-implementation/PR-T05-R5.md b/docs/implementation/2026-09-12-audit-implementation/PR-T05-R5.md
+index fe0270b..035f319 100644
+--- a/docs/implementation/2026-09-12-audit-implementation/PR-T05-R5.md
++++ b/docs/implementation/2026-09-12-audit-implementation/PR-T05-R5.md
+@@ -15,7 +15,7 @@
+ Root-owned contained command proposed after integration:
+ 
+ ```text
+-cargo test --offline --locked -p bareline --lib deferred_close_tests
++cargo test --offline --locked -p bareline --bin bareline deferred_close_tests
+ ```
+ 
+ Native one-shot Close/Exit qualification remains pending after integration.

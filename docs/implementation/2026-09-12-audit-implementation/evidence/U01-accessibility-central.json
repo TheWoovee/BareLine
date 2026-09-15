@@ -1,0 +1,17 @@
+{
+  "arguments": [
+    "test",
+    "-p",
+    "bareline",
+    "--bin",
+    "bareline",
+    "windows_app::accessibility::tests",
+    "--offline",
+    "--locked"
+  ],
+  "completed_utc": "2026-09-12T06:36:34.7244650Z",
+  "integration_snapshot": "97fcf41ce355874358129453cf2a2f77d2ee0095",
+  "exit_code": 0,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\U01-accessibility-central.log"
+}

@@ -1,0 +1,129 @@
+diff --git a/crates/editor-surface/src/paged_view.rs b/crates/editor-surface/src/paged_view.rs
+index 9ee873d..91ba783 100644
+--- a/crates/editor-surface/src/paged_view.rs
++++ b/crates/editor-surface/src/paged_view.rs
+@@ -113,17 +113,17 @@ impl Drop for JobWake {
+     }
+ }
+ struct JobCompletion<T> {
+-    sender: Option<SyncSender<Result<T, String>>>,
++    sender: Option<SyncSender<Result<T, PagedOperationError>>>,
+     wake: JobWake,
+ }
+ impl<T> JobCompletion<T> {
+-    fn new(sender: SyncSender<Result<T, String>>, notify: Arc<dyn Fn() + Send + Sync>) -> Self {
++    fn new(sender: SyncSender<Result<T, PagedOperationError>>, notify: Arc<dyn Fn() + Send + Sync>) -> Self {
+         Self {
+             sender: Some(sender),
+             wake: JobWake::new(notify),
+         }
+     }
+-    fn complete(mut self, result: Result<T, String>) {
++    fn complete(mut self, result: Result<T, PagedOperationError>) {
+         if let Some(sender) = self.sender.take() {
+             let _ = sender.try_send(result);
+         }
+@@ -133,11 +133,34 @@ impl<T> JobCompletion<T> {
+ impl<T> Drop for JobCompletion<T> {
+     fn drop(&mut self) {
+         if let Some(sender) = self.sender.take() {
+-            let _ = sender.try_send(Err("Paged worker failed".into()));
++            let _ = sender.try_send(Err(PagedOperationError::Message("Paged worker failed".into())));
+         }
+         self.wake.fire();
+     }
+ }
++#[derive(Debug)]
++enum PagedOperationError {
++    Lifecycle(PagedLifecycleError),
++    Message(String),
++}
++impl From<String> for PagedOperationError {
++    fn from(value: String) -> Self {
++        Self::Message(value)
++    }
++}
++impl From<&str> for PagedOperationError {
++    fn from(value: &str) -> Self {
++        Self::Message(value.into())
++    }
++}
++impl std::fmt::Display for PagedOperationError {
++    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++        match self {
++            Self::Lifecycle(error) => error.fmt(f),
++            Self::Message(error) => f.write_str(error),
++        }
++    }
++}
+ enum Action {
+     Tail {
+         platform: Arc<dyn LocalFileSystem>,
+@@ -398,7 +421,7 @@ pub struct PagedEditorSurface {
+     can_undo: bool,
+     can_redo: bool,
+     budget: Budget,
+-    pending: Option<Receiver<Result<Completed, String>>>,
++    pending: Option<Receiver<Result<Completed, PagedOperationError>>>,
+     pending_input: Option<Input>,
+     cancellation: Cancellation,
+     notify: Arc<dyn Fn() + Send + Sync>,
+@@ -3312,7 +3335,7 @@ impl PagedEditorSurface {
+                                     platform.as_ref(),
+                                     &cancellation,
+                                 );
+-                                let result = receipt.terminal.map_err(|error| error.to_string())?;
++                                let result = receipt.terminal.map_err(PagedOperationError::Lifecycle)?;
+                                 if let bareline_file_io::paged_service::PagedTerminalOutcome::Saved {
+                                     fingerprint,
+                                     copy_only: false,
+@@ -3585,7 +3608,7 @@ impl PagedEditorSurface {
+             Err(error) => {
+                 self.pending_marks = None;
+                 self.pending_input = None;
+-                self.error = Some(error);
++                self.error = Some(error.to_string());
+             }
+         }
+         self.ensure_viewport_mapping();
+diff --git a/docs/implementation/2026-09-12-audit-implementation/PR-T16.md b/docs/implementation/2026-09-12-audit-implementation/PR-T16.md
+index d9f2bd4..03f4acd 100644
+--- a/docs/implementation/2026-09-12-audit-implementation/PR-T16.md
++++ b/docs/implementation/2026-09-12-audit-implementation/PR-T16.md
+@@ -4,16 +4,32 @@
+ - **Issue:** TECH-019
+ - **Scope:** Move paged path/fingerprint, saved-state, encoding/provenance, recovery retirement, and background file-operation ownership into a file-io session with immutable read handles, typed lifecycle commands, and identity/revision/generation-fenced terminal receipts. Keep viewport, folds, selection, peer presentation, layout, and input in editor-surface.
+ - **Preserved contracts:** Exact source bytes and BOM/encoding provenance; save-conflict displaced/proposed bytes and cleanup warnings; durable discard separate from physical purge; `CleanupHold` shared by every view/read handle; fresh recovery/status generations after resume; atomic cross-document move and linked undo.
+-- **Coordination:** No renderer or Windows types in file-io, no dependency cycle, no public actor lock, and no wholesale rewrite. Cargo, build, native, and shared-target verification remain centrally owned.
++- **Coordination:** No renderer or Windows types in file-io, no dependency cycle, and no wholesale rewrite. Cargo, build, native, and shared-target verification remain centrally owned. The accepted U13 nonblocking line-index receipt correction is carried as `3797786..876cb7e` (source commits `d65aae4`, `35334b6`).
+ 
+ ## Evidence
+ 
+-- Implementation pending.
++- `file-io::paged_service::PagedSession` is the shared owner for the paged actor, path/fingerprint, opaque savepoint, encoding/conflict/cleanup state, recovery configuration/status/discard/cleanup hold, source generations, tail session, spill state, and operation generation. `PagedEditorSurface` no longer stores duplicate path, fingerprint, saved-state, save-as, recovery, tail, retired-generation, or spill owners.
++- `PagedReadHandle` moved to file-io. It is renderer-free, retains the session and cleanup hold transitively, resolves current and historical source pages, and exposes typed `Busy`/`Changed`/`SourceUnavailable` outcomes before the display adapter renders text.
++- Save and Save Copy run through `execute_save`, which validates document identity, revision, content state, source generation, and operation generation before writing and again before publishing. The typed terminal receipt retains `Cancelled`, `Encoding`, `Conflict`, `SourceUnavailable`, and cleanup state; displaced/proposed-byte artifacts remain owned by the unchanged T04 save primitive.
++- Recovery resume installs a fresh status owner and increments the operation generation. Every peer and captured read handle owns the same session, so the T05 `CleanupHold` remains live until the final view/read owner drops; durable discard and physical cleanup remain separate in `recovery_retirement`.
++- Cross-document transfer and linked undo still acquire all document-only session guards before publication and use the unchanged grouped recovery commit/lease primitives.
++- Added a renderer-free file-io lifecycle contract that Save Copy preserves UTF-8 BOM/CRLF bytes exactly, does not change the source identity, and rejects stale receipt application. Extended the controlled peer-view test so a stale lifecycle save command cannot write or change presentation state.
++- Lightweight local evidence: direct `rustfmt --edition 2024` on changed Rust files and `git diff --check` pass. Cargo and native checks remain central by policy.
+ 
+ ## Proposed contained integration commands
+ 
+-- To be finalized from the existing paged lifecycle cohort after implementation.
++Run centrally with the shared target, `--offline --locked`, stopping on the first failure:
++
++1. `cargo test -p bareline-file-io paged_service::lifecycle_contract_tests::headless_client_gets_exact_copy_and_generation_fenced_terminal_receipt --offline --locked`
++2. `cargo test -p bareline-editor-surface paged_view::peer_tests::peer_owns_full_document_and_survives_other_view_close --offline --locked`
++3. `cargo test -p bareline-editor-surface paged_spill::tests::pressure_spills_existing_paged_edit_history_and_refreshes_same_identity --offline --locked`
++4. `cargo test -p bareline-editor-surface paged_transfer::tests::opaque_cross_document_move_restart_and_linked_undo_preserve_raw_bytes --offline --locked`
++5. `cargo test -p bareline-app workspace::tests::paged_workspace_edits_undoes_navigates_and_saves --offline --locked`
++6. `cargo test -p bareline-app workspace::tests::readonly_paged_reload_replaces_same_tab_and_preserves_policy --offline --locked`
++7. `cargo test -p bareline-app workspace::tests::paged_recovery_restart_preserves_opaque_undo_and_recovers_stale_pointer --offline --locked`
++8. `cargo test -p bareline-app workspace::tests::paged_recovery_failed_retirement_is_retryable --offline --locked`
++9. `cargo test -p bareline-file-io recovery_retirement::tests::final_cleanup_hold_drop_cannot_miss_receipt_registration --offline --locked`
+ 
+ ## Deferred qualification
+ 
+-- Cargo/build/native checks remain owned by central integration policy.
++- The contained Cargo cohort, neutral-layer compile, actual Windows app compile, and native lifecycle scenario remain owned by central integration policy.

@@ -1,0 +1,16 @@
+{
+  "arguments": [
+    "test",
+    "-p",
+    "bareline-app",
+    "--lib",
+    "task::tests",
+    "--offline",
+    "--locked"
+  ],
+  "completed_utc": "2026-09-12T06:46:40.8545425Z",
+  "integration_snapshot": "1e54c028dda757408084c1aad1cee601a8142394",
+  "exit_code": 0,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\T07-task-corrected-central.log"
+}

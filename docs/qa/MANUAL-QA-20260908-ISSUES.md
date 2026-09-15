@@ -1,0 +1,58 @@
+# Manual QA issue register — 2026-09-08
+
+Source: [authoritative execution ledger](MANUAL-QA-20260908-RESULTS.md), QA-001–QA-066, executable from commit `51cd4c0d1651fce815c67ed268e42999a9c2bb33`. Testing only; no fixes are approved or implemented by this register. Severity reflects observed impact, not a diagnosed cause. **High** blocks a workflow or risks unintended editing/recovery failure; **Medium** affects interaction, accessibility, presentation or validation.
+
+All 32 identifiers are retained. “Observed” means the behavior occurred in this sweep, not that its implementation cause is proven. ISSUE-008, ISSUE-029 and ISSUE-030 need direct human reproduction to separate application behavior from native modal/launcher automation. ISSUE-026 is clarified guarded behavior, not a confirmed mutation defect.
+
+Evidence names below are under `tests/e2e/results/manual-qa-20260908/evidence/`. Each numbered stem has a `.json` snapshot and `-0.png` screenshot; `009-split-edit` also has `-1.png`. Where the ledger supplies no dedicated capture, the QA entry is the evidence; no filename is inferred.
+
+## Recovery, lifecycle and output
+
+| ID | Severity / status | Reproduction and observed result | Evidence / limits |
+| --- | --- | --- | --- |
+| ISSUE-002 | High · observed | Fresh isolated portable launch; enter multiline Unicode. Recovery unavailable reports sharing violation OS 32, while editing continues. | `002-recovery-sharing-error`; recurs in QA-002, QA-045 and QA059. Only QA instance launched in that profile; cause unproven. |
+| ISSUE-008 | High · attribution unconfirmed | Ctrl+W on dirty Untitled disables main menu; no targetable close confirmation, and Escape/Tab/reactivation do not recover interaction. | QA-009/010 ledger. Native dialog ownership/capture may explain the symptom; saved scratch copy existed before terminating only the QA process. Human reproduction required. |
+| ISSUE-009 | High · observed | After forced QA-process exit, reopen Recovery Center: latest saved-file previews report file not found; Open recovered copy and Compare are disabled. | `010-recovery-after-crash`; related to ISSUE-002. Ten checkpoints appeared, but presented entries could not be recovered. |
+| ISSUE-024 | High · observed, narrowed | At 1202×792, Print action below editor boundary does not respond; Shift+Tab instead dirties underlying document. | `025-print-button-no-response`. Maximizing enables printing (QA-035); QA058 verifies complete, unclipped one-page PDF. Not a general print-output failure. Column Editor lower controls also clip (QA-043). |
+| ISSUE-027 | High · observed | Record insertion, then Play Selected Macro on empty Untitled: nothing inserted, Cancel enabled and playback remains running. | `028-macro-empty-playback`; earlier `019-macro-record-pending-play`. QA-040 repeats after cancelling 1 GiB load, so that pending load alone does not explain it. No playback completion accepted. |
+| ISSUE-029 | High · unconfirmed | Fresh-profile Run marker loads; Run dispatch leaves editor visible but typing, palette and Close inactive; no separate confirmation target found. | `031-fresh-run-dispatch-blocked`. Human modal-ownership reproduction required; no command completion observed. QA-047 starting/zero-output result occurred in an already stuck-panel session and is not independent proof. |
+| ISSUE-030 | High · unconfirmed | Save session, cleanly exit, then launch saved profile twice: no targetable window/process remains. Fresh profile with identical executable launches. | QA-053 and restart differential; no dedicated capture cited. No new first-frame event, crash log or matching Windows crash event. Distinguish startup/profile failure from launcher behavior by direct launch. |
+| ISSUE-032 | High · observed | Export unsaved Unicode text as syntax-colored HTML to fresh destination: OS 32 sharing error; no output file created. | `035-html-export-sharing-error`; QA063. Source preserved; no external writer used. |
+
+## Input, focus and accessibility
+
+| ID | Severity / status | Reproduction and observed result | Evidence / limits |
+| --- | --- | --- | --- |
+| ISSUE-004 | Medium · observed | Ctrl+Shift+Home selects current line only; Ctrl+End in 24 MiB document goes to current line end; Ctrl+Shift+Right selects one character. | `003-selection-status`; QA-016/022 ledger. Editor explicitly focused for paged case; document/word navigation expectation not met. |
+| ISSUE-005 | Medium · observed | Type in Find/Replace: visible input works, but UIA focused element remains Editor and editable-node values are absent. | QA-004, `006-replace-complete`. Replacement controls are exposed; this finding concerns focus/value reporting. |
+| ISSUE-006 | Medium · observed | Escape from focused Replace All leaves Find/Replace open; also fails to dismiss utility result and Extensions. | `006-replace-complete`, QA-019/023. Visible Close works; Settings and Macro Manager Escape passed separately. |
+| ISSUE-007 | Medium · observed | Edit secondary clone at line 2: UIA reports primary selection/caret instead. Rectangular selection exposes primary row only. | `009-split-edit`, QA-042. Shared editing/undo passed; independent active-view accessibility is the issue. |
+| ISSUE-012 | High · observed | Focus open-document/folder query or compare command palette; typing edits underlying document while query stays unchanged. | `013-open-doc-search-wrong-input`, `029-folder-search-edits-document`, `033-compare-palette-input-routing`. QA056 blocks palette route only: QA057 native-menu merge and single Undo **passed**. |
+| ISSUE-013 | Medium · observed | Drag visible paged scrollbar thumb toward bottom: viewport does not scroll; caret moves instead. | `014-paged-scroll`. Wheel scrolling passed; hit-test cause not diagnosed. |
+| ISSUE-017 | Medium · observed | Double-click word or drag across it: only caret remains. Ctrl+D without selection inside word selects nothing. | QA-021/022 ledger. Ctrl+D with an existing selection successfully added a match. |
+| ISSUE-020 | Medium · observed | Assign `Ctrl+DefinitelyNotAKey` to Find Next: mapper accepts and displays it without validation error. | `023-invalid-shortcut-accepted`. F3 restored through mapper in QA-030; isolated settings only. |
+| ISSUE-023 | High · observed | Rust completion at `mess`: select `message` with Down, press Tab. Four spaces inserted and completion dismissed instead of accepted. | `024-completion-tab-indents`. Completion discovery passed; hint promises Enter/Tab, but Enter acceptance was not established here. |
+| ISSUE-028 | High · observed | Folder search stays open after Escape, cancellation/close commands and Alt+F4; lower controls clip and Tab edits underlying document. | `030-folder-panel-close-blocked`; QA-046. No separate close prompt found; terminate-only-QA-process used to continue testing. Related to ISSUE-012, not a diagnosed common cause. |
+
+## Rendering, navigation and document state
+
+| ID | Severity / status | Reproduction and observed result | Evidence / limits |
+| --- | --- | --- | --- |
+| ISSUE-001 | Medium · visual observation | Dark startup retains white stock menu bar/generic icon and empty Output pane taking about 200 px. | `001-startup`. Reference and tested window sizes differ; no exact pixel comparison claimed. |
+| ISSUE-003 | Medium · observed | Enter 44 bytes/two lines: painted status stays 0 B / one line / Ln 1 Col 1 across actions and maximize, while UIA updates. | `003-selection-status`; QA-007/012. Visible status is stale; document bytes are not shown to be lost. |
+| ISSUE-010 | Medium · observed once | Open three quoted existing fixture filenames in native dialog: only first opens, without omission error. | QA-011 ledger, `011-utf16-open` shows opened result. Multi-file dialog attempt failed; CLI multi-path remains unexecuted (QA066). |
+| ISSUE-011 | Medium · observed | Light-mode language picker remains dark and UIA focus remains Editor while picker handles keys. Other custom panels also stay dark. | `012-language-picker-light`, `015-extensions-empty-controls`; QA-032/043 document/outline/Column Editor observations. Language choice itself worked initially. |
+| ISSUE-014 | Medium · observed | Activate Extensions Discover via UIA and coordinates: Installed remains selected, content unchanged. | `015-extensions-empty-controls`. Signed runtime/catalog unavailable and compiled trust absent in this QA build; execution/install not tested or classified as this defect. |
+| ISSUE-015 | High · observed pending operation | End on 20 MiB single line leaves Preparing line / Caret column indexing across subsequent panel testing; selection reports BudgetExceeded. | `016-long-line-end-pending`. Menus remain responsive; no measured timeout or throughput acceptance claimed. |
+| ISSUE-016 | Medium · observed | With 239 px Workspace sidebar, click painted mixed-eol tab near x357,y68: utf16-le selected instead. | `017-tab-hit-test-workspace`. Offset is a hypothesis, not diagnosed implementation cause. |
+| ISSUE-018 | Medium · observed | Enable Show Toolbar: five buttons appear but painted document tab row becomes blank; UIA still lists tabs. | `020-toolbar-hides-tabs`; persists on refresh. Document List remains usable. |
+| ISSUE-019 | Medium · observed, narrowed | Compare left/right files: pane tab labels show unrelated filenames; options top/title clips at default size. | `021-compare-second-hunk`. Refreshed capture shows lower controls/Done: do not claim lower clipping. Comparison navigation and native-menu merge/Undo passed. |
+| ISSUE-021 | Medium · observed | Click already-open sample.rs in Workspace: reports existing tab but leaves another file active. | QA-030/031 ledger. Document List successfully activates sample.rs; hidden tabs compound access (ISSUE-018). |
+| ISSUE-022 | Medium · observed | Set sample.rs to Plain text, switch away/back without closing: Rust becomes effective again. | QA-013/031 ledger, `012-language-picker-light` for original choice. Persistence failed over this sequence; no cause or restart attribution proven. |
+| ISSUE-025 | Medium · observed | Unlock clean monitored log: prompt asks to discard unsaved changes and close tab; accepting leaves tab open with change controls. | `026-watch-unlock-warning` is post-confirmation; prompt recorded natively in QA-037/038. Misleading wording, not demonstrated data loss. |
+| ISSUE-026 | Medium · original observation **clarified** | Rename/delete previously monitored file while open appears unchanged. QA064 explicitly reports close-first guard on an unmonitored open file. | `027-workspace-rename-no-change`; QA-038/039/064. **Close-first rename, retained delete and Undo all passed with exact content. Not a confirmed mutation defect.** Review feedback visibility only if reproduced; do not approve a mutation fix from earlier no-op alone. |
+| ISSUE-031 | Medium · observed | Save edited 24 MiB paged fixture: Source changed banner appears despite no external writer. | `034-paged-save-self-change`. QA059 complete byte oracle and QA060 reopen passed; misleading self-change state, not corrupted save. |
+
+## Approval and follow-up boundaries
+
+Fixes remain paused until the user gives the go-ahead. Keep modal/startup attribution checks separate from confirmed input-routing failures. Preserve the passing merge, print artifact, paged-save byte oracle and closed-file workspace operations as regression cases. Signed runtime/release assets, CLI/IPC direct launch, remote shares and the broader accessibility/performance/fault matrices remain acceptance prerequisites in the [coverage record](MANUAL-QA-20260908-COVERAGE.md), not additional confirmed defects invented by this register.

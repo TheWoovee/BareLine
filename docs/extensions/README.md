@@ -1,9 +1,11 @@
 # First-party component walkthrough
 
 The SDK and extensions use MIT OR Apache-2.0. The editor and optional host use MPL-2.0.
-The optional Wasmtime 48 host requires Rust 1.95. The editor retains its Rust 1.85
-contract. A Windows machine with the MSVC tools and the repository toolchain is
-required for the authenticated child integration harness.
+Wasmtime 48 and its host dependencies require at least Rust 1.95. The host still
+inherits the workspace's supported Rust 1.98.1 compiler; the dependency floor is
+not a separately qualified workspace minimum. A Windows machine with the MSVC
+tools and the repository toolchain is required for the authenticated child
+integration harness.
 
 ## Build and execute the reference components
 

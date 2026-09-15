@@ -28,10 +28,7 @@ pub fn capture(
     let mut manifest = SessionManifest {
         active_tab,
         mru,
-        recent: recent
-            .iter()
-            .map(|path| SerializedPath::from_native(path))
-            .collect(),
+        recent: recent.iter().map(|path| SerializedPath::from_native(path)).collect(),
         ..Default::default()
     };
     let mut documents = HashSet::new();
@@ -136,10 +133,7 @@ impl RestoreQueue {
     /// Called only after the caller's PathOrigin::Session policy has approved read
     /// access and resolved this candidate. The queue never grants that trust itself.
     pub fn approve(&mut self, document_id: u64, canonical_path: PathBuf) -> bool {
-        if !matches!(
-            self.states.get(&document_id),
-            Some(RestoreState::AwaitingTrust)
-        ) {
+        if !matches!(self.states.get(&document_id), Some(RestoreState::AwaitingTrust)) {
             return false;
         }
         self.approved.insert(document_id, canonical_path);
@@ -151,8 +145,7 @@ impl RestoreQueue {
             self.states.get(&document_id),
             Some(RestoreState::AwaitingTrust | RestoreState::Ready)
         ) {
-            self.states
-                .insert(document_id, RestoreState::Failed(reason));
+            self.states.insert(document_id, RestoreState::Failed(reason));
             self.approved.remove(&document_id);
         }
     }

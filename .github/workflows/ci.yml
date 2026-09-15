@@ -15,9 +15,45 @@ jobs:
         with:
           python-version: '3.12'
       - run: python .github/workflows/check_portability.py
+      - run: cargo metadata --locked --format-version 1 > cargo-metadata.json
+      - run: python .github/workflows/check_toolchain_contract.py --metadata cargo-metadata.json
       - run: cargo fmt --all --check
-      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Complete Clippy census and exact debt ratchet
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force target | Out-Null
+          cargo clippy --workspace --all-targets --locked --message-format=json 1> target/clippy-census.jsonl 2> target/clippy-census.stderr.log
+          $clippyExit = $LASTEXITCODE
+          if ($clippyExit -ne 0) {
+            "Clippy census process failed with exit $clippyExit; ratchet not evaluated." | Set-Content target/clippy-ratchet.log
+            exit $clippyExit
+          }
+          $rustcDetails = rustc -vV
+          $hostTarget = (($rustcDetails | Where-Object { $_ -like 'host: *' }) -replace '^host: ', '').Trim()
+          $toolchain = (($rustcDetails | Where-Object { $_ -like 'release: *' }) -replace '^release: ', '').Trim()
+          if (!$hostTarget -or !$toolchain) { throw 'rustc did not report host target and release' }
+          python .github/workflows/check_clippy_ratchet.py check --diagnostics target/clippy-census.jsonl --baseline .github/workflows/clippy-baseline.json --source-root . --platform '${{ runner.os }}' --target $hostTarget --toolchain $toolchain --exclude-source-path cargo-metadata.json 2>&1 | Tee-Object -FilePath target/clippy-ratchet.log
+          exit $LASTEXITCODE
+      - name: Retain Clippy census and ratchet result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: clippy-ratchet-${{ runner.os }}
+          path: |
+            target/clippy-census.jsonl
+            target/clippy-census.stderr.log
+            target/clippy-ratchet.log
       - run: cargo test --workspace --locked
+      - name: Qualify actual first-party WASI components with the release host
+        shell: pwsh
+        run: ./scripts/test-first-party.ps1 -Suite Fast
+      - name: Retain first-party runtime qualification telemetry
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: first-party-runtime-qualification
+          path: target/first-party/
+          if-no-files-found: error
       - run: cargo build -p bareline --locked
       - run: cargo xtask perf smoke
   neutral:
@@ -38,11 +74,36 @@ jobs:
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev libxi-dev libxrandr-dev
       - run: python .github/workflows/check_portability.py
+      - run: python .github/workflows/check_toolchain_contract.py
       # Use the actual host compiler (including native C++ build scripts), not
       # --cfg simulation. Covers helpers/host and every neutral workspace target.
       - run: cargo check --workspace --all-targets --locked
       # Includes shared RecordingBackend UI and portable state/path tests.
       - run: cargo test --workspace --locked
-      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Complete Clippy census and exact debt ratchet
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force target | Out-Null
+          cargo clippy --workspace --all-targets --locked --message-format=json 1> target/clippy-census.jsonl 2> target/clippy-census.stderr.log
+          $clippyExit = $LASTEXITCODE
+          if ($clippyExit -ne 0) {
+            "Clippy census process failed with exit $clippyExit; ratchet not evaluated." | Set-Content target/clippy-ratchet.log
+            exit $clippyExit
+          }
+          $rustcDetails = rustc -vV
+          $hostTarget = (($rustcDetails | Where-Object { $_ -like 'host: *' }) -replace '^host: ', '').Trim()
+          $toolchain = (($rustcDetails | Where-Object { $_ -like 'release: *' }) -replace '^release: ', '').Trim()
+          if (!$hostTarget -or !$toolchain) { throw 'rustc did not report host target and release' }
+          python .github/workflows/check_clippy_ratchet.py check --diagnostics target/clippy-census.jsonl --baseline .github/workflows/clippy-baseline.json --source-root . --platform '${{ runner.os }}' --target $hostTarget --toolchain $toolchain 2>&1 | Tee-Object -FilePath target/clippy-ratchet.log
+          exit $LASTEXITCODE
+      - name: Retain Clippy census and ratchet result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: clippy-ratchet-${{ runner.os }}
+          path: |
+            target/clippy-census.jsonl
+            target/clippy-census.stderr.log
+            target/clippy-ratchet.log
       - run: cargo check -p bareline-platform-linux -p bareline-platform-macos --examples --locked
       # Native menu/dialog/renderer readiness is separate from headless test success.

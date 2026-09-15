@@ -149,19 +149,14 @@ pub enum ProtocolError {
 /// The length prefix is checked before allocating any attacker-sized buffer.
 pub fn read_frame(reader: &mut impl Read) -> Result<Envelope, ProtocolError> {
     let mut prefix = [0; 4];
-    reader
-        .read_exact(&mut prefix)
-        .map_err(|_| ProtocolError::Io)?;
+    reader.read_exact(&mut prefix).map_err(|_| ProtocolError::Io)?;
     let len = u32::from_le_bytes(prefix) as usize;
     if len == 0 || len > MAX_FRAME_BYTES {
         return Err(ProtocolError::Oversized);
     }
     let mut bytes = vec![0; len];
-    reader
-        .read_exact(&mut bytes)
-        .map_err(|_| ProtocolError::Io)?;
-    let (message, rest): (Envelope, _) =
-        postcard::take_from_bytes(&bytes).map_err(|_| ProtocolError::Malformed)?;
+    reader.read_exact(&mut bytes).map_err(|_| ProtocolError::Io)?;
+    let (message, rest): (Envelope, _) = postcard::take_from_bytes(&bytes).map_err(|_| ProtocolError::Malformed)?;
     if !rest.is_empty() {
         return Err(ProtocolError::Malformed);
     }
@@ -195,8 +190,7 @@ fn validate(message: &Envelope) -> Result<(), ProtocolError> {
     if !valid_id(&message.extension_id) {
         return Err(ProtocolError::InvalidIdentity);
     }
-    if matches!(&message.request, Request::AppendChunk { chunk, .. } if chunk.len() > MAX_CHUNK_BYTES)
-    {
+    if matches!(&message.request, Request::AppendChunk { chunk, .. } if chunk.len() > MAX_CHUNK_BYTES) {
         return Err(ProtocolError::ChunkLimit);
     }
     Ok(())

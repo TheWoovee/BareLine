@@ -1,0 +1,721 @@
+diff --git a/apps/bareline/src/windows_app.rs b/apps/bareline/src/windows_app.rs
+index e6b1445..0fe50f5 100644
+--- a/apps/bareline/src/windows_app.rs
++++ b/apps/bareline/src/windows_app.rs
+@@ -42,6 +42,7 @@ use bareline_renderer::{FrameStatus, Point, RenderBackend};
+ use bareline_settings::RendererMode;
+ use std::{
+     path::PathBuf,
++    sync::OnceLock,
+     time::{Duration, Instant},
+ };
+ use winit::{
+@@ -146,6 +147,15 @@ struct Shell {
+     status_pickers: Vec<(bareline_renderer::Rect, &'static str)>,
+ }
+ 
++fn tooltip_clock_ms() -> u64 {
++    static ORIGIN: OnceLock<Instant> = OnceLock::new();
++    ORIGIN
++        .get_or_init(Instant::now)
++        .elapsed()
++        .as_millis()
++        .min(u64::MAX as u128) as u64
++}
++
+ /// The feature handler that a contributed command ID is routed to. This is the
+ /// single source of truth for command routing: `dispatch` consults it (via
+ /// [`DISPATCH_CHAIN`] and the inline pre/post handlers) and the inventory
+@@ -792,12 +802,28 @@ impl ApplicationHandler<Wake> for Handler {
+         {
+             window.request_redraw();
+         }
++        let tooltip_now_ms = tooltip_clock_ms();
++        let tooltip_due = self
++            .shell
++            .workspace
++            .as_mut()
++            .is_some_and(|workspace| workspace.find.tooltip_tick(tooltip_now_ms));
++        let tooltip_deadline = self
++            .shell
++            .workspace
++            .as_ref()
++            .and_then(|workspace| workspace.find.tooltip_deadline_ms())
++            .map(|deadline| Instant::now() + Duration::from_millis(deadline.saturating_sub(tooltip_now_ms)));
++        if tooltip_due && let Some(window) = &self.shell.window {
++            window.request_redraw();
++        }
+         let deadline = caret_deadline
+             .into_iter()
+             .chain(self.shell.idle_at)
+             .chain(self.shell.inventory.deadline())
+             .chain(self.shell.macros.next_tick)
+             .chain(self.shell.toasts.next_deadline())
++            .chain(tooltip_deadline)
+             .min();
+         el.set_control_flow(deadline.map_or(ControlFlow::Wait, ControlFlow::WaitUntil));
+         if let Some(deadline) = self.shell.idle_at {
+@@ -1147,6 +1173,10 @@ impl Shell {
+         let checked = match action {
+             Action::FindMatchCase => self.workspace.as_ref().is_some_and(|w| w.find.case_sensitive),
+             Action::FindWholeWord => self.workspace.as_ref().is_some_and(|w| w.find.whole_word),
++            Action::FindMode => self
++                .workspace
++                .as_ref()
++                .is_some_and(|w| w.find.mode != bareline_search::SearchMode::Literal),
+             _ => false,
+         };
+         if checked {
+@@ -2171,6 +2201,15 @@ impl ApplicationHandler for Shell {
+         }
+     }
+     fn window_event(&mut self, el: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
++        if matches!(&event, WindowEvent::CursorLeft { .. } | WindowEvent::Focused(false))
++            && self
++                .workspace
++                .as_mut()
++                .is_some_and(|workspace| workspace.find.dismiss_tooltip())
++            && let Some(window) = &self.window
++        {
++            window.request_redraw();
++        }
+         if self.session.closing()
+             && matches!(
+                 event,
+@@ -2269,6 +2308,23 @@ impl ApplicationHandler for Shell {
+                     x: logical.x,
+                     y: logical.y,
+                 };
++                let find_pointer = Point {
++                    x: logical.x - editor_bounds.x,
++                    y: logical.y - editor_bounds.y,
++                };
++                let (find_inset, find_width) = self.views.find_horizontal_geometry(editor_bounds.width);
++                let find_pointer = Point {
++                    x: find_pointer.x - find_inset,
++                    y: find_pointer.y,
++                };
++                let now_ms = tooltip_clock_ms();
++                if self
++                    .workspace
++                    .as_mut()
++                    .is_some_and(|workspace| workspace.find.hover_toggles(find_width, find_pointer, now_ms))
++                {
++                    self.window.as_ref().unwrap().request_redraw();
++                }
+             }
+             WindowEvent::MouseInput {
+                 state: ElementState::Pressed,
+diff --git a/apps/bareline/src/windows_app/views.rs b/apps/bareline/src/windows_app/views.rs
+index f0e30a0..ddbf765 100644
+--- a/apps/bareline/src/windows_app/views.rs
++++ b/apps/bareline/src/windows_app/views.rs
+@@ -123,6 +123,36 @@ pub(super) fn accessibility_test_close_split(shell: &mut Shell) -> bool {
+ mod tests {
+     use super::*;
+ 
++    #[test]
++    fn vertical_tabs_share_find_draw_and_hover_geometry() {
++        let mut workspace = Workspace::new(
++            std::sync::Arc::new(|| {}),
++            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
++        )
++        .unwrap();
++        workspace.new_document().unwrap();
++        workspace.find.show();
++        let mut views = ViewsRuntime::default();
++        views.sync_documents(&workspace);
++        views.controller.as_mut().unwrap().vertical_tabs = true;
++
++        let (inset, find_width) = views.find_horizontal_geometry(1000.0);
++        assert_eq!((inset, find_width), (176.0, 824.0));
++        let window_point = Point {
++            x: inset + find_width - 458.0 + 2.0,
++            y: TAB_HEIGHT + 14.0,
++        };
++        assert!(workspace.find.hover_toggles(
++            find_width,
++            Point {
++                x: window_point.x - inset,
++                y: window_point.y,
++            },
++            100,
++        ));
++        assert_eq!(workspace.find.tooltip_deadline_ms(), Some(600));
++    }
++
+     #[test]
+     fn find_selection_scope_uses_the_active_split_view() {
+         let mut workspace = Workspace::new(
+@@ -1391,6 +1421,18 @@ pub(super) struct ViewsRuntime {
+ /// counters, so this never collides with a document tab.
+ const SETTINGS_TAB_ID: u64 = u64::MAX;
+ impl ViewsRuntime {
++    pub(super) fn find_horizontal_geometry(&self, width: f32) -> (f32, f32) {
++        let vertical = self
++            .controller
++            .as_ref()
++            .is_some_and(|controller| controller.vertical_tabs);
++        let inset = if !self.open() && vertical {
++            176.0f32.min(width * 0.4)
++        } else {
++            0.0
++        };
++        (inset, (width - inset).max(0.0))
++    }
+     #[cfg(test)]
+     pub(super) fn test_activate_different_secondary(
+         &mut self,
+@@ -2872,9 +2914,9 @@ impl ViewsRuntime {
+             .as_ref()
+             .is_some_and(|controller| controller.vertical_tabs);
+         if !self.open() {
+-            let inset = if vertical { 176.0f32.min(width * 0.4) } else { 0.0 };
++            let (inset, content_width) = self.find_horizontal_geometry(width);
+             let mut local = Vec::new();
+-            let caret = workspace.draw(app.active, renderer, (width - inset).max(0.0), height, &mut local)?;
++            let caret = workspace.draw(app.active, renderer, content_width, height, &mut local)?;
+             ops.extend(local.into_iter().map(|op| translate(op, inset, 0.0)));
+             self.bounds = [Some(rect(inset, 0.0, (width - inset).max(0.0), height - 24.0)), None];
+             self.draw_tab_strip(
+@@ -3060,7 +3102,10 @@ impl ViewsRuntime {
+                 MUTED,
+             );
+         }
+-        if let Some(caret) = workspace.find.draw_with_theme(renderer, width, workspace.theme, ops)? {
++        if let Some(caret) = workspace
++            .find
++            .draw_with_theme_in(renderer, width, height, workspace.theme, ops)?
++        {
+             active_caret = Some(caret);
+         }
+         let labels: Vec<_> = workspace
+diff --git a/crates/app/src/find.rs b/crates/app/src/find.rs
+index 3b56907..f9f53ed 100644
+--- a/crates/app/src/find.rs
++++ b/crates/app/src/find.rs
+@@ -7,6 +7,7 @@ use bareline_search::{
+ };
+ use bareline_ui::{
+     controls::{Button, ControlState},
++    overlays::Tooltip,
+     text_field::TextField,
+     *,
+ };
+@@ -81,6 +82,10 @@ pub struct FindController {
+     requested: Option<FindSessionKey>,
+     pressed: Option<FindAction>,
+     keyboard_focus: Option<FindAction>,
++    tooltip: Tooltip,
++    tooltip_target: Option<FindAction>,
++    tooltip_clock_ms: u64,
++    tooltip_wake_sent: bool,
+     active_source: Option<FindSourceKey>,
+     request_generation: u64,
+     accessibility_revision: std::cell::Cell<u64>,
+@@ -109,6 +114,10 @@ impl Default for FindController {
+             requested: None,
+             pressed: None,
+             keyboard_focus: None,
++            tooltip: Tooltip::default(),
++            tooltip_target: None,
++            tooltip_clock_ms: 0,
++            tooltip_wake_sent: false,
+             active_source: None,
+             request_generation: 0,
+             accessibility_revision: std::cell::Cell::new(0),
+@@ -314,6 +323,7 @@ impl FindController {
+     }
+ 
+     pub fn show(&mut self) {
++        self.dismiss_tooltip();
+         self.accessibility_revision.set(
+             self.accessibility_revision
+                 .get()
+@@ -522,6 +532,7 @@ impl FindController {
+         self.open = false;
+         self.focused = false;
+         self.keyboard_focus = None;
++        self.dismiss_tooltip();
+         self.field.cancel();
+         self.replacement.cancel();
+         // Retain completed results for F3 after closing the bar. A cancelled
+@@ -557,6 +568,7 @@ impl FindController {
+     pub fn blur(&mut self) {
+         self.focused = false;
+         self.keyboard_focus = None;
++        self.dismiss_tooltip();
+         self.field.cancel();
+         self.replacement.cancel();
+     }
+@@ -834,6 +846,142 @@ impl FindController {
+         }
+         buttons
+     }
++    fn toggle_contract(&self, action: FindAction) -> Option<(&'static str, bool)> {
++        match action {
++            FindAction::Case => Some(("Match case", self.case_sensitive)),
++            FindAction::WholeWord => Some(("Whole word", self.whole_word)),
++            FindAction::Mode if self.mode == SearchMode::Regex => Some(("Regular expression", true)),
++            FindAction::Mode => Some((
++                "Extended escape sequences: \\\\, \\0, \\n, \\r, \\t, \\xNN, \\uNNNN, \\UNNNNNNNN",
++                self.mode == SearchMode::Extended,
++            )),
++            _ => None,
++        }
++    }
++    pub fn dismiss_tooltip(&mut self) -> bool {
++        let changed = self.tooltip_target.is_some();
++        self.tooltip.dismiss();
++        self.tooltip_target = None;
++        self.tooltip_wake_sent = false;
++        changed
++    }
++    pub fn hover_toggles(&mut self, width: f32, point: Point, now_ms: u64) -> bool {
++        self.tooltip_clock_ms = now_ms;
++        let target = self
++            .open
++            .then(|| {
++                self.buttons(width)
++                    .into_iter()
++                    .take(7)
++                    .find(|(action, _, bounds)| self.toggle_contract(*action).is_some() && bounds.contains(point))
++                    .map(|(action, _, _)| action)
++            })
++            .flatten();
++        let changed = target != self.tooltip_target;
++        if changed {
++            self.tooltip.dismiss();
++            self.tooltip_target = target;
++            self.tooltip_wake_sent = false;
++        }
++        self.tooltip.hover(target.is_some(), now_ms);
++        changed
++    }
++    pub fn tooltip_deadline_ms(&self) -> Option<u64> {
++        (!self.tooltip_wake_sent && self.tooltip_target.is_some())
++            .then(|| self.tooltip.deadline())
++            .flatten()
++    }
++    pub fn tooltip_tick(&mut self, now_ms: u64) -> bool {
++        self.tooltip_clock_ms = now_ms;
++        if self.tooltip_wake_sent || self.tooltip_target.is_none() || !self.tooltip.visible(now_ms) {
++            return false;
++        }
++        self.tooltip_wake_sent = true;
++        true
++    }
++    fn wrap_tooltip(backend: &mut impl TextBackend, label: &str, max_width: f32) -> Result<String, LayoutError> {
++        let mut lines = Vec::<String>::new();
++        for word in label.split_whitespace() {
++            let candidate = lines.last().map_or_else(
++                || word.to_owned(),
++                |line| {
++                    if line.is_empty() {
++                        word.to_owned()
++                    } else {
++                        format!("{line} {word}")
++                    }
++                },
++            );
++            let needs_new = !lines.is_empty() && backend.measure_text(&candidate, 13.0)?.0 > max_width;
++            if lines.is_empty() || needs_new {
++                lines.push(word.to_owned());
++                continue;
++            }
++            let line = lines.last_mut().unwrap();
++            if !line.is_empty() {
++                line.push(' ');
++            }
++            line.push_str(word);
++        }
++        Ok(lines.join("\n"))
++    }
++    fn tooltip_layout(
++        &self,
++        backend: &mut impl TextBackend,
++        width: f32,
++        height: f32,
++        action: FindAction,
++        label: &str,
++    ) -> Result<Option<(Rect, String)>, LayoutError> {
++        let available = (width - 16.0).max(0.0);
++        if available <= 16.0 {
++            return Ok(None);
++        }
++        let mut wrapped = Self::wrap_tooltip(backend, label, available - 16.0)?;
++        let mut line_width = 0.0f32;
++        for line in wrapped.lines() {
++            line_width = line_width.max(backend.measure_text(line, 13.0)?.0);
++        }
++        let mut tooltip_width = (line_width + 16.0).clamp(0.0, available);
++        let mut tooltip_height = wrapped.lines().count().max(1) as f32 * 18.0 + 12.0;
++        let anchor = self
++            .buttons(width)
++            .into_iter()
++            .take(7)
++            .find(|(candidate, _, _)| *candidate == action)
++            .map(|(_, _, bounds)| bounds)
++            .unwrap_or_else(|| rect(8.0, TAB_HEIGHT + 12.0, 0.0, 28.0));
++        let preferred_y = TAB_HEIGHT + self.height() + 4.0;
++        let viewport_bottom = height - STATUS_HEIGHT;
++        let mut y = preferred_y;
++        if y + tooltip_height > viewport_bottom {
++            let summary = match action {
++                FindAction::Mode if self.mode == SearchMode::Regex => "Regular expression",
++                FindAction::Mode => "Extended escape sequences",
++                _ => label,
++            };
++            wrapped = Self::wrap_tooltip(backend, summary, available - 16.0)?;
++            line_width = 0.0;
++            for line in wrapped.lines() {
++                line_width = line_width.max(backend.measure_text(line, 13.0)?.0);
++            }
++            tooltip_width = (line_width + 16.0).clamp(0.0, available);
++            tooltip_height = wrapped.lines().count().max(1) as f32 * 18.0 + 12.0;
++            y = viewport_bottom - tooltip_height;
++            let field = if self.replacing {
++                Self::replacement_bounds(width)
++            } else {
++                Self::field_bounds(width)
++            };
++            if y < field.y + field.height {
++                return Ok(None);
++            }
++        }
++        let x = (anchor.x + anchor.width / 2.0 - tooltip_width / 2.0)
++            .max(8.0)
++            .min((width - tooltip_width - 8.0).max(8.0));
++        Ok(Some((rect(x, y, tooltip_width, tooltip_height), wrapped)))
++    }
+     pub fn pointer(
+         &mut self,
+         width: f32,
+@@ -848,6 +996,7 @@ impl FindController {
+             .find(|(action, _, bounds)| self.action_enabled(*action) && bounds.contains(point))
+             .map(|(action, _, _)| *action);
+         if down {
++            self.dismiss_tooltip();
+             self.pressed = hit;
+             self.keyboard_focus = hit;
+             self.replacement_focus = self.replacing && Self::replacement_bounds(width).contains(point);
+@@ -874,6 +1023,16 @@ impl FindController {
+         width: f32,
+         theme: bareline_ui::theme::UiTheme,
+         ops: &mut Vec<DrawOp>,
++    ) -> Result<Option<Rect>, LayoutError> {
++        self.draw_with_theme_in(backend, width, f32::INFINITY, theme, ops)
++    }
++    pub fn draw_with_theme_in(
++        &mut self,
++        backend: &mut impl TextBackend,
++        width: f32,
++        height: f32,
++        theme: bareline_ui::theme::UiTheme,
++        ops: &mut Vec<DrawOp>,
+     ) -> Result<Option<Rect>, LayoutError> {
+         if !self.open {
+             self.field.release(backend);
+@@ -985,7 +1144,7 @@ impl FindController {
+                 state: ControlState {
+                     disabled: !self.action_enabled(action),
+                     checked: (action == FindAction::Case && self.case_sensitive)
+-                        || (action == FindAction::Mode && self.mode == SearchMode::Regex)
++                        || (action == FindAction::Mode && self.mode != SearchMode::Literal)
+                         || (action == FindAction::WholeWord && self.whole_word),
+                     pressed: self.pressed == Some(action),
+                     focused: self.keyboard_focus == Some(action),
+@@ -1013,6 +1172,14 @@ impl FindController {
+         ops.push(DrawOp::PushClip(rect(width - 314.0, TAB_HEIGHT, 74.0, HEIGHT)));
+         text(ops, width - 314.0, TAB_HEIGHT + 19.0, &self.status, 13.0, theme.muted);
+         ops.push(DrawOp::PopClip);
++        if let Some(action) = self.tooltip_target
++            && let Some((label, _)) = self.toggle_contract(action)
++        {
++            if let Some((bounds, wrapped)) = self.tooltip_layout(backend, width, height, action, label)? {
++                self.tooltip
++                    .paint(self.tooltip_clock_ms, bounds, &wrapped, theme.widgets(), ops);
++            }
++        }
+         Ok(self.focused.then_some(caret))
+     }
+     fn replacement_bounds(width: f32) -> Rect {
+@@ -1061,18 +1228,18 @@ impl FindController {
+         }
+         for (index, (action, _, bounds)) in self.buttons(width).into_iter().enumerate() {
+             let (name, command) = match action {
+-                FindAction::Case => ("Match Case", "search.match_case"),
+-                FindAction::WholeWord => ("Match Whole Word", "search.whole_word"),
++                FindAction::Case => ("Match case", "search.match_case"),
++                FindAction::WholeWord => ("Whole word", "search.whole_word"),
+                 FindAction::Previous => ("Find Previous", "search.find_previous"),
+                 FindAction::Next => ("Find Next", "search.find_next"),
+                 FindAction::Close => ("Close Find", "search.close_find"),
+                 FindAction::Replace => ("Replace", "search.replace"),
+                 FindAction::ReplaceOne => ("Replace One", "search.replace_one"),
+                 FindAction::ReplaceAll => ("Replace All", "search.replace_all"),
+-                FindAction::Mode => ("Search Mode", "search.mode"),
++                FindAction::Mode => (self.toggle_contract(action).unwrap().0, "search.mode"),
+                 FindAction::Cancel => ("Cancel Search", "search.cancel"),
+             };
+-            let toggle = matches!(action, FindAction::Case | FindAction::WholeWord);
++            let toggle = matches!(action, FindAction::Case | FindAction::WholeWord | FindAction::Mode);
+             let mut node = Semantics::new(
+                 ViewId(if index < 7 { 6100 } else { 6200 } + action as u64),
+                 if toggle {
+@@ -1094,6 +1261,7 @@ impl FindController {
+             node.selected = match action {
+                 FindAction::Case => self.case_sensitive,
+                 FindAction::WholeWord => self.whole_word,
++                FindAction::Mode => self.mode != SearchMode::Literal,
+                 _ => false,
+             };
+             if action == FindAction::Mode {
+@@ -1217,6 +1385,147 @@ mod find_bar_tests {
+         assert_eq!(find.query().mode, SearchMode::Literal);
+     }
+     #[test]
++    fn toggle_tooltips_share_names_and_pressed_state_with_semantics() {
++        let mut find = FindController::default();
++        find.show();
++        find.case_sensitive = true;
++        find.whole_word = true;
++        find.mode = SearchMode::Extended;
++        let semantics = find.semantics(1000.0);
++        for (command, name) in [
++            ("search.match_case", "Match case"),
++            ("search.whole_word", "Whole word"),
++            (
++                "search.mode",
++                "Extended escape sequences: \\\\, \\0, \\n, \\r, \\t, \\xNN, \\uNNNN, \\UNNNNNNNN",
++            ),
++        ] {
++            let node = semantics.iter().find(|node| node.command_id == command).unwrap();
++            assert_eq!(node.name, name);
++            assert_eq!(node.role, bareline_ui::widgets::SemanticRole::Checkbox);
++            assert!(node.selected);
++        }
++    }
++
++    #[test]
++    fn toggle_tooltip_deadline_wakes_once_and_dismisses_on_leave_or_close() {
++        let mut find = FindController::default();
++        find.show();
++        let width = 1000.0;
++        for (index, action) in [FindAction::Case, FindAction::WholeWord, FindAction::Mode]
++            .into_iter()
++            .enumerate()
++        {
++            let bounds = find
++                .buttons(width)
++                .into_iter()
++                .find(|(candidate, _, _)| *candidate == action)
++                .unwrap()
++                .2;
++            let entered = find.hover_toggles(
++                width,
++                Point {
++                    x: bounds.x + 2.0,
++                    y: bounds.y + 2.0,
++                },
++                index as u64 * 1_000,
++            );
++            assert!(entered);
++            let deadline = index as u64 * 1_000 + 500;
++            assert_eq!(find.tooltip_deadline_ms(), Some(deadline));
++            assert!(!find.tooltip_tick(deadline - 1));
++            assert!(find.tooltip_tick(deadline));
++            assert!(!find.tooltip_tick(deadline + 1));
++            assert_eq!(find.tooltip_deadline_ms(), None);
++            assert!(find.tooltip.visible(deadline));
++
++            assert!(find.hover_toggles(width, Point { x: 4.0, y: 4.0 }, deadline + 2));
++            assert!(!find.tooltip.visible(deadline + 2));
++        }
++        let case = find
++            .buttons(width)
++            .into_iter()
++            .find(|(action, _, _)| *action == FindAction::Case)
++            .unwrap()
++            .2;
++        find.hover_toggles(
++            width,
++            Point {
++                x: case.x + 2.0,
++                y: case.y + 2.0,
++            },
++            4_000,
++        );
++        find.hide();
++        assert_eq!(find.tooltip_deadline_ms(), None);
++        assert!(find.tooltip_target.is_none());
++    }
++
++    #[test]
++    fn tooltip_content_wraps_and_clamps_without_covering_the_query() {
++        let mut find = FindController::default();
++        find.show();
++        let label = find.toggle_contract(FindAction::Mode).unwrap().0;
++        for (physical_width, scale) in [(480.0, 1.0), (720.0, 1.5), (960.0, 2.0), (240.0, 1.0)] {
++            let logical_width = physical_width / scale;
++            let mut backend = bareline_renderer_recording::RecordingBackend::default();
++            let (bounds, wrapped) = find
++                .tooltip_layout(&mut backend, logical_width, 300.0, FindAction::Mode, label)
++                .unwrap()
++                .unwrap();
++            assert!(bounds.x >= 8.0);
++            assert!(bounds.x + bounds.width <= logical_width - 8.0 + f32::EPSILON);
++            assert!(bounds.y >= FindController::field_bounds(logical_width).y + 28.0);
++            assert!(bounds.y + bounds.height <= 300.0 - STATUS_HEIGHT + f32::EPSILON);
++            assert_eq!(wrapped.lines().collect::<Vec<_>>().join(" "), label);
++
++            let mut operations = Vec::new();
++            find.tooltip.hover(true, 0);
++            find.tooltip.paint(
++                500,
++                bounds,
++                &wrapped,
++                bareline_ui::widgets::Theme::default(),
++                &mut operations,
++            );
++            let lines: Vec<_> = operations
++                .iter()
++                .filter_map(|operation| match operation {
++                    DrawOp::Text { text, .. } => Some(text.as_str()),
++                    _ => None,
++                })
++                .collect();
++            assert_eq!(lines, wrapped.lines().collect::<Vec<_>>());
++            assert!(
++                lines
++                    .iter()
++                    .all(|line| backend.measure(line, 13.0).0 <= bounds.width - 16.0 + f32::EPSILON)
++            );
++            find.tooltip.dismiss();
++        }
++    }
++    #[test]
++    fn short_replace_view_uses_summary_or_hides_without_covering_a_field() {
++        let mut find = FindController::default();
++        find.show_replace();
++        let label = find.toggle_contract(FindAction::Mode).unwrap().0;
++        let mut backend = bareline_renderer_recording::RecordingBackend::default();
++        let (bounds, wrapped) = find
++            .tooltip_layout(&mut backend, 480.0, 160.0, FindAction::Mode, label)
++            .unwrap()
++            .unwrap();
++        let replacement = FindController::replacement_bounds(480.0);
++        assert_eq!(wrapped, "Extended escape sequences");
++        assert!(bounds.y >= replacement.y + replacement.height);
++        assert!(bounds.y + bounds.height <= 160.0 - STATUS_HEIGHT);
++
++        assert!(
++            find.tooltip_layout(&mut backend, 480.0, 120.0, FindAction::Mode, label)
++                .unwrap()
++                .is_none()
++        );
++    }
++    #[test]
+     fn enter_and_f3_cycle_direction() {
+         let mut find = FindController::default();
+         find.show();
+diff --git a/crates/app/src/workspace.rs b/crates/app/src/workspace.rs
+index b9884e3..0e95c8a 100644
+--- a/crates/app/src/workspace.rs
++++ b/crates/app/src/workspace.rs
+@@ -2739,7 +2739,7 @@ impl Workspace {
+             }
+             None => Ok(None),
+         };
+-        if let Some(caret) = self.find.draw_with_theme(renderer, width, self.theme, ops)? {
++        if let Some(caret) = self.find.draw_with_theme_in(renderer, width, height, self.theme, ops)? {
+             result = Ok(Some(caret));
+         }
+         let labels: Vec<_> = self
+diff --git a/crates/renderer/src/lib.rs b/crates/renderer/src/lib.rs
+index cec72d6..f9ed9a3 100644
+--- a/crates/renderer/src/lib.rs
++++ b/crates/renderer/src/lib.rs
+@@ -131,6 +131,12 @@ pub struct TextStyle {
+     pub color: Color,
+ }
+ pub trait TextBackend {
++    fn measure_text(&mut self, text: &str, size: f32) -> Result<(f32, f32), LayoutError> {
++        let layout = self.shape(text, size, 1.0e9)?;
++        let measured = self.layout_size(layout);
++        self.release_layout(layout);
++        measured
++    }
+     fn shape_wrapped(&mut self, text: &str, size: f32, width: f32, family: &str) -> Result<LayoutId, LayoutError> {
+         self.shape_with_font_family(text, size, width, family)
+     }
+diff --git a/crates/ui/src/overlays.rs b/crates/ui/src/overlays.rs
+index cfde0e0..f7ca2db 100644
+--- a/crates/ui/src/overlays.rs
++++ b/crates/ui/src/overlays.rs
+@@ -69,7 +69,16 @@ impl Tooltip {
+         ops.push(DrawOp::FillRounded(bounds, theme.surface, 4.0));
+         ops.push(DrawOp::StrokeRounded(bounds, theme.border, 4.0, 1.0));
+         ops.push(DrawOp::PushClip(bounds));
+-        text(ops, bounds.x + 8.0, bounds.y + 6.0, label, 13.0, theme.text);
++        for (line, label) in label.lines().enumerate() {
++            text(
++                ops,
++                bounds.x + 8.0,
++                bounds.y + 6.0 + line as f32 * 18.0,
++                label,
++                13.0,
++                theme.text,
++            );
++        }
+         ops.push(DrawOp::PopClip);
+     }
+     pub fn semantics(&self, now_ms: u64, id: ViewId, name: &str, bounds: Rect) -> Option<Semantics> {
+diff --git a/docs/implementation/2026-09-12-audit-implementation/PR-U12.md b/docs/implementation/2026-09-12-audit-implementation/PR-U12.md
+new file mode 100644
+index 0000000..b0cc64f
+--- /dev/null
++++ b/docs/implementation/2026-09-12-audit-implementation/PR-U12.md
+@@ -0,0 +1,42 @@
++# PR-U12 — Find and Replace toggle tooltips
++
++## Baseline
++
++- Base commit: `04e4bb28fbd416ebf9aad3ef67183ed3aec48707`
++- Dependency: PR-U09 document-bound Find state, including its reviewed scope/cancellation correction, and U07 accessibility ownership.
++- Worktree: `audit-implementation-worktrees/modal`.
++
++## Scope
++
++Add delayed, clamped tooltips for Match case, Whole word, and Extended escape sequences. Visible tooltip wording and UIA name/selected state share one contract. Reuse the existing deadline wake path and preserve the current Find composition.
++
++## Decisions
++
++- Keep the existing compact toggle composition from `bareline-find-bar.png`; the tooltip appears below the complete Find/Replace surface so it does not cover either active text field.
++- Use the shared delayed `Tooltip` primitive and the Windows event loop's next-deadline control flow. Each hover schedules one 500 ms wake, and the wake is consumed before painting so an idle window does not continuously redraw. Cursor exit and window focus loss dismiss before modal or panel event capture.
++- Derive visible tooltip text and UIA names from one contract. Extended mode names all supported slash, null, newline, return, tab, and hexadecimal Unicode escapes; toggle paint, UIA selection, and command checked state agree. The shared primitive paints lines wrapped from actual backend measurements so every escape stays visible at narrow widths. A short Replace viewport uses the concise function name while UIA retains the full help, or suppresses the popup when no field-safe space remains.
++- Compute tooltip geometry in logical pixels, cap it to the editor viewport, and clamp both horizontal edges with an eight-pixel inset. Find drawing and hover hit testing share the same vertical-tab inset and content width. This produces the same logical result at 100%, 150%, and 200% DPI.
++
++## Changed files
++
++- `crates/app/src/find.rs`
++- `crates/app/src/workspace.rs`
++- `crates/ui/src/overlays.rs`
++- `crates/renderer/src/lib.rs`
++- `apps/bareline/src/windows_app.rs`
++- `apps/bareline/src/windows_app/views.rs`
++- This implementation note.
++
++## Focused checks
++
++- `cargo test -p bareline-app toggle_tooltips_share_names_and_pressed_state_with_semantics`
++- `cargo test -p bareline-app toggle_tooltip_deadline_wakes_once_and_dismisses_on_leave_or_close`
++- `cargo test -p bareline-app tooltip_content_wraps_and_clamps_without_covering_the_query`
++- `cargo test -p bareline-app short_replace_view_uses_summary_or_hides_without_covering_a_field`
++- `cargo test -p bareline vertical_tabs_share_find_draw_and_hover_geometry`
++- Cargo, semantic golden capture, and native desktop qualification are owned by root integration; no Cargo or desktop run was made in this isolated worktree.
++
++## Unresolved qualifications
++
++- Native pointer timing and DPI journeys remain for final integrated qualification.
++- Shared Find/Search dock composition remains assigned to PR-U11.

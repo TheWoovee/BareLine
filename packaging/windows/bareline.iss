@@ -1,4 +1,7 @@
 ; SPDX-License-Identifier: MPL-2.0
+#if Ver != EncodeVer(6, 4, 3)
+  #error Expected pinned Inno Setup 6.4.3
+#endif
 ; Local compile: ISCC /DAppVersion=0.1.0 /DPayloadDir=<absolute> /DOutputDir=<absolute> bareline.iss
 #ifndef AppVersion
   #error AppVersion must be supplied
@@ -26,6 +29,7 @@ OutputBaseFilename=bareline-{#AppVersion}-windows-x64-setup
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
+SetupIconFile=bareline.ico
 UninstallDisplayIcon={app}\bareline.exe
 CloseApplications=yes
 RestartApplications=no
@@ -40,7 +44,7 @@ Source: "{#PayloadDir}\THIRD-PARTY-NOTICES.md"; DestDir: "{app}"; Flags: ignorev
 Source: "{#PayloadDir}\SBOM.json"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#PayloadDir}\bareline-update-helper.exe"; DestDir: "{app}"; Flags: ignoreversion
 [Icons]
-Name: "{group}\Bareline"; Filename: "{app}\bareline.exe"
+Name: "{group}\Bareline"; Filename: "{app}\bareline.exe"; IconFilename: "{app}\bareline.exe"
 [Registry]
 Root: HKA; Subkey: "Software\Classes\*\shell\Bareline"; ValueType: string; ValueData: "Open with Bareline"; Flags: uninsdeletekey; Tasks: contextmenu
 Root: HKA; Subkey: "Software\Classes\*\shell\Bareline\command"; ValueType: string; ValueData: """{app}\bareline.exe"" -- ""%1"""; Tasks: contextmenu

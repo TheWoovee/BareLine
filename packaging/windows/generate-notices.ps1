@@ -2,16 +2,20 @@
 # Generate local notices from the exact locked Windows dependency graph and vendored
 # license texts. Refuses missing evidence; does not invent third-party license grants.
 [CmdletBinding()]
-param([Parameter(Mandatory)][string]$OutputFile,[string]$SdkOutputFile)
+param(
+    [Parameter(Mandatory)][string]$OutputFile,
+    [string]$SdkOutputFile,
+    [ValidateNotNullOrEmpty()][ValidateSet('bareline','bareline-update-helper','bareline-extension-host')]
+    [string[]]$Roots = @('bareline','bareline-update-helper','bareline-extension-host')
+)
 $ErrorActionPreference = 'Stop'
 $metadataText = & cargo metadata --format-version 1 --locked --offline --filter-platform x86_64-pc-windows-msvc
 if ($LASTEXITCODE -ne 0) { throw 'Cargo metadata failed' }
 $metadata = ($metadataText -join "`n") | ConvertFrom-Json
-$roots = @('bareline','bareline-update-helper','bareline-extension-host')
 foreach ($name in $roots) { if (-not ($metadata.packages | Where-Object name -eq $name)) { throw "Missing packaged Cargo root: $name" } }
 $ids = [Collections.Generic.HashSet[string]]::new()
 $pending = [Collections.Generic.Queue[string]]::new()
-foreach ($package in $metadata.packages | Where-Object { $_.name -in 'bareline', 'bareline-update-helper', 'bareline-extension-host' }) { $pending.Enqueue($package.id) }
+foreach ($package in $metadata.packages | Where-Object { $_.name -in $Roots }) { $pending.Enqueue($package.id) }
 while ($pending.Count) {
     $id = $pending.Dequeue()
     if (-not $ids.Add($id)) { continue }
@@ -22,6 +26,7 @@ while ($pending.Count) {
 }
 $parts = [Collections.Generic.List[string]]::new()
 $parts.Add('# Third-party notices')
+$parts.Add('Packaged Cargo roots: ' + (($Roots | Sort-Object -Unique) -join ', ') + '.')
 $parts.Add('Generated from Cargo.lock and registry package license files for Windows x64. This is local source-license evidence; release review and SBOM remain required.')
 $missing = [Collections.Generic.List[string]]::new()
 foreach ($package in ($metadata.packages | Where-Object { $_.source -and $ids.Contains($_.id) } | Sort-Object name,version)) {

@@ -197,8 +197,7 @@ mod tests {
     #[test]
     fn eol_conversion_is_one_undoable_transaction_and_quota_refuses() {
         use bareline_document::{Budget, Document, TextOffset};
-        let mut d =
-            Document::from_utf8("é\r\na\rb\nc", Budget::new(10000), Budget::new(10000)).unwrap();
+        let mut d = Document::from_utf8("é\r\na\rb\nc", Budget::new(10000), Budget::new(10000)).unwrap();
         let s = d.snapshot();
         let range = TextOffset(0)..TextOffset(s.len());
         assert!(plan_eol_conversion(&s, range.clone(), Eol::Lf, 1).is_err());
@@ -222,10 +221,18 @@ mod tests {
 }
 
 pub fn metadata_encoding(metadata: &bareline_document::DocumentMetadata) -> Option<EncodingState> {
-    metadata.get("file.encoding").and_then(|value| serde_json::from_str(value).ok())
+    metadata
+        .get("file.encoding")
+        .and_then(|value| serde_json::from_str(value).ok())
 }
-pub fn with_encoding(metadata: &bareline_document::DocumentMetadata, state: &EncodingState) -> Result<bareline_document::DocumentMetadata, bareline_document::Error> {
-    let mut values=metadata.values().clone();
-    values.insert("file.encoding".into(),serde_json::to_string(state).map_err(|_|bareline_document::Error::BudgetExceeded)?);
+pub fn with_encoding(
+    metadata: &bareline_document::DocumentMetadata,
+    state: &EncodingState,
+) -> Result<bareline_document::DocumentMetadata, bareline_document::Error> {
+    let mut values = metadata.values().clone();
+    values.insert(
+        "file.encoding".into(),
+        serde_json::to_string(state).map_err(|_| bareline_document::Error::BudgetExceeded)?,
+    );
     bareline_document::DocumentMetadata::new(values)
 }

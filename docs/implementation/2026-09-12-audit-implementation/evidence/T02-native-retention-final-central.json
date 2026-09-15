@@ -1,0 +1,14 @@
+{
+  "arguments": [
+    "test",
+    "-p",
+    "bareline-platform-windows",
+    "--lib",
+    "native_directory_source_is_retained_when_lease_cannot_exclude_new_children"
+  ],
+  "completed_utc": "2026-09-12T09:01:41.8432521Z",
+  "integration_snapshot": "ec0d5f488bce0f523850889969b51a9f07e2dd79",
+  "exit_code": 0,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\T02-native-retention-final-central.log"
+}

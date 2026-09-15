@@ -2,9 +2,7 @@
 //! Bounded synchronous resident-snapshot diff. Callers own scheduling.
 use bareline_unicode_fold as casefold;
 pub mod paged;
-use bareline_document::{
-    ContentStateId, DocumentSnapshot, Edit, EditTransaction, Revision, TextOffset,
-};
+use bareline_document::{ContentStateId, DocumentSnapshot, Edit, EditTransaction, Revision, TextOffset};
 use std::{
     collections::BTreeMap,
     ops::Range,
@@ -98,10 +96,21 @@ pub struct DiffHunk {
 impl DiffHunk {
     /// Verify the captured text generations before worker-side source splicing.
     /// Content states are globally unique; equal revision numbers alone are insufficient.
-    pub fn matches_states(&self,left_revision:Revision,left_state:ContentStateId,right_revision:Revision,right_state:ContentStateId)->bool {
-        self.left_revision==left_revision&&self.right_revision==right_revision&&self.left_state==left_state&&self.right_state==right_state
+    pub fn matches_states(
+        &self,
+        left_revision: Revision,
+        left_state: ContentStateId,
+        right_revision: Revision,
+        right_state: ContentStateId,
+    ) -> bool {
+        self.left_revision == left_revision
+            && self.right_revision == right_revision
+            && self.left_state == left_state
+            && self.right_state == right_state
     }
-    pub fn options(&self)->&CompareOptions {&self.options}
+    pub fn options(&self) -> &CompareOptions {
+        &self.options
+    }
 }
 #[derive(Clone, Debug, Default)]
 pub struct DiffStats {
@@ -140,8 +149,7 @@ impl Work<'_> {
     fn check(&self) -> Result<(), CompareCompleteness> {
         if self.cancel.is_cancelled() {
             Err(CompareCompleteness::Cancelled)
-        } else if self.start.elapsed().as_millis() >= u128::from(self.options.limits.time_budget_ms)
-        {
+        } else if self.start.elapsed().as_millis() >= u128::from(self.options.limits.time_budget_ms) {
             Err(CompareCompleteness::Coarse(CoarseReason::Time))
         } else {
             Ok(())
@@ -213,9 +221,7 @@ fn lines(s: &DocumentSnapshot, w: &mut Work<'_>) -> Result<Vec<Line>, CompareCom
     let mut out = Vec::new();
     for hint in 0..s.line_count() {
         w.check()?;
-        let range = s
-            .line_range(hint)
-            .map_err(|_| CompareCompleteness::Unavailable)?;
+        let range = s.line_range(hint).map_err(|_| CompareCompleteness::Unavailable)?;
         if range.is_empty() {
             continue;
         }
@@ -229,10 +235,7 @@ fn lines(s: &DocumentSnapshot, w: &mut Work<'_>) -> Result<Vec<Line>, CompareCom
         }
         w.reserve(len.saturating_mul(16).saturating_add(512))?;
         let mut raw = String::with_capacity(len);
-        for chunk in s
-            .chunks(range.clone())
-            .map_err(|_| CompareCompleteness::Unavailable)?
-        {
+        for chunk in s.chunks(range.clone()).map_err(|_| CompareCompleteness::Unavailable)? {
             w.check()?;
             raw.push_str(chunk);
         }
@@ -279,11 +282,7 @@ fn make_hunk(
         options: CompareOptions::default(),
     }
 }
-fn myers(
-    a: &[Line],
-    b: &[Line],
-    w: &mut Work<'_>,
-) -> Result<Vec<(usize, usize)>, CompareCompleteness> {
+fn myers(a: &[Line], b: &[Line], w: &mut Work<'_>) -> Result<Vec<(usize, usize)>, CompareCompleteness> {
     let max = a.len() + b.len();
     let width = 2 * max + 3;
     let offset = max + 1;
@@ -404,10 +403,7 @@ fn anchored(
     anchors.reverse();
     let mut pairs = Vec::new();
     let (mut x, mut y) = (0, 0);
-    for (i, j) in anchors
-        .into_iter()
-        .chain(std::iter::once((a.len(), b.len())))
-    {
+    for (i, j) in anchors.into_iter().chain(std::iter::once((a.len(), b.len()))) {
         for (dx, dy) in myers(&a[x..i], &b[y..j], w)? {
             pairs.push((x + dx, y + dy));
         }
@@ -463,11 +459,7 @@ fn intraline(
         gp += x.len();
     }
     let mut gs = 0;
-    for (x, y) in lm[gp..]
-        .graphemes(true)
-        .rev()
-        .zip(rm[gp..].graphemes(true).rev())
-    {
+    for (x, y) in lm[gp..].graphemes(true).rev().zip(rm[gp..].graphemes(true).rev()) {
         w.check()?;
         if x != y {
             break;
@@ -481,12 +473,7 @@ fn intraline(
 }
 /// Unique patience anchors followed by bounded Myers. Cap exhaustion emits a single
 /// coarse original-range block. Output and workspace share a conservative byte cap.
-pub fn compare(
-    l: &DocumentSnapshot,
-    r: &DocumentSnapshot,
-    o: &CompareOptions,
-    c: &CancelToken,
-) -> CompareResult {
+pub fn compare(l: &DocumentSnapshot, r: &DocumentSnapshot, o: &CompareOptions, c: &CancelToken) -> CompareResult {
     compare_hashed(l, r, o, c, hash)
 }
 fn compare_hashed(
@@ -529,9 +516,7 @@ fn compare_hashed(
         }
         let a = lines(l, &mut w)?;
         let b = lines(r, &mut w)?;
-        w.reserve(
-            (a.len() + b.len() + 1).saturating_mul(std::mem::size_of::<DiffHunk>() * 2 + 128),
-        )?;
+        w.reserve((a.len() + b.len() + 1).saturating_mul(std::mem::size_of::<DiffHunk>() * 2 + 128))?;
         let pairs = anchored(&a, &b, &mut w, hash_line)?;
         let (mut si, mut sj) = (0, 0);
         let mut anchor = 0u64;
@@ -593,9 +578,7 @@ fn compare_hashed(
                 }
                 let lr = result.hunks[removed].left.clone();
                 let rr = result.hunks[added].right.clone();
-                if lr.end.0 - lr.start.0 > 64 * 1024
-                    || lr.end.0 - lr.start.0 != rr.end.0 - rr.start.0
-                {
+                if lr.end.0 - lr.start.0 > 64 * 1024 || lr.end.0 - lr.start.0 != rr.end.0 - rr.start.0 {
                     continue;
                 }
                 let lt = l
@@ -681,14 +664,7 @@ pub fn compare_batches(
             return out;
         }
         if started.elapsed().as_millis() >= u128::from(o.limits.time_budget_ms) {
-            let mut h = make_hunk(
-                l,
-                r,
-                lp..TextOffset(l.len()),
-                rp..TextOffset(r.len()),
-                (li, ri),
-                0,
-            );
+            let mut h = make_hunk(l, r, lp..TextOffset(l.len()), rp..TextOffset(r.len()), (li, ri), 0);
             h.options = o.clone();
             out.completeness = if sink(&[h]) {
                 CompareCompleteness::Coarse(CoarseReason::Time)
@@ -697,25 +673,9 @@ pub fn compare_batches(
             };
             return out;
         }
-        let mut stop = || {
-            c.is_cancelled() || started.elapsed().as_millis() >= u128::from(o.limits.time_budget_ms)
-        };
-        let (lr, ln) = window(
-            l,
-            li,
-            lp,
-            cap,
-            o.limits.max_lines_exact.clamp(1, 64),
-            &mut stop,
-        );
-        let (rr, rn) = window(
-            r,
-            ri,
-            rp,
-            cap,
-            o.limits.max_lines_exact.clamp(1, 64),
-            &mut stop,
-        );
+        let mut stop = || c.is_cancelled() || started.elapsed().as_millis() >= u128::from(o.limits.time_budget_ms);
+        let (lr, ln) = window(l, li, lp, cap, o.limits.max_lines_exact.clamp(1, 64), &mut stop);
+        let (rr, rn) = window(r, ri, rp, cap, o.limits.max_lines_exact.clamp(1, 64), &mut stop);
         if stop() {
             continue;
         }
@@ -782,10 +742,8 @@ pub fn compare_batches(
                 h.left = TextOffset(h.left.start.0 + lp.0)..TextOffset(h.left.end.0 + lp.0);
                 h.right = TextOffset(h.right.start.0 + rp.0)..TextOffset(h.right.end.0 + rp.0);
                 for span in &mut h.intraline {
-                    span.left =
-                        TextOffset(span.left.start.0 + lp.0)..TextOffset(span.left.end.0 + lp.0);
-                    span.right =
-                        TextOffset(span.right.start.0 + rp.0)..TextOffset(span.right.end.0 + rp.0);
+                    span.left = TextOffset(span.left.start.0 + lp.0)..TextOffset(span.left.end.0 + lp.0);
+                    span.right = TextOffset(span.right.start.0 + rp.0)..TextOffset(span.right.end.0 + rp.0);
                 }
                 h.left_line_hint = h.left_line_hint.map(|n| n + li);
                 h.right_line_hint = h.right_line_hint.map(|n| n + ri);
@@ -893,18 +851,12 @@ pub fn apply_hunk_with_policy(
         Direction::LeftToRight => (l, r, h.left.clone(), h.right.clone()),
         Direction::RightToLeft => (r, l, h.right.clone(), h.left.clone()),
     };
-    source
-        .chunks(srange.clone())
-        .map_err(|_| ApplyError::InvalidRange)?;
-    target
-        .chunks(trange.clone())
-        .map_err(|_| ApplyError::InvalidRange)?;
+    source.chunks(srange.clone()).map_err(|_| ApplyError::InvalidRange)?;
+    target.chunks(trange.clone()).map_err(|_| ApplyError::InvalidRange)?;
     if policy == MergePolicy::PreserveIgnoredDestination && ignores(&h.options) {
         return preserve(source, target, srange, trange, &h.options, max_insert_bytes);
     }
-    target
-        .chunks(trange.clone())
-        .map_err(|_| ApplyError::InvalidRange)?;
+    target.chunks(trange.clone()).map_err(|_| ApplyError::InvalidRange)?;
     let insert = source.read(srange, max_insert_bytes).map_err(|e| {
         if e == bareline_document::Error::BudgetExceeded {
             ApplyError::BudgetExceeded
@@ -914,10 +866,7 @@ pub fn apply_hunk_with_policy(
     })?;
     Ok(EditTransaction {
         base_revision: target.revision,
-        edits: vec![Edit {
-            range: trange,
-            insert,
-        }],
+        edits: vec![Edit { range: trange, insert }],
     })
 }
 fn ignores(o: &CompareOptions) -> bool {
@@ -968,9 +917,7 @@ fn tokens(
             if skip
                 || (o.ignore_encoding_bom && offset + idx == 0 && g == "\u{feff}")
                 || (o.whitespace == Whitespace::IgnoreAll && whitespace && idx < body.len())
-                || (o.whitespace == Whitespace::TrimEdges
-                    && idx < body.len()
-                    && (idx < trim_start || idx >= trim_end))
+                || (o.whitespace == Whitespace::TrimEdges && idx < body.len() && (idx < trim_start || idx >= trim_end))
             {
                 continue;
             }
@@ -1028,11 +975,7 @@ fn preserve(
     let pairs = myers(&a, &b, &mut w).map_err(|_| ApplyError::BudgetExceeded)?;
     let mut segments: Vec<(usize, usize, usize, usize)> = Vec::new();
     let (mut si, mut sj) = (0, 0);
-    for (i, j) in pairs
-        .iter()
-        .copied()
-        .chain(std::iter::once((a.len(), b.len())))
-    {
+    for (i, j) in pairs.iter().copied().chain(std::iter::once((a.len(), b.len()))) {
         if si < i || sj < j {
             let mut segment = (si, i, sj, j);
             loop {
@@ -1106,10 +1049,7 @@ fn preserve(
             }
         } else {
             let at = a.get(i).map_or(trange.end, |x| x.range.start);
-            edits.push(Edit {
-                range: at..at,
-                insert,
-            });
+            edits.push(Edit { range: at..at, insert });
         }
     }
     Ok(EditTransaction {
@@ -1119,11 +1059,7 @@ fn preserve(
 }
 // Expand partial case-fold units back to an indivisible original grapheme.
 fn expand_original(tokens: &[Line], mut start: usize, mut end: usize) -> (usize, usize) {
-    if start == end
-        && start > 0
-        && start < tokens.len()
-        && tokens[start - 1].range == tokens[start].range
-    {
+    if start == end && start > 0 && start < tokens.len() && tokens[start - 1].range == tokens[start].range {
         start -= 1;
         end += 1;
     }
@@ -1165,21 +1101,12 @@ mod tests {
                 let mut l = doc(left);
                 let ls = l.snapshot();
                 let rs = doc(right).snapshot();
-                let result = compare(
-                    &ls,
-                    &rs,
-                    &CompareOptions::default(),
-                    &CancelToken::default(),
-                );
+                let result = compare(&ls, &rs, &CompareOptions::default(), &CancelToken::default());
                 assert_eq!(result.completeness, CompareCompleteness::Exact);
                 let edits = result
                     .hunks
                     .iter()
-                    .flat_map(|h| {
-                        apply_hunk(Direction::RightToLeft, h, &ls, &rs, 1000)
-                            .unwrap()
-                            .edits
-                    })
+                    .flat_map(|h| apply_hunk(Direction::RightToLeft, h, &ls, &rs, 1000).unwrap().edits)
                     .collect();
                 l.apply(EditTransaction {
                     base_revision: ls.revision,
@@ -1196,27 +1123,15 @@ mod tests {
     }
     #[test]
     fn unicode_crlf_apply_undo() {
-        for (left, right) in [
-            ("e\u{301}\n🙂\n漢\n", "e\u{301}\n🙃\n字\n"),
-            ("a\r\nb\r", "x\r\nb\r"),
-        ] {
+        for (left, right) in [("e\u{301}\n🙂\n漢\n", "e\u{301}\n🙃\n字\n"), ("a\r\nb\r", "x\r\nb\r")] {
             let mut l = doc(left);
             let ls = l.snapshot();
             let rs = doc(right).snapshot();
-            let result = compare(
-                &ls,
-                &rs,
-                &CompareOptions::default(),
-                &CancelToken::default(),
-            );
+            let result = compare(&ls, &rs, &CompareOptions::default(), &CancelToken::default());
             let edits = result
                 .hunks
                 .iter()
-                .flat_map(|h| {
-                    apply_hunk(Direction::RightToLeft, h, &ls, &rs, 1000)
-                        .unwrap()
-                        .edits
-                })
+                .flat_map(|h| apply_hunk(Direction::RightToLeft, h, &ls, &rs, 1000).unwrap().edits)
                 .collect();
             l.apply(EditTransaction {
                 base_revision: ls.revision,
@@ -1327,12 +1242,7 @@ mod tests {
         let mut l = doc("a");
         let ls = l.snapshot();
         let rs = doc("b").snapshot();
-        let result = compare(
-            &ls,
-            &rs,
-            &CompareOptions::default(),
-            &CancelToken::default(),
-        );
+        let result = compare(&ls, &rs, &CompareOptions::default(), &CancelToken::default());
         l.apply(EditTransaction {
             base_revision: ls.revision,
             edits: vec![Edit {
@@ -1343,23 +1253,11 @@ mod tests {
         .unwrap();
         assert!(is_stale(&result, l.snapshot().revision, rs.revision));
         assert!(matches!(
-            apply_hunk(
-                Direction::RightToLeft,
-                &result.hunks[0],
-                &l.snapshot(),
-                &rs,
-                100
-            ),
+            apply_hunk(Direction::RightToLeft, &result.hunks[0], &l.snapshot(), &rs, 100),
             Err(ApplyError::Stale)
         ));
         assert!(matches!(
-            apply_hunk(
-                Direction::RightToLeft,
-                &result.hunks[0],
-                &doc("a").snapshot(),
-                &rs,
-                100
-            ),
+            apply_hunk(Direction::RightToLeft, &result.hunks[0], &doc("a").snapshot(), &rs, 100),
             Err(ApplyError::Stale)
         ));
     }
@@ -1375,14 +1273,7 @@ mod tests {
         let r2 = doc("unrelated\nanchor\ne\u{301} 🙃 tail\nend\n").snapshot();
         assert_eq!(
             result.hunks[0].stable_id,
-            compare(
-                &l2,
-                &r2,
-                &CompareOptions::default(),
-                &CancelToken::default()
-            )
-            .hunks[0]
-                .stable_id
+            compare(&l2, &r2, &CompareOptions::default(), &CancelToken::default()).hunks[0].stable_id
         );
         let mut calls = 0;
         let stopped = compare_batches(
@@ -1402,18 +1293,11 @@ mod tests {
     }
     #[test]
     fn incomplete_prefix_is_neither_exact_nor_applicable() {
-        let mut builder =
-            bareline_document::DocumentBuilder::new(Budget::new(10000), Budget::new(10000))
-                .unwrap();
+        let mut builder = bareline_document::DocumentBuilder::new(Budget::new(10000), Budget::new(10000)).unwrap();
         builder.append("a").unwrap();
         let prefix = builder.prefix();
         let right = doc("b").snapshot();
-        let result = compare(
-            &prefix,
-            &right,
-            &CompareOptions::default(),
-            &CancelToken::default(),
-        );
+        let result = compare(&prefix, &right, &CompareOptions::default(), &CancelToken::default());
         assert_eq!(result.completeness, CompareCompleteness::Unavailable);
         assert!(result.hunks.is_empty());
         let h = make_hunk(
@@ -1481,20 +1365,12 @@ mod tests {
             whitespace: Whitespace::TrimEdges,
             ..Default::default()
         };
-        assert!(
-            !compare(&l, &r, &options, &CancelToken::default())
-                .hunks
-                .is_empty()
-        );
+        assert!(!compare(&l, &r, &options, &CancelToken::default()).hunks.is_empty());
         let options = CompareOptions {
             ignore_eol_style: true,
             ..options
         };
-        assert!(
-            compare(&l, &r, &options, &CancelToken::default())
-                .hunks
-                .is_empty()
-        );
+        assert!(compare(&l, &r, &options, &CancelToken::default()).hunks.is_empty());
     }
     #[test]
     fn ignore_eol_preserves_line_structure_and_rejects_bad_ranges() {
@@ -1533,19 +1409,12 @@ mod tests {
             batches += 1;
             assert!(batch.len() <= 1);
             for h in batch {
-                edits.extend(
-                    apply_hunk(Direction::RightToLeft, h, &ls, &rs, 1000)
-                        .unwrap()
-                        .edits,
-                );
+                edits.extend(apply_hunk(Direction::RightToLeft, h, &ls, &rs, 1000).unwrap().edits);
             }
             true
         });
         assert!(batches > 1);
-        assert!(matches!(
-            result.completeness,
-            CompareCompleteness::Coarse(_)
-        ));
+        assert!(matches!(result.completeness, CompareCompleteness::Coarse(_)));
         assert!(result.hunks.is_empty());
         target
             .apply(EditTransaction {
@@ -1601,11 +1470,7 @@ mod tests {
             let edits = result
                 .hunks
                 .iter()
-                .flat_map(|h| {
-                    apply_hunk(Direction::RightToLeft, h, &ls, &rs, 1000)
-                        .unwrap()
-                        .edits
-                })
+                .flat_map(|h| apply_hunk(Direction::RightToLeft, h, &ls, &rs, 1000).unwrap().edits)
                 .collect();
             target
                 .apply(EditTransaction {
@@ -1641,11 +1506,7 @@ mod tests {
                 let edits = result
                     .hunks
                     .iter()
-                    .flat_map(|h| {
-                        apply_hunk(Direction::RightToLeft, h, &ls, &rs, 1000)
-                            .unwrap()
-                            .edits
-                    })
+                    .flat_map(|h| apply_hunk(Direction::RightToLeft, h, &ls, &rs, 1000).unwrap().edits)
                     .collect();
                 target
                     .apply(EditTransaction {
@@ -1691,20 +1552,7 @@ mod tests {
         assert_eq!(result.completeness, CompareCompleteness::Exact);
         assert_eq!(result.hunks.len(), 1);
         assert_eq!(result.hunks[0].left, TextOffset(9)..TextOffset(21));
-        let tx = apply_hunk(
-            Direction::RightToLeft,
-            &result.hunks[0],
-            &left,
-            &right,
-            4096,
-        )
-        .unwrap();
-        assert_eq!(
-            tx.edits
-                .iter()
-                .map(|e| e.insert.as_str())
-                .collect::<String>(),
-            "new"
-        );
+        let tx = apply_hunk(Direction::RightToLeft, &result.hunks[0], &left, &right, 4096).unwrap();
+        assert_eq!(tx.edits.iter().map(|e| e.insert.as_str()).collect::<String>(), "new");
     }
 }

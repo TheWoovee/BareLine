@@ -1,0 +1,1876 @@
+diff --git a/apps/bareline/src/windows_app.rs b/apps/bareline/src/windows_app.rs
+index 10028bf..e1d3cdf 100644
+--- a/apps/bareline/src/windows_app.rs
++++ b/apps/bareline/src/windows_app.rs
+@@ -598,9 +598,14 @@ impl ApplicationHandler<Wake> for Handler {
+         if self.shell.profile_initialization.pump() {
+             match self.shell.profile_initialization.completion() {
+                 Some(Ok(result)) => eprintln!(
+-                    "event=profile_initialization_completed migrated_entries={} removed_caches={}",
++                    "event=profile_initialization_completed migrated_entries={} removed_caches={} visited_cache_entries={} skipped={} cancelled={} limit_reached={} authority_restore_failed={}",
+                     result.migrated_entries.len(),
+-                    result.removed_caches
++                    result.cleanup.removed,
++                    result.cleanup.visited_entries,
++                    result.cleanup.skipped.values().sum::<usize>(),
++                    result.cleanup.cancelled,
++                    result.cleanup.limit_reached,
++                    result.cleanup.authority_restore_failed,
+                 ),
+                 Some(Err(error)) => eprintln!("event=profile_initialization_failed reason={error}"),
+                 None => {}
+diff --git a/apps/bareline/src/windows_app/launch.rs b/apps/bareline/src/windows_app/launch.rs
+index 137e3c2..40248b9 100644
+--- a/apps/bareline/src/windows_app/launch.rs
++++ b/apps/bareline/src/windows_app/launch.rs
+@@ -314,7 +314,7 @@ pub(super) struct ProfileInitialization {
+ pub(super) struct ProfileInitializationResult {
+     pub(super) profile_root: Option<PathBuf>,
+     pub(super) migrated_entries: Vec<&'static str>,
+-    pub(super) removed_caches: usize,
++    pub(super) cleanup: bareline_file_io::owned_cache::SweepReport,
+ }
+ 
+ #[derive(Default)]
+@@ -322,6 +322,7 @@ pub(super) struct ProfileInitializationRuntime {
+     pending: Option<ProfileInitialization>,
+     worker: Option<std::sync::mpsc::Receiver<Result<ProfileInitializationResult, String>>>,
+     completion: Option<Result<ProfileInitializationResult, String>>,
++    cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+ }
+ impl ProfileInitializationRuntime {
+     pub(super) fn new(pending: Option<ProfileInitialization>) -> Self {
+@@ -329,6 +330,7 @@ impl ProfileInitializationRuntime {
+             pending,
+             worker: None,
+             completion: None,
++            cancel: Default::default(),
+         }
+     }
+ 
+@@ -337,6 +339,8 @@ impl ProfileInitializationRuntime {
+             return Ok(false);
+         };
+         let retry = initialization.clone();
++        self.cancel.store(false, std::sync::atomic::Ordering::Release);
++        let cancel = self.cancel.clone();
+         let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+         match std::thread::Builder::new()
+             .name("bareline-profile-initialize".into())
+@@ -345,11 +349,18 @@ impl ProfileInitializationRuntime {
+                 let migrated_entries = initialization.local.as_deref().map_or_else(Vec::new, |local| {
+                     migrate_from_roaming(initialization.roaming.as_deref(), local)
+                 });
+-                let removed_caches = sweep_temp_caches(&initialization.temp, &process_alive);
++                let cleanup = bareline_file_io::owned_cache::sweep(
++                    &initialization.temp,
++                    &std::collections::HashSet::new(),
++                    &bareline_platform_windows::WindowsFileSystem,
++                    &|| cancel.load(std::sync::atomic::Ordering::Acquire),
++                    256,
++                    std::time::Duration::from_millis(100),
++                );
+                 let _ = sender.send(Ok(ProfileInitializationResult {
+                     profile_root,
+                     migrated_entries,
+-                    removed_caches,
++                    cleanup,
+                 }));
+                 notify();
+             }) {
+@@ -393,6 +404,11 @@ impl ProfileInitializationRuntime {
+         self.completion.take()
+     }
+ }
++impl Drop for ProfileInitializationRuntime {
++    fn drop(&mut self) {
++        self.cancel.store(true, std::sync::atomic::Ordering::Release);
++    }
++}
+ 
+ pub struct LaunchConfig {
+     pub(super) mode: LaunchMode,
+@@ -656,71 +672,6 @@ fn migrate_from_roaming(roaming: Option<&Path>, local: &Path) -> Vec<&'static st
+     migrated
+ }
+ 
+-/// Private caches are named `<kind>-<pid>-<serial>` inside a `Bareline-*`
+-/// directory under the temporary folder; a crash leaves them behind.
+-fn cache_owner_pid(name: &str) -> Option<u32> {
+-    let mut parts = name.rsplitn(3, '-');
+-    parts.next()?;
+-    let pid = parts.next()?;
+-    parts.next()?;
+-    pid.parse().ok()
+-}
+-
+-/// Delete temporary caches left by processes that are no longer running.
+-fn sweep_temp_caches(temp: &Path, alive: &dyn Fn(u32) -> bool) -> usize {
+-    let Ok(roots) = std::fs::read_dir(temp) else {
+-        return 0;
+-    };
+-    let mut removed = 0;
+-    for root in roots.flatten() {
+-        if !root.file_name().to_string_lossy().starts_with("Bareline-") || !root.path().is_dir() {
+-            continue;
+-        }
+-        let Ok(caches) = std::fs::read_dir(root.path()) else {
+-            continue;
+-        };
+-        for cache in caches.flatten() {
+-            let name = cache.file_name();
+-            let Some(pid) = cache_owner_pid(&name.to_string_lossy()) else {
+-                continue;
+-            };
+-            if alive(pid) {
+-                continue;
+-            }
+-            if std::fs::remove_dir_all(cache.path()).is_ok() {
+-                removed += 1;
+-            }
+-        }
+-        let _ = std::fs::remove_dir(root.path());
+-    }
+-    removed
+-}
+-
+-#[cfg(windows)]
+-fn process_alive(pid: u32) -> bool {
+-    use windows::Win32::{
+-        Foundation::{CloseHandle, STILL_ACTIVE},
+-        System::Threading::{GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION},
+-    };
+-    if pid == std::process::id() {
+-        return true;
+-    }
+-    // SAFETY: the handle is closed on every path and only queried for liveness.
+-    unsafe {
+-        let Ok(process) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) else {
+-            return false;
+-        };
+-        let mut code = 0u32;
+-        let running = GetExitCodeProcess(process, &mut code).is_ok() && code == STILL_ACTIVE.0 as u32;
+-        let _ = CloseHandle(process);
+-        running
+-    }
+-}
+-#[cfg(not(windows))]
+-fn process_alive(_pid: u32) -> bool {
+-    true
+-}
+-
+ /// `bareline --diag handles` records the process handle counters so a leak shows
+ /// up as a growing number across runs. Sampled at startup and after each close.
+ pub(super) fn log_handle_counters(directory: Option<&Path>) {
+@@ -921,33 +872,6 @@ mod tests {
+         std::fs::remove_dir_all(temp).unwrap();
+     }
+ 
+-    #[test]
+-    fn temp_sweep_removes_dead_owners_and_keeps_live_ones() {
+-        let temp = std::env::temp_dir().join(format!(
+-            "bareline-sweep-{}-{}",
+-            std::process::id(),
+-            std::time::SystemTime::now()
+-                .duration_since(std::time::UNIX_EPOCH)
+-                .unwrap()
+-                .as_nanos()
+-        ));
+-        let root = temp.join("Bareline-transcode");
+-        let live = root.join("resident-spill-4242-1");
+-        let dead = root.join("resident-spill-4243-7");
+-        let odd = root.join("not-a-cache");
+-        let other = temp.join("unrelated");
+-        for path in [&live, &dead, &odd, &other] {
+-            std::fs::create_dir_all(path).unwrap();
+-        }
+-        assert_eq!(sweep_temp_caches(&temp, &|pid| pid == 4242), 1);
+-        assert!(live.is_dir());
+-        assert!(!dead.exists());
+-        assert!(odd.is_dir());
+-        assert!(other.is_dir());
+-        assert_eq!(cache_owner_pid("owned-segments-99-3"), Some(99));
+-        assert_eq!(cache_owner_pid("not-a-cache"), None);
+-        std::fs::remove_dir_all(&temp).unwrap();
+-    }
+     #[test]
+     fn launch_coordinates_clamp_and_preserve_utf8_boundaries() {
+         let document = bareline_document::Document::from_utf8(
+diff --git a/crates/file-io/src/codecs/disk.rs b/crates/file-io/src/codecs/disk.rs
+index b214a85..ff21350 100644
+--- a/crates/file-io/src/codecs/disk.rs
++++ b/crates/file-io/src/codecs/disk.rs
+@@ -251,7 +251,19 @@ impl DiskTranscoder {
+                 NEXT.fetch_add(1, Ordering::Relaxed)
+             ));
+             match fs::create_dir(&path) {
+-                Ok(()) => break Arc::new(Directory(path, false)),
++                Ok(()) => {
++                    if crate::owned_cache::registered_root(cache)
++                        && let Err(error) = crate::owned_cache::publish_ownership(
++                            &path,
++                            crate::owned_cache::CacheKind::Transcode,
++                            platform.as_ref(),
++                        )
++                    {
++                        let _ = fs::remove_dir(&path);
++                        return Err(error.into());
++                    }
++                    break Arc::new(Directory(path, false));
++                }
+                 Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+                 Err(e) => return Err(e.into()),
+             }
+diff --git a/crates/file-io/src/lib.rs b/crates/file-io/src/lib.rs
+index 68fce7b..5f13253 100644
+--- a/crates/file-io/src/lib.rs
++++ b/crates/file-io/src/lib.rs
+@@ -4,6 +4,7 @@ pub mod cancellation;
+ pub mod codecs;
+ pub mod lifecycle;
+ mod owned_read;
++pub mod owned_cache;
+ pub mod owned_store;
+ pub mod paged_recovery;
+ pub mod paged_service;
+diff --git a/crates/file-io/src/owned_cache.rs b/crates/file-io/src/owned_cache.rs
+new file mode 100644
+index 0000000..f1aecf4
+--- /dev/null
++++ b/crates/file-io/src/owned_cache.rs
+@@ -0,0 +1,691 @@
++// SPDX-License-Identifier: MPL-2.0
++//! Proven-owned temporary cache publication and bounded reclamation.
++use bareline_platform::{LocalFileSystem, ProcessLiveness};
++use serde::{Deserialize, Serialize};
++use std::{
++    collections::{BTreeMap, HashSet},
++    fs,
++    io::{self, Read, Write},
++    path::{Path, PathBuf},
++    time::{Duration, Instant},
++};
++
++const RECORD: &str = ".bareline-cache-owner.json";
++const RETAINED_RECORD: &str = ".bareline-cache-cleanup-retained.json";
++const VERSION: u32 = 1;
++pub const ROOTS: [&str; 5] = [
++    "Bareline-owned-spill",
++    "Bareline-transcode",
++    "Bareline-compare-staging",
++    "Bareline-power-staging",
++    "Bareline-drag-staging",
++];
++
++#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
++#[serde(rename_all = "kebab-case")]
++pub enum CacheKind {
++    ResidentSpill,
++    SpillBaseline,
++    OwnedSegments,
++    OwnedStream,
++    Transcode,
++}
++impl CacheKind {
++    fn prefix(self) -> &'static str {
++        match self {
++            Self::ResidentSpill => "resident-spill",
++            Self::SpillBaseline => "spill-baseline",
++            Self::OwnedSegments => "owned-segments",
++            Self::OwnedStream => "owned-stream",
++            Self::Transcode => "bareline-transcode",
++        }
++    }
++}
++
++#[derive(Deserialize, Serialize)]
++struct OwnershipRecord {
++    version: u32,
++    kind: CacheKind,
++    directory_identity: String,
++    pid: u32,
++    process_created: u64,
++    retained_recovery: Vec<String>,
++}
++
++pub fn publish_ownership(directory: &Path, kind: CacheKind, platform: &dyn LocalFileSystem) -> io::Result<()> {
++    let root = directory
++        .parent()
++        .ok_or_else(|| invalid("cache directory has no root"))?;
++    if !registered_root(root) {
++        return Ok(());
++    }
++    if !registered_kind(root, kind) || parse_candidate(directory.file_name(), kind) != Some(std::process::id()) {
++        return Err(invalid("cache root or producer grammar is not registered"));
++    }
++    let owner = platform.cache_process_identity()?;
++    if owner.pid != std::process::id() {
++        return Err(invalid("cache owner identity does not match this process"));
++    }
++    let record = OwnershipRecord {
++        version: VERSION,
++        kind,
++        directory_identity: hex(&owner.nonce),
++        pid: owner.pid,
++        process_created: owner.created,
++        retained_recovery: Vec::new(),
++    };
++    let bytes = serde_json::to_vec(&record).map_err(io::Error::other)?;
++    let staged = directory.join(format!("{RECORD}.new"));
++    let final_path = directory.join(RECORD);
++    let mut file = fs::OpenOptions::new().write(true).create_new(true).open(&staged)?;
++    file.write_all(&bytes)?;
++    file.sync_all()?;
++    drop(file);
++    fs::rename(staged, final_path)
++}
++
++#[derive(Clone, Debug, Default, Eq, PartialEq)]
++pub struct SweepReport {
++    pub roots: usize,
++    pub candidates: usize,
++    pub removed: usize,
++    pub removed_entries: usize,
++    pub visited_entries: usize,
++    pub skipped: BTreeMap<&'static str, usize>,
++    pub cancelled: bool,
++    pub limit_reached: bool,
++    pub authority_restore_failed: bool,
++}
++impl SweepReport {
++    fn skip(&mut self, reason: &'static str) {
++        *self.skipped.entry(reason).or_default() += 1;
++    }
++}
++
++pub fn sweep(
++    temp: &Path,
++    referenced: &HashSet<PathBuf>,
++    platform: &dyn LocalFileSystem,
++    cancelled: &dyn Fn() -> bool,
++    max_entries: usize,
++    max_time: Duration,
++) -> SweepReport {
++    let mut report = SweepReport::default();
++    let started = Instant::now();
++    for name in ROOTS {
++        if report.cancelled || report.limit_reached || report.authority_restore_failed {
++            break;
++        }
++        if cancelled() {
++            report.cancelled = true;
++            break;
++        }
++        if report.candidates.saturating_add(report.visited_entries) >= max_entries || started.elapsed() >= max_time {
++            report.limit_reached = true;
++            break;
++        }
++        let root = temp.join(name);
++        let Ok(Some(root_lease)) = platform.cache_directory_guard(&root) else {
++            if root.exists() {
++                report.skip("root-not-plain");
++            }
++            continue;
++        };
++        report.roots += 1;
++        let Ok(entries) = fs::read_dir(&root) else {
++            report.skip("root-unreadable");
++            continue;
++        };
++        for entry in entries.flatten() {
++            if report.cancelled || report.limit_reached || report.authority_restore_failed {
++                break;
++            }
++            if cancelled() {
++                report.cancelled = true;
++                break;
++            }
++            if report.candidates.saturating_add(report.visited_entries) >= max_entries || started.elapsed() >= max_time
++            {
++                report.limit_reached = true;
++                break;
++            }
++            report.candidates += 1;
++            let candidate = entry.path();
++            if referenced.contains(&candidate) {
++                report.skip("referenced");
++                continue;
++            }
++            let Ok(Some(candidate_lease)) = platform.cache_directory_guard(&candidate) else {
++                report.skip("candidate-not-plain");
++                continue;
++            };
++            let Ok(proof) = read_record(&candidate) else {
++                report.skip("unproven");
++                continue;
++            };
++            let record = &proof.record;
++            if !registered_kind(&root, record.kind)
++                || parse_candidate(candidate.file_name(), record.kind) != Some(record.pid)
++            {
++                report.skip("grammar-mismatch");
++                continue;
++            }
++            if !record.retained_recovery.is_empty() {
++                report.skip("recovery-referenced");
++                continue;
++            }
++            match platform.cache_process_liveness(record.pid, record.process_created) {
++                ProcessLiveness::Alive => {
++                    report.skip("live");
++                    continue;
++                }
++                ProcessLiveness::Unknown => {
++                    report.skip("unknown-liveness");
++                    continue;
++                }
++                ProcessLiveness::Dead => {}
++            }
++            let consumed = report.candidates.saturating_add(report.visited_entries);
++            let remaining_entries = max_entries.saturating_sub(consumed);
++            let remaining_time = max_time.saturating_sub(started.elapsed());
++            if remaining_entries == 0 || remaining_time.is_zero() {
++                report.limit_reached = true;
++                break;
++            }
++            let root_identity = root_lease.identity;
++            let candidate_identity = candidate_lease.identity;
++            drop(candidate_lease);
++            let outcome = platform.remove_owned_cache_directory(
++                &root,
++                &candidate,
++                root_identity,
++                candidate_identity,
++                proof.name,
++                &proof.bytes,
++                remaining_entries,
++                remaining_time,
++                cancelled,
++            );
++            report.visited_entries = report.visited_entries.saturating_add(outcome.visited);
++            let budget_exhausted = report.candidates.saturating_add(report.visited_entries) >= max_entries;
++            if !outcome.retry_authority_retained {
++                report.skip("authority-restore-failed");
++                report.authority_restore_failed = true;
++                break;
++            }
++            match outcome.result {
++                Ok(entries) => {
++                    report.removed += 1;
++                    report.removed_entries += entries;
++                }
++                Err(error) if error.kind() == io::ErrorKind::Interrupted => report.cancelled = true,
++                Err(error) if error.kind() == io::ErrorKind::InvalidData => report.limit_reached = true,
++                Err(_) => report.skip("deletion-failed"),
++            }
++            if budget_exhausted {
++                report.limit_reached = true;
++            }
++        }
++    }
++    report
++}
++
++struct SelectedProof {
++    record: OwnershipRecord,
++    name: &'static str,
++    bytes: Vec<u8>,
++}
++
++fn read_record(directory: &Path) -> io::Result<SelectedProof> {
++    let mut last_error = io::Error::new(io::ErrorKind::NotFound, "ownership record missing");
++    for name in [RECORD, RETAINED_RECORD] {
++        match read_record_named(directory, name) {
++            Ok(proof) => return Ok(proof),
++            Err(error) => last_error = error,
++        }
++    }
++    Err(last_error)
++}
++
++fn read_record_named(directory: &Path, name: &'static str) -> io::Result<SelectedProof> {
++    let path = directory.join(name);
++    let metadata = fs::symlink_metadata(&path)?;
++    if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() > 4096 {
++        return Err(invalid("invalid ownership record"));
++    }
++    let mut bytes = Vec::with_capacity(metadata.len() as usize);
++    fs::File::open(path)?.take(4097).read_to_end(&mut bytes)?;
++    if bytes.len() > 4096 {
++        return Err(invalid("ownership record limit"));
++    }
++    let record: OwnershipRecord = serde_json::from_slice(&bytes).map_err(|_| invalid("invalid ownership record"))?;
++    if record.version != VERSION
++        || record.directory_identity.len() != 32
++        || !record.directory_identity.bytes().all(|b| b.is_ascii_hexdigit())
++    {
++        return Err(invalid("unsupported ownership record"));
++    }
++    Ok(SelectedProof { record, name, bytes })
++}
++
++pub fn registered_root(root: &Path) -> bool {
++    root.file_name()
++        .and_then(|name| name.to_str())
++        .is_some_and(|name| ROOTS.contains(&name))
++}
++fn registered_kind(root: &Path, kind: CacheKind) -> bool {
++    match root.file_name().and_then(|name| name.to_str()) {
++        Some("Bareline-owned-spill") => matches!(
++            kind,
++            CacheKind::ResidentSpill | CacheKind::SpillBaseline | CacheKind::OwnedSegments | CacheKind::OwnedStream
++        ),
++        Some("Bareline-transcode") => kind == CacheKind::Transcode,
++        Some("Bareline-compare-staging" | "Bareline-power-staging" | "Bareline-drag-staging") => {
++            kind == CacheKind::OwnedStream
++        }
++        _ => false,
++    }
++}
++fn parse_candidate(name: Option<&std::ffi::OsStr>, kind: CacheKind) -> Option<u32> {
++    let name = name?.to_str()?;
++    let rest = name.strip_prefix(kind.prefix())?.strip_prefix('-')?;
++    let mut pieces = rest.split('-');
++    let pid = pieces.next()?.parse().ok()?;
++    pieces.next()?.parse::<u64>().ok()?;
++    pieces.next().is_none().then_some(pid)
++}
++fn hex(bytes: &[u8; 16]) -> String {
++    const HEX: &[u8; 16] = b"0123456789abcdef";
++    let mut value = String::with_capacity(32);
++    for byte in bytes {
++        value.push(HEX[(byte >> 4) as usize] as char);
++        value.push(HEX[(byte & 15) as usize] as char);
++    }
++    value
++}
++fn invalid(message: &'static str) -> io::Error {
++    io::Error::new(io::ErrorKind::InvalidData, message)
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use bareline_platform::{
++        CacheDirectoryIdentity, CacheDirectoryLease, CacheProcessIdentity, CacheRemovalOutcome, FileIdentity,
++    };
++    use std::sync::atomic::{AtomicBool, Ordering};
++
++    struct Platform {
++        created: u64,
++        fail_delete: bool,
++        swap_on_remove: bool,
++    }
++    impl LocalFileSystem for Platform {
++        fn cache_process_identity(&self) -> io::Result<CacheProcessIdentity> {
++            Ok(CacheProcessIdentity {
++                pid: std::process::id(),
++                created: self.created,
++                nonce: [0x5a; 16],
++            })
++        }
++        fn cache_process_liveness(&self, _: u32, created: u64) -> ProcessLiveness {
++            match created {
++                7 | 10 => ProcessLiveness::Dead,
++                8 => ProcessLiveness::Alive,
++                _ => ProcessLiveness::Unknown,
++            }
++        }
++        fn cache_directory_guard(&self, path: &Path) -> io::Result<Option<CacheDirectoryLease>> {
++            let metadata = fs::symlink_metadata(path)?;
++            Ok(
++                (metadata.is_dir() && !metadata.file_type().is_symlink()).then_some(CacheDirectoryLease {
++                    identity: CacheDirectoryIdentity {
++                        volume: 1,
++                        file: path
++                            .to_string_lossy()
++                            .bytes()
++                            .fold(0u64, |hash, byte| hash.wrapping_mul(31).wrapping_add(byte as u64)),
++                    },
++                    guard: std::sync::Arc::new(()),
++                }),
++            )
++        }
++        fn remove_owned_cache_directory(
++            &self,
++            root: &Path,
++            candidate: &Path,
++            root_identity: CacheDirectoryIdentity,
++            candidate_identity: CacheDirectoryIdentity,
++            _: &str,
++            _: &[u8],
++            max_entries: usize,
++            _: Duration,
++            cancelled: &dyn Fn() -> bool,
++        ) -> CacheRemovalOutcome {
++            let mut visited = 0;
++            let result = (|| {
++                if cancelled() {
++                    return Err(io::Error::new(io::ErrorKind::Interrupted, "cancelled"));
++                }
++                if self.fail_delete {
++                    return Err(io::Error::other("injected deletion failure"));
++                }
++                if self.swap_on_remove {
++                    return Err(io::Error::new(
++                        io::ErrorKind::PermissionDenied,
++                        "injected directory swap",
++                    ));
++                }
++                if self.cache_directory_guard(root)?.map(|lease| lease.identity) != Some(root_identity)
++                    || self.cache_directory_guard(candidate)?.map(|lease| lease.identity) != Some(candidate_identity)
++                {
++                    return Err(io::Error::new(
++                        io::ErrorKind::PermissionDenied,
++                        "cache directory changed",
++                    ));
++                }
++                let count = fs::read_dir(candidate)?.count() + 1;
++                visited = count;
++                if count > max_entries {
++                    return Err(io::Error::new(io::ErrorKind::InvalidData, "entry budget"));
++                }
++                fs::remove_dir_all(candidate)?;
++                Ok(count)
++            })();
++            CacheRemovalOutcome {
++                visited,
++                retry_authority_retained: true,
++                result,
++            }
++        }
++        fn identity(&self, _: &fs::File) -> io::Result<FileIdentity> {
++            Err(io::ErrorKind::Unsupported.into())
++        }
++        fn validate_target(&self, _: &Path) -> io::Result<()> {
++            Ok(())
++        }
++        fn commit(&self, _: &Path, _: &Path, _: bool) -> io::Result<()> {
++            Err(io::ErrorKind::Unsupported.into())
++        }
++    }
++    struct Fixture(PathBuf);
++    impl Fixture {
++        fn new() -> Self {
++            let path = std::env::temp_dir().join(format!(
++                "bareline-owned-cleanup-{}-{}",
++                std::process::id(),
++                std::time::SystemTime::now()
++                    .duration_since(std::time::UNIX_EPOCH)
++                    .unwrap()
++                    .as_nanos()
++            ));
++            fs::create_dir(&path).unwrap();
++            Self(path)
++        }
++        fn candidate(&self, serial: u64, platform: &Platform) -> PathBuf {
++            let root = self.0.join("Bareline-owned-spill");
++            fs::create_dir_all(&root).unwrap();
++            let path = root.join(format!("owned-stream-{}-{serial}", std::process::id()));
++            fs::create_dir(&path).unwrap();
++            publish_ownership(&path, CacheKind::OwnedStream, platform).unwrap();
++            fs::write(path.join("payload"), b"owned").unwrap();
++            path
++        }
++    }
++    impl Drop for Fixture {
++        fn drop(&mut self) {
++            let _ = fs::remove_dir_all(&self.0);
++        }
++    }
++
++    #[test]
++    fn exact_registry_and_producer_grammar_are_required() {
++        let fixture = Fixture::new();
++        let platform = Platform {
++            created: 7,
++            fail_delete: false,
++            swap_on_remove: false,
++        };
++        let foreign = fixture
++            .0
++            .join("Bareline-foreign")
++            .join(format!("owned-stream-{}-1", std::process::id()));
++        fs::create_dir_all(&foreign).unwrap();
++        publish_ownership(&foreign, CacheKind::OwnedStream, &platform).unwrap();
++        assert!(!foreign.join(RECORD).exists());
++        let malformed = fixture
++            .0
++            .join("Bareline-owned-spill")
++            .join(format!("owned-stream-{}-1-extra", std::process::id()));
++        fs::create_dir_all(&malformed).unwrap();
++        assert!(publish_ownership(&malformed, CacheKind::OwnedStream, &platform).is_err());
++        let wrong_kind = fixture
++            .0
++            .join("Bareline-transcode")
++            .join(format!("owned-stream-{}-1", std::process::id()));
++        fs::create_dir_all(&wrong_kind).unwrap();
++        assert!(publish_ownership(&wrong_kind, CacheKind::OwnedStream, &platform).is_err());
++    }
++
++    #[test]
++    fn sweep_removes_only_proven_unreferenced_definitely_dead_cache() {
++        let fixture = Fixture::new();
++        let dead = Platform {
++            created: 7,
++            fail_delete: false,
++            swap_on_remove: false,
++        };
++        let removed = fixture.candidate(1, &dead);
++        let referenced = fixture.candidate(2, &dead);
++        let live = fixture.candidate(
++            3,
++            &Platform {
++                created: 8,
++                fail_delete: false,
++                swap_on_remove: false,
++            },
++        );
++        let reused_pid = fixture.candidate(
++            5,
++            &Platform {
++                created: 11,
++                fail_delete: false,
++                swap_on_remove: false,
++            },
++        );
++        let recovery = fixture.candidate(6, &dead);
++        let mut recovery_record = read_record(&recovery).unwrap().record;
++        recovery_record.retained_recovery.push("checkpoint-1".into());
++        fs::write(recovery.join(RECORD), serde_json::to_vec(&recovery_record).unwrap()).unwrap();
++        let root = fixture.0.join("Bareline-owned-spill");
++        let unmarked = root.join(format!("owned-stream-{}-4", std::process::id()));
++        fs::create_dir(&unmarked).unwrap();
++        let references = HashSet::from([referenced.clone()]);
++        let report = sweep(&fixture.0, &references, &dead, &|| false, 32, Duration::from_secs(1));
++        assert_eq!(report.removed, 1);
++        assert!(!removed.exists());
++        assert!(referenced.exists() && live.exists() && reused_pid.exists() && recovery.exists() && unmarked.exists());
++        assert_eq!(report.skipped.get("unknown-liveness"), Some(&1));
++        assert_eq!(report.skipped.get("referenced"), Some(&1));
++        assert_eq!(report.skipped.get("recovery-referenced"), Some(&1));
++        assert_eq!(report.skipped.get("unproven"), Some(&1));
++    }
++
++    #[test]
++    fn unknown_failure_and_cancellation_retain_record_for_retry() {
++        let fixture = Fixture::new();
++        let unknown = Platform {
++            created: 9,
++            fail_delete: false,
++            swap_on_remove: false,
++        };
++        let unknown_path = fixture.candidate(1, &unknown);
++        let report = sweep(
++            &fixture.0,
++            &HashSet::new(),
++            &unknown,
++            &|| false,
++            8,
++            Duration::from_secs(1),
++        );
++        assert_eq!(report.skipped.get("unknown-liveness"), Some(&1));
++        assert!(unknown_path.join(RECORD).is_file());
++
++        let failing = Platform {
++            created: 10,
++            fail_delete: true,
++            swap_on_remove: false,
++        };
++        let failed_path = fixture.candidate(2, &failing);
++        let report = sweep(
++            &fixture.0,
++            &HashSet::new(),
++            &failing,
++            &|| false,
++            8,
++            Duration::from_secs(1),
++        );
++        assert!(report.skipped.get("deletion-failed").is_some());
++        assert!(failed_path.join(RECORD).is_file());
++
++        let cancelled = AtomicBool::new(true);
++        let report = sweep(
++            &fixture.0,
++            &HashSet::new(),
++            &failing,
++            &|| cancelled.load(Ordering::Acquire),
++            8,
++            Duration::from_secs(1),
++        );
++        assert!(report.cancelled);
++        assert!(failed_path.join(RECORD).is_file());
++    }
++
++    #[test]
++    fn directory_identity_change_retains_owner_record_and_payload() {
++        let fixture = Fixture::new();
++        let publisher = Platform {
++            created: 7,
++            fail_delete: false,
++            swap_on_remove: false,
++        };
++        let candidate = fixture.candidate(1, &publisher);
++        let swapped = Platform {
++            created: 7,
++            fail_delete: false,
++            swap_on_remove: true,
++        };
++        let report = sweep(
++            &fixture.0,
++            &HashSet::new(),
++            &swapped,
++            &|| false,
++            8,
++            Duration::from_secs(1),
++        );
++        assert_eq!(report.skipped.get("deletion-failed"), Some(&1));
++        assert!(candidate.join(RECORD).is_file());
++        assert!(candidate.join("payload").is_file());
++    }
++
++    #[test]
++    fn recursive_entry_budget_retains_owner_record() {
++        let fixture = Fixture::new();
++        let platform = Platform {
++            created: 7,
++            fail_delete: false,
++            swap_on_remove: false,
++        };
++        let candidate = fixture.candidate(1, &platform);
++        fs::write(candidate.join("second-payload"), b"owned").unwrap();
++        let report = sweep(
++            &fixture.0,
++            &HashSet::new(),
++            &platform,
++            &|| false,
++            2,
++            Duration::from_secs(1),
++        );
++        assert!(report.limit_reached);
++        assert!(candidate.join(RECORD).is_file());
++    }
++
++    #[test]
++    fn retained_cleanup_receipt_remains_valid_retry_authority() {
++        let fixture = Fixture::new();
++        let platform = Platform {
++            created: 7,
++            fail_delete: false,
++            swap_on_remove: false,
++        };
++        let candidate = fixture.candidate(1, &platform);
++        fs::rename(candidate.join(RECORD), candidate.join(RETAINED_RECORD)).unwrap();
++        let report = sweep(
++            &fixture.0,
++            &HashSet::new(),
++            &platform,
++            &|| false,
++            16,
++            Duration::from_secs(1),
++        );
++        assert_eq!(report.removed, 1);
++        assert!(!candidate.exists());
++    }
++
++    #[test]
++    fn invalid_primary_without_valid_fallback_is_retained() {
++        let fixture = Fixture::new();
++        let platform = Platform {
++            created: 7,
++            fail_delete: false,
++            swap_on_remove: false,
++        };
++        let root = fixture.0.join("Bareline-owned-spill");
++        fs::create_dir(&root).unwrap();
++        let candidate = root.join(format!("owned-stream-{}-1", std::process::id()));
++        fs::create_dir(&candidate).unwrap();
++        fs::write(candidate.join(RECORD), b"{").unwrap();
++        fs::write(candidate.join("payload"), b"foreign").unwrap();
++        let report = sweep(
++            &fixture.0,
++            &HashSet::new(),
++            &platform,
++            &|| false,
++            16,
++            Duration::from_secs(1),
++        );
++        assert_eq!(report.skipped.get("unproven"), Some(&1));
++        assert_eq!(fs::read(candidate.join("payload")).unwrap(), b"foreign");
++    }
++
++    #[test]
++    fn deletion_visits_and_later_skips_share_one_entry_cap() {
++        let fixture = Fixture::new();
++        let platform = Platform {
++            created: 7,
++            fail_delete: false,
++            swap_on_remove: false,
++        };
++        let removed = fixture.candidate(1, &platform);
++        let later_root = fixture.0.join("Bareline-transcode");
++        fs::create_dir(&later_root).unwrap();
++        for serial in 0..8 {
++            fs::create_dir(later_root.join(format!("bareline-transcode-999999-{serial}"))).unwrap();
++        }
++        let report = sweep(
++            &fixture.0,
++            &HashSet::new(),
++            &platform,
++            &|| false,
++            7,
++            Duration::from_secs(1),
++        );
++        assert_eq!(report.removed, 1);
++        assert!(!removed.exists());
++        assert_eq!(report.visited_entries, 3);
++        assert_eq!(report.candidates, 4);
++        assert_eq!(report.skipped.get("unproven"), Some(&3));
++        assert!(report.limit_reached);
++        assert!(fs::read_dir(later_root).unwrap().count() > 3);
++    }
++}
+diff --git a/crates/file-io/src/owned_store.rs b/crates/file-io/src/owned_store.rs
+index 8eff8d4..9daad68 100644
+--- a/crates/file-io/src/owned_store.rs
++++ b/crates/file-io/src/owned_store.rs
+@@ -88,6 +88,14 @@ pub fn prepare_resident(
+         NEXT.fetch_add(1, Ordering::Relaxed)
+     ));
+     fs::create_dir(&directory)?;
++    if let Err(error) = crate::owned_cache::publish_ownership(
++        &directory,
++        crate::owned_cache::CacheKind::ResidentSpill,
++        platform.as_ref(),
++    ) {
++        let _ = fs::remove_dir(&directory);
++        return Err(error.into());
++    }
+     let staging = Staging(directory);
+     let path = staging.0.join("input.raw");
+     let output = OpenOptions::new().write(true).create_new(true).open(&path)?;
+@@ -187,6 +195,14 @@ pub fn prepare_segments(
+     let serial = NEXT_OWNED.fetch_add(1, Ordering::Relaxed);
+     let directory = cache.join(format!("owned-segments-{}-{serial}", std::process::id()));
+     fs::create_dir(&directory)?;
++    if let Err(error) = crate::owned_cache::publish_ownership(
++        &directory,
++        crate::owned_cache::CacheKind::OwnedSegments,
++        platform.as_ref(),
++    ) {
++        let _ = fs::remove_dir(&directory);
++        return Err(error.into());
++    }
+     let cleanup = OwnedDirectory(directory);
+     let directory_guard = platform.guard_directory(&cleanup.0)?;
+     let path = cleanup.0.join("segments.utf8");
+@@ -298,6 +314,14 @@ pub fn prepare_original_baseline(
+         NEXT_BASELINE.fetch_add(1, Ordering::Relaxed)
+     ));
+     fs::create_dir(&directory)?;
++    if let Err(error) = crate::owned_cache::publish_ownership(
++        &directory,
++        crate::owned_cache::CacheKind::SpillBaseline,
++        platform.as_ref(),
++    ) {
++        let _ = fs::remove_dir(&directory);
++        return Err(error.into());
++    }
+     let staging = Staging(directory);
+     let directory_guard = platform.guard_directory(&staging.0)?;
+     let path = staging.0.join("input.raw");
+@@ -433,6 +457,14 @@ impl StreamingStoreBuilder {
+         let serial = NEXT_STREAM.fetch_add(1, Ordering::Relaxed);
+         let directory = cache.join(format!("owned-stream-{}-{serial}", std::process::id()));
+         fs::create_dir(&directory)?;
++        if let Err(error) = crate::owned_cache::publish_ownership(
++            &directory,
++            crate::owned_cache::CacheKind::OwnedStream,
++            platform.as_ref(),
++        ) {
++            let _ = fs::remove_dir(&directory);
++            return Err(error);
++        }
+         let cleanup = OwnedDirectory(directory);
+         let directory_guard = platform.guard_directory(&cleanup.0)?;
+         let output = OpenOptions::new()
+diff --git a/crates/platform-windows/src/files.rs b/crates/platform-windows/src/files.rs
+index 1379ade..cba5f79 100644
+--- a/crates/platform-windows/src/files.rs
++++ b/crates/platform-windows/src/files.rs
+@@ -18,6 +18,86 @@ fn io_error(error: windows::core::Error) -> io::Error {
+     io::Error::from_raw_os_error(error.code().0 & 0xffff)
+ }
+ impl LocalFileSystem for WindowsFileSystem {
++    fn cache_process_identity(&self) -> io::Result<bareline_platform::CacheProcessIdentity> {
++        use windows::Win32::{
++            Security::Cryptography::{BCRYPT_USE_SYSTEM_PREFERRED_RNG, BCryptGenRandom},
++            System::Threading::GetCurrentProcess,
++        };
++        let mut nonce = [0; 16];
++        unsafe { BCryptGenRandom(None, &mut nonce, BCRYPT_USE_SYSTEM_PREFERRED_RNG) }
++            .ok()
++            .map_err(io_error)?;
++        let created = process_created(unsafe { GetCurrentProcess() })?;
++        Ok(bareline_platform::CacheProcessIdentity {
++            pid: std::process::id(),
++            created,
++            nonce,
++        })
++    }
++
++    fn cache_process_liveness(&self, pid: u32, created: u64) -> bareline_platform::ProcessLiveness {
++        use bareline_platform::ProcessLiveness;
++        use windows::Win32::System::Threading::{GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
++        let process = match unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) } {
++            Ok(process) => process,
++            Err(error) if pid != 0 && (error.code().0 & 0xffff) as u32 == ERROR_INVALID_PARAMETER.0 => {
++                return ProcessLiveness::Dead;
++            }
++            Err(_) => return ProcessLiveness::Unknown,
++        };
++        let mut code = 0;
++        let state = if unsafe { GetExitCodeProcess(process, &mut code) }.is_err() {
++            ProcessLiveness::Unknown
++        } else if code != STILL_ACTIVE.0 as u32 {
++            ProcessLiveness::Dead
++        } else {
++            match process_created(process) {
++                Ok(actual) if actual == created => ProcessLiveness::Alive,
++                Ok(_) => ProcessLiveness::Unknown,
++                Err(_) => ProcessLiveness::Unknown,
++            }
++        };
++        let _ = unsafe { CloseHandle(process) };
++        state
++    }
++
++    fn cache_directory_guard(&self, path: &Path) -> io::Result<Option<bareline_platform::CacheDirectoryLease>> {
++        let guard = match crate::path_trust::WindowsPathTrustProvider.guard_directory(path) {
++            Ok(guard) => guard,
++            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
++            Err(error) => return Err(error),
++        };
++        let identity = crate::owned_cache::identity(&guard.file)?;
++        Ok(Some(bareline_platform::CacheDirectoryLease {
++            identity,
++            guard: std::sync::Arc::new(guard),
++        }))
++    }
++
++    fn remove_owned_cache_directory(
++        &self,
++        root: &Path,
++        candidate: &Path,
++        root_identity: bareline_platform::CacheDirectoryIdentity,
++        candidate_identity: bareline_platform::CacheDirectoryIdentity,
++        proof_name: &str,
++        proof_bytes: &[u8],
++        max_entries: usize,
++        max_time: std::time::Duration,
++        cancelled: &dyn Fn() -> bool,
++    ) -> bareline_platform::CacheRemovalOutcome {
++        crate::owned_cache::remove(
++            root,
++            candidate,
++            root_identity,
++            candidate_identity,
++            proof_name,
++            proof_bytes,
++            max_entries,
++            max_time,
++            cancelled,
++        )
++    }
+     fn scoped_remote_read(
+         &self,
+         access: bareline_platform::RemoteReadAccess,
+@@ -121,6 +201,18 @@ impl LocalFileSystem for WindowsFileSystem {
+     }
+ }
+ 
++fn process_created(process: HANDLE) -> io::Result<u64> {
++    use windows::Win32::System::Threading::GetProcessTimes;
++    let (mut created, mut exited, mut kernel, mut user) = (
++        FILETIME::default(),
++        FILETIME::default(),
++        FILETIME::default(),
++        FILETIME::default(),
++    );
++    unsafe { GetProcessTimes(process, &mut created, &mut exited, &mut kernel, &mut user) }.map_err(io_error)?;
++    Ok(((created.dwHighDateTime as u64) << 32) | created.dwLowDateTime as u64)
++}
++
+ impl WindowsFileSystem {
+     fn validate_path(&self, path: &Path, writing: bool) -> io::Result<()> {
+         if !path.is_absolute() {
+diff --git a/crates/platform-windows/src/lib.rs b/crates/platform-windows/src/lib.rs
+index 0006ee7..10b7656 100644
+--- a/crates/platform-windows/src/lib.rs
++++ b/crates/platform-windows/src/lib.rs
+@@ -18,6 +18,7 @@ mod files;
+ pub use files::WindowsFileSystem;
+ #[cfg(windows)]
+ mod clipboard;
++mod owned_cache;
+ #[cfg(windows)]
+ mod path_trust;
+ #[cfg(windows)]
+diff --git a/crates/platform-windows/src/owned_cache.rs b/crates/platform-windows/src/owned_cache.rs
+new file mode 100644
+index 0000000..5d1ab92
+--- /dev/null
++++ b/crates/platform-windows/src/owned_cache.rs
+@@ -0,0 +1,597 @@
++// SPDX-License-Identifier: MPL-2.0
++use bareline_platform::{CacheDirectoryIdentity, CacheRemovalOutcome, TrustedRead};
++use std::{
++    fs,
++    io::{self, Read, Write},
++    mem::size_of,
++    os::windows::{
++        fs::{MetadataExt, OpenOptionsExt},
++        io::AsRawHandle,
++    },
++    path::{Path, PathBuf},
++    time::{Duration, Instant},
++};
++use windows::Win32::{Foundation::HANDLE, Storage::FileSystem::*};
++
++const RECORD: &str = ".bareline-cache-owner.json";
++const RETAINED_RECORD: &str = ".bareline-cache-cleanup-retained.json";
++const MAX_RECORD: usize = 4096;
++
++pub(crate) fn identity(file: &fs::File) -> io::Result<CacheDirectoryIdentity> {
++    let mut info = BY_HANDLE_FILE_INFORMATION::default();
++    // SAFETY: File owns the handle and the output structure remains valid for the call.
++    unsafe { GetFileInformationByHandle(HANDLE(file.as_raw_handle()), &mut info) }
++        .map_err(|error| io::Error::from_raw_os_error(error.code().0 & 0xffff))?;
++    Ok(CacheDirectoryIdentity {
++        volume: info.dwVolumeSerialNumber as u64,
++        file: ((info.nFileIndexHigh as u64) << 32) | info.nFileIndexLow as u64,
++    })
++}
++
++pub(crate) fn remove(
++    root: &Path,
++    candidate: &Path,
++    expected_root: CacheDirectoryIdentity,
++    expected_candidate: CacheDirectoryIdentity,
++    proof_name: &str,
++    proof_bytes: &[u8],
++    max_entries: usize,
++    max_time: Duration,
++    cancelled: &dyn Fn() -> bool,
++) -> CacheRemovalOutcome {
++    remove_with_finalize_hook(
++        root,
++        candidate,
++        expected_root,
++        expected_candidate,
++        proof_name,
++        proof_bytes,
++        max_entries,
++        max_time,
++        cancelled,
++        &|_, _| Ok(()),
++    )
++}
++
++#[derive(Clone, Copy, Eq, PartialEq)]
++enum FinalizePoint {
++    CandidateGuardReleased,
++    ProofRemoved,
++}
++
++#[allow(clippy::too_many_arguments)]
++fn remove_with_finalize_hook(
++    root: &Path,
++    candidate: &Path,
++    expected_root: CacheDirectoryIdentity,
++    expected_candidate: CacheDirectoryIdentity,
++    proof_name: &str,
++    proof_bytes: &[u8],
++    max_entries: usize,
++    max_time: Duration,
++    cancelled: &dyn Fn() -> bool,
++    finalize_hook: &dyn Fn(FinalizePoint, &Path) -> io::Result<()>,
++) -> CacheRemovalOutcome {
++    let mut visited = 0;
++    let mut retry_authority_retained = true;
++    let result = remove_inner(
++        root,
++        candidate,
++        expected_root,
++        expected_candidate,
++        proof_name,
++        proof_bytes,
++        max_entries,
++        max_time,
++        cancelled,
++        &mut visited,
++        &mut retry_authority_retained,
++        finalize_hook,
++    );
++    CacheRemovalOutcome {
++        visited,
++        retry_authority_retained,
++        result,
++    }
++}
++
++#[allow(clippy::too_many_arguments)]
++fn remove_inner(
++    root: &Path,
++    candidate: &Path,
++    expected_root: CacheDirectoryIdentity,
++    expected_candidate: CacheDirectoryIdentity,
++    proof_name: &str,
++    proof_bytes: &[u8],
++    max_entries: usize,
++    max_time: Duration,
++    cancelled: &dyn Fn() -> bool,
++    visited: &mut usize,
++    retry_authority_retained: &mut bool,
++    finalize_hook: &dyn Fn(FinalizePoint, &Path) -> io::Result<()>,
++) -> io::Result<usize> {
++    if !root.is_absolute() || candidate.parent() != Some(root) {
++        return Err(io::Error::new(
++            io::ErrorKind::PermissionDenied,
++            "cache candidate escapes its root",
++        ));
++    }
++    let root_guard = crate::path_trust::WindowsPathTrustProvider.guard_directory(root)?;
++    if identity(&root_guard.file)? != expected_root {
++        return Err(changed());
++    }
++    let candidate_guard = crate::path_trust::WindowsPathTrustProvider.guard_directory(candidate)?;
++    if identity(&candidate_guard.file)? != expected_candidate {
++        return Err(changed());
++    }
++
++    let started = Instant::now();
++    let mut directories = Vec::new();
++    let mut files = Vec::new();
++    *visited = 1;
++    collect(
++        candidate,
++        Some(candidate_guard),
++        max_entries,
++        max_time,
++        started,
++        cancelled,
++        visited,
++        &mut directories,
++        &mut files,
++    )?;
++
++    if proof_name != RECORD && proof_name != RETAINED_RECORD {
++        return Err(io::Error::new(
++            io::ErrorKind::InvalidInput,
++            "invalid ownership proof name",
++        ));
++    }
++    let record_path = candidate.join(proof_name);
++    let record_bytes = read_bounded(&record_path)?;
++    if record_bytes != proof_bytes {
++        return Err(io::Error::new(
++            io::ErrorKind::PermissionDenied,
++            "ownership proof changed",
++        ));
++    }
++    let mut removed = 0;
++    for path in files.iter().filter(|path| *path != &record_path) {
++        check_budget(started, max_time, cancelled)?;
++        fs::remove_file(path)?;
++        removed += 1;
++    }
++    let nested_count = directories.len().saturating_sub(1);
++    for (path, guard) in directories[..nested_count].iter_mut() {
++        check_budget(started, max_time, cancelled)?;
++        guard.take();
++        fs::remove_dir(path)?;
++        removed += 1;
++    }
++
++    check_budget(started, max_time, cancelled)?;
++    let (_, candidate_guard) = directories.last_mut().expect("candidate guard collected");
++    candidate_guard.take();
++    finalize_hook(FinalizePoint::CandidateGuardReleased, candidate)?;
++    let final_handle = open_delete_directory(candidate)?;
++    if identity(&final_handle)? != expected_candidate {
++        return Err(changed());
++    }
++    fs::remove_file(&record_path)?;
++    let disposition = (|| {
++        finalize_hook(FinalizePoint::ProofRemoved, candidate)?;
++        let info = FILE_DISPOSITION_INFO { DeleteFile: true };
++        // SAFETY: the verified no-follow directory handle stays live through disposition.
++        unsafe {
++            SetFileInformationByHandle(
++                HANDLE(final_handle.as_raw_handle()),
++                FileDispositionInfo,
++                (&info as *const FILE_DISPOSITION_INFO).cast(),
++                size_of::<FILE_DISPOSITION_INFO>() as u32,
++            )
++            .map_err(|error| io::Error::from_raw_os_error(error.code().0 & 0xffff))
++        }
++    })();
++    match disposition {
++        Ok(()) => {
++            drop(final_handle);
++            Ok(removed + 2)
++        }
++        Err(error) => {
++            if let Err(restore) = restore_authority(candidate, &record_bytes) {
++                *retry_authority_retained = false;
++                return Err(io::Error::other(format!(
++                    "cache directory removal failed ({error}); cleanup authority restoration failed ({restore})"
++                )));
++            }
++            Err(error)
++        }
++    }
++}
++
++fn open_delete_directory(path: &Path) -> io::Result<fs::File> {
++    let file = fs::OpenOptions::new()
++        .access_mode(DELETE.0 | FILE_READ_ATTRIBUTES.0)
++        .share_mode(FILE_SHARE_READ.0)
++        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT.0 | FILE_FLAG_BACKUP_SEMANTICS.0)
++        .open(path)?;
++    let attributes = file.metadata()?.file_attributes();
++    if attributes & (FILE_ATTRIBUTE_REPARSE_POINT.0 | FILE_ATTRIBUTE_OFFLINE.0) != 0
++        || attributes & FILE_ATTRIBUTE_DIRECTORY.0 == 0
++    {
++        return Err(io::Error::new(
++            io::ErrorKind::PermissionDenied,
++            "cache finalization target is linked, offline, or not a directory",
++        ));
++    }
++    Ok(file)
++}
++
++#[allow(clippy::too_many_arguments)]
++fn collect(
++    directory: &Path,
++    guard: Option<TrustedRead>,
++    max_entries: usize,
++    max_time: Duration,
++    started: Instant,
++    cancelled: &dyn Fn() -> bool,
++    visited: &mut usize,
++    directories: &mut Vec<(PathBuf, Option<TrustedRead>)>,
++    files: &mut Vec<PathBuf>,
++) -> io::Result<()> {
++    check_budget(started, max_time, cancelled)?;
++    if *visited > max_entries {
++        return Err(limit());
++    }
++    let guard = match guard {
++        Some(guard) => guard,
++        None => crate::path_trust::WindowsPathTrustProvider.guard_directory(directory)?,
++    };
++    for entry in fs::read_dir(directory)? {
++        check_budget(started, max_time, cancelled)?;
++        *visited = visited.checked_add(1).ok_or_else(limit)?;
++        if *visited > max_entries {
++            return Err(limit());
++        }
++        let entry = entry?;
++        let metadata = fs::symlink_metadata(entry.path())?;
++        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0 {
++            return Err(io::Error::new(
++                io::ErrorKind::PermissionDenied,
++                "cache contains a reparse point",
++            ));
++        }
++        if metadata.is_dir() {
++            collect(
++                &entry.path(),
++                None,
++                max_entries,
++                max_time,
++                started,
++                cancelled,
++                visited,
++                directories,
++                files,
++            )?;
++        } else if metadata.is_file() {
++            files.push(entry.path());
++        } else {
++            return Err(io::Error::new(
++                io::ErrorKind::PermissionDenied,
++                "cache contains an unsupported entry",
++            ));
++        }
++    }
++    directories.push((directory.to_owned(), Some(guard)));
++    Ok(())
++}
++
++fn restore_record(path: &Path, bytes: &[u8]) -> io::Result<()> {
++    let mut file = fs::OpenOptions::new().write(true).create_new(true).open(path)?;
++    file.write_all(bytes)?;
++    file.sync_all()
++}
++
++fn restore_authority(candidate: &Path, bytes: &[u8]) -> io::Result<()> {
++    match restore_record(&candidate.join(RECORD), bytes) {
++        Ok(()) => Ok(()),
++        Err(primary) => restore_record(&candidate.join(RETAINED_RECORD), bytes)
++            .map_err(|retained| io::Error::other(format!("owner record: {primary}; retained receipt: {retained}"))),
++    }
++}
++
++fn read_bounded(path: &Path) -> io::Result<Vec<u8>> {
++    let metadata = fs::symlink_metadata(path)?;
++    if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() > MAX_RECORD as u64 {
++        return Err(io::Error::new(io::ErrorKind::InvalidData, "invalid ownership record"));
++    }
++    let mut bytes = Vec::with_capacity(metadata.len() as usize);
++    fs::File::open(path)?
++        .take((MAX_RECORD + 1) as u64)
++        .read_to_end(&mut bytes)?;
++    if bytes.len() > MAX_RECORD {
++        return Err(io::Error::new(io::ErrorKind::InvalidData, "ownership record limit"));
++    }
++    Ok(bytes)
++}
++
++fn check_budget(started: Instant, max_time: Duration, cancelled: &dyn Fn() -> bool) -> io::Result<()> {
++    if cancelled() {
++        Err(io::Error::new(io::ErrorKind::Interrupted, "cache cleanup cancelled"))
++    } else if started.elapsed() >= max_time {
++        Err(limit())
++    } else {
++        Ok(())
++    }
++}
++
++fn changed() -> io::Error {
++    io::Error::new(io::ErrorKind::PermissionDenied, "cache directory changed")
++}
++
++fn limit() -> io::Error {
++    io::Error::new(io::ErrorKind::InvalidData, "cache deletion budget exhausted")
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use std::{
++        os::windows::fs::OpenOptionsExt,
++        process::Command,
++        sync::atomic::{AtomicBool, Ordering},
++        time::{SystemTime, UNIX_EPOCH},
++    };
++    use windows::Win32::Storage::FileSystem::FILE_SHARE_READ;
++
++    struct Fixture {
++        base: PathBuf,
++        junction: Option<PathBuf>,
++    }
++
++    impl Fixture {
++        fn new() -> Self {
++            let base = std::env::temp_dir().join(format!(
++                "bareline-cache-guard-{}-{}",
++                std::process::id(),
++                SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
++            ));
++            fs::create_dir(&base).unwrap();
++            Self { base, junction: None }
++        }
++
++        fn tree(&self) -> (PathBuf, PathBuf) {
++            let root = self.base.join("Bareline-owned-spill");
++            let candidate = root.join(format!("owned-stream-{}-1", std::process::id()));
++            fs::create_dir_all(&candidate).unwrap();
++            fs::write(candidate.join(RECORD), b"owner-proof").unwrap();
++            (root, candidate)
++        }
++
++        fn ids(root: &Path, candidate: &Path) -> (CacheDirectoryIdentity, CacheDirectoryIdentity) {
++            let root_guard = crate::path_trust::WindowsPathTrustProvider
++                .guard_directory(root)
++                .unwrap();
++            let candidate_guard = crate::path_trust::WindowsPathTrustProvider
++                .guard_directory(candidate)
++                .unwrap();
++            (
++                identity(&root_guard.file).unwrap(),
++                identity(&candidate_guard.file).unwrap(),
++            )
++        }
++    }
++
++    impl Drop for Fixture {
++        fn drop(&mut self) {
++            if let Some(junction) = self.junction.take() {
++                let _ = fs::remove_dir(junction);
++            }
++            let _ = fs::remove_dir_all(&self.base);
++        }
++    }
++
++    #[test]
++    fn nested_junction_is_rejected_and_external_sentinel_survives() {
++        let mut fixture = Fixture::new();
++        let (root, candidate) = fixture.tree();
++        let external = fixture.base.join("external");
++        fs::create_dir(&external).unwrap();
++        let sentinel = external.join("sentinel");
++        fs::write(&sentinel, b"foreign").unwrap();
++        let junction = candidate.join("escape");
++        let status = Command::new("cmd")
++            .args(["/d", "/c", "mklink", "/J"])
++            .arg(&junction)
++            .arg(&external)
++            .status()
++            .unwrap();
++        assert!(status.success(), "junction fixture creation failed");
++        fixture.junction = Some(junction);
++        let (root_id, candidate_id) = Fixture::ids(&root, &candidate);
++        assert!(
++            remove(
++                &root,
++                &candidate,
++                root_id,
++                candidate_id,
++                RECORD,
++                b"owner-proof",
++                16,
++                Duration::from_secs(1),
++                &|| false
++            )
++            .result
++            .is_err()
++        );
++        assert_eq!(fs::read(&sentinel).unwrap(), b"foreign");
++        assert!(candidate.join(RECORD).is_file());
++    }
++
++    #[test]
++    fn replaced_root_identity_is_rejected() {
++        let fixture = Fixture::new();
++        let (root, candidate) = fixture.tree();
++        let (root_id, candidate_id) = Fixture::ids(&root, &candidate);
++        let original = fixture.base.join("original-root");
++        fs::rename(&root, &original).unwrap();
++        let replacement = root.join(candidate.file_name().unwrap());
++        fs::create_dir_all(&replacement).unwrap();
++        fs::write(replacement.join(RECORD), b"replacement-proof").unwrap();
++        let sentinel = replacement.join("sentinel");
++        fs::write(&sentinel, b"replacement").unwrap();
++        assert!(
++            remove(
++                &root,
++                &replacement,
++                root_id,
++                candidate_id,
++                RECORD,
++                b"owner-proof",
++                16,
++                Duration::from_secs(1),
++                &|| false
++            )
++            .result
++            .is_err()
++        );
++        assert_eq!(fs::read(sentinel).unwrap(), b"replacement");
++    }
++
++    #[test]
++    fn failed_partial_purge_preserves_owner_record() {
++        let fixture = Fixture::new();
++        let (root, candidate) = fixture.tree();
++        let locked = candidate.join("locked");
++        fs::write(&locked, b"busy").unwrap();
++        let _lock = fs::OpenOptions::new()
++            .read(true)
++            .share_mode(FILE_SHARE_READ.0)
++            .open(&locked)
++            .unwrap();
++        let (root_id, candidate_id) = Fixture::ids(&root, &candidate);
++        assert!(
++            remove(
++                &root,
++                &candidate,
++                root_id,
++                candidate_id,
++                RECORD,
++                b"owner-proof",
++                16,
++                Duration::from_secs(1),
++                &|| false
++            )
++            .result
++            .is_err()
++        );
++        assert!(candidate.join(RECORD).is_file());
++    }
++
++    #[test]
++    fn successful_nested_purge_uses_handle_finalization() {
++        let fixture = Fixture::new();
++        let (root, candidate) = fixture.tree();
++        let nested = candidate.join("nested");
++        fs::create_dir(&nested).unwrap();
++        fs::write(nested.join("payload"), b"owned").unwrap();
++        let (root_id, candidate_id) = Fixture::ids(&root, &candidate);
++        let outcome = remove(
++            &root,
++            &candidate,
++            root_id,
++            candidate_id,
++            RECORD,
++            b"owner-proof",
++            16,
++            Duration::from_secs(1),
++            &|| false,
++        );
++        assert_eq!(outcome.result.unwrap(), 4);
++        assert!(!candidate.exists());
++    }
++
++    #[test]
++    fn finalization_replacement_is_rejected_before_proof_removal() {
++        let fixture = Fixture::new();
++        let (root, candidate) = fixture.tree();
++        let (root_id, candidate_id) = Fixture::ids(&root, &candidate);
++        let original = root.join("original-candidate");
++        let replaced = AtomicBool::new(false);
++        let outcome = remove_with_finalize_hook(
++            &root,
++            &candidate,
++            root_id,
++            candidate_id,
++            RECORD,
++            b"owner-proof",
++            16,
++            Duration::from_secs(1),
++            &|| false,
++            &|point, path| {
++                if point == FinalizePoint::CandidateGuardReleased && !replaced.swap(true, Ordering::AcqRel) {
++                    fs::rename(path, &original)?;
++                    fs::create_dir(path)?;
++                    fs::write(path.join("replacement-sentinel"), b"foreign")?;
++                }
++                Ok(())
++            },
++        );
++        assert!(outcome.result.is_err());
++        assert_eq!(fs::read(candidate.join("replacement-sentinel")).unwrap(), b"foreign");
++        assert!(original.join(RECORD).is_file());
++        assert!(!candidate.join(RECORD).exists());
++    }
++
++    #[test]
++    fn failed_disposition_uses_retained_receipt_when_owner_name_is_blocked() {
++        let fixture = Fixture::new();
++        let (root, initial) = fixture.tree();
++        fs::remove_file(initial.join(RECORD)).unwrap();
++        bareline_file_io::owned_cache::publish_ownership(
++            &initial,
++            bareline_file_io::owned_cache::CacheKind::OwnedStream,
++            &crate::files::WindowsFileSystem,
++        )
++        .unwrap();
++        let current_pid = std::process::id();
++        let dead_pid = u32::MAX;
++        let proof = fs::read_to_string(initial.join(RECORD))
++            .unwrap()
++            .replace(&format!("\"pid\":{current_pid}"), &format!("\"pid\":{dead_pid}"));
++        fs::write(initial.join(RECORD), proof.as_bytes()).unwrap();
++        let candidate = root.join(format!("owned-stream-{dead_pid}-1"));
++        fs::rename(initial, &candidate).unwrap();
++        let (root_id, candidate_id) = Fixture::ids(&root, &candidate);
++        let outcome = remove_with_finalize_hook(
++            &root,
++            &candidate,
++            root_id,
++            candidate_id,
++            RECORD,
++            proof.as_bytes(),
++            16,
++            Duration::from_secs(1),
++            &|| false,
++            &|point, path| {
++                if point == FinalizePoint::ProofRemoved {
++                    fs::create_dir(path.join(RECORD))?;
++                }
++                Ok(())
++            },
++        );
++        assert!(outcome.result.is_err());
++        assert!(outcome.retry_authority_retained);
++        assert!(candidate.join(RETAINED_RECORD).is_file());
++        let report = bareline_file_io::owned_cache::sweep(
++            &fixture.base,
++            &std::collections::HashSet::new(),
++            &crate::files::WindowsFileSystem,
++            &|| false,
++            16,
++            Duration::from_secs(1),
++        );
++        assert_eq!(report.removed, 1);
++        assert!(!candidate.exists());
++    }
++}
+diff --git a/crates/platform/src/lib.rs b/crates/platform/src/lib.rs
+index c78a2a8..9922f11 100644
+--- a/crates/platform/src/lib.rs
++++ b/crates/platform/src/lib.rs
+@@ -113,8 +113,97 @@ pub struct FileIdentity {
+     pub length: u64,
+     pub modified: u64,
+ }
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub struct CacheProcessIdentity {
++    pub pid: u32,
++    pub created: u64,
++    pub nonce: [u8; 16],
++}
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub struct CacheDirectoryIdentity {
++    pub volume: u64,
++    pub file: u64,
++}
++
++pub struct CacheDirectoryLease {
++    pub identity: CacheDirectoryIdentity,
++    pub guard: std::sync::Arc<dyn Send + Sync>,
++}
++
++pub struct CacheRemovalOutcome {
++    pub visited: usize,
++    pub retry_authority_retained: bool,
++    pub result: std::io::Result<usize>,
++}
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum ProcessLiveness {
++    Alive,
++    Dead,
++    Unknown,
++}
+ /// Background file operations; implementations must refuse unsupported replacement semantics.
+ pub trait LocalFileSystem: Send + Sync {
++    fn cache_process_identity(&self) -> std::io::Result<CacheProcessIdentity> {
++        use std::sync::{
++            OnceLock,
++            atomic::{AtomicU64, Ordering},
++        };
++        static CREATED: OnceLock<u64> = OnceLock::new();
++        static NEXT: AtomicU64 = AtomicU64::new(1);
++        let created = *CREATED.get_or_init(|| {
++            std::time::SystemTime::now()
++                .duration_since(std::time::UNIX_EPOCH)
++                .unwrap_or_default()
++                .as_nanos() as u64
++        });
++        let next = NEXT.fetch_add(1, Ordering::Relaxed);
++        let mut nonce = [0; 16];
++        nonce[..8].copy_from_slice(&created.to_le_bytes());
++        nonce[8..].copy_from_slice(&next.to_le_bytes());
++        Ok(CacheProcessIdentity {
++            pid: std::process::id(),
++            created,
++            nonce,
++        })
++    }
++    fn cache_process_liveness(&self, _: u32, _: u64) -> ProcessLiveness {
++        ProcessLiveness::Unknown
++    }
++    fn cache_directory_guard(&self, path: &Path) -> std::io::Result<Option<CacheDirectoryLease>> {
++        let metadata = std::fs::symlink_metadata(path)?;
++        if metadata.is_dir() && !metadata.file_type().is_symlink() {
++            Err(std::io::Error::new(
++                std::io::ErrorKind::Unsupported,
++                "stable directory identity unavailable",
++            ))
++        } else {
++            Ok(None)
++        }
++    }
++    fn remove_owned_cache_directory(
++        &self,
++        _: &Path,
++        _: &Path,
++        _: CacheDirectoryIdentity,
++        _: CacheDirectoryIdentity,
++        _: &str,
++        _: &[u8],
++        _: usize,
++        _: std::time::Duration,
++        _: &dyn Fn() -> bool,
++    ) -> CacheRemovalOutcome {
++        CacheRemovalOutcome {
++            visited: 0,
++            retry_authority_retained: true,
++            result: Err(std::io::Error::new(
++                std::io::ErrorKind::Unsupported,
++                "owned cache deletion unavailable",
++            )),
++        }
++    }
+     /// Release source-only guards after a private snapshot has been sealed.
+     fn release_source_read(&self, _: &Path) {}
+     /// Recheck an admitted read capability without opening or querying a path.
+diff --git a/docs/implementation/2026-09-12-audit-implementation/PR-T01.md b/docs/implementation/2026-09-12-audit-implementation/PR-T01.md
+new file mode 100644
+index 0000000..ae2a9f0
+--- /dev/null
++++ b/docs/implementation/2026-09-12-audit-implementation/PR-T01.md
+@@ -0,0 +1,47 @@
++# PR-T01 — Proven-owned cache cleanup
++
++- Issue: TECH-001
++- Baseline source: `6fdaf57ed55f99c2146d8d647fa41d8721efe608`
++- Audit reproduction binary: SHA-256 `e3f283c8cc61ccae5d1549a1136b899d02abf3cf95a27c9fc7be8a42d7128702`
++- Dependency: PR-T17 integrated in the private snapshot.
++
++## Scope
++
++Define a reusable `crates/file-io` ownership and bounded cleanup policy for Bareline-created temporary caches, with Windows no-follow/reparse and process-identity operations in `crates/platform-windows`. Replace launch cleanup's wildcard/PID-guess deletion. Preserve all unproven legacy, linked, referenced, live, unknown-liveness, cancelled and failed-deletion candidates with structured reasons. The policy is intended for reuse by PR-T05.
++
++## Producer grammar and decisions
++
++- The exact top-level roots are `Bareline-owned-spill`, `Bareline-transcode`, `Bareline-compare-staging`, `Bareline-power-staging`, and `Bareline-drag-staging`. No `Bareline-*` wildcard remains.
++- Owned-spill producers create `resident-spill-<pid>-<serial>`, `spill-baseline-<pid>-<serial>`, `owned-segments-<pid>-<serial>`, and `owned-stream-<pid>-<serial>`. Transcode creates `bareline-transcode-<pid>-<serial>`. Compare, power, and drag staging use only the owned-stream grammar. Root/kind combinations outside this registry are rejected.
++- `bareline-tail-<pid>-<serial>.raw` is a file scratch format and is not a directory sweep candidate. Recovery directories live below profile roots and are not temporary-cache roots.
++- Call sites can supply custom quota, test, or private-profile cache roots. Writers continue to operate there without publishing a cleanup record; only a registered top-level root opts into this janitor.
++- A record is created with `create_new`, synced, and renamed before content is written. It carries format/kind, a random 128-bit directory nonce, PID/process creation time, and retained-recovery references.
++- Sweep candidates require a registered root/kind/grammar, a valid record, no recovery reference, and `Dead` liveness. Access/query failure and PID creation-time mismatch are `Unknown` and retained.
++- Windows obtains no-follow guards and volume/file identities for root and candidate. The sweep retains both guards across bounded record reading and the liveness decision, releases the candidate guard, and deletion reacquires guards and validates both identities before traversal. Every descendant directory is guarded and every reparse entry is rejected.
++- A shared consumable entry/deadline budget covers candidate enumeration, successful deletion, and failed traversal. The platform reports visits even on error, and the sweep stops immediately on cancellation or exhaustion.
++- The policy selects the first bounded, structurally valid owner record or retained-cleanup receipt and passes that exact filename and byte sequence into deletion. Windows re-reads and compares the same proof after reacquiring the candidate guard, so it cannot remove or restore authority selected from a different path. Invalid proof files without a valid fallback remain unproven and retained.
++- The owner record is removed only at the final candidate-directory operation. After descendant guards retire, Windows opens a no-follow delete-capable handle with no delete sharing and revalidates the candidate identity. It removes the selected proof and applies directory disposition through that pinned handle. A failed disposition restores the bounded proof while the same identity remains pinned, as the owner record or a retained-cleanup receipt. Failure of both restoration paths is surfaced in the structured report and aborts the sweep. Filesystems that cannot apply handle disposition retain the candidate and report deletion failure.
++- Recovery does not retain these temporary cache paths. `seal_baseline` copies and syncs `baseline.bin` inside the profile recovery generation; streaming recovery visits the source ranges and copies inverse/inserted bytes into hashed, synced `segment-<revision>.bin` files before journaling them. Replay opens only those generation-local blobs. Production owner records therefore publish an empty retained-recovery list by construction; the field remains versioned for future policy changes, and the sweep still conservatively rejects any nonempty record.
++
++## Changed files
++
++- `crates/platform/src/lib.rs`: reusable cache identity/liveness/deletion capability contract.
++- `crates/file-io/src/owned_cache.rs`, `lib.rs`, `owned_store.rs`, and `codecs/disk.rs`: exact producer registry, atomic records, conservative sweep, and producer publication.
++- `crates/platform-windows/src/owned_cache.rs`, `files.rs`, and `lib.rs`: process creation/liveness queries, guarded directory identity, bounded no-follow deletion, and Windows fixtures.
++- `apps/bareline/src/windows_app/launch.rs` and `windows_app.rs`: replace wildcard startup deletion with the bounded worker sweep and structured completion counts.
++
++## Focused checks
++
++- Worker Cargo runs are prohibited; root will run exact contained commands after review/integration.
++- Worker static checks: `rustfmt --edition 2024` on every changed Rust file and `git diff --check`.
++- Deterministic policy fixtures cover exact registry/grammar, one dead removal, live/unknown/PID-reuse/unmarked/recovery-reference retention, injected identity change, deletion failure, cancellation, and entry cap.
++- Windows guarded-deletion fixtures cover a successful nested purge, a nested junction with an external sentinel, replacement root identity, finalization-time candidate replacement, a locked-entry partial purge, and failed disposition with the primary owner name blocked and retained-receipt fallback.
++- Root commands after integration:
++  - `cargo test -p bareline-file-io owned_cache::tests --offline --locked`
++  - `cargo test -p bareline-platform-windows owned_cache::tests --offline --locked`
++  - `cargo test -p bareline --bin bareline windows_app::launch::tests --no-default-features --offline --locked`
++
++## Unresolved qualification
++
++- PR-T02 owns migration correctness/reconciliation; PR-T05 consumes the deletion policy for recovery retirement.
++- Final integrated compile, native Windows junction/subprocess evidence, and the full lifecycle suite after shared file-safety PRs remain root-owned.

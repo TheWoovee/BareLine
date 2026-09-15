@@ -1,0 +1,13 @@
+diff --git a/apps/bareline/src/windows_app/lifecycle.rs b/apps/bareline/src/windows_app/lifecycle.rs
+index aebac5d..98e71c5 100644
+--- a/apps/bareline/src/windows_app/lifecycle.rs
++++ b/apps/bareline/src/windows_app/lifecycle.rs
+@@ -1269,7 +1269,7 @@ mod tests {
+             })
+             .expect("the consumed peer failure must remain available as a typed notification");
+         assert_eq!(failure.level, bareline_ui::theme::ToastLevel::Error);
+-        assert_eq!(failure.kind, toast::NotificationKind::Outcome);
++        assert_eq!(failure.kind, crate::windows_app::toast::NotificationKind::Outcome);
+         assert!(
+             failure
+                 .details

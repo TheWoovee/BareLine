@@ -41,12 +41,7 @@ impl FoldAccumulator {
     pub fn known(&self) -> &[Fold] {
         &self.known
     }
-    pub fn advance(
-        &mut self,
-        snapshot: &DocumentSnapshot,
-        syntax: &SyntaxResult,
-        limit: usize,
-    ) -> Result<(), Error> {
+    pub fn advance(&mut self, snapshot: &DocumentSnapshot, syntax: &SyntaxResult, limit: usize) -> Result<(), Error> {
         if !syntax.is_current(snapshot) {
             return Err(Error::StaleCheckpoint);
         }
@@ -59,11 +54,7 @@ impl FoldAccumulator {
             limit,
         )
     }
-    pub fn advance_stream(
-        &mut self,
-        window: &crate::stream::StreamResult,
-        limit: usize,
-    ) -> Result<(), Error> {
+    pub fn advance_stream(&mut self, window: &crate::stream::StreamResult, limit: usize) -> Result<(), Error> {
         self.advance_window(
             &window.syntax.source,
             &window.syntax,
@@ -87,13 +78,8 @@ impl FoldAccumulator {
         }
         if let Some(levels) = &syntax.fold_levels {
             self.native_open.clear();
-            let first = line_base
-                + snapshot
-                    .line_at(syntax.range.start)
-                    .map_err(|_| Error::InvalidRange)?;
-            let last = snapshot
-                .line_at(syntax.range.end)
-                .map_err(|_| Error::InvalidRange)?;
+            let first = line_base + snapshot.line_at(syntax.range.start).map_err(|_| Error::InvalidRange)?;
+            let last = snapshot.line_at(syntax.range.end).map_err(|_| Error::InvalidRange)?;
             let empty_final = eof
                 && snapshot
                     .line_range(last)
@@ -108,13 +94,7 @@ impl FoldAccumulator {
                 if value & 0x1000 == 0 {
                     while self.open.last().is_some_and(|(_, level)| number <= *level) {
                         let (header, level) = self.open.pop().unwrap();
-                        push_level_fold(
-                            &mut self.known,
-                            header,
-                            (first + index).saturating_sub(1),
-                            level,
-                            limit,
-                        )?;
+                        push_level_fold(&mut self.known, header, (first + index).saturating_sub(1), level, limit)?;
                     }
                 }
                 if value & 0x2000 != 0 {
@@ -173,30 +153,16 @@ impl FoldAccumulator {
         origin: usize,
         line_base: usize,
     ) -> Result<(), Error> {
-        let first = snapshot
-            .line_at(syntax.range.start)
-            .map_err(|_| Error::InvalidRange)?
-            + line_base;
-        let last = snapshot
-            .line_at(syntax.range.end)
-            .map_err(|_| Error::InvalidRange)?
-            + line_base;
+        let first = snapshot.line_at(syntax.range.start).map_err(|_| Error::InvalidRange)? + line_base;
+        let last = snapshot.line_at(syntax.range.end).map_err(|_| Error::InvalidRange)? + line_base;
         let current_line = |line: usize| -> Option<std::ops::Range<TextOffset>> {
             if line < first || line > last {
                 return None;
             }
             let range = snapshot.line_range(line.checked_sub(line_base)?).ok()?;
             Some(
-                TextOffset(
-                    origin
-                        .checked_add(range.start.0)?
-                        .checked_sub(syntax.range.start.0)?,
-                )
-                    ..TextOffset(
-                        origin
-                            .checked_add(range.end.0)?
-                            .checked_sub(syntax.range.start.0)?,
-                    ),
+                TextOffset(origin.checked_add(range.start.0)?.checked_sub(syntax.range.start.0)?)
+                    ..TextOffset(origin.checked_add(range.end.0)?.checked_sub(syntax.range.start.0)?),
             )
         };
         let anchored: std::collections::BTreeSet<_> = self
@@ -213,8 +179,7 @@ impl FoldAccumulator {
                 .get(&fold.header)
                 .cloned()
                 .or_else(|| current_line(fold.header));
-            let end =
-                current_line(fold.end).or_else(|| self.retained_lines.get(&fold.end).cloned());
+            let end = current_line(fold.end).or_else(|| self.retained_lines.get(&fold.end).cloned());
             if let (Some(header), Some(end)) = (header, end)
                 && header.end <= end.end
             {
@@ -253,11 +218,7 @@ impl FoldAccumulator {
         Ok(())
     }
 }
-pub fn folds(
-    snapshot: &DocumentSnapshot,
-    syntax: &SyntaxResult,
-    max_folds: usize,
-) -> Result<Vec<Fold>, Error> {
+pub fn folds(snapshot: &DocumentSnapshot, syntax: &SyntaxResult, max_folds: usize) -> Result<Vec<Fold>, Error> {
     if !syntax.is_current(snapshot) || syntax.status != Status::Complete {
         return Err(Error::StaleCheckpoint);
     }
@@ -276,13 +237,9 @@ pub fn folds(
         return Ok(result);
     }
     if let Some(levels) = &syntax.fold_levels {
-        let first_line = snapshot
-            .line_at(syntax.range.start)
-            .map_err(|_| Error::InvalidRange)?;
+        let first_line = snapshot.line_at(syntax.range.start).map_err(|_| Error::InvalidRange)?;
         let eof = syntax.range.end.0 == snapshot.len();
-        let last = snapshot
-            .line_at(syntax.range.end)
-            .map_err(|_| Error::InvalidRange)?;
+        let last = snapshot.line_at(syntax.range.end).map_err(|_| Error::InvalidRange)?;
         let empty_final = eof
             && snapshot
                 .line_range(last)
@@ -316,9 +273,11 @@ fn append_native(
         while span_index < syntax.spans.len() && syntax.spans[span_index].range.end.0 <= offset {
             span_index += 1;
         }
-        if syntax.spans.get(span_index).is_some_and(|s| {
-            s.range.start.0 <= offset && matches!(s.kind, StyleKind::Comment | StyleKind::String)
-        }) {
+        if syntax
+            .spans
+            .get(span_index)
+            .is_some_and(|s| s.range.start.0 <= offset && matches!(s.kind, StyleKind::Comment | StyleKind::String))
+        {
             continue;
         }
         if let Some((_, close)) = syntax.fold_pairs.iter().find(|(open, _)| *open == c) {
@@ -327,10 +286,7 @@ fn append_native(
             }
             stack.push((
                 *close,
-                line_base
-                    + snapshot
-                        .line_at(TextOffset(offset))
-                        .map_err(|_| Error::InvalidRange)?,
+                line_base + snapshot.line_at(TextOffset(offset)).map_err(|_| Error::InvalidRange)?,
             ));
         } else if syntax.fold_pairs.iter().any(|(_, close)| *close == c)
             && let Some((close, header)) = stack.pop()
@@ -339,10 +295,7 @@ fn append_native(
                 stack.clear();
                 continue;
             }
-            let end = line_base
-                + snapshot
-                    .line_at(TextOffset(offset))
-                    .map_err(|_| Error::InvalidRange)?;
+            let end = line_base + snapshot.line_at(TextOffset(offset)).map_err(|_| Error::InvalidRange)?;
             if end > header {
                 if folds.len() >= max_folds {
                     return Err(Error::BudgetExceeded);
@@ -372,21 +325,13 @@ fn append_indent(
         .read(syntax.range.clone(), crate::MAX_REQUEST_BYTES)
         .map_err(|_| Error::InvalidRange)?;
     let mut start = 0;
-    let mut line = line_base
-        + snapshot
-            .line_at(syntax.range.start)
-            .map_err(|_| Error::InvalidRange)?;
+    let mut line = line_base + snapshot.line_at(syntax.range.start).map_err(|_| Error::InvalidRange)?;
     let literal = |offset: usize| {
         syntax
             .spans
-            .get(
-                syntax
-                    .spans
-                    .partition_point(|span| span.range.end.0 <= offset),
-            )
+            .get(syntax.spans.partition_point(|span| span.range.end.0 <= offset))
             .is_some_and(|span| {
-                span.range.start.0 <= offset
-                    && matches!(span.kind, StyleKind::String | StyleKind::Comment)
+                span.range.start.0 <= offset && matches!(span.kind, StyleKind::String | StyleKind::Comment)
             })
     };
     while start < text.len() {
@@ -396,19 +341,10 @@ fn append_indent(
         let content = &text[start..end];
         let trim = content.trim_start_matches([' ', '\t']);
         if !trim.is_empty() && !literal(syntax.range.start.0 + end - trim.len()) {
-            let indentation = content[..content.len() - trim.len()]
-                .bytes()
-                .fold(0, |column, b| {
-                    if b == b'\t' {
-                        (column / 8 + 1) * 8
-                    } else {
-                        column + 1
-                    }
-                });
-            while stack
-                .last()
-                .is_some_and(|(_, indent)| indentation <= *indent)
-            {
+            let indentation = content[..content.len() - trim.len()].bytes().fold(0, |column, b| {
+                if b == b'\t' { (column / 8 + 1) * 8 } else { column + 1 }
+            });
+            while stack.last().is_some_and(|(_, indent)| indentation <= *indent) {
                 let (header, _) = stack.pop().unwrap();
                 push_level_fold(
                     result,
@@ -427,8 +363,7 @@ fn append_indent(
                 stack.push((header, indent));
             }
             let trimmed = content.trim_end();
-            if trimmed.ends_with(':') && !literal(syntax.range.start.0 + start + trimmed.len() - 1)
-            {
+            if trimmed.ends_with(':') && !literal(syntax.range.start.0 + start + trimmed.len() - 1) {
                 *candidate = Some((line, indentation));
             }
         }
@@ -496,13 +431,7 @@ fn from_levels(levels: &[i32], first: usize, eof: bool, limit: usize) -> Result<
     result.sort_by_key(|f| (f.header, f.level));
     Ok(result)
 }
-fn push_level_fold(
-    result: &mut Vec<Fold>,
-    header: usize,
-    end: usize,
-    level: i32,
-    limit: usize,
-) -> Result<(), Error> {
+fn push_level_fold(result: &mut Vec<Fold>, header: usize, end: usize, level: i32, limit: usize) -> Result<(), Error> {
     if end > header {
         if result.len() >= limit {
             return Err(Error::BudgetExceeded);
@@ -531,6 +460,13 @@ impl FoldState {
                 .extend(folds.iter().filter(|f| f.level >= level).map(|f| f.header));
         }
     }
+    /// Collapse every foldable region at every nesting level. This is the real
+    /// "Fold All" — unlike `apply_level`, it does not depend on a level
+    /// threshold, so it collapses inner regions as well as the outermost ones.
+    pub fn fold_all(&mut self, folds: &[Fold]) {
+        self.collapse_level = Some(1);
+        self.collapsed = folds.iter().map(|fold| fold.header).collect();
+    }
     pub fn unfold_all(&mut self) {
         self.collapsed.clear();
         self.collapse_level = None;
@@ -547,11 +483,49 @@ mod tests {
     use super::*;
     use bareline_document::{Budget, Document};
     #[test]
+    fn fold_all_collapses_every_foldable_region_at_every_level() {
+        // A sample with three nested regions at levels 1, 2 and 3.
+        let folds = vec![
+            Fold {
+                header: 0,
+                end: 40,
+                level: 1,
+            },
+            Fold {
+                header: 5,
+                end: 30,
+                level: 2,
+            },
+            Fold {
+                header: 10,
+                end: 20,
+                level: 3,
+            },
+        ];
+        let mut state = FoldState::default();
+        state.fold_all(&folds);
+        // Every region is collapsed, not only the outermost (level 1) one.
+        for fold in &folds {
+            assert!(
+                state.collapsed.contains(&fold.header),
+                "level {} region at line {} was left unfolded",
+                fold.level,
+                fold.header
+            );
+        }
+        assert_eq!(state.collapsed.len(), folds.len());
+        // Folding to level 3, by contrast, leaves the outer levels expanded.
+        let mut leveled = FoldState::default();
+        leveled.apply_level(&folds, 3);
+        assert!(!leveled.collapsed.contains(&0));
+        assert!(!leveled.collapsed.contains(&5));
+        assert!(leveled.collapsed.contains(&10));
+    }
+    #[test]
     fn forward_pass_carries_header_across_windows() {
         let first = format!("int f() {{\n{}", "int x;\n".repeat(1000));
         let text = format!("{first}return 1;\n}}\n");
-        let document =
-            Document::from_utf8(&text, Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+        let document = Document::from_utf8(&text, Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
         let snapshot = document.snapshot();
         let mut lexer = crate::ForwardLexer::new(snapshot.clone(), crate::Language::Cpp);
         let mut folds = FoldAccumulator::default();
@@ -577,8 +551,7 @@ mod tests {
     #[test]
     fn lexilla_indentation_folds_exclude_following_statement() {
         let text = "def f():\n    x = 1\n    return x\ny = 2\n";
-        let document =
-            Document::from_utf8(text, Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+        let document = Document::from_utf8(text, Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
         let snapshot = document.snapshot();
         let syntax = crate::lex(
             snapshot.clone(),

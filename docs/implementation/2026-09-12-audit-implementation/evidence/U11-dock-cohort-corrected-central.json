@@ -1,0 +1,17 @@
+{
+  "arguments": [
+    "test",
+    "-p",
+    "bareline",
+    "--bin",
+    "bareline",
+    "dock",
+    "--offline",
+    "--locked"
+  ],
+  "completed_utc": "2026-09-12T11:08:00.2108423Z",
+  "integration_snapshot": "f2c7f83374d91367f005cdd1d4e6b56d8dd355e3",
+  "exit_code": 101,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\U11-dock-cohort-corrected-central.log"
+}

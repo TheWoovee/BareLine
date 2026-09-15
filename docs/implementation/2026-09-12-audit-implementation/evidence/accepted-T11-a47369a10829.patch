@@ -1,0 +1,144 @@
+diff --git a/scripts/release_config.py b/scripts/release_config.py
+index 06723f8..c2991d4 100644
+--- a/scripts/release_config.py
++++ b/scripts/release_config.py
+@@ -11,6 +11,7 @@ import ipaddress
+ import json
+ import os
+ import re
++import stat
+ import subprocess
+ import sys
+ import zipfile
+@@ -537,6 +538,59 @@ def verify_t10_source_receipt(t10: object, values: dict[str, str]) -> None:
+         raise ConfigurationError("T10 execution source identity does not match the prepared release source")
+ 
+ 
++def _comparable_local_path(path: Path) -> str:
++    value = str(path)
++    if os.name == "nt" and value.startswith("\\\\?\\UNC\\"):
++        value = "\\\\" + value[8:]
++    elif os.name == "nt" and value.startswith("\\\\?\\"):
++        if not re.fullmatch(r"\\\\\?\\[A-Za-z]:\\.*", value):
++            raise ConfigurationError("unsupported Windows device path")
++        value = value[4:]
++    if os.name == "nt" and value.startswith("\\\\.\\"):
++        raise ConfigurationError("unsupported Windows device path")
++    if not os.path.isabs(value):
++        raise ConfigurationError("artifact path is not absolute")
++    return os.path.normcase(os.path.normpath(value))
++
++
++def verified_installed_artifact_path(path_text: str, installation_root: Path) -> Path:
++    if not path_text or "\0" in path_text:
++        raise ConfigurationError("artifact path is empty or contains NUL")
++    candidate = Path(os.path.normpath(path_text))
++    root = installation_root.resolve(strict=True)
++    candidate_key = _comparable_local_path(candidate)
++    root_key = _comparable_local_path(root)
++    try:
++        if os.path.commonpath((root_key, candidate_key)) != root_key or candidate_key == root_key:
++            raise ConfigurationError("artifact path escapes the installation root")
++    except ValueError as error:
++        raise ConfigurationError("artifact path is on a different volume") from error
++
++    reached_root = False
++    for current in (candidate, *candidate.parents):
++        try:
++            metadata = current.lstat()
++        except OSError as error:
++            raise ConfigurationError("artifact path is missing") from error
++        attributes = getattr(metadata, "st_file_attributes", 0)
++        if stat.S_ISLNK(metadata.st_mode) or attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0):
++            raise ConfigurationError("artifact path traverses a reparse point")
++        if _comparable_local_path(current) == root_key:
++            reached_root = True
++            break
++    if not reached_root or not stat.S_ISREG(candidate.lstat().st_mode):
++        raise ConfigurationError("artifact path is not a regular file below the installation root")
++
++    resolved = candidate.resolve(strict=True)
++    resolved_key = _comparable_local_path(resolved)
++    try:
++        if os.path.commonpath((root_key, resolved_key)) != root_key or resolved_key == root_key:
++            raise ConfigurationError("resolved artifact path escapes the installation root")
++    except ValueError as error:
++        raise ConfigurationError("resolved artifact path is on a different volume") from error
++    return candidate
++
++
+ def fixture_report(
+     prepared: Path,
+     t10_path: Path,
+@@ -555,12 +609,13 @@ def fixture_report(
+     installed_artifacts = installed.get("artifacts")
+     if not isinstance(installed_artifacts, dict) or set(installed_artifacts) != {"host", "json", "xml", "hex"}:
+         raise ConfigurationError("installed fixture manifest requires exactly host/json/xml/hex")
+-    installation_root = (installed_path.parent / "installation").resolve()
++    installation_root = installed_path.parent / "installation"
+     for role, record in installed_artifacts.items():
+         if not isinstance(record, dict) or set(record) != {"path", "sha256", "bytes"} or not isinstance(record["path"], str):
+             raise ConfigurationError(f"installed fixture {role} identity is malformed")
+-        candidate = Path(record["path"]).resolve()
+-        if installation_root not in candidate.parents or not candidate.is_file() or candidate.is_symlink():
++        try:
++            candidate = verified_installed_artifact_path(record["path"], installation_root)
++        except ConfigurationError:
+             raise ConfigurationError(f"installed fixture {role} path is unsafe or missing")
+         digest, size = sha256_file(candidate)
+         if digest != record["sha256"] or size != record["bytes"]:
+diff --git a/scripts/test_release_config.py b/scripts/test_release_config.py
+index 5bf2eb1..18af692 100644
+--- a/scripts/test_release_config.py
++++ b/scripts/test_release_config.py
+@@ -28,6 +28,13 @@ def rejected(document: dict, message: str) -> None:
+ 
+ 
+ def main() -> None:
++    if os.name == "nt":
++        assert release_config._comparable_local_path(Path(r"\\?\C:\retained\artifact")) == release_config._comparable_local_path(Path(r"C:\retained\artifact"))
++        assert release_config._comparable_local_path(Path(r"\\?\UNC\server\share\artifact")) == release_config._comparable_local_path(Path(r"\\server\share\artifact"))
++        for device_path in (r"\\.\PhysicalDrive0", r"\\?\GLOBALROOT\Device\HarddiskVolumeShadowCopy1"):
++            try: release_config._comparable_local_path(Path(device_path))
++            except release_config.ConfigurationError: pass
++            else: raise AssertionError(f"unsupported device path accepted: {device_path}")
+     preview = release_config.validate(release_config.ROOT / "release" / "preview.release-config.json", {"preview"})
+     fixture = release_config.validate(
+         release_config.ROOT / "release" / "fixtures" / "nonshipping.release-config.json", {"fixture"}
+@@ -143,11 +150,17 @@ def main() -> None:
+             path = executables / filename; path.write_bytes(b"MZ-static-fixture\0" + marker); artifact_arguments.append(f"{role}={path}")
+         capability = root / "build-capabilities.json"; release_config.manifest(prepared, artifact_arguments, capability)
+         delivery = root / "connected-delivery"; installation = delivery / "installation"; installation.mkdir(parents=True)
++        long_segment = "retained-" + "a" * 64
++        def retained_path(relative: str) -> Path:
++            path = installation / long_segment / long_segment / relative
++            if os.name == "nt":
++                path = Path("\\\\?\\" + str(path.resolve()))
++            return path
+         installed_paths = {
+-            "host": installation / "runtimes/hash/bareline-extension-host.exe",
+-            "json": installation / "json/extension.wasm",
+-            "xml": installation / "xml/extension.wasm",
+-            "hex": installation / "hex/extension.wasm",
++            "host": retained_path("runtimes/hash/bareline-extension-host.exe"),
++            "json": retained_path("json/extension.wasm"),
++            "xml": retained_path("xml/extension.wasm"),
++            "hex": retained_path("hex/extension.wasm"),
+         }
+         installed_paths["host"].parent.mkdir(parents=True); installed_paths["host"].write_bytes((executables / "bareline-extension-host.exe").read_bytes())
+         for role in ("json", "xml", "hex"):
+@@ -158,6 +171,14 @@ def main() -> None:
+         installed_artifacts = {role: identity(path) for role, path in installed_paths.items()}
+         installed_manifest = delivery / "installed-artifacts.json"
+         installed_manifest.write_text(json.dumps({"schema_version": 1, "nonshipping": True, "artifacts": installed_artifacts}), encoding="utf-8")
++        assert all(len(record["path"]) > 260 for record in installed_artifacts.values())
++        for record in installed_artifacts.values():
++            release_config.verified_installed_artifact_path(record["path"], installation)
++        outside = root / "outside.wasm"; outside.write_bytes(b"outside")
++        for unsafe in (str(outside.resolve()), str((installation / "missing.wasm").resolve())):
++            try: release_config.verified_installed_artifact_path(unsafe, installation)
++            except release_config.ConfigurationError: pass
++            else: raise AssertionError(f"unsafe or missing installed path accepted: {unsafe}")
+         assets = root / "delivery-assets"; assets.mkdir()
+         (assets / "bareline-exthost-x64.exe").write_bytes(installed_paths["host"].read_bytes())
+         (assets / "catalog.json").write_text("{}", encoding="ascii"); (assets / "catalog.minisig").write_text("fixture", encoding="ascii")

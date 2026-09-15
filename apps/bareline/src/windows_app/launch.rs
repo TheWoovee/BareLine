@@ -1,28 +1,60 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Startup-only, bounded configuration and lossless product CLI parsing.
 use bareline_diagnostics::{StartupAction, StartupLedger};
-use std::{ffi::OsString, path::PathBuf};
+use std::{
+    ffi::OsString,
+    path::{Path, PathBuf},
+};
 
 pub(super) struct LaunchRuntime {
-    pending: Vec<PendingPath>,
-    navigation: Option<(PathBuf, std::sync::mpsc::Receiver<Result<usize,String>>)>,
-    cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    requests: Vec<PendingPath>,
+    next_request_id: u64,
+    /// `--diag handles` was requested, so handle counters are sampled at startup
+    /// and after every document close.
+    pub(super) diag_handles: bool,
 }
 struct PendingPath {
+    id: u64,
     path: PathBuf,
     line: Option<u64>,
     column: u64,
     read_only: bool,
     monitor: bool,
+    state: LaunchRequestState,
+}
+enum LaunchRequestState {
+    Queued,
+    Opening,
+    Opened {
+        document: (u64, u64),
+        activated: bool,
+    },
+    Navigating {
+        document: (u64, u64),
+        source: (u64, u64),
+        task: bareline_app::task::Task<Result<usize, String>>,
+    },
+    Monitoring {
+        document: (u64, u64),
+        retries: u8,
+    },
+    Complete,
+    Failed,
+    Cancelled,
+}
+impl LaunchRequestState {
+    fn terminal(&self) -> bool {
+        matches!(self, Self::Complete | Self::Failed | Self::Cancelled)
+    }
 }
 impl LaunchRuntime {
     pub(super) fn new(config: &LaunchConfig) -> Self {
         let mut runtime = Self {
-            pending: Vec::new(),
-            navigation: None,
-            cancel: Default::default(),
+            requests: Vec::new(),
+            next_request_id: 1,
+            diag_handles: config.diag_handles,
         };
-        runtime.queue(&bareline_platform_windows::instance::OpenRequest {
+        let _ = runtime.queue(&bareline_platform_windows::instance::OpenRequest {
             paths: config.paths.clone(),
             line: config.line,
             column: config.column,
@@ -31,133 +63,694 @@ impl LaunchRuntime {
         });
         runtime
     }
-    pub(super) fn queue(
-        &mut self,
-        request: &bareline_platform_windows::instance::OpenRequest,
-    ) -> bool {
-        if self.pending.len().saturating_add(request.paths.len()) > 256 {
-            return false;
+    pub(super) fn queue(&mut self, request: &bareline_platform_windows::instance::OpenRequest) -> Option<Vec<u64>> {
+        if self.requests.len().saturating_add(request.paths.len()) > 256 {
+            return None;
         }
-        self.pending
-            .extend(request.paths.iter().cloned().map(|path| PendingPath {
+        let mut accepted = Vec::with_capacity(request.paths.len());
+        for path in request.paths.iter().cloned() {
+            let id = self.next_request_id;
+            self.next_request_id = self.next_request_id.wrapping_add(1).max(1);
+            accepted.push(id);
+            self.requests.push(PendingPath {
+                id,
                 path,
                 line: request.line,
                 column: request.column.unwrap_or(1),
                 read_only: request.read_only,
                 monitor: request.monitor,
-            }));
-        true
+                state: LaunchRequestState::Queued,
+            });
+        }
+        Some(accepted)
     }
+
+    pub(super) fn cancel_requests(&mut self, request_ids: &[u64]) {
+        for request in &mut self.requests {
+            if request_ids.contains(&request.id) {
+                if let LaunchRequestState::Navigating { task, .. } = &request.state {
+                    task.cancel();
+                }
+                request.state = LaunchRequestState::Cancelled;
+            }
+        }
+        self.retire_terminal();
+    }
+
+    pub(super) fn cancel_document(&mut self, document: (u64, u64)) {
+        for request in &mut self.requests {
+            match &request.state {
+                LaunchRequestState::Navigating {
+                    document: owner, task, ..
+                } if owner.0 == document.0 => {
+                    task.cancel();
+                    request.state = LaunchRequestState::Cancelled;
+                }
+                LaunchRequestState::Opened { document: owner, .. }
+                | LaunchRequestState::Monitoring { document: owner, .. }
+                    if owner.0 == document.0 =>
+                {
+                    request.state = LaunchRequestState::Cancelled
+                }
+                _ => {}
+            }
+        }
+        self.requests.retain(|request| !request.state.terminal());
+    }
+
+    fn consume_open_outcomes(&mut self, outcomes: Vec<bareline_app::workspace::LaunchOpenOutcome>) -> Option<String> {
+        let mut message = None;
+        for outcome in outcomes {
+            let (request_id, state, failure) = match outcome {
+                bareline_app::workspace::LaunchOpenOutcome::Opened { request_id, document } => (
+                    request_id,
+                    LaunchRequestState::Opened {
+                        document,
+                        activated: false,
+                    },
+                    None,
+                ),
+                bareline_app::workspace::LaunchOpenOutcome::Failed { request_id, error } => (
+                    request_id,
+                    LaunchRequestState::Failed,
+                    Some(format!("Could not open requested file: {error}")),
+                ),
+            };
+            if let Some(request) = self.requests.iter_mut().find(|request| request.id == request_id) {
+                request.state = state;
+                message = failure.or(message);
+            }
+        }
+        message
+    }
+
+    fn retire_terminal(&mut self) {
+        self.requests.retain(|request| !request.state.terminal());
+    }
+}
+fn request_processing_order(requests: &[PendingPath]) -> Vec<usize> {
+    let mut order: Vec<_> = (0..requests.len()).collect();
+    order.sort_by_key(|&index| !matches!(requests[index].state, LaunchRequestState::Navigating { .. }));
+    order
 }
 impl super::Shell {
     pub(super) fn launch_pump(&mut self) {
         let Some(workspace) = &mut self.workspace else {
             return;
         };
-        let mut remaining = Vec::new();
-        let mut monitors = Vec::new();
-        for pending in self.launch.pending.drain(..) {
-            let Some(index) = (0..workspace.editors.len())
-                .find(|&index| workspace.path(index) == Some(pending.path.as_path()))
-            else {
-                remaining.push(pending);
-                continue;
-            };
-            let editor = &mut workspace.editors[index];
-            if !editor.paged() && !editor.snapshot().is_complete() {
-                remaining.push(pending);
-                continue;
-            }
-            if pending.read_only {
-                editor.set_read_only(true);
-            }
-            if let Some(line) = pending.line {
-                if editor.paged() {
-                    if self.launch.navigation.as_ref().is_some_and(|(path,_)|path==&pending.path) {
-                        let result=self.launch.navigation.as_ref().and_then(|(_,rx)|rx.try_recv().ok());
-                        if let Some(result)=result {
-                            self.launch.navigation=None;
-                            match result {
-                                Ok(offset)=>if let bareline_app::workspace::WorkspaceEditor::Paged(paged)=editor {
-                                    if let Err(e)=paged.restore_selection(bareline_document::TextOffset(offset),bareline_document::TextOffset(offset)) {workspace.message=Some(e);}
-                                },
-                                Err(e)=>workspace.message=Some(e),
-                            }
-                        } else { remaining.push(pending); continue; }
+        let launch_request_ids: Vec<_> = self.launch.requests.iter().map(|request| request.id).collect();
+        if let Some(message) = self
+            .launch
+            .consume_open_outcomes(workspace.take_tracked_open_outcomes(&launch_request_ids))
+        {
+            workspace.message = Some(message);
+        }
+
+        let mut navigation_busy = self
+            .launch
+            .requests
+            .iter()
+            .any(|request| matches!(request.state, LaunchRequestState::Navigating { .. }));
+        let order = request_processing_order(&self.launch.requests);
+        for index in order {
+            let request = &mut self.launch.requests[index];
+            let state = std::mem::replace(&mut request.state, LaunchRequestState::Cancelled);
+            request.state = match state {
+                LaunchRequestState::Queued => {
+                    if let Some(index) = (0..workspace.editors.len())
+                        .find(|&index| workspace.path(index) == Some(request.path.as_path()))
+                    {
+                        LaunchRequestState::Opened {
+                            document: workspace.editors[index].document_identity(),
+                            activated: false,
+                        }
+                    } else if workspace.path_loading(&request.path) {
+                        LaunchRequestState::Queued
                     } else {
-                        if self.launch.navigation.is_none() && let bareline_app::workspace::WorkspaceEditor::Paged(paged)=editor {
-                            let handle=paged.read_handle(); let column=pending.column; let cancel=self.launch.cancel.clone(); let notify=self.notify.clone();
-                            let (tx,rx)=std::sync::mpsc::sync_channel(1);
-                            match std::thread::Builder::new().name("bareline-launch-position".into()).spawn(move || {let result=paged_position(handle,line,column,&cancel); let _=tx.send(result); notify();}) {
-                                Ok(_)=>self.launch.navigation=Some((pending.path.clone(),rx)), Err(e)=>workspace.message=Some(e.to_string()),
+                        match workspace.open_tracked(request.id, request.path.clone()) {
+                            Ok(()) => LaunchRequestState::Opening,
+                            Err(error) => {
+                                workspace.message = Some(format!("Could not open requested file: {error}"));
+                                LaunchRequestState::Failed
                             }
                         }
-                        remaining.push(pending); continue;
                     }
-                } else {
-                    match launch_position(editor.snapshot(), line, pending.column) {
-                        Ok(offset) => {
-                            editor.selection.anchor = offset;
-                            editor.selection.caret = offset;
-                            editor.scroll_y = (line
-                                .saturating_sub(1)
-                                .min(editor.snapshot().line_count().saturating_sub(1) as u64)
-                                as f64
-                                * 20.0)
-                                .max(0.0);
+                }
+                other => other,
+            };
+
+            let state = std::mem::replace(&mut request.state, LaunchRequestState::Cancelled);
+            request.state = match state {
+                LaunchRequestState::Opened {
+                    document,
+                    mut activated,
+                } => {
+                    let Some(index) = workspace
+                        .editors
+                        .iter()
+                        .position(|editor| editor.document_identity() == document)
+                    else {
+                        workspace.message = Some("Requested document closed before activation.".into());
+                        continue;
+                    };
+                    if !activated {
+                        self.app.active = index;
+                        activated = true;
+                    }
+                    let editor = &mut workspace.editors[index];
+                    if !editor.paged() && !editor.snapshot().is_complete() {
+                        LaunchRequestState::Opened { document, activated }
+                    } else {
+                        if request.read_only {
+                            editor.set_read_only(true);
                         }
-                        Err(error) => workspace.message = Some(error),
+                        if let Some(line) = request.line {
+                            if editor.paged() {
+                                if navigation_busy {
+                                    LaunchRequestState::Opened { document, activated }
+                                } else if let bareline_app::workspace::WorkspaceEditor::Paged(paged) = editor {
+                                    let handle = paged.read_handle();
+                                    let column = request.column;
+                                    let source = handle.snapshot().identity_token();
+                                    let wake = self.wake.clone();
+                                    match bareline_app::task::spawn(
+                                        move || wake(bareline_app::task::Wake::One(bareline_app::task::Source::Launch)),
+                                        move |cancel| paged_position(handle, line, column, cancel),
+                                    ) {
+                                        Ok(task) => {
+                                            navigation_busy = true;
+                                            LaunchRequestState::Navigating { document, source, task }
+                                        }
+                                        Err(error) => {
+                                            workspace.message = Some(format!("Navigation could not start: {error}"));
+                                            LaunchRequestState::Failed
+                                        }
+                                    }
+                                } else {
+                                    LaunchRequestState::Failed
+                                }
+                            } else {
+                                match launch_position(editor.snapshot(), line, request.column) {
+                                    Ok(offset) => {
+                                        editor.viewport_mut().selection.anchor = offset;
+                                        editor.viewport_mut().selection.caret = offset;
+                                        editor.viewport_mut().scroll_y = (line
+                                            .saturating_sub(1)
+                                            .min(editor.snapshot().line_count().saturating_sub(1) as u64)
+                                            as f64
+                                            * 20.0)
+                                            .max(0.0);
+                                        if request.monitor {
+                                            LaunchRequestState::Monitoring { document, retries: 0 }
+                                        } else {
+                                            LaunchRequestState::Complete
+                                        }
+                                    }
+                                    Err(error) => {
+                                        workspace.message = Some(error);
+                                        LaunchRequestState::Failed
+                                    }
+                                }
+                            }
+                        } else if request.monitor {
+                            LaunchRequestState::Monitoring { document, retries: 0 }
+                        } else {
+                            LaunchRequestState::Complete
+                        }
+                    }
+                }
+                LaunchRequestState::Navigating { document, source, task } => match task.poll() {
+                    bareline_app::task::TaskPoll::Pending => {
+                        if workspace
+                            .editors
+                            .iter()
+                            .any(|editor| paged_source_matches(editor, source))
+                        {
+                            LaunchRequestState::Navigating { document, source, task }
+                        } else {
+                            task.cancel();
+                            navigation_busy = false;
+                            workspace.message = Some("Navigation cancelled because the document closed.".into());
+                            LaunchRequestState::Cancelled
+                        }
+                    }
+                    bareline_app::task::TaskPoll::Complete(Ok(offset)) => {
+                        navigation_busy = false;
+                        let target = workspace
+                            .editors
+                            .iter_mut()
+                            .find(|editor| paged_source_unchanged(editor, source));
+                        match target {
+                            Some(bareline_app::workspace::WorkspaceEditor::Paged(paged)) => {
+                                match paged.restore_selection(
+                                    bareline_document::TextOffset(offset),
+                                    bareline_document::TextOffset(offset),
+                                ) {
+                                    Ok(()) if request.monitor => {
+                                        LaunchRequestState::Monitoring { document, retries: 0 }
+                                    }
+                                    Ok(()) => LaunchRequestState::Complete,
+                                    Err(error) => {
+                                        workspace.message = Some(error);
+                                        LaunchRequestState::Failed
+                                    }
+                                }
+                            }
+                            _ => {
+                                workspace.message =
+                                    Some("Navigation target changed or closed; caret unchanged.".into());
+                                LaunchRequestState::Cancelled
+                            }
+                        }
+                    }
+                    bareline_app::task::TaskPoll::Complete(Err(error)) => {
+                        navigation_busy = false;
+                        workspace.message = Some(error);
+                        LaunchRequestState::Failed
+                    }
+                    bareline_app::task::TaskPoll::Cancelled => {
+                        navigation_busy = false;
+                        workspace.message = Some("Navigation cancelled.".into());
+                        LaunchRequestState::Cancelled
+                    }
+                    bareline_app::task::TaskPoll::Failed(error) => {
+                        navigation_busy = false;
+                        workspace.message = Some(format!("Navigation failed: {error}"));
+                        LaunchRequestState::Failed
+                    }
+                    bareline_app::task::TaskPoll::Consumed => {
+                        navigation_busy = false;
+                        workspace.message = Some("Navigation result was already consumed.".into());
+                        LaunchRequestState::Failed
+                    }
+                },
+                other => other,
+            };
+        }
+
+        let monitoring: Vec<_> = self
+            .launch
+            .requests
+            .iter()
+            .filter_map(|request| match request.state {
+                LaunchRequestState::Monitoring { document, retries } => Some((request.id, document, retries)),
+                _ => None,
+            })
+            .collect();
+        for (request_id, document, retries) in monitoring {
+            let outcome = self.watch_start_follow_document(document);
+            if let Some(request) = self.launch.requests.iter_mut().find(|request| request.id == request_id) {
+                match outcome {
+                    Ok(()) => request.state = LaunchRequestState::Complete,
+                    Err(error) if error.contains("queue is full") && retries < 2 => {
+                        request.state = LaunchRequestState::Monitoring {
+                            document,
+                            retries: retries + 1,
+                        };
+                        if let Some(workspace) = &mut self.workspace {
+                            workspace.message = Some(format!("Monitor startup is busy; retrying ({}/3).", retries + 1));
+                        }
+                    }
+                    Err(error) => {
+                        request.state = LaunchRequestState::Failed;
+                        if let Some(workspace) = &mut self.workspace {
+                            workspace.message = Some(format!("Monitor startup failed: {error}"));
+                        }
                     }
                 }
             }
-            if pending.monitor {
-                monitors.push((index,pending));
-            }
         }
-        self.launch.pending = remaining;
-        for (index,pending) in monitors {
-            if let Err(error)=self.watch_start_follow(index) {
-                if let Some(workspace)=&mut self.workspace{workspace.message=Some(error);}
-                self.launch.pending.push(pending);
+        self.launch.retire_terminal();
+    }
+}
+
+#[cfg(test)]
+mod request_tests {
+    use super::*;
+    use std::time::Duration;
+
+    fn runtime() -> LaunchRuntime {
+        LaunchRuntime {
+            requests: Vec::new(),
+            next_request_id: 1,
+            diag_handles: false,
+        }
+    }
+
+    fn request(paths: Vec<PathBuf>) -> bareline_platform_windows::instance::OpenRequest {
+        bareline_platform_windows::instance::OpenRequest {
+            paths,
+            line: Some(7),
+            column: Some(3),
+            read_only: true,
+            monitor: true,
+        }
+    }
+
+    #[test]
+    fn sequential_failures_release_capacity_and_preserve_request_ids() {
+        let mut launch = runtime();
+        for number in 0..300 {
+            assert!(
+                launch
+                    .queue(&request(vec![PathBuf::from(format!("missing-{number}"))]))
+                    .is_some()
+            );
+            let id = launch.requests.last().unwrap().id;
+            let message = launch.consume_open_outcomes(vec![bareline_app::workspace::LaunchOpenOutcome::Failed {
+                request_id: id,
+                error: "missing".into(),
+            }]);
+            assert!(message.unwrap().contains("missing"));
+            launch.retire_terminal();
+            assert!(launch.requests.is_empty());
+        }
+        assert_eq!(launch.next_request_id, 301);
+    }
+
+    #[test]
+    fn concurrent_bound_rejects_then_reopens_one_slot_with_flags_intact() {
+        let mut launch = runtime();
+        let duplicate = PathBuf::from("same.txt");
+        assert!(launch.queue(&request(vec![duplicate; 256])).is_some());
+        assert!(launch.queue(&request(vec![PathBuf::from("overflow.txt")])).is_none());
+        assert_eq!(launch.requests[0].id, 1);
+        assert_eq!(launch.requests[255].id, 256);
+        assert!(launch.requests[0].read_only);
+        assert!(launch.requests[0].monitor);
+        assert_eq!(launch.requests[0].line, Some(7));
+        assert_eq!(launch.requests[0].column, 3);
+        launch.consume_open_outcomes(vec![bareline_app::workspace::LaunchOpenOutcome::Failed {
+            request_id: 1,
+            error: "missing".into(),
+        }]);
+        launch.retire_terminal();
+        assert!(launch.queue(&request(vec![PathBuf::from("later-valid.txt")])).is_some());
+        assert_eq!(launch.requests.last().unwrap().id, 257);
+        launch.cancel_requests(&[257]);
+        assert!(!launch.requests.iter().any(|request| request.id == 257));
+    }
+
+    #[test]
+    fn completed_navigation_is_processed_before_an_earlier_waiter() {
+        let root = std::env::temp_dir().join(format!(
+            "bareline-launch-order-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let waiting_path = root.join("waiting.txt");
+        let completed_path = root.join("completed.txt");
+        std::fs::write(&waiting_path, "waiting\n".repeat(2_000)).unwrap();
+        std::fs::write(&completed_path, "completed\n".repeat(2_000)).unwrap();
+        let mut workspace = bareline_app::workspace::Workspace::new(
+            std::sync::Arc::new(|| {}),
+            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+        )
+        .unwrap();
+        workspace.resident_max_bytes = 4;
+        workspace.open(waiting_path.clone());
+        workspace.open(completed_path.clone());
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while workspace.io_busy() || workspace.editors.iter().any(|editor| editor.busy()) {
+            workspace.pump();
+            assert!(std::time::Instant::now() < deadline, "{:?}", workspace.message);
+            std::thread::yield_now();
+        }
+        let waiting_document = workspace.editors[0].document_identity();
+        let completed_document = workspace.editors[1].document_identity();
+        let bareline_app::workspace::WorkspaceEditor::Paged(completed) = &workspace.editors[1] else {
+            panic!("forced-paged fixture opened resident editor");
+        };
+        let completed_source = completed.snapshot().identity_token();
+        let pool = bareline_app::task::Pool::new(1, 2);
+        let (completed_tx, completed_rx) = std::sync::mpsc::sync_channel(1);
+        let task = pool
+            .spawn(
+                move || {
+                    completed_tx.send(()).unwrap();
+                },
+                move |_| Ok::<_, String>(3),
+            )
+            .unwrap();
+        completed_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let mut shell = super::super::accessibility::tests::headless_shell();
+        let (wake_tx, wake_rx) = std::sync::mpsc::sync_channel(2);
+        shell.wake = std::sync::Arc::new(move |wake| {
+            wake_tx.send(wake).unwrap();
+        });
+        shell.workspace = Some(workspace);
+        shell.launch.requests.push(PendingPath {
+            id: 1,
+            path: waiting_path,
+            line: Some(8),
+            column: 1,
+            read_only: false,
+            monitor: false,
+            state: LaunchRequestState::Opened {
+                document: waiting_document,
+                activated: true,
+            },
+        });
+        shell.launch.requests.push(PendingPath {
+            id: 2,
+            path: completed_path,
+            line: Some(9),
+            column: 1,
+            read_only: false,
+            monitor: false,
+            state: LaunchRequestState::Navigating {
+                document: completed_document,
+                source: completed_source,
+                task,
+            },
+        });
+        shell.launch_pump();
+        assert_eq!(shell.launch.requests.len(), 1);
+        assert_eq!(shell.launch.requests[0].id, 1);
+        assert!(matches!(
+            shell.launch.requests[0].state,
+            LaunchRequestState::Navigating { .. }
+        ));
+        assert_eq!(
+            wake_rx.recv_timeout(Duration::from_secs(5)).unwrap(),
+            bareline_app::task::Wake::One(bareline_app::task::Source::Launch)
+        );
+        shell.launch_pump();
+        assert!(shell.launch.requests.is_empty());
+        drop(shell);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn closing_navigation_owner_cancels_task_and_releases_slot() {
+        let pool = bareline_app::task::Pool::new(1, 2);
+        let (started_tx, started_rx) = std::sync::mpsc::sync_channel(1);
+        let task = pool
+            .spawn(
+                || {},
+                move |cancel| {
+                    started_tx.send(()).unwrap();
+                    while !cancel.is_cancelled() {
+                        std::thread::yield_now();
+                    }
+                    Ok(0)
+                },
+            )
+            .unwrap();
+        let cancellation = task.cancel_handle();
+        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+
+        let mut launch = runtime();
+        launch.requests.push(PendingPath {
+            id: 1,
+            path: PathBuf::from("closed.txt"),
+            line: Some(10),
+            column: 1,
+            read_only: false,
+            monitor: false,
+            state: LaunchRequestState::Navigating {
+                document: (11, 22),
+                source: (11, 22),
+                task,
+            },
+        });
+        launch.cancel_document((11, 23));
+        assert!(cancellation.is_cancelled());
+        assert!(launch.requests.is_empty());
+
+        let next = pool.spawn(|| {}, |_| Ok::<_, String>(9)).unwrap();
+        assert_eq!(
+            next.wait_timeout(Duration::from_secs(5)),
+            bareline_app::task::TaskPoll::Complete(Ok(9))
+        );
+    }
+
+    #[test]
+    fn forced_paged_navigation_uses_full_source_after_viewport_moves() {
+        let root = std::env::temp_dir().join(format!(
+            "bareline-launch-paged-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let path = root.join("paged.txt");
+        std::fs::write(&path, "line\n".repeat(2_000)).unwrap();
+        let mut workspace = bareline_app::workspace::Workspace::new(
+            std::sync::Arc::new(|| {}),
+            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+        )
+        .unwrap();
+        workspace.resident_max_bytes = 4;
+        workspace.open(path);
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while workspace.io_busy() || workspace.editors.iter().any(|editor| editor.busy()) {
+            workspace.pump();
+            assert!(std::time::Instant::now() < deadline, "{:?}", workspace.message);
+            std::thread::yield_now();
+        }
+        workspace.editors[0].scroll(10_000.0, 400.0);
+        while workspace.editors[0].busy() {
+            workspace.pump();
+            assert!(std::time::Instant::now() < deadline, "{:?}", workspace.message);
+            std::thread::yield_now();
+        }
+        let bareline_app::workspace::WorkspaceEditor::Paged(paged) = &workspace.editors[0] else {
+            panic!("forced-paged fixture opened resident editor");
+        };
+        let handle = paged.read_handle();
+        let source = handle.snapshot().identity_token();
+        assert_ne!(source, workspace.editors[0].snapshot().identity_token());
+        assert!(paged_source_matches(&workspace.editors[0], source));
+        assert!(paged_source_unchanged(&workspace.editors[0], source));
+        assert_eq!(
+            paged_position(handle, 1_500, 3, &bareline_app::task::Cancel::default()).unwrap(),
+            7_497
+        );
+        workspace.editors[0].enqueue(bareline_app::workspace::Input::Insert("x".into()));
+        let mutation_deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while workspace.editors[0].busy() {
+            workspace.pump();
+            assert!(std::time::Instant::now() < mutation_deadline, "{:?}", workspace.message);
+            std::thread::yield_now();
+        }
+        assert!(paged_source_matches(&workspace.editors[0], source));
+        assert!(!paged_source_unchanged(&workspace.editors[0], source));
+        drop(workspace);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+impl Drop for LaunchRuntime {
+    fn drop(&mut self) {
+        for request in &self.requests {
+            if let LaunchRequestState::Navigating { task, .. } = &request.state {
+                task.cancel();
             }
         }
     }
 }
-impl Drop for LaunchRuntime { fn drop(&mut self) { self.cancel.store(true,std::sync::atomic::Ordering::Release); } }
-fn paged_position(handle: bareline_editor_surface::paged_view::PagedReadHandle, line:u64, column:u64, cancel:&std::sync::atomic::AtomicBool)->Result<usize,String> {
-    use bareline_document::{Budget,TextOffset,line_lookup::{LineTarget,LineLookupPoll},paged::{SparseLineIndex,WindowPoll}};
-    let snapshot=handle.snapshot(); let budget=Budget::new(256*1024);
-    let index=SparseLineIndex::new(snapshot.clone(),16,65536,&budget).map_err(|e|format!("Line index: {e:?}"))?;
-    let mut lookup=index.lookup(LineTarget::Line(usize::try_from(line.saturating_sub(1)).map_err(|_|"Line number too large")?),budget.clone()).map_err(|e|format!("Line lookup: {e:?}"))?;
-    let range=loop {
-        if cancel.load(std::sync::atomic::Ordering::Acquire) {return Err("Navigation cancelled".into());}
+
+fn paged_source_matches(editor: &bareline_app::workspace::WorkspaceEditor, source: (u64, u64)) -> bool {
+    matches!(
+        editor,
+        bareline_app::workspace::WorkspaceEditor::Paged(paged)
+            if paged.snapshot().identity_token().0 == source.0
+    )
+}
+
+fn paged_source_unchanged(editor: &bareline_app::workspace::WorkspaceEditor, source: (u64, u64)) -> bool {
+    matches!(
+        editor,
+        bareline_app::workspace::WorkspaceEditor::Paged(paged)
+            if paged.snapshot().identity_token() == source
+    )
+}
+
+fn paged_position(
+    handle: bareline_editor_surface::paged_view::PagedReadHandle,
+    line: u64,
+    column: u64,
+    cancel: &bareline_app::task::Cancel,
+) -> Result<usize, String> {
+    use bareline_document::{
+        Budget, TextOffset,
+        line_lookup::{LineLookupPoll, LineTarget},
+        paged::{SparseLineIndex, WindowPoll},
+    };
+    let snapshot = handle.snapshot();
+    let budget = Budget::new(256 * 1024);
+    let index = SparseLineIndex::new(snapshot.clone(), 16, 65536, &budget).map_err(|e| format!("Line index: {e:?}"))?;
+    let mut lookup = index
+        .lookup(
+            LineTarget::Line(usize::try_from(line.saturating_sub(1)).map_err(|_| "Line number too large")?),
+            budget.clone(),
+        )
+        .map_err(|e| format!("Line lookup: {e:?}"))?;
+    let range = loop {
+        if cancel.is_cancelled() {
+            return Err("Navigation cancelled".into());
+        }
         match lookup.poll() {
-            LineLookupPoll::Range(range)=>break range,
-            LineLookupPoll::Pending(ticket)=>{if !handle.resolve_page(ticket)? {std::thread::sleep(std::time::Duration::from_millis(1));}},
-            LineLookupPoll::Progress(_)=>(),
-            LineLookupPoll::Failed(bareline_document::Error::OutOfBounds)=>return Ok(snapshot.len()),
-            other=>return Err(format!("Line lookup: {other:?}")),
+            LineLookupPoll::Range(range) => break range,
+            LineLookupPoll::Pending(ticket) => {
+                if !handle.resolve_page(ticket).map_err(|error| error.to_string())? {
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+            }
+            LineLookupPoll::Progress(_) => (),
+            LineLookupPoll::Failed(bareline_document::Error::OutOfBounds) => return Ok(snapshot.len()),
+            other => return Err(format!("Line lookup: {other:?}")),
         }
     };
-    let mut offset=range.start.0; let mut columns=column.saturating_sub(1);
-    while offset<range.end.0 && columns>0 {
-        if cancel.load(std::sync::atomic::Ordering::Acquire) {return Err("Navigation cancelled".into());}
-        let mut request=snapshot.begin_viewport(TextOffset(offset),65536,&budget).map_err(|e|format!("Column window: {e:?}"))?;
-        let window=loop {match request.poll() {WindowPoll::Ready(w)=>break w,WindowPoll::Pending(ticket)=>{if !handle.resolve_page(ticket)? {std::thread::sleep(std::time::Duration::from_millis(1));}},_=>return Err("Column lookup unavailable".into()),}};
-        let start=offset.saturating_sub(window.range().start.0);
-        let text=&window.text()[start..];
-        let mut moved=0;
-        for ch in text.chars() {if columns==0 || ch=='\r' || ch=='\n' {return Ok(offset+moved);} moved+=ch.len_utf8(); columns-=1;}
-        if moved==0 {break;} offset+=moved;
+    let mut offset = range.start.0;
+    let mut columns = column.saturating_sub(1);
+    while offset < range.end.0 && columns > 0 {
+        if cancel.is_cancelled() {
+            return Err("Navigation cancelled".into());
+        }
+        let mut request = snapshot
+            .begin_viewport(TextOffset(offset), 65536, &budget)
+            .map_err(|e| format!("Column window: {e:?}"))?;
+        let window = loop {
+            if cancel.is_cancelled() {
+                return Err("Navigation cancelled".into());
+            }
+            match request.poll() {
+                WindowPoll::Ready(w) => break w,
+                WindowPoll::Pending(ticket) => {
+                    if !handle.resolve_page(ticket).map_err(|error| error.to_string())? {
+                        std::thread::sleep(std::time::Duration::from_millis(1));
+                    }
+                }
+                _ => return Err("Column lookup unavailable".into()),
+            }
+        };
+        let start = offset.saturating_sub(window.range().start.0);
+        let text = &window.text()[start..];
+        let mut moved = 0;
+        for ch in text.chars() {
+            if columns == 0 || ch == '\r' || ch == '\n' {
+                return Ok(offset + moved);
+            }
+            moved += ch.len_utf8();
+            columns -= 1;
+        }
+        if moved == 0 {
+            break;
+        }
+        offset += moved;
     }
     Ok(offset)
 }
 
-fn launch_position(
-    snapshot: &bareline_document::DocumentSnapshot,
-    line: u64,
-    column: u64,
-) -> Result<usize, String> {
+fn launch_position(snapshot: &bareline_document::DocumentSnapshot, line: u64, column: u64) -> Result<usize, String> {
     let line = usize::try_from(line.saturating_sub(1))
         .unwrap_or(usize::MAX)
         .min(snapshot.line_count().saturating_sub(1));
@@ -165,9 +758,7 @@ fn launch_position(
         .line_range(line)
         .map_err(|error| format!("Cannot navigate to the requested line: {error:?}"))?;
     if range.end.0 - range.start.0 > 64 * 1024 {
-        return Err(
-            "The requested line exceeds the bounded command-line navigation window.".into(),
-        );
+        return Err("The requested line exceeds the bounded command-line navigation window.".into());
     }
     let text = snapshot
         .read(range.clone(), 64 * 1024)
@@ -181,13 +772,207 @@ fn launch_position(
             .map_or(content.len(), |(offset, _)| offset))
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum LaunchMode {
+    Help,
+    Version,
+    Diagnostic,
+    Portable,
+    Installed,
+    Performance,
+}
+
+pub(super) const HELP: &str = "Bareline [--line N] [--column N] [--read-only] [--monitor] [--no-session] [--no-extensions] [--new-instance] [--diagnostic-root PATH] [--] [files...]\nDiagnostic modes require an isolated root containing an empty regular .bareline-diagnostic marker (or a portable executable).";
+
+pub(super) struct ParsedLaunch {
+    mode: LaunchMode,
+    performance: Option<super::performance::PerformanceOptions>,
+    options: bareline_distribution::cli::LaunchOptions,
+    software: bool,
+    hardware: bool,
+    smoke: bool,
+    prototype: bool,
+    perf: bool,
+    diag_handles: bool,
+    diagnostic_root: Option<PathBuf>,
+}
+impl ParsedLaunch {
+    pub(super) fn mode(&self) -> LaunchMode {
+        self.mode
+    }
+    pub(super) fn has_paths(&self) -> bool {
+        !self.options.paths.is_empty()
+    }
+}
+
+#[derive(Clone)]
+pub(super) struct ProfileInitialization {
+    roaming: Option<PathBuf>,
+    local: Option<PathBuf>,
+    temp: PathBuf,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct ProfileInitializationResult {
+    pub(super) profile_root: Option<PathBuf>,
+    pub(super) migration: Result<bareline_file_io::profile_migration::MigrationReport, String>,
+    pub(super) authorities: bareline_file_io::profile_migration::MigrationReport,
+    pub(super) cleanup: bareline_file_io::owned_cache::SweepReport,
+}
+
+#[derive(Default)]
+pub(super) struct ProfileInitializationRuntime {
+    pending: Option<ProfileInitialization>,
+    retry: Option<ProfileInitialization>,
+    worker: Option<std::sync::mpsc::Receiver<Result<ProfileInitializationResult, String>>>,
+    completion: Option<Result<ProfileInitializationResult, String>>,
+    cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+impl ProfileInitializationRuntime {
+    pub(super) fn new(pending: Option<ProfileInitialization>) -> Self {
+        Self {
+            retry: pending.clone(),
+            pending,
+            worker: None,
+            completion: None,
+            cancel: Default::default(),
+        }
+    }
+
+    pub(super) fn retry(&mut self) -> Result<(), String> {
+        if self.worker.is_some() {
+            return Err("Profile migration is already running".into());
+        }
+        self.pending = self.retry.clone();
+        self.completion = None;
+        self.pending
+            .as_ref()
+            .map(|_| ())
+            .ok_or_else(|| "Profile migration is not available in this launch mode".into())
+    }
+
+    pub(super) fn schedule(&mut self, notify: std::sync::Arc<dyn Fn() + Send + Sync>) -> Result<bool, String> {
+        let Some(initialization) = self.pending.take() else {
+            return Ok(false);
+        };
+        let retry = initialization.clone();
+        self.cancel.store(false, std::sync::atomic::Ordering::Release);
+        let cancel = self.cancel.clone();
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        match std::thread::Builder::new()
+            .name("bareline-profile-initialize".into())
+            .spawn(move || {
+                let profile_root = initialization.local.clone();
+                let migration = match (initialization.roaming.as_deref(), initialization.local.as_deref()) {
+                    (Some(roaming), Some(local)) => {
+                        let retire_sources = bareline_file_io::profile_migration::retirement_ready(
+                            local,
+                            &bareline_platform_windows::WindowsFileSystem,
+                        );
+                        bareline_file_io::profile_migration::migrate(
+                            bareline_file_io::profile_migration::MigrationRequest {
+                                roaming,
+                                local,
+                                retire_sources,
+                                max_entries: 16_384,
+                                max_io_bytes: 8 * 1024 * 1024 * 1024,
+                                max_time: std::time::Duration::from_secs(30),
+                            },
+                            &bareline_platform_windows::WindowsFileSystem,
+                            &|| cancel.load(std::sync::atomic::Ordering::Acquire),
+                        )
+                        .map_err(|error| error.to_string())
+                    }
+                    _ => Ok(Default::default()),
+                };
+                let authorities = match (initialization.roaming.as_deref(), initialization.local.as_deref()) {
+                    (Some(roaming), Some(local)) => bareline_file_io::profile_migration::inspect_authorities(
+                        roaming,
+                        local,
+                        &bareline_platform_windows::WindowsFileSystem,
+                    ),
+                    _ => Default::default(),
+                };
+                let cleanup = bareline_file_io::owned_cache::sweep(
+                    &initialization.temp,
+                    &std::collections::HashSet::new(),
+                    &bareline_platform_windows::WindowsFileSystem,
+                    &|| cancel.load(std::sync::atomic::Ordering::Acquire),
+                    256,
+                    std::time::Duration::from_millis(100),
+                );
+                let _ = sender.send(Ok(ProfileInitializationResult {
+                    profile_root,
+                    migration,
+                    authorities,
+                    cleanup,
+                }));
+                notify();
+            }) {
+            Ok(_) => {
+                self.worker = Some(receiver);
+                self.completion = None;
+                Ok(true)
+            }
+            Err(error) => {
+                let error = format!("Cannot schedule profile initialization: {error}");
+                self.pending = Some(retry);
+                self.completion = Some(Err(error.clone()));
+                Err(error)
+            }
+        }
+    }
+
+    pub(super) fn pump(&mut self) -> bool {
+        let Some(worker) = self.worker.as_ref() else {
+            return false;
+        };
+        let completion = match worker.try_recv() {
+            Ok(result) => result,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return false,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                Err("Profile initialization worker stopped without a result".into())
+            }
+        };
+        self.worker = None;
+        self.completion = Some(completion);
+        true
+    }
+
+    /// Retained completion receipt for PR-T02 to reconcile migrated settings and
+    /// session state against revisions created after the first frame.
+    #[cfg(test)]
+    pub(super) fn completion(&self) -> Option<&Result<ProfileInitializationResult, String>> {
+        self.completion.as_ref()
+    }
+
+    pub(super) fn take_completion(&mut self) -> Option<Result<ProfileInitializationResult, String>> {
+        self.completion.take()
+    }
+
+    pub(super) fn settled(&self) -> bool {
+        self.worker.is_none() && (self.pending.is_none() || self.completion.is_some())
+    }
+}
+impl Drop for ProfileInitializationRuntime {
+    fn drop(&mut self) {
+        self.cancel.store(true, std::sync::atomic::Ordering::Release);
+    }
+}
+
 pub struct LaunchConfig {
+    pub(super) mode: LaunchMode,
     pub performance: Option<super::performance::PerformanceConfig>,
+    pub(super) profile_initialization: Option<ProfileInitialization>,
     pub portable: bool,
     pub settings_path: Option<PathBuf>,
+    pub(super) legacy_settings_path: Option<PathBuf>,
     pub session_path: Option<PathBuf>,
+    pub(super) legacy_session_path: Option<PathBuf>,
     pub recovery_path: Option<PathBuf>,
+    pub(super) legacy_recovery_path: Option<PathBuf>,
     pub extensions_path: Option<PathBuf>,
+    pub(super) legacy_extensions_path: Option<PathBuf>,
     pub diagnostics_path: Option<PathBuf>,
     pub paths: Vec<PathBuf>,
     pub line: Option<u64>,
@@ -197,27 +982,40 @@ pub struct LaunchConfig {
     pub no_session: bool,
     pub no_extensions: bool,
     pub new_instance: bool,
-    pub help: bool,
-    pub version: bool,
     pub software: bool,
     pub hardware: bool,
     pub smoke: bool,
     pub prototype: bool,
     pub perf: bool,
+    pub diag_handles: bool,
 }
 
-pub fn parse(
-    args: &[OsString],
-    ledger: &mut StartupLedger,
-) -> Result<LaunchConfig, Box<dyn std::error::Error>> {
+pub(super) fn parse(args: &[OsString], ledger: &mut StartupLedger) -> Result<ParsedLaunch, Box<dyn std::error::Error>> {
     ledger.record(StartupAction::ParseCli);
     let (filtered, performance) = super::performance::parse_args(args)?;
     let args = &filtered;
     let mut product = Vec::new();
-    let (mut software, mut hardware, mut smoke, mut prototype, mut perf) =
-        (false, false, false, false, false);
+    let (mut software, mut hardware, mut smoke, mut prototype, mut perf) = (false, false, false, false, false);
     let mut after_separator = false;
-    for arg in args {
+    let mut diag: Option<OsString> = None;
+    let mut diagnostic_root: Option<PathBuf> = None;
+    let mut args_iter = args.iter();
+    while let Some(arg) = args_iter.next() {
+        if !after_separator && arg == "--diag" {
+            diag = Some(args_iter.next().ok_or("Missing diagnostic option value")?.clone());
+            continue;
+        }
+        if !after_separator && arg == "--diag=handles" {
+            diag = Some(OsString::from("handles"));
+            continue;
+        }
+        if !after_separator && arg == "--diagnostic-root" {
+            let value = args_iter.next().ok_or("Missing diagnostic root")?;
+            if diagnostic_root.replace(PathBuf::from(value)).is_some() {
+                return Err("Duplicate diagnostic root".into());
+            }
+            continue;
+        }
         if !after_separator && arg == "--" {
             after_separator = true;
             product.push(arg.clone());
@@ -248,68 +1046,386 @@ pub fn parse(
         product.push(arg.clone());
     }
     let options = bareline_distribution::cli::parse(product)?;
-    if performance.is_some() && !options.paths.is_empty() { return Err("Performance workloads reject ordinary document paths".into()); }
+    if options.help && options.version {
+        return Err("Choose either --help or --version".into());
+    }
+    if software && hardware {
+        return Err("Choose either --software or --hardware".into());
+    }
+    if diag.as_deref().is_some_and(|value| value != "handles") {
+        return Err("Unknown diagnostic option".into());
+    }
+    if performance.is_some() && !options.paths.is_empty() {
+        return Err("Performance workloads reject ordinary document paths".into());
+    }
     if options.paths.len() > 16 || (!options.paths.is_empty() && (smoke || perf || prototype)) {
         return Err("Open up to 16 paths; diagnostic modes do not accept document paths.".into());
     }
-    let executable = std::env::current_exe()?;
-    let directory = executable
-        .parent()
-        .ok_or("executable directory unavailable")?;
-    // Empty marker is part of settings discovery, bounded/tracked like other config.
-    let portable = ledger
-        .read_config(
-            &directory.join("bareline.portable"),
-            StartupAction::ReadSettings,
-            0,
-        )?
-        .is_some();
-    let installed = std::env::var_os("APPDATA").map(|root| PathBuf::from(root).join("Bareline"));
-    let root = if let Some(config) = &performance { Some(config.root.clone()) } else if portable {
-        bareline_distribution::data_root(&executable, true, directory)
+    let diagnostic_count = usize::from(smoke) + usize::from(perf) + usize::from(prototype);
+    if diagnostic_count > 1 {
+        return Err("Choose one diagnostic mode".into());
+    }
+    if performance.is_some() && (diagnostic_count != 0 || diag.is_some()) {
+        return Err("Performance workload cannot be combined with diagnostic modes".into());
+    }
+    let mode = if options.help {
+        LaunchMode::Help
+    } else if options.version {
+        LaunchMode::Version
+    } else if performance.is_some() {
+        LaunchMode::Performance
+    } else if diagnostic_count != 0 || diag.is_some() {
+        LaunchMode::Diagnostic
     } else {
-        installed
+        LaunchMode::Installed
     };
-    let cwd = std::env::current_dir()?;
-    Ok(LaunchConfig {
-        portable,
-        settings_path: root.as_ref().map(|p| p.join("settings.toml")),
-        session_path: root.as_ref().map(|p| p.join("session.json")),
-        recovery_path: root.as_ref().map(|p| p.join("recovery")),
-        extensions_path: root.as_ref().map(|p| p.join("extensions")),
-        diagnostics_path: if performance.is_some() { root.as_ref().map(|p|p.join("diagnostics")) } else if smoke {
-            None
-        } else if portable {
-            root.as_ref().map(|p| p.join("diagnostics"))
-        } else {
-            std::env::var_os("LOCALAPPDATA").map(|p| PathBuf::from(p).join("Bareline/diagnostics"))
-        },
-        paths: options
-            .paths
-            .into_iter()
-            .map(|p| if p.is_absolute() { p } else { cwd.join(p) })
-            .collect(),
-        line: options.line,
-        column: options.column,
-        read_only: options.read_only,
-        monitor: options.monitor,
-        no_session: options.no_session || performance.is_some(),
-        no_extensions: options.no_extensions || performance.as_ref().is_some_and(|config| !config.requires_extensions()),
-        new_instance: options.new_instance || performance.is_some(),
-        help: options.help,
-        version: options.version,
+    if diagnostic_root.is_some() && mode != LaunchMode::Diagnostic {
+        return Err("--diagnostic-root requires a diagnostic mode".into());
+    }
+    Ok(ParsedLaunch {
+        mode,
+        performance,
+        options,
         software,
         hardware,
         smoke,
         prototype,
         perf,
-        performance,
+        diag_handles: diag.is_some(),
+        diagnostic_root,
     })
+}
+
+pub(super) fn prepare(
+    parsed: ParsedLaunch,
+    ledger: &mut StartupLedger,
+) -> Result<LaunchConfig, Box<dyn std::error::Error>> {
+    debug_assert!(!matches!(parsed.mode, LaunchMode::Help | LaunchMode::Version));
+    let executable = std::env::current_exe()?;
+    let directory = executable.parent().ok_or("executable directory unavailable")?;
+    // Capture this before process search hardening changes the process CWD.
+    let cwd = std::env::current_dir()?;
+    let performance = parsed.performance.map(super::performance::prepare).transpose()?;
+    // The portable marker is configuration discovery, so informational and invalid
+    // invocations return before it is read.
+    let portable = matches!(parsed.mode, LaunchMode::Installed | LaunchMode::Diagnostic)
+        && parsed.diagnostic_root.is_none()
+        && ledger
+            .read_config(&directory.join("bareline.portable"), StartupAction::ReadSettings, 0)?
+            .is_some();
+    let mode = select_mode(parsed.mode, portable);
+    let diagnostic_root = parsed
+        .diagnostic_root
+        .map(|root| validate_diagnostic_root(&root))
+        .transpose()?;
+    // Settings, session, recovery journals and macros are machine-local data.
+    // Installed locations are not even discovered for an isolated launch.
+    let (roaming, local) = if mode == LaunchMode::Installed {
+        (
+            std::env::var_os("APPDATA").map(|root| PathBuf::from(root).join("Bareline")),
+            std::env::var_os("LOCALAPPDATA").map(|root| PathBuf::from(root).join("Bareline")),
+        )
+    } else {
+        (None, None)
+    };
+    let installed = local.clone().or_else(|| roaming.clone());
+    let root = match mode {
+        LaunchMode::Performance => performance.as_ref().map(|config| config.root.clone()),
+        LaunchMode::Portable => bareline_distribution::data_root(&executable, true, directory),
+        LaunchMode::Diagnostic => {
+            Some(diagnostic_root.ok_or("Diagnostic mode requires --diagnostic-root or a portable executable")?)
+        }
+        LaunchMode::Installed => installed,
+        LaunchMode::Help | LaunchMode::Version => unreachable!(),
+    };
+    let legacy = legacy_root(mode, roaming.clone());
+    let profile_initialization = profile_initialization(mode, roaming.clone(), local.clone(), std::env::temp_dir());
+    let config = LaunchConfig {
+        mode,
+        profile_initialization,
+        portable,
+        settings_path: root.as_ref().map(|p| p.join("settings.toml")),
+        legacy_settings_path: legacy.as_ref().map(|p| p.join("settings.toml")),
+        session_path: root.as_ref().map(|p| p.join("session.json")),
+        legacy_session_path: legacy.as_ref().map(|p| p.join("session.json")),
+        recovery_path: root.as_ref().map(|p| p.join("recovery")),
+        legacy_recovery_path: legacy.as_ref().map(|p| p.join("recovery")),
+        extensions_path: root.as_ref().map(|p| p.join("extensions")),
+        legacy_extensions_path: legacy.as_ref().map(|p| p.join("extensions")),
+        diagnostics_path: root.as_ref().map(|path| path.join("diagnostics")),
+        paths: parsed
+            .options
+            .paths
+            .into_iter()
+            .map(|p| if p.is_absolute() { p } else { cwd.join(p) })
+            .collect(),
+        line: parsed.options.line,
+        column: parsed.options.column,
+        read_only: parsed.options.read_only,
+        monitor: parsed.options.monitor,
+        no_session: parsed.options.no_session || performance.is_some(),
+        no_extensions: parsed.options.no_extensions
+            || performance.as_ref().is_some_and(|config| !config.requires_extensions()),
+        new_instance: parsed.options.new_instance || performance.is_some(),
+        software: parsed.software,
+        hardware: parsed.hardware,
+        smoke: parsed.smoke,
+        prototype: parsed.prototype,
+        perf: parsed.perf,
+        diag_handles: parsed.diag_handles,
+        performance,
+    };
+    // Relative command line paths were resolved against the launch directory above;
+    // from here the process must not search it for executables or DLLs (SEC-01).
+    let _ = bareline_platform_windows::shell_integration::harden_process_search_paths();
+    if config.diag_handles {
+        log_handle_counters(config.diagnostics_path.as_deref());
+    }
+    Ok(config)
+}
+
+fn legacy_root(mode: LaunchMode, roaming: Option<PathBuf>) -> Option<PathBuf> {
+    (mode == LaunchMode::Installed).then_some(roaming).flatten()
+}
+
+fn validate_diagnostic_root(root: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let root = root.canonicalize()?;
+    let marker = std::fs::symlink_metadata(root.join(".bareline-diagnostic"))?;
+    if !marker.is_file() || marker.file_type().is_symlink() || marker.len() != 0 {
+        return Err("Diagnostic root requires an empty regular .bareline-diagnostic marker".into());
+    }
+    Ok(root)
+}
+
+fn select_mode(requested: LaunchMode, portable_marker: bool) -> LaunchMode {
+    if matches!(requested, LaunchMode::Installed | LaunchMode::Diagnostic) && portable_marker {
+        LaunchMode::Portable
+    } else {
+        requested
+    }
+}
+
+fn profile_initialization(
+    mode: LaunchMode,
+    roaming: Option<PathBuf>,
+    local: Option<PathBuf>,
+    temp: PathBuf,
+) -> Option<ProfileInitialization> {
+    (mode == LaunchMode::Installed).then_some(ProfileInitialization { roaming, local, temp })
+}
+
+/// `bareline --diag handles` records the process handle counters so a leak shows
+/// up as a growing number across runs. Sampled at startup and after each close.
+pub(super) fn log_handle_counters(directory: Option<&Path>) {
+    let Some(directory) = directory else { return };
+    if std::fs::create_dir_all(directory).is_err() {
+        return;
+    }
+    let (handles, gdi, user) = handle_counters();
+    let line = format!(
+        "handles pid={} process={handles} gdi={gdi} user={user}\n",
+        std::process::id()
+    );
+    use std::io::Write;
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(directory.join("handles.log"))
+    {
+        let _ = file.write_all(line.as_bytes());
+    }
+}
+
+#[cfg(windows)]
+fn handle_counters() -> (u32, u32, u32) {
+    use windows::Win32::System::Threading::{
+        GR_GDIOBJECTS, GR_USEROBJECTS, GetCurrentProcess, GetGuiResources, GetProcessHandleCount,
+    };
+    // SAFETY: pseudo handle for the current process; counters are plain outputs.
+    unsafe {
+        let process = GetCurrentProcess();
+        let mut handles = 0u32;
+        let _ = GetProcessHandleCount(process, &mut handles);
+        (
+            handles,
+            GetGuiResources(process, GR_GDIOBJECTS),
+            GetGuiResources(process, GR_USEROBJECTS),
+        )
+    }
+}
+#[cfg(not(windows))]
+fn handle_counters() -> (u32, u32, u32) {
+    (0, 0, 0)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn parser_returns_typed_modes_without_preparing_paths() {
+        let mut ledger = StartupLedger::default();
+        let help = parse(&[OsString::from("--help")], &mut ledger).unwrap();
+        assert_eq!(help.mode(), LaunchMode::Help);
+
+        let version = parse(&[OsString::from("--version")], &mut ledger).unwrap();
+        assert_eq!(version.mode(), LaunchMode::Version);
+
+        let diagnostic = parse(&[OsString::from("--smoke")], &mut ledger).unwrap();
+        assert_eq!(diagnostic.mode(), LaunchMode::Diagnostic);
+
+        let performance = parse(
+            &[
+                OsString::from("--perf-workload"),
+                OsString::from("launch"),
+                OsString::from("--perf-root"),
+                OsString::from("missing-root-is-not-probed-by-parse"),
+            ],
+            &mut ledger,
+        )
+        .unwrap();
+        assert_eq!(performance.mode(), LaunchMode::Performance);
+
+        let installed = parse(&[], &mut ledger).unwrap();
+        assert_eq!(installed.mode(), LaunchMode::Installed);
+    }
+
+    #[test]
+    fn parser_preserves_option_like_and_non_ascii_paths_after_separator() {
+        let mut ledger = StartupLedger::default();
+        let parsed = parse(
+            &[
+                OsString::from("--"),
+                OsString::from("--version"),
+                OsString::from("文書.txt"),
+            ],
+            &mut ledger,
+        )
+        .unwrap();
+        assert_eq!(parsed.mode(), LaunchMode::Installed);
+        assert_eq!(
+            parsed.options.paths,
+            [PathBuf::from("--version"), PathBuf::from("文書.txt")]
+        );
+    }
+
+    #[test]
+    fn parser_rejects_contradictory_and_invalid_modes() {
+        for args in [
+            vec!["--help", "--version"],
+            vec!["--software", "--hardware"],
+            vec!["--smoke", "--perf"],
+            vec!["--diag"],
+            vec!["--diag", "unknown"],
+        ] {
+            let mut ledger = StartupLedger::default();
+            assert!(parse(&args.into_iter().map(OsString::from).collect::<Vec<_>>(), &mut ledger).is_err());
+        }
+        for diagnostic in [["--smoke"], ["--text-prototype"], ["--perf"], ["--diag=handles"]] {
+            let mut args = ["--perf-workload", "launch", "--perf-root", "unprepared-root"]
+                .into_iter()
+                .map(OsString::from)
+                .collect::<Vec<_>>();
+            args.extend(diagnostic.into_iter().map(OsString::from));
+            let mut ledger = StartupLedger::default();
+            assert!(parse(&args, &mut ledger).is_err());
+        }
+        let mut ledger = StartupLedger::default();
+        assert!(
+            parse(
+                &[
+                    "--perf-workload",
+                    "launch",
+                    "--perf-root",
+                    "unprepared-root",
+                    "--diag",
+                    "handles",
+                ]
+                .into_iter()
+                .map(OsString::from)
+                .collect::<Vec<_>>(),
+                &mut ledger,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn only_installed_mode_owns_profile_initialization() {
+        assert_eq!(select_mode(LaunchMode::Installed, true), LaunchMode::Portable);
+        assert_eq!(select_mode(LaunchMode::Diagnostic, true), LaunchMode::Portable);
+        for mode in [
+            LaunchMode::Help,
+            LaunchMode::Version,
+            LaunchMode::Diagnostic,
+            LaunchMode::Portable,
+            LaunchMode::Performance,
+        ] {
+            assert!(profile_initialization(mode, None, None, PathBuf::from("temp")).is_none());
+        }
+        assert!(profile_initialization(LaunchMode::Installed, None, None, PathBuf::from("temp")).is_some());
+        let installed = PathBuf::from("installed-profile");
+        assert_eq!(
+            legacy_root(LaunchMode::Installed, Some(installed.clone())),
+            Some(installed.clone())
+        );
+        for mode in [LaunchMode::Portable, LaunchMode::Diagnostic, LaunchMode::Performance] {
+            assert_eq!(legacy_root(mode, Some(installed.clone())), None);
+        }
+    }
+
+    #[test]
+    fn diagnostic_root_requires_an_owned_empty_regular_marker() {
+        let root = std::env::temp_dir().join(format!(
+            "bareline-diagnostic-root-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let marker = root.join(".bareline-diagnostic");
+        assert!(validate_diagnostic_root(&root).is_err());
+        std::fs::write(&marker, []).unwrap();
+        assert_eq!(validate_diagnostic_root(&root).unwrap(), root.canonicalize().unwrap());
+        std::fs::write(&marker, b"not-owned").unwrap();
+        assert!(validate_diagnostic_root(&root).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn installed_initialization_retains_its_completion_receipt() {
+        let temp = std::env::temp_dir().join(format!(
+            "bareline-initialization-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&temp).unwrap();
+        let pending = profile_initialization(LaunchMode::Installed, None, None, temp.clone());
+        let mut runtime = ProfileInitializationRuntime::new(pending);
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        assert!(
+            runtime
+                .schedule(std::sync::Arc::new(move || {
+                    let _ = sender.send(());
+                }))
+                .unwrap()
+        );
+        receiver.recv_timeout(std::time::Duration::from_secs(2)).unwrap();
+        assert!(runtime.pump());
+        let completion = runtime.completion().unwrap().as_ref().unwrap();
+        assert_eq!(completion.profile_root, None);
+        assert!(completion.migration.as_ref().unwrap().items.is_empty());
+        assert!(completion.authorities.items.is_empty());
+        assert!(runtime.settled());
+        runtime.retry().unwrap();
+        assert!(!runtime.settled());
+        std::fs::remove_dir_all(temp).unwrap();
+    }
+
     #[test]
     fn launch_coordinates_clamp_and_preserve_utf8_boundaries() {
         let document = bareline_document::Document::from_utf8(

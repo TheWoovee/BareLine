@@ -6,9 +6,7 @@ use super::{
     state::{EncodingState, EolState},
 };
 use crate::{CodecError, DecodedSink, DecodedSpan, StreamingDecoder};
-use bareline_document::{
-    Budget, BudgetClaim, Document, DocumentBuilder, DocumentSnapshot, TextOffset,
-};
+use bareline_document::{Budget, BudgetClaim, Document, DocumentBuilder, DocumentSnapshot, TextOffset};
 use std::{io::Write, ops::Range, sync::Arc};
 
 #[derive(Clone, Debug)]
@@ -42,12 +40,34 @@ mod tests {
     }
     #[test]
     fn failures_use_current_text_offsets_after_prefix_edits() {
-        let (mut document,codec)=open(vec![b'A',255,b'B'],Encoding::Utf8);
-        document.apply(EditTransaction {base_revision:document.snapshot().revision,edits:vec![Edit {range:TextOffset(0)..TextOffset(0),insert:"prefix".into()}]}).unwrap();
-        let Err(ResidentError::At {range,..})=save(&document,&codec,Encoding::Utf16Le) else {panic!("expected opaque range")};assert_eq!(range,7..10);
-        let (mut document,codec)=open(b"A".to_vec(),Encoding::Utf8);
-        document.apply(EditTransaction {base_revision:document.snapshot().revision,edits:vec![Edit {range:TextOffset(1)..TextOffset(1),insert:"x😀z".into()}]}).unwrap();
-        let Err(ResidentError::At {range,..})=save(&document,&codec,Encoding::Latin1) else {panic!("expected scalar range")};assert_eq!(range,2..6);
+        let (mut document, codec) = open(vec![b'A', 255, b'B'], Encoding::Utf8);
+        document
+            .apply(EditTransaction {
+                base_revision: document.snapshot().revision,
+                edits: vec![Edit {
+                    range: TextOffset(0)..TextOffset(0),
+                    insert: "prefix".into(),
+                }],
+            })
+            .unwrap();
+        let Err(ResidentError::At { range, .. }) = save(&document, &codec, Encoding::Utf16Le) else {
+            panic!("expected opaque range")
+        };
+        assert_eq!(range, 7..10);
+        let (mut document, codec) = open(b"A".to_vec(), Encoding::Utf8);
+        document
+            .apply(EditTransaction {
+                base_revision: document.snapshot().revision,
+                edits: vec![Edit {
+                    range: TextOffset(1)..TextOffset(1),
+                    insert: "x😀z".into(),
+                }],
+            })
+            .unwrap();
+        let Err(ResidentError::At { range, .. }) = save(&document, &codec, Encoding::Latin1) else {
+            panic!("expected scalar range")
+        };
+        assert_eq!(range, 2..6);
     }
     #[test]
     fn all_catalog_raw_bytes_survive_unchanged_and_unrelated_edits() {
@@ -96,10 +116,7 @@ mod tests {
     #[test]
     fn opaque_conversion_refuses_but_removed_opaque_does_not_poison_document() {
         let (mut d, p) = open(vec![b'A', 255, b'B'], Encoding::Utf8);
-        assert!(matches!(
-            save(&d, &p, Encoding::Utf16Le),
-            Err(ResidentError::At { .. })
-        ));
+        assert!(matches!(save(&d, &p, Encoding::Utf16Le), Err(ResidentError::At { .. })));
         d.apply(EditTransaction {
             base_revision: d.snapshot().revision,
             edits: vec![Edit {
@@ -131,10 +148,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            interpreted
-                .snapshot()
-                .read(TextOffset(0)..TextOffset(4), 100)
-                .unwrap(),
+            interpreted.snapshot().read(TextOffset(0)..TextOffset(4), 100).unwrap(),
             "AÿB"
         );
     }
@@ -152,10 +166,7 @@ mod tests {
         assert_eq!(save(&d, &p, Encoding::Utf16Le).unwrap(), [65, 0]);
         let (d, mut p) = open(vec![255], Encoding::Utf8);
         p.state.user_override = Some(Encoding::Utf16Le);
-        assert!(matches!(
-            save(&d, &p, Encoding::Utf16Le),
-            Err(ResidentError::At { .. })
-        ));
+        assert!(matches!(save(&d, &p, Encoding::Utf16Le), Err(ResidentError::At { .. })));
     }
 }
 #[derive(Clone)]
@@ -170,7 +181,10 @@ pub struct ResidentEncoding {
 }
 #[derive(Debug)]
 pub enum ResidentError {
-    At {range: std::ops::Range<usize>, reason: String},
+    At {
+        range: std::ops::Range<usize>,
+        reason: String,
+    },
     Cancelled,
     Limit,
     Document(bareline_document::Error),
@@ -216,9 +230,7 @@ impl DecodedSink for Collector {
                 && m.raw.end == span.original.start.0 as usize
         });
         if !coalesce && self.mapping.len() >= self.mapping_limit {
-            return Err(CodecError::Output(std::io::Error::other(
-                "resident provenance quota",
-            )));
+            return Err(CodecError::Output(std::io::Error::other("resident provenance quota")));
         }
         // Exact growth prevents Vec/String's geometric reserve from exceeding the
         // caller's explicit temporary limits near a quota boundary.
@@ -227,9 +239,7 @@ impl DecodedSink for Collector {
             self.claims.push(
                 self.budget
                     .claim(additional * std::mem::size_of::<Mapping>())
-                    .map_err(|e| {
-                        CodecError::Output(std::io::Error::other(format!("budget: {e:?}")))
-                    })?,
+                    .map_err(|e| CodecError::Output(std::io::Error::other(format!("budget: {e:?}"))))?,
             );
             self.mapping
                 .try_reserve_exact(additional)
@@ -263,9 +273,9 @@ impl DecodedSink for Collector {
 impl Collector {
     fn flush(&mut self) -> Result<(), CodecError> {
         if !self.text.is_empty() {
-            self.builder.append(&self.text).map_err(|e| {
-                CodecError::Output(std::io::Error::other(format!("document: {e:?}")))
-            })?;
+            self.builder
+                .append(&self.text)
+                .map_err(|e| CodecError::Output(std::io::Error::other(format!("document: {e:?}"))))?;
             self.text_offset += self.text.len();
             self.text.clear();
         }
@@ -295,8 +305,7 @@ impl ResidentBuilder {
         let mut state = EncodingState::new(detect(sample));
         state.user_override = interpret;
         state.save_target = state.interpreted();
-        state.bom =
-            !state.interpreted().bom().is_empty() && sample.starts_with(state.interpreted().bom());
+        state.bom = !state.interpreted().bom().is_empty() && sample.starts_with(state.interpreted().bom());
         Ok(Self {
             decoder: Decoder::new(state.interpreted()),
             collector: Collector {
@@ -348,13 +357,23 @@ impl ResidentBuilder {
     }
 }
 impl ResidentEncoding {
-    pub fn original_bytes(&self) -> Arc<Vec<u8>> { self.raw.clone() }
-    pub fn has_opaque_original(&self) -> bool { self.mapping.iter().any(|span| span.opaque) }
-    pub fn original_encoding(&self) -> Encoding { self.original_encoding }
+    pub fn original_bytes(&self) -> Arc<Vec<u8>> {
+        self.raw.clone()
+    }
+    pub fn has_opaque_original(&self) -> bool {
+        self.mapping.iter().any(|span| span.opaque)
+    }
+    pub fn original_encoding(&self) -> Encoding {
+        self.original_encoding
+    }
     /// Pointer identity distinguishes retained original allocation from typed equal text.
     pub fn spill_original_range(&self, text: &str) -> Option<std::ops::Range<u64>> {
         let mut offset = 0u64;
-        for chunk in self.baseline.chunks(TextOffset(0)..TextOffset(self.baseline.len())).ok()? {
+        for chunk in self
+            .baseline
+            .chunks(TextOffset(0)..TextOffset(self.baseline.len()))
+            .ok()?
+        {
             if let Some(local) = (text.as_ptr() as usize).checked_sub(chunk.as_ptr() as usize) {
                 if local <= chunk.len() && text.len() <= chunk.len() - local {
                     let start = offset + local as u64;
@@ -365,14 +384,36 @@ impl ResidentEncoding {
         }
         None
     }
-    pub fn recovery_pieces(&self, snapshot: &DocumentSnapshot) -> Result<Vec<bareline_document::paged::RestoredPiece>, ResidentError> {
-        if !snapshot.same_document(&self.baseline) { return Err(ResidentError::WrongDocument); }
-        let mut originals=Vec::new();let mut offset=0;
-        for text in self.baseline.chunks(TextOffset(0)..TextOffset(self.baseline.len()))? { originals.push((text.as_ptr() as usize,text.len(),offset));offset+=text.len(); }
-        snapshot.chunks(TextOffset(0)..TextOffset(snapshot.len()))?.map(|text| {
-            let origin=originals.iter().find_map(|&(base,len,offset)| (text.as_ptr() as usize).checked_sub(base).filter(|&n| n<=len && text.len()<=len-n).map(|n|offset+n));
-            Ok(match origin {Some(start)=>bareline_document::paged::RestoredPiece::Original(start as u64..(start+text.len()) as u64),None=>bareline_document::paged::RestoredPiece::Inserted(text.to_owned())})
-        }).collect()
+    pub fn recovery_pieces(
+        &self,
+        snapshot: &DocumentSnapshot,
+    ) -> Result<Vec<bareline_document::paged::RestoredPiece>, ResidentError> {
+        if !snapshot.same_document(&self.baseline) {
+            return Err(ResidentError::WrongDocument);
+        }
+        let mut originals = Vec::new();
+        let mut offset = 0;
+        for text in self.baseline.chunks(TextOffset(0)..TextOffset(self.baseline.len()))? {
+            originals.push((text.as_ptr() as usize, text.len(), offset));
+            offset += text.len();
+        }
+        snapshot
+            .chunks(TextOffset(0)..TextOffset(snapshot.len()))?
+            .map(|text| {
+                let origin = originals.iter().find_map(|&(base, len, offset)| {
+                    (text.as_ptr() as usize)
+                        .checked_sub(base)
+                        .filter(|&n| n <= len && text.len() <= len - n)
+                        .map(|n| offset + n)
+                });
+                Ok(match origin {
+                    Some(start) => {
+                        bareline_document::paged::RestoredPiece::Original(start as u64..(start + text.len()) as u64)
+                    }
+                    None => bareline_document::paged::RestoredPiece::Inserted(text.to_owned()),
+                })
+            })
+            .collect()
     }
 
     /// No source file writes. All temporary allocation is bounded by explicit limits;
@@ -388,14 +429,7 @@ impl ResidentEncoding {
         if raw.len() > max_raw_bytes {
             return Err(ResidentError::Limit);
         }
-        let mut builder = ResidentBuilder::new(
-            &raw,
-            interpret,
-            bytes,
-            history,
-            raw.len(),
-            max_mapping_bytes,
-        )?;
+        let mut builder = ResidentBuilder::new(&raw, interpret, bytes, history, raw.len(), max_mapping_bytes)?;
         for chunk in raw.chunks(65536) {
             builder.push(chunk)?;
         }
@@ -449,15 +483,13 @@ impl ResidentEncoding {
         bom: bool,
         out: &mut dyn Write,
     ) -> Result<(), ResidentError> {
-        let policy=super::state::metadata_encoding(snapshot.metadata());
-        let (target,bom)=policy.map_or((target,bom),|state|(state.save_target,state.bom));
+        let policy = super::state::metadata_encoding(snapshot.metadata());
+        let (target, bom) = policy.map_or((target, bom), |state| (state.save_target, state.bom));
         if !snapshot.same_document(&self.baseline) {
             return Err(ResidentError::WrongDocument);
         }
         if !snapshot.is_complete() {
-            return Err(ResidentError::Document(
-                bareline_document::Error::IncompleteSource,
-            ));
+            return Err(ResidentError::Document(bareline_document::Error::IncompleteSource));
         }
         let write = |out: &mut dyn Write, b: &[u8]| {
             for chunk in b.chunks(65536) {
@@ -474,10 +506,7 @@ impl ResidentEncoding {
         // owns every segment for this operation's lifetime, preventing allocator reuse.
         let mut original_chunks = Vec::new();
         let mut offset = 0;
-        for s in self
-            .baseline
-            .chunks(TextOffset(0)..TextOffset(self.baseline.len()))?
-        {
+        for s in self.baseline.chunks(TextOffset(0)..TextOffset(self.baseline.len()))? {
             original_chunks.push((s.as_ptr() as usize, s.len(), offset));
             offset += s.len();
         }
@@ -490,10 +519,8 @@ impl ResidentEncoding {
                     .map(|n| offset + n)
             })
         };
-        let mut chunks = snapshot
-            .chunks(TextOffset(0)..TextOffset(snapshot.len()))?
-            .peekable();
-        let mut document_offset=0usize;
+        let mut chunks = snapshot.chunks(TextOffset(0)..TextOffset(snapshot.len()))?.peekable();
+        let mut document_offset = 0usize;
         while let Some(chunk) = chunks.next() {
             if let Some(start) = origin_of(chunk) {
                 let mut end = start + chunk.len();
@@ -505,49 +532,51 @@ impl ResidentEncoding {
                     chunks.next();
                 }
                 let first = self.mapping.partition_point(|m| m.text.end <= start);
-                for m in self.mapping[first..]
-                    .iter()
-                    .take_while(|m| m.text.start < end)
-                {
+                for m in self.mapping[first..].iter().take_while(|m| m.text.start < end) {
                     let a = m.text.start.max(start);
                     let b = m.text.end.min(end);
                     if m.opaque && target != self.original_encoding {
-                        return Err(ResidentError::At {range:document_offset+a-start..document_offset+b-start,reason:"Unresolved original bytes cannot be converted".into()});
+                        return Err(ResidentError::At {
+                            range: document_offset + a - start..document_offset + b - start,
+                            reason: "Unresolved original bytes cannot be converted".into(),
+                        });
                     }
                     let encode_range = |a, b, out: &mut dyn Write| -> Result<(), ResidentError> {
-                        let mut at=document_offset+a-start;
+                        let mut at = document_offset + a - start;
                         for text in self.baseline.chunks(TextOffset(a)..TextOffset(b))? {
-                            for (local,part) in super::failure::bounded_chunks(text) {
-                                let encoded=encoder.encode_text(part).map_err(|error|ResidentError::At {range:super::failure::rejected_range(part,target,at+local),reason:format!("{error:?}")})?;
+                            for (local, part) in super::failure::bounded_chunks(text) {
+                                let encoded = encoder.encode_text(part).map_err(|error| ResidentError::At {
+                                    range: super::failure::rejected_range(part, target, at + local),
+                                    reason: format!("{error:?}"),
+                                })?;
                                 write(out, &encoded)?;
-                            } at+=text.len();
+                            }
+                            at += text.len();
                         }
                         Ok(())
                     };
                     if target == self.original_encoding {
-                        let aligned_a = (m.text.start
-                            + (a - m.text.start).div_ceil(m.text_unit) * m.text_unit)
-                            .min(b);
-                        let aligned_b = (m.text.start
-                            + (b - m.text.start) / m.text_unit * m.text_unit)
-                            .max(aligned_a);
+                        let aligned_a = (m.text.start + (a - m.text.start).div_ceil(m.text_unit) * m.text_unit).min(b);
+                        let aligned_b = (m.text.start + (b - m.text.start) / m.text_unit * m.text_unit).max(aligned_a);
                         encode_range(a, aligned_a, out)?;
-                        let ra =
-                            m.raw.start + (aligned_a - m.text.start) / m.text_unit * m.raw_unit;
-                        let rb =
-                            m.raw.start + (aligned_b - m.text.start) / m.text_unit * m.raw_unit;
+                        let ra = m.raw.start + (aligned_a - m.text.start) / m.text_unit * m.raw_unit;
+                        let rb = m.raw.start + (aligned_b - m.text.start) / m.text_unit * m.raw_unit;
                         write(out, &self.raw[ra..rb])?;
                         encode_range(aligned_b, b, out)?;
                     } else {
                         encode_range(a, b, out)?;
                     }
                 }
-                document_offset+=end-start;
+                document_offset += end - start;
             } else {
-                for (local,part) in super::failure::bounded_chunks(chunk) {
-                    let encoded=encoder.encode_text(part).map_err(|error|ResidentError::At {range:super::failure::rejected_range(part,target,document_offset+local),reason:format!("{error:?}")})?;
+                for (local, part) in super::failure::bounded_chunks(chunk) {
+                    let encoded = encoder.encode_text(part).map_err(|error| ResidentError::At {
+                        range: super::failure::rejected_range(part, target, document_offset + local),
+                        reason: format!("{error:?}"),
+                    })?;
                     write(out, &encoded)?;
-                } document_offset+=chunk.len();
+                }
+                document_offset += chunk.len();
             }
         }
         Ok(())

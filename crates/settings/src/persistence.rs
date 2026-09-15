@@ -23,31 +23,18 @@ pub fn read_config(path: &Path) -> io::Result<Vec<u8>> {
 }
 /// Stages and syncs the complete replacement before invoking the native atomic commit.
 /// No delete-target/rename fallback is allowed. Failure leaves the previous target intact.
-pub fn atomic_write_config(
-    path: &Path,
-    bytes: &[u8],
-    platform: &dyn LocalFileSystem,
-) -> io::Result<()> {
+pub fn atomic_write_config(path: &Path, bytes: &[u8], platform: &dyn LocalFileSystem) -> io::Result<()> {
     write_config(path, bytes, platform, false)
 }
 /// Publish a default configuration only when absent; a concurrent creator is preserved.
-pub fn atomic_create_config(
-    path: &Path,
-    bytes: &[u8],
-    platform: &dyn LocalFileSystem,
-) -> io::Result<()> {
+pub fn atomic_create_config(path: &Path, bytes: &[u8], platform: &dyn LocalFileSystem) -> io::Result<()> {
     platform.validate_target(path)?;
     if path.try_exists()? {
         return Ok(());
     }
     write_config(path, bytes, platform, true)
 }
-fn write_config(
-    path: &Path,
-    bytes: &[u8],
-    platform: &dyn LocalFileSystem,
-    create_only: bool,
-) -> io::Result<()> {
+fn write_config(path: &Path, bytes: &[u8], platform: &dyn LocalFileSystem, create_only: bool) -> io::Result<()> {
     static NEXT: AtomicU64 = AtomicU64::new(0);
     if bytes.len() > MAX_CONFIG_BYTES {
         return Err(io::Error::new(
@@ -65,10 +52,7 @@ fn write_config(
         std::process::id(),
         NEXT.fetch_add(1, Ordering::Relaxed)
     ));
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&staged)?;
+    let mut file = OpenOptions::new().write(true).create_new(true).open(&staged)?;
     let result = (|| {
         file.write_all(bytes)?;
         file.sync_all()?;
@@ -82,8 +66,7 @@ fn write_config(
 }
 impl SettingsDocument {
     pub fn load(path: &Path, scope: Scope) -> io::Result<Self> {
-        Self::parse(&read_config(path)?, scope)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+        Self::parse(&read_config(path)?, scope).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
     }
     pub fn save(&self, path: &Path, platform: &dyn LocalFileSystem) -> io::Result<()> {
         if self.scope == Scope::Session {
@@ -110,17 +93,20 @@ impl SaveStatus {
         }
     }
 }
-/// Holds a revert snapshot independently of live preview. Invalid edits never change the document.
+/// Holds persisted and opening-session snapshots independently of live preview.
+/// Autosave acknowledgements advance `saved`, while Revert always uses `opening`.
 #[derive(Clone, Debug)]
 pub struct SettingsEditor {
     pub document: SettingsDocument,
     saved: SettingsDocument,
+    opening: Option<SettingsDocument>,
+    generation: u64,
     pub status: SaveStatus,
 }
 impl SettingsEditor {
     /// A background save may finish after a newer edit; never overwrite that live edit.
-    pub fn acknowledge_saved(&mut self, snapshot: SettingsDocument) {
-        let current = self.document.to_toml() == snapshot.to_toml();
+    pub fn acknowledge_saved(&mut self, generation: u64, snapshot: SettingsDocument) {
+        let current = self.generation == generation && self.document.to_toml() == snapshot.to_toml();
         self.saved = snapshot;
         self.status = if current {
             SaveStatus::Saved
@@ -132,30 +118,65 @@ impl SettingsEditor {
         Self {
             saved: document.clone(),
             document,
+            opening: None,
+            generation: 0,
             status: SaveStatus::Saved,
         }
     }
+    pub fn begin_session(&mut self) {
+        self.opening = Some(self.document.clone());
+    }
+    pub fn end_session(&mut self) {
+        self.opening = None;
+    }
+    pub fn changed_from_opening(&self) -> bool {
+        self.opening
+            .as_ref()
+            .is_some_and(|opening| opening.to_toml() != self.document.to_toml())
+    }
+    pub fn changed_from_saved(&self) -> bool {
+        self.saved.to_toml() != self.document.to_toml()
+    }
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+    /// Apply an explicit external-reload decision without changing the opening baseline.
+    pub fn replace_from_disk(&mut self, document: SettingsDocument) {
+        self.generation = self.generation.wrapping_add(1);
+        self.saved = document.clone();
+        self.document = document;
+        self.status = SaveStatus::Saved;
+    }
     pub fn set(&mut self, key: &str, value: SettingValue) -> Result<(), String> {
         self.document.set(key, value)?;
+        self.generation = self.generation.wrapping_add(1);
         self.status = SaveStatus::Pending;
         Ok(())
     }
     pub fn reset_section(&mut self, category: &str) -> Vec<&'static str> {
         let keys = self.document.reset_section(category);
         if !keys.is_empty() {
+            self.generation = self.generation.wrapping_add(1);
             self.status = SaveStatus::Pending;
         }
         keys
     }
-    pub fn revert(&mut self) {
-        self.document = self.saved.clone();
-        self.status = SaveStatus::Saved;
+    pub fn revert(&mut self) -> bool {
+        let Some(opening) = self.opening.as_ref() else {
+            return false;
+        };
+        if opening.to_toml() == self.document.to_toml() {
+            return false;
+        }
+        self.document = opening.clone();
+        self.generation = self.generation.wrapping_add(1);
+        self.status = SaveStatus::Pending;
+        true
     }
     pub fn save(&mut self, path: &Path, platform: &dyn LocalFileSystem) -> io::Result<()> {
         match self.document.save(path, platform) {
             Ok(()) => {
-                self.saved = self.document.clone();
-                self.status = SaveStatus::Saved;
+                self.acknowledge_saved(self.generation, self.document.clone());
                 Ok(())
             }
             Err(error) => {

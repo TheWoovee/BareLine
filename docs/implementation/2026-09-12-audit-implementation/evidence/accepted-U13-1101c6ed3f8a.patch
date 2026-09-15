@@ -1,0 +1,467 @@
+diff --git a/crates/app/src/accessibility.rs b/crates/app/src/accessibility.rs
+index 31bdbbc..7e4355c 100644
+--- a/crates/app/src/accessibility.rs
++++ b/crates/app/src/accessibility.rs
+@@ -33,13 +33,28 @@ pub fn status(editor: &crate::workspace::WorkspaceEditor, width: f64, height: f6
+             (size, position, e.eol_status_label().to_owned())
+         }
+         WorkspaceEditor::Paged(e) => {
++            let estimated = e.gutter_lines_estimated();
+             let lines = match e.snapshot().line_count() {
+                 bareline_document::paged::LineCount::Known(count) => format!("{count} lines"),
+-                bareline_document::paged::LineCount::Unknown => "lines indexing".into(),
++                bareline_document::paged::LineCount::Unknown if !estimated => e
++                    .indexed_line_count()
++                    .map_or_else(|| "line count unavailable".into(), |count| format!("{count} lines")),
++                bareline_document::paged::LineCount::Unknown if estimated => {
++                    "lines indexing; visible gutter range estimated".into()
++                }
++                bareline_document::paged::LineCount::Unknown => "line count unavailable".into(),
++            };
++            let position = match (e.active_gutter_line(), estimated) {
++                (Some(line), true) => format!(
++                    "Byte {}, estimated line {line} while indexing",
++                    e.global_selection().1.0
++                ),
++                (Some(line), false) => format!("Byte {}, line {line}", e.global_selection().1.0),
++                (None, _) => format!("Byte {}, line and column indexing", e.global_selection().1.0),
+             };
+             (
+                 format!("{} bytes, {lines}", e.snapshot().len()),
+-                format!("Byte {}, line and column indexing", e.global_selection().1.0),
++                position,
+                 e.viewport().eol_status_label().to_owned(),
+             )
+         }
+diff --git a/crates/editor-surface/src/lib.rs b/crates/editor-surface/src/lib.rs
+index db8d85e..6359142 100644
+--- a/crates/editor-surface/src/lib.rs
++++ b/crates/editor-surface/src/lib.rs
+@@ -186,6 +186,7 @@ pub struct EditorSurface {
+     view_spacers: Vec<(usize, usize)>,
+     tab_width: usize,
+     line_numbers: bool,
++    gutter_lines_estimated: bool,
+     source_rows: Option<(bareline_document::ContentStateId, Vec<paged_view::ViewportSegment>)>,
+     highlight_current_line: bool,
+     whitespace: String,
+@@ -209,6 +210,7 @@ impl EditorSurface {
+         notify: Arc<dyn Fn() + Send + Sync>,
+     ) -> Self {
+         let initial_state = snapshot.content_state;
++        let gutter_lines_estimated = !snapshot.is_complete();
+         Self {
+             blink: Default::default(),
+             wrap: false,
+@@ -283,6 +285,7 @@ impl EditorSurface {
+             view_spacers: Vec::new(),
+             tab_width: 4,
+             line_numbers: true,
++            gutter_lines_estimated,
+             source_rows: None,
+             highlight_current_line: true,
+             whitespace: "none".into(),
+@@ -602,6 +605,7 @@ impl EditorSurface {
+         view.font_family = self.font_family.clone();
+         view.tab_width = self.tab_width;
+         view.line_numbers = self.line_numbers;
++        view.gutter_lines_estimated = self.gutter_lines_estimated;
+         view.source_rows = self.source_rows.clone();
+         view.highlight_current_line = self.highlight_current_line;
+         view.whitespace = self.whitespace.clone();
+@@ -620,6 +624,16 @@ impl EditorSurface {
+     pub fn set_eol_status_override(&mut self, label: Option<String>) {
+         self.eol_status_override = label;
+     }
++    /// Whether visible global gutter labels are provisional while a paged line
++    /// index is incomplete. Changing this affects paint and status text only.
++    pub fn set_gutter_lines_estimated(&mut self, estimated: bool) -> bool {
++        let changed = self.gutter_lines_estimated != estimated;
++        self.gutter_lines_estimated = estimated;
++        changed
++    }
++    pub fn gutter_lines_estimated(&self) -> bool {
++        self.gutter_lines_estimated
++    }
+     pub fn eol_status_label(&self) -> &str {
+         self.eol_status_override
+             .as_deref()
+@@ -630,6 +644,7 @@ impl EditorSurface {
+             return false;
+         }
+         self.snapshot = snapshot.clone();
++        self.gutter_lines_estimated = !self.snapshot.is_complete();
+         for offset in [&mut self.selection.anchor, &mut self.selection.caret] {
+             *offset = (*offset).min(snapshot.len());
+             while !snapshot.is_boundary(TextOffset(*offset)) {
+@@ -815,6 +830,7 @@ impl EditorSurface {
+     }
+     pub fn finish_loading(&mut self, service: DocumentService, snapshot: DocumentSnapshot) {
+         self.initial_state = snapshot.content_state;
++        self.gutter_lines_estimated = !snapshot.is_complete();
+         self.snapshot = snapshot;
+         self.service = Some(service);
+         self.error = None;
+@@ -1051,6 +1067,7 @@ impl EditorSurface {
+                         );
+                     }
+                     self.snapshot = completion.snapshot;
++                    self.gutter_lines_estimated = !self.snapshot.is_complete();
+                     match completion.result {
+                         Ok(_) => {
+                             if let Some(command) = self.pending_command.take() {
+@@ -1688,19 +1705,23 @@ impl EditorSurface {
+     /// selection size · EOL · Encoding · INS/RO (UX-40). Plain language only —
+     /// no internal jargon.
+     pub fn status_segments(&self, language: &str) -> Vec<String> {
+-        let mut position = format!(
+-            "Ln {}, Col {}",
+-            self.source_line_at(TextOffset(self.selection.caret))
+-                .map_or_else(|| "…".to_string(), |line| line.saturating_add(1).to_string()),
+-            self.column_label(),
+-        );
++        let line = self
++            .source_line_at(TextOffset(self.selection.caret))
++            .map_or_else(|| "…".to_string(), |line| line.saturating_add(1).to_string());
++        let mut position = if self.gutter_lines_estimated {
++            format!("Ln ~{line}, Col {}", self.column_label())
++        } else {
++            format!("Ln {line}, Col {}", self.column_label())
++        };
+         let selection = self.selection.anchor.abs_diff(self.selection.caret);
+         if selection > 0 {
+             position.push_str(&format!("   Sel {selection}"));
+         }
+         vec![
+             language.to_string(),
+-            if self.snapshot.is_complete() {
++            if self.gutter_lines_estimated {
++                "Line numbers estimated · indexing".to_string()
++            } else if self.snapshot.is_complete() {
+                 format!("Tab: {}", self.tab_width)
+             } else {
+                 "Large file · indexing…".to_string()
+@@ -2107,23 +2128,21 @@ impl EditorSurface {
+                 ));
+             }
+             if self.line_numbers {
+-                // While the line index is still being built the numbers are
+-                // estimates, shown fainter to signal they may still shift (the
+-                // renderer's immediate text has no italic weight to lean on).
+-                let gutter_color = if self.snapshot.is_complete() {
+-                    self.theme.gutter
+-                } else {
++                let exact_label = self
++                    .source_line_at(TextOffset(start))
++                    .map_or_else(|| "…".into(), |line| line.saturating_add(1).to_string());
++                // Immediate text has no font-style support, so `~` is the compact
++                // non-colour approximation cue. The status and accessibility
++                // projections spell out its meaning.
++                let gutter_color = if self.gutter_lines_estimated {
++                    // Keep the marker in its own fixed column so adding/removing
++                    // it never shifts numeral or document layout at any DPI.
++                    text(ops, 2.0, y, "~", self.font_pixels, self.theme.gutter);
+                     estimated_gutter(self.theme.gutter, self.theme.ui.editor)
++                } else {
++                    self.theme.gutter
+                 };
+-                text(
+-                    ops,
+-                    14.0,
+-                    y,
+-                    self.source_line_at(TextOffset(start))
+-                        .map_or_else(|| "…".into(), |line| line.saturating_add(1).to_string()),
+-                    self.font_pixels,
+-                    gutter_color,
+-                );
++                text(ops, 14.0, y, exact_label, self.font_pixels, gutter_color);
+             }
+             if self.known_folds.iter().any(|fold| fold.header == number) {
+                 text(
+@@ -2369,7 +2388,7 @@ impl EditorSurface {
+ }
+ 
+ /// Fade a gutter colour toward the editor background so estimated line numbers
+-/// read as provisional while the line index is still being built (UX-04).
++/// read as provisional while the line index is still being built (UX-11/U13).
+ fn estimated_gutter(
+     gutter: bareline_renderer::Color,
+     background: bareline_renderer::Color,
+diff --git a/crates/editor-surface/src/paged_navigation.rs b/crates/editor-surface/src/paged_navigation.rs
+index 7a6461e..3bfc493 100644
+--- a/crates/editor-surface/src/paged_navigation.rs
++++ b/crates/editor-surface/src/paged_navigation.rs
+@@ -191,15 +191,29 @@ impl GlobalNavigation {
+     }
+     /// Fraction of the document the retained sparse line index has scanned, for
+     /// the status strip's determinate progress while line numbers are resolving.
+-    pub fn index_progress(&self) -> Option<f32> {
++    pub fn index_progress(&self, expected: &PagedSnapshot) -> Option<f32> {
+         let guard = self.index.lock().ok()?;
+         let (snapshot, index) = guard.as_ref()?;
++        if !snapshot.same_document(expected) || snapshot.content_state != expected.content_state {
++            return None;
++        }
+         let total = snapshot.len();
+         if total == 0 {
+             return Some(1.0);
+         }
+         Some((index.scanned_to().0.min(total) as f32 / total as f32).clamp(0.0, 1.0))
+     }
++    pub fn indexed_line_count(&self, expected: &PagedSnapshot) -> Option<usize> {
++        let guard = self.index.lock().ok()?;
++        let (snapshot, index) = guard.as_ref()?;
++        if !snapshot.same_document(expected) || snapshot.content_state != expected.content_state {
++            return None;
++        }
++        match index.line_count() {
++            bareline_document::paged::LineCount::Known(count) => Some(count),
++            bareline_document::paged::LineCount::Unknown => None,
++        }
++    }
+     pub fn cancel(&mut self) {
+         self.queued = None;
+         if let Some(active) = &self.active {
+diff --git a/crates/editor-surface/src/paged_view.rs b/crates/editor-surface/src/paged_view.rs
+index 85b0a90..654c4b2 100644
+--- a/crates/editor-surface/src/paged_view.rs
++++ b/crates/editor-surface/src/paged_view.rs
+@@ -551,6 +551,7 @@ impl PagedEditorSurface {
+             .map_err(|error| format!("{error:?}"))?
+             .prefix();
+         let mut surface = EditorSurface::loading(prefix, notify.clone());
++        surface.set_gutter_lines_estimated(true);
+         surface.set_eol_status_override(Some("Computing".into()));
+         surface.encoding_label = format!("{:?}", opened.transcoded.store.state.save_target);
+         surface.user_read_only = opened.transcoded.store.state.binary_warning;
+@@ -689,6 +690,7 @@ impl PagedEditorSurface {
+         surface.font_family = self.surface.font_family.clone();
+         surface.tab_width = self.surface.tab_width;
+         surface.line_numbers = self.surface.line_numbers;
++        surface.set_gutter_lines_estimated(self.surface.gutter_lines_estimated());
+         surface.highlight_current_line = self.surface.highlight_current_line;
+         surface.whitespace = self.surface.whitespace.clone();
+         let mut view = Self {
+@@ -1512,7 +1514,22 @@ impl PagedEditorSurface {
+     /// Deterministic progress for the sparse line-number index the view keeps
+     /// across navigation requests, or `None` before any index exists.
+     pub fn index_fraction(&self) -> Option<f32> {
+-        self.navigation.index_progress()
++        self.navigation.index_progress(&self.snapshot)
++    }
++    fn refresh_gutter_accuracy(&mut self) -> bool {
++        let estimated = self.navigation.indexed_line_count(&self.snapshot).is_none();
++        self.surface.set_gutter_lines_estimated(estimated)
++    }
++    pub fn gutter_lines_estimated(&self) -> bool {
++        self.surface.gutter_lines_estimated()
++    }
++    pub fn indexed_line_count(&self) -> Option<usize> {
++        self.navigation.indexed_line_count(&self.snapshot)
++    }
++    pub fn active_gutter_line(&self) -> Option<u64> {
++        self.surface
++            .source_line_at(TextOffset(self.surface.selection.caret))
++            .map(|line| line.saturating_add(1))
+     }
+     pub fn global_logical_scroll(&mut self) -> GlobalScrollPosition {
+         if self.busy() || self.requested_scroll.is_some() || self.pending_scroll_mapping.is_some() {
+@@ -3484,14 +3501,24 @@ impl PagedEditorSurface {
+         let viewport_changed = self.pump_viewport_requests();
+         let selection_changed = self.pump_selection_validation();
+         let navigation_changed = self.pump_navigation();
++        let gutter_accuracy_changed = self.refresh_gutter_accuracy();
+         let Some(receiver) = &self.pending else {
+             self.ensure_viewport_mapping();
+-            return self.refresh_peer() || navigation_changed || selection_changed || viewport_changed || fold_changed;
++            return self.refresh_peer()
++                || gutter_accuracy_changed
++                || navigation_changed
++                || selection_changed
++                || viewport_changed
++                || fold_changed;
+         };
+         let result = match receiver.try_recv() {
+             Ok(result) => result,
+             Err(TryRecvError::Empty) => {
+-                return selection_changed || navigation_changed || viewport_changed || fold_changed;
++                return gutter_accuracy_changed
++                    || selection_changed
++                    || navigation_changed
++                    || viewport_changed
++                    || fold_changed;
+             }
+             Err(TryRecvError::Disconnected) => Err("Paged worker stopped.".into()),
+         };
+@@ -3557,6 +3584,7 @@ impl PagedEditorSurface {
+                 self.viewport_valid = false;
+                 self.surface.set_eol_status_override(Some("Computing".into()));
+                 self.snapshot = completed.snapshot;
++                self.refresh_gutter_accuracy();
+                 self.path = completed.path;
+                 if let Some(fingerprint) = completed.saved {
+                     self.fingerprint = fingerprint;
+@@ -4344,6 +4372,125 @@ mod peer_tests {
+         };
+         let mut view = PagedEditorSurface::new(opened, budget, Arc::new(|| {})).unwrap();
+         drain(&mut view);
++        let mut backend = bareline_renderer_recording::RecordingBackend::default();
++        let mut estimated_ops = Vec::new();
++        view.surface
++            .draw(&mut backend, 800.0, 400.0, &mut estimated_ops)
++            .unwrap();
++        let estimated_marker = estimated_ops
++            .iter()
++            .find_map(|op| match op {
++                bareline_renderer::DrawOp::Text { origin, text, .. }
++                    if (origin.x - 2.0).abs() < f32::EPSILON && text == "~" =>
++                {
++                    Some(text.clone())
++                }
++                _ => None,
++            })
++            .expect("incomplete index gutter approximation marker");
++        assert_eq!(estimated_marker, "~");
++        let estimated_label = estimated_ops
++            .iter()
++            .find_map(|op| match op {
++                bareline_renderer::DrawOp::Text { origin, text, .. } if (origin.x - 14.0).abs() < f32::EPSILON => {
++                    Some(text.clone())
++                }
++                _ => None,
++            })
++            .expect("incomplete index gutter label");
++        assert!(view.gutter_lines_estimated());
++        assert!(
++            view.surface
++                .status_segments("Plain text")
++                .iter()
++                .any(|segment| segment.contains("estimated"))
++        );
++
++        // Scan almost all of the real retained sparse index. Approximate progress
++        // is deliberately above the former 99.9% threshold, but EOF has not been
++        // observed and the line count must remain estimated.
++        let handle = view.read_handle();
++        let end = TextOffset(view.snapshot().len());
++        let navigation_budget = view.budget.clone();
++        view.navigation
++            .request(
++                handle,
++                crate::paged_navigation::NavigationTarget::Byte(TextOffset(end.0 - 64)),
++                navigation_budget,
++                Arc::new(|| {}),
++            )
++            .unwrap();
++        let deadline = Instant::now() + Duration::from_secs(10);
++        loop {
++            match view.navigation.poll() {
++                Some(Ok(_)) => break,
++                Some(Err(error)) => panic!("line index completion failed: {error}"),
++                None => {
++                    assert!(Instant::now() < deadline, "line index completion timed out");
++                    std::thread::yield_now();
++                }
++            }
++        }
++        assert!(view.index_fraction().is_some_and(|fraction| fraction >= 0.999));
++        assert_eq!(view.indexed_line_count(), None);
++        assert!(!view.refresh_gutter_accuracy());
++        assert!(view.gutter_lines_estimated());
++
++        // Only terminal EOF knowledge makes the same generation exact.
++        let handle = view.read_handle();
++        let navigation_budget = view.budget.clone();
++        view.navigation
++            .request(
++                handle,
++                crate::paged_navigation::NavigationTarget::Byte(end),
++                navigation_budget,
++                Arc::new(|| {}),
++            )
++            .unwrap();
++        let deadline = Instant::now() + Duration::from_secs(10);
++        loop {
++            match view.navigation.poll() {
++                Some(Ok(_)) => break,
++                Some(Err(error)) => panic!("line index completion failed: {error}"),
++                None => {
++                    assert!(Instant::now() < deadline, "line index completion timed out");
++                    std::thread::yield_now();
++                }
++            }
++        }
++        assert_eq!(view.index_fraction(), Some(1.0));
++        assert_eq!(view.indexed_line_count(), Some(40_001));
++        assert!(view.refresh_gutter_accuracy());
++        assert!(
++            !view.refresh_gutter_accuracy(),
++            "exact transition repeated without a state change"
++        );
++        let mut exact_ops = Vec::new();
++        view.surface.draw(&mut backend, 800.0, 400.0, &mut exact_ops).unwrap();
++        let exact_label = exact_ops
++            .iter()
++            .find_map(|op| match op {
++                bareline_renderer::DrawOp::Text { origin, text, .. }
++                    if (origin.x - 14.0).abs() < f32::EPSILON && text == &estimated_label =>
++                {
++                    Some(text.clone())
++                }
++                _ => None,
++            })
++            .expect("completed index exact gutter label for the same row");
++        assert_eq!(estimated_label, exact_label);
++        assert!(!exact_ops.iter().any(|op| matches!(
++            op,
++            bareline_renderer::DrawOp::Text { origin, text, .. }
++                if (origin.x - 2.0).abs() < f32::EPSILON && text == "~"
++        )));
++        assert!(!view.gutter_lines_estimated());
++        assert!(
++            view.surface
++                .status_segments("Plain text")
++                .iter()
++                .all(|segment| !segment.contains("estimated"))
++        );
+         // A forced-paged document (resident_max_bytes = 0) keeps its source tree lazy,
+         // so `snapshot().line_count()` stays Unknown until the whole file is
+         // materialised, and window reads never materialise it. The fixture is 40_000
+@@ -4353,6 +4500,10 @@ mod peer_tests {
+         // Ctrl+End jumps the byte scrollbar to the very bottom of the file.
+         view.request_byte_scroll_in_view(1.0, 400.0).unwrap();
+         drain(&mut view);
++        assert!(
++            !view.gutter_lines_estimated(),
++            "installing a complete resident viewport slice reset paged index accuracy"
++        );
+         // The last window sits at the end of the document, and once the index is
+         // complete its first global line is resolved so the gutter shows true numbers
+         // (window start line + local index) rather than restarting at 1.
+diff --git a/docs/implementation/2026-09-12-audit-implementation/PR-U13.md b/docs/implementation/2026-09-12-audit-implementation/PR-U13.md
+new file mode 100644
+index 0000000..c4be9b0
+--- /dev/null
++++ b/docs/implementation/2026-09-12-audit-implementation/PR-U13.md
+@@ -0,0 +1,21 @@
++# PR-U13: Estimated gutter cue
++
++- **Baseline:** `d5d35cee8fa0668bc288b3383a797b626d43e76e`
++- **Scope:** Carry exact versus estimated line-label state through paged viewport painting, add a compact non-color approximation cue, and expose the transition through status and accessibility.
++- **Constraints:** Preserve global line calculations, byte-based navigation, bounded indexing, and existing renderer interfaces.
++
++## Evidence
++
++- Paged views now carry explicit estimated/exact gutter state tied to a known terminal line count in the retained sparse index for the same document/content generation. Progress percentages remain presentation only and cannot establish exactness. A change only requests a repaint; it does not invalidate shaped text, alter byte navigation, or rebuild global mappings.
++- While incomplete, every visible label keeps its verified global number and paints a separate `~` cue in a fixed gutter column plus the existing muted color. The fixed column preserves numeral alignment at scaled DPI and does not depend on italic font availability.
++- The status strip says line numbers are estimated and prefixes its line value with `~`. Accessibility describes the visible gutter range and caret line as estimated; the stable status nodes change to exact text once when the index reaches completion.
++- `peer_tests::go_to_end_resolves_to_the_last_line_once_the_index_is_complete` now paints an actual forced-paged viewport while its retained index is incomplete, proves an index above 99.9% remains estimated until EOF establishes its line count, and verifies the same row then loses the marker, retains its global number, reports the exact count, and does not repeat the transition. Installing a later complete resident viewport slice must preserve the full paged index's exact state.
++- Static checks in the private worktree: direct `rustfmt --edition 2024` on all four changed Rust files and `git diff --check`. Cargo remains central by policy.
++
++## Proposed contained integration command
++
++`cargo test -p bareline-editor-surface peer_tests::go_to_end_resolves_to_the_last_line_once_the_index_is_complete --offline --locked`
++
++## Deferred qualification
++
++- Light, dark, high-contrast, and 100/150/200% DPI visual checks remain part of final native qualification.

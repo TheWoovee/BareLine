@@ -1,0 +1,293 @@
+diff --git a/apps/bareline/src/windows_app/recovery.rs b/apps/bareline/src/windows_app/recovery.rs
+index 687afe5..40e4271 100644
+--- a/apps/bareline/src/windows_app/recovery.rs
++++ b/apps/bareline/src/windows_app/recovery.rs
+@@ -243,6 +243,7 @@ impl RecoveryRuntime {
+     }
+     fn default_command(&self) -> &'static str {
+         match &self.content {
++            RecoveryContent::Ready(_) if self.action_enabled("recovery.confirm_discard") => "recovery.confirm_discard",
+             RecoveryContent::Failed(_) if self.action_enabled("recovery.discovery_retry") => "recovery.discovery_retry",
+             RecoveryContent::Ready(rows) if !rows.is_empty() && self.action_enabled("recovery.restore_selected") => {
+                 "recovery.restore_selected"
+@@ -1406,6 +1407,8 @@ mod tests {
+         ids.sort_unstable();
+         ids.dedup();
+         assert_eq!(ids.len(), count);
++        runtime.content = RecoveryContent::Ready(Vec::new());
++        runtime.mutation_allowed = true;
+         runtime.confirm_discard = Some(vec![PathBuf::from("named-recovery")]);
+         runtime.draw(Default::default(), 1000.0, 600.0, &mut ops);
+         assert!(
+@@ -1414,6 +1417,13 @@ mod tests {
+                 .iter()
+                 .any(|(_, command)| command == "recovery.confirm_discard")
+         );
++        assert_eq!(runtime.default_command(), "recovery.confirm_discard");
++        assert_eq!(runtime.focused_command(), "recovery.confirm_discard");
++        assert_eq!(
++            runtime.accessibility_focus(),
++            Some(recovery_action_id("recovery.confirm_discard"))
++        );
++        assert!(activates_recovery_command(&Key::Named(NamedKey::Enter)));
+     }
+     #[test]
+     fn center_preserves_window_lifecycle_and_consumes_text_input() {
+@@ -2076,6 +2086,7 @@ pub(super) fn accessibility_test_cases() -> Vec<(
+     ] {
+         let mut runtime = RecoveryRuntime::default();
+         runtime.open = scenario != "closed";
++        runtime.mutation_allowed = true;
+         if scenario == "open_empty" {
+             runtime.content = RecoveryContent::Ready(Vec::new());
+         }
+@@ -2103,8 +2114,8 @@ pub(super) fn accessibility_test_cases() -> Vec<(
+                     document_metadata: None,
+                 },
+             ));
+-            runtime.preview_text = "First line\nSecond line".into();
+             runtime.rebuild_rows();
++            runtime.preview_text = "First line\nSecond line".into();
+         }
+         if scenario == "discard_confirmation" {
+             runtime.confirm_discard = Some(vec![PathBuf::from("checkpoint-1")]);
+diff --git a/crates/app/src/workspace.rs b/crates/app/src/workspace.rs
+index 8e3090c..e1306d3 100644
+--- a/crates/app/src/workspace.rs
++++ b/crates/app/src/workspace.rs
+@@ -639,6 +639,7 @@ pub struct Workspace {
+     open_outcomes: Vec<LaunchOpenOutcome>,
+     next_recovery_restore_request: u64,
+     recovery_restore_outcomes: Vec<RecoveryRestoreOutcome>,
++    pending_recovery_restore_publications: Vec<PendingRecoveryRestorePublication>,
+     pending_save_recovery: Vec<(PathBuf, IoTicket)>,
+     pending_save_cleanup: Vec<(PathBuf, IoTicket)>,
+     scanned_save_recovery: std::collections::BTreeSet<PathBuf>,
+@@ -705,6 +706,11 @@ struct PendingIo {
+     preview: Option<bareline_document::DocumentSnapshot>,
+     reload: Option<bareline_document::DocumentSnapshot>,
+ }
++struct PendingRecoveryRestorePublication {
++    request_id: u64,
++    document_id: u64,
++    receipt: bareline_editor_surface::TrackedEditReceipt,
++}
+ #[derive(Clone, Debug, PartialEq, Eq)]
+ pub enum LaunchOpenOutcome {
+     Opened { request_id: u64, document: (u64, u64) },
+@@ -849,6 +855,7 @@ impl Workspace {
+             open_outcomes: Vec::new(),
+             next_recovery_restore_request: 1,
+             recovery_restore_outcomes: Vec::new(),
++            pending_recovery_restore_publications: Vec::new(),
+             pending_save_recovery: Vec::new(),
+             pending_save_cleanup: Vec::new(),
+             scanned_save_recovery: std::collections::BTreeSet::new(),
+@@ -1059,6 +1066,33 @@ impl Workspace {
+                 }
+             }
+         }
++        let mut publication = 0;
++        while publication < self.pending_recovery_restore_publications.len() {
++            let terminal = self.pending_recovery_restore_publications[publication]
++                .receipt
++                .terminal();
++            let Some(terminal) = terminal else {
++                publication += 1;
++                continue;
++            };
++            let pending = self.pending_recovery_restore_publications.remove(publication);
++            match terminal {
++                Ok(revision)
++                    if self
++                        .editors
++                        .iter()
++                        .any(|editor| editor.document_identity().0 == pending.document_id) =>
++                {
++                    self.record_recovery_restore(Some(pending.request_id), Ok((pending.document_id, revision.0)));
++                }
++                Ok(_) => self.record_recovery_restore(
++                    Some(pending.request_id),
++                    Err("Recovered document closed before its text was published.".into()),
++                ),
++                Err(error) => self.record_recovery_restore(Some(pending.request_id), Err(error)),
++            }
++            changed = true;
++        }
+         changed |= self.pump_encoding();
+         changed |= self.pump_search_acknowledgment();
+         let mut saved_paths = Vec::new();
+@@ -1426,11 +1460,29 @@ impl Workspace {
+                     if opened.recovery_origin.is_none() {
+                         self.note_recent(opened.path.clone());
+                     }
+-                    if opened.recovery_origin.is_some() && self.adopt_recovered_resident(&mut opened) {
+-                        self.discard_preview(pending.preview.as_ref());
+-                        let document = self.editors.last().unwrap().document_identity();
+-                        self.record_recovery_restore(recovery_restore_request, Ok(document));
+-                        continue;
++                    if opened.recovery_origin.is_some() {
++                        match self.adopt_recovered_resident(&mut opened) {
++                            Ok(Some((document_id, receipt))) => {
++                                self.discard_preview(pending.preview.as_ref());
++                                if let Some(request_id) = recovery_restore_request {
++                                    self.pending_recovery_restore_publications.push(
++                                        PendingRecoveryRestorePublication {
++                                            request_id,
++                                            document_id,
++                                            receipt,
++                                        },
++                                    );
++                                }
++                                continue;
++                            }
++                            Err(error) => {
++                                self.discard_preview(pending.preview.as_ref());
++                                self.message = Some(error.clone());
++                                self.record_recovery_restore(recovery_restore_request, Err(error));
++                                continue;
++                            }
++                            Ok(None) => {}
++                        }
+                     }
+                     self.discard_preview(pending.preview.as_ref());
+                     let file = FileState {
+@@ -2174,10 +2226,14 @@ impl Workspace {
+     }
+     /// A recovered document that fits in memory becomes an ordinary editable tab under
+     /// its own name, with unsaved changes, instead of a read-only paged view that can
+-    /// never finish loading. Returns false when the document is too large to adopt.
+-    fn adopt_recovered_resident(&mut self, opened: &mut bareline_file_io::lifecycle::PagedOpened) -> bool {
++    /// never finish loading. The receipt owns the exact recovered insertion;
++    /// callers must not publish restore success before that receipt is terminal.
++    fn adopt_recovered_resident(
++        &mut self,
++        opened: &mut bareline_file_io::lifecycle::PagedOpened,
++    ) -> Result<Option<(u64, bareline_editor_surface::TrackedEditReceipt)>, String> {
+         let Some(text) = opened.recovered_resident.take() else {
+-            return false;
++            return Ok(None);
+         };
+         let recovery_origin = opened.recovery_origin.clone();
+         let label = opened
+@@ -2185,15 +2241,14 @@ impl Workspace {
+             .file_name()
+             .map(|name| name.to_string_lossy().into_owned())
+             .unwrap_or_else(|| "Untitled 1".to_owned());
+-        let Ok(document) = Document::from_utf8("", self.bytes.clone(), self.history.clone()) else {
+-            return false;
+-        };
++        let document = Document::from_utf8("", self.bytes.clone(), self.history.clone())
++            .map_err(|error| format!("Recovered text could not create an editor: {error:?}"))?;
+         let snapshot = document.snapshot();
+-        let mut editor: WorkspaceEditor =
+-            EditorSurface::new(self.scheduler.document(document, 32), snapshot, self.notify.clone()).into();
++        let document_id = snapshot.identity_token().0;
++        let mut surface = EditorSurface::new(self.scheduler.document(document, 32), snapshot, self.notify.clone());
+         // Inserting the recovered text is what marks the tab as having unsaved changes.
+-        editor.enqueue(Input::Insert(text));
+-        self.editors.push(editor);
++        let receipt = surface.enqueue_tracked(Input::Insert(text))?;
++        self.editors.push(surface.into());
+         self.files.push(None);
+         self.untitled_labels.push(label);
+         let index = self.editors.len() - 1;
+@@ -2212,7 +2267,7 @@ impl Workspace {
+             }
+         }
+         self.message = None;
+-        true
++        Ok(Some((document_id, receipt)))
+     }
+     pub fn restore_paged_recovery(&mut self, directory: PathBuf) {
+         self.submit_paged_recovery(directory);
+@@ -2223,6 +2278,7 @@ impl Workspace {
+     /// this queue.
+     pub fn restore_paged_recovery_tracked(&mut self, directory: PathBuf) -> Result<u64, String> {
+         let retained = self.recovery_restore_outcomes.len()
++            + self.pending_recovery_restore_publications.len()
+             + self
+                 .pending_io
+                 .iter()
+@@ -4538,7 +4594,26 @@ mod tests {
+         settle(&mut stale);
+         assert_eq!(std::fs::read(latest).unwrap(), raw);
+         drop(stale);
+-        std::fs::remove_dir_all(root).unwrap();
++        // Paged/recovery actors observe cancellation asynchronously. On Windows
++        // their sealed source handles can remain live briefly after the final
++        // Workspace drops, so assert eventual handle release before finishing
++        // fixture cleanup instead of racing it once.
++        let cleanup_deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
++        loop {
++            match std::fs::remove_dir_all(&root) {
++                Ok(()) => break,
++                Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
++                Err(error)
++                    if matches!(
++                        error.kind(),
++                        std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::WouldBlock
++                    ) && std::time::Instant::now() < cleanup_deadline =>
++                {
++                    std::thread::sleep(std::time::Duration::from_millis(2));
++                }
++                Err(error) => panic!("recovery fixture handles did not release before cleanup: {error}"),
++            }
++        }
+     }
+     #[test]
+     fn resident_and_untitled_automatic_recovery_restore_current_text() {
+@@ -4608,6 +4683,10 @@ mod tests {
+             drop(preview);
+             let mut restored = Workspace::new(Arc::new(|| {}), Arc::new(PagedFileSystem)).unwrap();
+             let restore_request = restored.restore_paged_recovery_tracked(directory).unwrap();
++            assert!(
++                restored.take_recovery_restore_outcome(restore_request).is_none(),
++                "submission is not a recovered-text terminal"
++            );
+             settle(&mut restored);
+             assert_eq!(restored.editors.len(), 1, "{:?}", restored.message);
+             let restored_document = restored.editors[0].document_identity();
+diff --git a/crates/editor-surface/src/tracked_edit.rs b/crates/editor-surface/src/tracked_edit.rs
+index 9fd6117..2ce49b3 100644
+--- a/crates/editor-surface/src/tracked_edit.rs
++++ b/crates/editor-surface/src/tracked_edit.rs
+@@ -44,6 +44,25 @@ impl Drop for TrackedEditCompletion {
+     }
+ }
+ impl crate::EditorSurface {
++    /// Enqueue one input against an idle surface and retain its exact actor
++    /// terminal. Refusing an already-busy surface keeps the receipt attached to
++    /// this input rather than an older queued edit.
++    pub fn enqueue_tracked(&mut self, input: crate::Input) -> Result<TrackedEditReceipt, String> {
++        if self.busy() {
++            return Err("Editor is busy; tracked input was not queued".into());
++        }
++        let receipt = TrackedEditReceipt::new(self.snapshot.identity_token());
++        self.enqueue(input);
++        if let Some(pending) = self.pending.as_mut() {
++            pending.tracked = Some(TrackedEditCompletion(receipt.clone()));
++        } else if let Some(error) = &self.error {
++            return Err(error.clone());
++        } else {
++            receipt.complete_once(Ok(self.snapshot.revision));
++        }
++        Ok(receipt)
++    }
++
+     pub fn execute_power_tracked(
+         &mut self,
+         id: &str,
+diff --git a/docs/implementation/2026-09-12-audit-implementation/PR-U05.md b/docs/implementation/2026-09-12-audit-implementation/PR-U05.md
+index 64bc8f4..e94b6bd 100644
+--- a/docs/implementation/2026-09-12-audit-implementation/PR-U05.md
++++ b/docs/implementation/2026-09-12-audit-implementation/PR-U05.md
+@@ -12,7 +12,7 @@ Recovery content has explicit `Discovering`, `Ready(rows)`, and `Failed(error)`
+ 
+ Opening and closing the center attaches or detaches only the preview worker. Global discovery continues independently. A ready result replaces rows while the center is open, preserves selection by recovery identity, and restarts preview only when the selected representative changes. A failed result exposes Retry and Close with the full error in UI Automation. Open and Close remain available while discovery is loading or failed; checkpoint actions are mutually gated while restore, compare, export, or delete owns the checkpoint. The initial keyboard command and UI Automation focus identify the same enabled visible action, falling back to Close for an incomplete selection or busy checkpoint, and both the named activation keys and the character-space event route through it.
+ 
+-When a discovery with rows completes while the center is closed, U02 publishes one transient completion notice for that generation. Export and delete terminal outcomes request a fresh fenced discovery. Restore records its request ID, checkpoint directory, root, and discovery generation, then waits for the matching Workspace terminal result. A matching successful editor publication starts refresh; a matching failure retains the checkpoint and publishes the full error; an old root or generation cannot refresh or surface stale failure. Tracked terminal results are bounded and selectively consumed. A removed selection moves to the nearest survivor and clears its preview.
++When a discovery with rows completes while the center is closed, U02 publishes one transient completion notice for that generation. Export and delete terminal outcomes request a fresh fenced discovery. Restore records its request ID, checkpoint directory, root, and discovery generation, then waits for the matching Workspace terminal result. Paged success follows editor publication; resident success follows the exact tracked recovered-text insertion acknowledgement, preserving its normal dirty and undo behavior. A matching failure retains the checkpoint and publishes the full error; an old root or generation cannot refresh or surface stale failure. Pending resident acknowledgements share the same bounded result capacity and results are selectively consumed. A removed selection moves to the nearest survivor and clears its preview.
+ 
+ ## Controlled evidence
+ 

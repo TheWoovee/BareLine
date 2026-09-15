@@ -1,0 +1,34 @@
+diff --git a/crates/editor-surface/src/paged_view.rs b/crates/editor-surface/src/paged_view.rs
+index afc8659..2de9743 100644
+--- a/crates/editor-surface/src/paged_view.rs
++++ b/crates/editor-surface/src/paged_view.rs
+@@ -4429,17 +4429,19 @@ mod peer_tests {
+         second.enqueue(Input::Insert("peer ".into()));
+         drain(&mut second);
+         let rejected_path = root.join("stale-save.txt");
+-        let rejected = first.actor.execute_save(
+-            stale_lifecycle,
+-            bareline_file_io::lifecycle::PreparedDestination {
+-                path: rejected_path.clone(),
+-                condition: bareline_file_io::lifecycle::DestinationCondition::MustBeAbsent,
+-                consent: bareline_file_io::lifecycle::DestinationConsent::NotRequired,
+-                document: (stale_lifecycle.document, stale_lifecycle.revision.0),
+-                operation: bareline_file_io::lifecycle::SaveOperation::Save,
++        let rejected = first.actor.execute(
++            bareline_file_io::paged_service::PagedLifecycleCommand::Save {
++                requested: stale_lifecycle,
++                destination: bareline_file_io::lifecycle::PreparedDestination {
++                    path: rejected_path.clone(),
++                    condition: bareline_file_io::lifecycle::DestinationCondition::MustBeAbsent,
++                    consent: bareline_file_io::lifecycle::DestinationConsent::NotRequired,
++                    document: (stale_lifecycle.document, stale_lifecycle.revision.0),
++                    operation: bareline_file_io::lifecycle::SaveOperation::Save,
++                },
++                copy_only: false,
++                platform: Arc::new(Platform),
+             },
+-            false,
+-            &Platform,
+             &Cancellation::default(),
+         );
+         assert!(matches!(

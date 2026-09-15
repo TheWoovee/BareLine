@@ -12,14 +12,8 @@ use std::{
 
 #[derive(Clone, Debug)]
 pub enum LaunchMode {
-    Direct {
-        program: PathBuf,
-        arguments: Vec<OsString>,
-    },
-    Shell {
-        program: PathBuf,
-        arguments: Vec<OsString>,
-    },
+    Direct { program: PathBuf, arguments: Vec<OsString> },
+    Shell { program: PathBuf, arguments: Vec<OsString> },
 }
 #[derive(Clone, Debug)]
 pub struct ProcessRequest {
@@ -71,18 +65,12 @@ impl OutputBuffer {
         // Charge 64 bytes for each chunk's Vec/queue slot and allocator bookkeeping.
         const ENTRY_BUDGET: usize = 64;
         let keep = bytes.len().min(self.capacity - ENTRY_BUDGET);
-        self.discarded_bytes = self
-            .discarded_bytes
-            .saturating_add((bytes.len() - keep) as u64);
+        self.discarded_bytes = self.discarded_bytes.saturating_add((bytes.len() - keep) as u64);
         // Bound allocation/entry overhead as well as payload, including alternating one-byte reads.
-        while self.bytes + keep + (self.chunks.len() + 1) * ENTRY_BUDGET > self.capacity
-            || self.chunks.len() >= 2048
-        {
+        while self.bytes + keep + (self.chunks.len() + 1) * ENTRY_BUDGET > self.capacity || self.chunks.len() >= 2048 {
             let removed = self.chunks.pop_front().unwrap();
             self.bytes -= removed.bytes.len();
-            self.discarded_bytes = self
-                .discarded_bytes
-                .saturating_add(removed.bytes.len() as u64);
+            self.discarded_bytes = self.discarded_bytes.saturating_add(removed.bytes.len() as u64);
         }
         if keep > 0 {
             self.chunks.push_back(OutputChunk {
@@ -115,13 +103,8 @@ impl OutputBuffer {
 pub enum ProcessState {
     Starting,
     Running,
-    Exited {
-        code: Option<i32>,
-        elapsed: Duration,
-    },
-    Cancelled {
-        elapsed: Duration,
-    },
+    Exited { code: Option<i32>, elapsed: Duration },
+    Cancelled { elapsed: Duration },
     Failed(String),
 }
 pub struct ProcessHandle {
@@ -134,15 +117,10 @@ impl ProcessHandle {
         let _ = self.cancel.try_send(());
     }
     pub fn state(&self) -> ProcessState {
-        self.state
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .clone()
+        self.state.lock().unwrap_or_else(|error| error.into_inner()).clone()
     }
     pub fn output(&self) -> std::sync::MutexGuard<'_, OutputBuffer> {
-        self.output
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
+        self.output.lock().unwrap_or_else(|error| error.into_inner())
     }
 }
 impl Drop for ProcessHandle {
@@ -161,26 +139,23 @@ pub fn launch(
         (
             LaunchMode::Direct { .. },
             ProcessPermission::UserGrantedDirect | ProcessPermission::UserGrantedShell
-        ) | (
-            LaunchMode::Shell { .. },
-            ProcessPermission::UserGrantedShell
-        )
+        ) | (LaunchMode::Shell { .. }, ProcessPermission::UserGrantedShell)
     );
     if !authorized {
-        return Err("External command requires an explicit user grant; workspace settings cannot authorize processes".into());
+        return Err(
+            "External command requires an explicit user grant; workspace settings cannot authorize processes".into(),
+        );
     }
     let (program, args) = match &request.mode {
-        LaunchMode::Direct { program, arguments } | LaunchMode::Shell { program, arguments } => {
-            (program, arguments)
-        }
+        LaunchMode::Direct { program, arguments } | LaunchMode::Shell { program, arguments } => (program, arguments),
     };
     if !program.is_absolute() {
         return Err("External program must be an absolute configured path".into());
     }
     if matches!(request.mode, LaunchMode::Direct { .. })
-        && program.extension().is_some_and(|extension| {
-            extension.eq_ignore_ascii_case("bat") || extension.eq_ignore_ascii_case("cmd")
-        })
+        && program
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("bat") || extension.eq_ignore_ascii_case("cmd"))
     {
         return Err("Batch files require explicit shell mode".into());
     }
@@ -197,16 +172,17 @@ pub fn launch(
         .spawn(move || {
             let start = Instant::now();
             let update = |value| {
-                *worker_state
-                    .lock()
-                    .unwrap_or_else(|error| error.into_inner()) = value;
+                *worker_state.lock().unwrap_or_else(|error| error.into_inner()) = value;
             };
             let (program, args) = match request.mode {
-                LaunchMode::Direct { program, arguments }
-                | LaunchMode::Shell { program, arguments } => (program, arguments),
+                LaunchMode::Direct { program, arguments } | LaunchMode::Shell { program, arguments } => {
+                    (program, arguments)
+                }
             };
             let mut command = Command::new(program);
             command.args(args).stdin(Stdio::null());
+            // cmd.exe and CreateProcess otherwise probe the working directory first.
+            command.env("NoDefaultCurrentDirectoryInExePath", "1");
             if let Some(directory) = request.directory {
                 command.current_dir(directory);
             }
@@ -235,25 +211,23 @@ pub fn launch(
                 stream: OutputStream,
                 output: Arc<Mutex<OutputBuffer>>,
             ) -> io::Result<thread::JoinHandle<io::Result<()>>> {
-                thread::Builder::new()
-                    .name("bareline-output".into())
-                    .spawn(move || {
-                        let mut pipe = pipe;
-                        let mut bytes = [0; 8192];
-                        loop {
-                            match pipe.read(&mut bytes) {
-                                Ok(0) => return Ok(()),
-                                Ok(count) => output
-                                    .lock()
-                                    .unwrap_or_else(|error| error.into_inner())
-                                    .push(stream, &bytes[..count]),
-                                Err(error) if error.kind() == io::ErrorKind::Interrupted => {
-                                    continue;
-                                }
-                                Err(error) => return Err(error),
+                thread::Builder::new().name("bareline-output".into()).spawn(move || {
+                    let mut pipe = pipe;
+                    let mut bytes = [0; 8192];
+                    loop {
+                        match pipe.read(&mut bytes) {
+                            Ok(0) => return Ok(()),
+                            Ok(count) => output
+                                .lock()
+                                .unwrap_or_else(|error| error.into_inner())
+                                .push(stream, &bytes[..count]),
+                            Err(error) if error.kind() == io::ErrorKind::Interrupted => {
+                                continue;
                             }
+                            Err(error) => return Err(error),
                         }
-                    })
+                    }
+                })
             }
             let mut setup_error = None;
             if let Some(pipe) = child.stdout.take() {
@@ -308,17 +282,11 @@ pub fn launch(
                 }
             }
             if let Err(error) = cleanup {
-                update(ProcessState::Failed(format!(
-                    "Process tree cleanup failed: {error}"
-                )));
+                update(ProcessState::Failed(format!("Process tree cleanup failed: {error}")));
             } else if let Err(error) = waited {
-                update(ProcessState::Failed(format!(
-                    "Process wait failed: {error}"
-                )));
+                update(ProcessState::Failed(format!("Process wait failed: {error}")));
             } else if let Some(error) = read_error {
-                update(ProcessState::Failed(format!(
-                    "Output capture failed: {error}"
-                )));
+                update(ProcessState::Failed(format!("Output capture failed: {error}")));
             } else {
                 update(result);
             }
@@ -339,8 +307,47 @@ pub struct PlaceholderContext {
     pub line: u64,
     pub column: u64,
 }
+/// How an expanded placeholder value must be treated by the command interpreter.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PlaceholderSafety {
+    /// Direct launch: values become argv entries, so no interpreter sees them.
+    Argument,
+    /// Shell launch: the expanded template becomes one `cmd.exe /c` string.
+    CommandShell,
+}
+/// Characters `cmd.exe` acts on. A value carrying any of them cannot be made safe by
+/// quoting alone (a quote inside the value re-opens the metacharacter context), so
+/// shell mode refuses it and points the user at direct mode.
+const SHELL_METACHARACTERS: &[char] = &['&', '|', '<', '>', '^', '%', '"', '(', ')', '!', '\n', '\r'];
+/// Env-var passing (`%BARELINE_FILE%`) was considered and rejected: `cmd.exe` expands
+/// `%VAR%` while it parses the `/c` string, so a `&` inside the value would still
+/// separate commands. Refusing metacharacters is the interpreter-independent guarantee.
+fn shell_safe(value: &OsStr) -> Result<OsString, String> {
+    let text = value
+        .to_str()
+        .ok_or("Shell commands require text placeholder values; use direct mode")?;
+    if text
+        .chars()
+        .any(|c| SHELL_METACHARACTERS.contains(&c) || c.is_control())
+    {
+        return Err("This name or selection contains characters a command shell would run as commands (& | < > ^ % \" ( ) !). Run the command in direct mode instead.".into());
+    }
+    Ok(if text.is_empty() || text.contains(char::is_whitespace) {
+        OsString::from(format!("\"{text}\""))
+    } else {
+        value.to_owned()
+    })
+}
 /// Preserves native path units and argv boundaries. Unsaved file/dir or missing workspace refuses expansion.
 pub fn expand_argument(template: &str, context: &PlaceholderContext) -> Result<OsString, String> {
+    expand_argument_for(template, context, PlaceholderSafety::Argument)
+}
+/// Preserves native path units and argv boundaries. Unsaved file/dir or missing workspace refuses expansion.
+pub fn expand_argument_for(
+    template: &str,
+    context: &PlaceholderContext,
+    safety: PlaceholderSafety,
+) -> Result<OsString, String> {
     fn append(output: &mut OsString, value: impl AsRef<OsStr>) -> Result<(), String> {
         let value = value.as_ref();
         if value.len() > 1024 * 1024 - output.len() {
@@ -349,37 +356,43 @@ pub fn expand_argument(template: &str, context: &PlaceholderContext) -> Result<O
         output.push(value);
         Ok(())
     }
+    let place = |output: &mut OsString, value: &OsStr| -> Result<(), String> {
+        match safety {
+            PlaceholderSafety::Argument => append(output, value),
+            PlaceholderSafety::CommandShell => append(output, shell_safe(value)?),
+        }
+    };
     let mut output = OsString::new();
     let mut rest = template;
     while let Some(start) = rest.find("${") {
         append(&mut output, &rest[..start])?;
         rest = &rest[start + 2..];
-        let end = rest
-            .find('}')
-            .ok_or("Unclosed external command placeholder")?;
+        let end = rest.find('}').ok_or("Unclosed external command placeholder")?;
         match &rest[..end] {
-            "file" => append(
+            "file" => place(
                 &mut output,
                 context
                     .file
                     .as_ref()
-                    .ok_or("Save the document before using ${file}")?,
+                    .ok_or("Save the document before using ${file}")?
+                    .as_os_str(),
             )?,
-            "dir" => append(
+            "dir" => place(
                 &mut output,
                 context
                     .file
                     .as_ref()
                     .and_then(|path| path.parent())
-                    .ok_or("Save the document before using ${dir}")?,
+                    .ok_or("Save the document before using ${dir}")?
+                    .as_os_str(),
             )?,
-            "workspace" => append(
+            "workspace" => place(
                 &mut output,
-                context.workspace.as_ref().ok_or("No workspace is open")?,
+                context.workspace.as_ref().ok_or("No workspace is open")?.as_os_str(),
             )?,
-            "selection" => append(&mut output, &context.selection)?,
-            "line" => append(&mut output, context.line.to_string())?,
-            "column" => append(&mut output, context.column.to_string())?,
+            "selection" => place(&mut output, OsStr::new(context.selection.as_str()))?,
+            "line" => place(&mut output, OsStr::new(&context.line.to_string()))?,
+            "column" => place(&mut output, OsStr::new(&context.column.to_string()))?,
             unknown => return Err(format!("Unknown external command placeholder: {unknown}")),
         }
         rest = &rest[end + 1..];
@@ -436,6 +449,56 @@ mod tests {
         assert!(expand_argument("${bad}", &PlaceholderContext::default()).is_err());
         assert_eq!(parse_output_link(r"C:\a b.rs:12:3").unwrap().line, 12);
         assert!(parse_output_link("https://bad:1:2").is_none());
+    }
+    #[test]
+    fn shell_mode_refuses_command_metacharacters_in_expanded_placeholders() {
+        let context = PlaceholderContext {
+            file: Some(PathBuf::from(r"C:\notes\a&calc.exe.txt")),
+            workspace: Some(PathBuf::from(r"C:\notes & tools")),
+            selection: "& calc".into(),
+            ..Default::default()
+        };
+        for template in ["${file}", "${selection}", "--root=${workspace}"] {
+            assert!(
+                expand_argument_for(template, &context, PlaceholderSafety::CommandShell).is_err(),
+                "{template} must be refused in shell mode"
+            );
+        }
+        // The same values stay literal for direct launches, which never reach a shell.
+        assert!(expand_argument("${file}", &context).is_ok());
+        let safe = PlaceholderContext {
+            file: Some(PathBuf::from(r"C:\some folder\notes.txt")),
+            selection: "plain".into(),
+            line: 7,
+            ..Default::default()
+        };
+        assert_eq!(
+            expand_argument_for("${file}", &safe, PlaceholderSafety::CommandShell).unwrap(),
+            OsString::from("\"C:\\some folder\\notes.txt\"")
+        );
+        assert_eq!(
+            expand_argument_for("${selection}:${line}", &safe, PlaceholderSafety::CommandShell).unwrap(),
+            OsString::from("plain:7")
+        );
+    }
+    #[test]
+    fn shell_mode_runs_in_the_workspace_root_not_the_document_folder() {
+        let definition = ExternalDefinition {
+            name: "x".into(),
+            program: r"C:\Windows\System32\cmd.exe".into(),
+            arguments: vec!["/c".into(), "tool".into()],
+            shell: true,
+            capture: true,
+        };
+        let context = PlaceholderContext {
+            file: Some(PathBuf::from(r"C:\untrusted\notes.txt")),
+            workspace: Some(PathBuf::from(r"C:\work")),
+            ..Default::default()
+        };
+        assert_eq!(
+            definition.request(&context).unwrap().directory,
+            Some(PathBuf::from(r"C:\work"))
+        );
     }
     #[test]
     fn gigabyte_output_budget_stays_bounded_without_materializing_fixture() {
@@ -509,9 +572,7 @@ mod tests {
         while handle.state() == ProcessState::Starting && Instant::now() < deadline {
             thread::yield_now();
         }
-        assert!(
-            matches!(handle.state(),ProcessState::Failed(reason) if reason.contains("fixture rejects"))
-        );
+        assert!(matches!(handle.state(),ProcessState::Failed(reason) if reason.contains("fixture rejects")));
     }
 }
 
@@ -532,24 +593,13 @@ impl ExternalDefinition {
         let doc = text
             .parse::<toml_edit::DocumentMut>()
             .map_err(|error| error.to_string())?;
-        if doc
-            .get("format_version")
-            .and_then(|value| value.as_integer())
-            != Some(1)
-        {
+        if doc.get("format_version").and_then(|value| value.as_integer()) != Some(1) {
             return Err("Unsupported external command format_version".into());
         }
-        if doc.iter().any(|(key, _)| {
-            ![
-                "format_version",
-                "name",
-                "program",
-                "args",
-                "mode",
-                "capture",
-            ]
-            .contains(&key)
-        }) {
+        if doc
+            .iter()
+            .any(|(key, _)| !["format_version", "name", "program", "args", "mode", "capture"].contains(&key))
+        {
             return Err("Unknown external command field; grants cannot be imported".into());
         }
         let name = doc
@@ -570,21 +620,12 @@ impl ExternalDefinition {
             .and_then(|value| value.as_array())
             .ok_or("args must be an array")?
             .iter()
-            .map(|value| {
-                value
-                    .as_str()
-                    .map(str::to_string)
-                    .ok_or("Arguments must be strings")
-            })
+            .map(|value| value.as_str().map(str::to_string).ok_or("Arguments must be strings"))
             .collect::<Result<Vec<_>, _>>()?;
         if arguments.len() > 4096 {
             return Err("Too many external command arguments".into());
         }
-        let shell = match doc
-            .get("mode")
-            .and_then(|value| value.as_str())
-            .unwrap_or("direct")
-        {
+        let shell = match doc.get("mode").and_then(|value| value.as_str()).unwrap_or("direct") {
             "direct" => false,
             "shell" => true,
             _ => return Err("mode must be direct or shell".into()),
@@ -604,11 +645,14 @@ impl ExternalDefinition {
     pub fn request(&self, context: &PlaceholderContext) -> Result<ProcessRequest, String> {
         let mut arguments = Vec::new();
         let mut budget = 0usize;
+        let safety = if self.shell {
+            PlaceholderSafety::CommandShell
+        } else {
+            PlaceholderSafety::Argument
+        };
         for template in &self.arguments {
-            let argument = expand_argument(template, context)?;
-            budget = budget
-                .checked_add(argument.len())
-                .ok_or("Argument budget exceeded")?;
+            let argument = expand_argument_for(template, context, safety)?;
+            budget = budget.checked_add(argument.len()).ok_or("Argument budget exceeded")?;
             if budget > 1024 * 1024 {
                 return Err("Expanded arguments exceed 1 MiB".into());
             }
@@ -621,11 +665,13 @@ impl ExternalDefinition {
             } else {
                 LaunchMode::Direct { program, arguments }
             },
-            directory: context
-                .file
-                .as_ref()
-                .and_then(|file| file.parent())
-                .map(PathBuf::from),
+            // Shell templates resolve unqualified tool names against the working
+            // directory, so they never run in the document's folder (SEC-04).
+            directory: if self.shell {
+                context.workspace.as_ref().map(PathBuf::from)
+            } else {
+                context.file.as_ref().and_then(|file| file.parent()).map(PathBuf::from)
+            },
             capture: self.capture,
         })
     }

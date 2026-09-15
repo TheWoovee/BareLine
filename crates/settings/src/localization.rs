@@ -18,26 +18,15 @@ impl LocalePack {
             return Err("Locale exceeds 1 MiB".into());
         }
         let text = std::str::from_utf8(bytes).map_err(|_| "Locale must be UTF-8")?;
-        let document = text
-            .parse::<toml_edit::DocumentMut>()
-            .map_err(|e| e.to_string())?;
-        if document
-            .get("version")
-            .and_then(toml_edit::Item::as_integer)
-            != Some(1)
-        {
+        let document = text.parse::<toml_edit::DocumentMut>().map_err(|e| e.to_string())?;
+        if document.get("version").and_then(toml_edit::Item::as_integer) != Some(1) {
             return Err("Unsupported locale version".into());
         }
         let locale = document
             .get("locale")
             .and_then(toml_edit::Item::as_str)
             .ok_or("Locale ID is required")?;
-        if locale.is_empty()
-            || locale.len() > 64
-            || !locale
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b == b'-')
-        {
+        if locale.is_empty() || locale.len() > 64 || !locale.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
             return Err("Invalid locale ID".into());
         }
         let direction = match document.get("direction").and_then(toml_edit::Item::as_str) {
@@ -52,9 +41,7 @@ impl LocalePack {
             .ok_or("Locale messages are required")?
             .iter()
         {
-            let text = value
-                .as_str()
-                .ok_or("Locale messages must be plain strings")?;
+            let text = value.as_str().ok_or("Locale messages must be plain strings")?;
             if key.is_empty() || key.len() > 256 || text.len() > 16 * 1024 || text.contains('\0') {
                 return Err("Locale message exceeds limits".into());
             }
@@ -68,17 +55,12 @@ impl LocalePack {
         })
     }
     pub fn english() -> Self {
-        let mut pack =
-            Self::parse(include_bytes!("../locales/en.toml")).expect("valid built-in English");
+        let mut pack = Self::parse(include_bytes!("../locales/en.toml")).expect("valid built-in English");
         for definition in DEFINITIONS {
-            pack.messages.insert(
-                format!("setting.{}.title", definition.key),
-                definition.title.into(),
-            );
-            pack.messages.insert(
-                definition.description_id.into(),
-                definition.description.into(),
-            );
+            pack.messages
+                .insert(format!("setting.{}.title", definition.key), definition.title.into());
+            pack.messages
+                .insert(definition.description_id.into(), definition.description.into());
         }
         for category in [
             "Editor",
@@ -92,12 +74,7 @@ impl LocalePack {
         ] {
             pack.messages.insert(
                 format!("settings.category.{category}"),
-                if category == "Language" {
-                    "Languages"
-                } else {
-                    category
-                }
-                .into(),
+                if category == "Language" { "Languages" } else { category }.into(),
             );
         }
         for command in bareline_commands::shell_commands().entries() {
@@ -113,8 +90,7 @@ impl LocalePack {
             }
         }
         menus(
-            &bareline_commands::MenuModel::from_registry(&bareline_commands::shell_commands())
-                .items,
+            &bareline_commands::MenuModel::from_registry(&bareline_commands::shell_commands()).items,
             &mut pack.messages,
         );
         pack
@@ -194,10 +170,7 @@ fn format_message(text: &str, args: &[(&str, &str)]) -> Result<String, String> {
             .ok_or_else(|| format!("Missing message parameter: {key}"))
     })
 }
-fn visit_message(
-    text: &str,
-    mut parameter: impl FnMut(&str) -> Result<String, String>,
-) -> Result<String, String> {
+fn visit_message(text: &str, mut parameter: impl FnMut(&str) -> Result<String, String>) -> Result<String, String> {
     let mut output = String::new();
     let mut rest = text;
     while !rest.is_empty() {

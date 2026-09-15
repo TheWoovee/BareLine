@@ -1,0 +1,15 @@
+{
+  "arguments": [
+    "test",
+    "-p",
+    "bareline-file-io",
+    "discard_removes_every_generation_even_mid_rotation",
+    "--offline",
+    "--locked"
+  ],
+  "completed_utc": "2026-09-12T09:44:51.3222560Z",
+  "integration_snapshot": "4d2d60c011356091852571cda434817362e3e78a",
+  "exit_code": 0,
+  "zero_tests": true,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\T05-resident-generations-central.log"
+}

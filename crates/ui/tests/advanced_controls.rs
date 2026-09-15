@@ -1,9 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 use bareline_renderer::{DrawOp, Point, balanced_clips};
 use bareline_renderer_recording::RecordingBackend;
-use bareline_ui::controls::{
-    ControlAction, Key, Popover, ScrollAction, Scrollbar, ScrollbarInteraction, UiEvent,
-};
+use bareline_ui::controls::{ControlAction, Key, Popover, ScrollAction, Scrollbar, ScrollbarInteraction, UiEvent};
 use bareline_ui::focus::{DispatchResult, EventRouter, RouteTarget};
 use bareline_ui::overlays::{AnchoredPanel, Banner, Tooltip};
 use bareline_ui::text_field::{TextField, TextMode};
@@ -30,19 +28,14 @@ fn focus_loss_cancels_capture_even_when_popup_handles_and_target_was_disabled() 
         enabled: id != 3,
     });
     let mut visited = Vec::new();
-    let result = router.route(
-        UiEvent::Focus(false),
-        Some(ViewId(2)),
-        &targets,
-        |id, event| {
-            assert!(matches!(event, UiEvent::Focus(false)));
-            visited.push(id);
-            DispatchResult {
-                handled: true,
-                invalidated: None,
-            }
-        },
-    );
+    let result = router.route(UiEvent::Focus(false), Some(ViewId(2)), &targets, |id, event| {
+        assert!(matches!(event, UiEvent::Focus(false)));
+        visited.push(id);
+        DispatchResult {
+            handled: true,
+            invalidated: None,
+        }
+    });
     assert_eq!(visited, [ViewId(1), ViewId(2), ViewId(3)]);
     assert!(result.handled);
     assert_eq!(router.pointer_capture, None);
@@ -264,11 +257,7 @@ fn lazy_tree_seeks_million_siblings_and_requests_only_expanded_children() {
     tree.offset = 500_000.0 * 28.0;
     let mut ops = Vec::new();
     tree.paint(&source, Theme::default(), &mut ops);
-    assert_eq!(
-        source.reads.get(),
-        4,
-        "viewport does not enumerate preceding siblings"
-    );
+    assert_eq!(source.reads.get(), 4, "viewport does not enumerate preceding siblings");
     assert!(balanced_clips(&ops));
     tree.event(UiEvent::Key(Key::Home), &source);
     assert_eq!(
@@ -309,22 +298,14 @@ impl VariableItemSource for VariableSource {
 }
 #[test]
 fn indexed_variable_rows_align_hit_testing_and_reveal_without_prefix_scan() {
-    let source = VariableSource {
-        labels: Cell::new(0),
-    };
+    let source = VariableSource { labels: Cell::new(0) };
     let mut list = VariableList {
         bounds: rect(0.0, 0.0, 200.0, 56.0),
         offset: 500_000.0 * 28.0 + 8.0,
         selected: None,
     };
-    assert_eq!(
-        list.hit_test(&source, Point { x: 5.0, y: 1.0 }),
-        Some(500_000)
-    );
-    assert_eq!(
-        list.hit_test(&source, Point { x: 5.0, y: 9.0 }),
-        Some(500_001)
-    );
+    assert_eq!(list.hit_test(&source, Point { x: 5.0, y: 1.0 }), Some(500_000));
+    assert_eq!(list.hit_test(&source, Point { x: 5.0, y: 9.0 }), Some(500_001));
     let mut ops = Vec::new();
     list.paint(&source, Theme::default(), &mut ops);
     assert!(source.labels.get() <= 5);
@@ -367,18 +348,13 @@ fn routing_capture_focus_hit_ancestors_and_release_are_ordered() {
     assert_eq!(regions.len(), 4);
     assert_eq!(router.pointer_capture, None);
     seen.clear();
-    router.dispatch(
-        UiEvent::Key(Key::Escape),
-        Some(ViewId(2)),
-        &targets,
-        |id, _| {
-            seen.push(id);
-            DispatchResult {
-                handled: true,
-                invalidated: None,
-            }
-        },
-    );
+    router.dispatch(UiEvent::Key(Key::Escape), Some(ViewId(2)), &targets, |id, _| {
+        seen.push(id);
+        DispatchResult {
+            handled: true,
+            invalidated: None,
+        }
+    });
     assert_eq!(seen, [ViewId(4)]);
 }
 
@@ -395,15 +371,9 @@ fn password_masks_layout_clipboard_and_semantics_while_decimal_rejects_invalid_c
     field
         .draw(&mut backend, rect(0.0, 0.0, 150.0, 28.0), true, &mut ops)
         .unwrap();
-    field
-        .click(&backend, Point { x: 8.0, y: 14.0 }, false)
-        .unwrap();
+    field.click(&backend, Point { x: 8.0, y: 14.0 }, false).unwrap();
     field.delete(true);
-    assert_eq!(
-        field.value(),
-        "🔒x",
-        "masked hit maps back to one complete grapheme"
-    );
+    assert_eq!(field.value(), "🔒x", "masked hit maps back to one complete grapheme");
     assert!(!field.set_mode(TextMode::Decimal));
     field.select_all();
     field.insert("");
@@ -415,11 +385,7 @@ fn password_masks_layout_clipboard_and_semantics_while_decimal_rejects_invalid_c
     assert!(!field.composing());
     assert_eq!(field.value(), "-12.5");
     field.undo(false);
-    assert_eq!(
-        field.value(),
-        "",
-        "rejected numeric composition does not add history"
-    );
+    assert_eq!(field.value(), "", "rejected numeric composition does not add history");
     assert!(
         !ops.iter()
             .any(|op| matches!(op, DrawOp::Text { text, .. } if text.contains('🔒')))
@@ -430,13 +396,7 @@ fn password_masks_layout_clipboard_and_semantics_while_decimal_rejects_invalid_c
 fn sticky_panel_tooltip_deadline_and_banner_dismiss_are_explicit() {
     let bounds = rect(10.0, 10.0, 120.0, 28.0);
     let mut panel = AnchoredPanel {
-        popover: Popover::place(
-            ViewId(1),
-            bounds,
-            120.0,
-            100.0,
-            rect(0.0, 0.0, 200.0, 200.0),
-        ),
+        popover: Popover::place(ViewId(1), bounds, 120.0, 100.0, rect(0.0, 0.0, 200.0, 200.0)),
         sticky: true,
     };
     assert_eq!(panel.event(UiEvent::Key(Key::Escape)), None);
@@ -450,12 +410,7 @@ fn sticky_panel_tooltip_deadline_and_banner_dismiss_are_explicit() {
     assert!(tooltip.visible(600));
     tooltip.hover(false, 601);
     assert!(!tooltip.visible(1000));
-    let mut banner = Banner::new(
-        ViewId(2),
-        bounds,
-        "Warning: changes not saved".into(),
-        ViewId(3),
-    );
+    let mut banner = Banner::new(ViewId(2), bounds, "Warning: changes not saved".into(), ViewId(3));
     banner.event(UiEvent::Focus(true));
     assert_eq!(
         banner.event(UiEvent::Key(Key::Enter)),

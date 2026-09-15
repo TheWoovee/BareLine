@@ -1,0 +1,28 @@
+diff --git a/apps/bareline/src/windows_app/accessibility.rs b/apps/bareline/src/windows_app/accessibility.rs
+index 4449b68..895a96f 100644
+--- a/apps/bareline/src/windows_app/accessibility.rs
++++ b/apps/bareline/src/windows_app/accessibility.rs
+@@ -800,7 +800,7 @@ impl Shell {
+                 chrome.push(AccessibilityNode {
+                     id: notice.id,
+                     parent: 1,
+-                    role: if notice.kind == toast::NotificationKind::Progress
++                    role: if notice.kind == super::toast::NotificationKind::Progress
+                         || notice.level == bareline_ui::theme::ToastLevel::Info
+                     {
+                         AccessibilityRole::Status
+diff --git a/apps/bareline/src/windows_app/lifecycle.rs b/apps/bareline/src/windows_app/lifecycle.rs
+index e2d972e..8cfb99e 100644
+--- a/apps/bareline/src/windows_app/lifecycle.rs
++++ b/apps/bareline/src/windows_app/lifecycle.rs
+@@ -719,9 +719,7 @@ impl Shell {
+                             resolve(workspace, other_document, &other),
+                         ));
+                         if let Some((Some(left), Some(right))) = pair {
+-                            if !self.compare_start_pair(left, right)
+-                                && let Some(workspace) = &mut self.workspace
+-                            {
++                            if !self.compare_start_pair(left, right) {
+                                 self.toasts.enqueue_owned(
+                                     toast::Notification::new(
+                                         format!("data-safety:save-compare:{}", transaction.display()),

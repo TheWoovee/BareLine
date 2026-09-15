@@ -119,10 +119,7 @@ impl SpillPlan {
         bytes: Budget,
         history: Budget,
     ) -> Result<Self, Error> {
-        let entry_count = undo
-            .len()
-            .checked_add(redo.len())
-            .ok_or(Error::BudgetExceeded)?;
+        let entry_count = undo.len().checked_add(redo.len()).ok_or(Error::BudgetExceeded)?;
         let charge = bytes.claim(
             entry_count
                 .checked_mul(std::mem::size_of::<PagedHistory>())
@@ -169,11 +166,7 @@ impl SpillPlan {
     }
     /// The producer must have flushed every mapped segment and attached its owned loader.
     /// No actor state is touched during conversion; stale attachment simply drops this result.
-    pub fn prepare(
-        self,
-        source: MemorySource,
-        stored: Vec<StoredSegment>,
-    ) -> Result<PreparedSpill, Error> {
+    pub fn prepare(self, source: MemorySource, stored: Vec<StoredSegment>) -> Result<PreparedSpill, Error> {
         if !source.has_owned_loader() {
             return Err(Error::IncompleteSource);
         }
@@ -215,8 +208,7 @@ impl SpillPlan {
                             stored.original.as_ref().map(|(source, range)| {
                                 (
                                     source.clone(),
-                                    range.start + piece.range.start as u64
-                                        ..range.start + piece.range.end as u64,
+                                    range.start + piece.range.start as u64..range.start + piece.range.end as u64,
                                 )
                             })
                         });
@@ -237,9 +229,7 @@ impl SpillPlan {
                     convert(&Some(right.clone()), source, map, budget)?,
                     budget,
                 ),
-                tree::Node::Source { .. } | tree::Node::OwnedSource { .. } => {
-                    Ok(Some(node.clone()))
-                }
+                tree::Node::Source { .. } | tree::Node::OwnedSource { .. } => Ok(Some(node.clone())),
             }
         }
         let stamp = Stamp {
@@ -267,10 +257,8 @@ impl SpillPlan {
                 })
                 .collect::<Result<Vec<_>, Error>>()
         };
-        document.undo =
-            crate::history::HistoryStack::from_vec(history(self.undo)?, self.history.clone())?;
-        document.redo =
-            crate::history::HistoryStack::from_vec(history(self.redo)?, self.history.clone())?;
+        document.undo = crate::history::HistoryStack::from_vec(history(self.undo)?, self.history.clone())?;
+        document.redo = crate::history::HistoryStack::from_vec(history(self.redo)?, self.history.clone())?;
         Ok(PreparedSpill { stamp, document })
     }
 }

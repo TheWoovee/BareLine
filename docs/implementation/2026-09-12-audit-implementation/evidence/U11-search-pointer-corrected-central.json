@@ -1,0 +1,18 @@
+{
+  "arguments": [
+    "test",
+    "-p",
+    "bareline-app",
+    "--lib",
+    "search_panel::tests::external_dock_bounds_own_search_hit_and_semantic_geometry",
+    "--offline",
+    "--locked",
+    "--",
+    "--exact"
+  ],
+  "completed_utc": "2026-09-12T10:58:05.3789241Z",
+  "integration_snapshot": "662cba3ca7a7add26881dfbebcf194a95e5d2b9f",
+  "exit_code": 0,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\U11-search-pointer-corrected-central.log"
+}

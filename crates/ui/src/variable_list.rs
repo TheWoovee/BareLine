@@ -28,14 +28,10 @@ pub struct VariableList {
 impl VariableList {
     /// At most 4096 rows can be emitted per viewport, even for corrupt/tiny metrics.
     pub fn visible(&self, source: &impl VariableItemSource, overscan: usize) -> Vec<VisibleItem> {
-        if !self.offset.is_finite() || !self.bounds.height.is_finite() || self.bounds.height <= 0.0
-        {
+        if !self.offset.is_finite() || !self.bounds.height.is_finite() || self.bounds.height <= 0.0 {
             return Vec::new();
         }
-        let count = source
-            .len()
-            .unwrap_or(source.discovered())
-            .min(source.discovered());
+        let count = source.len().unwrap_or(source.discovered()).min(source.discovered());
         let start = source
             .index_at(self.offset.max(0.0))
             .min(count)

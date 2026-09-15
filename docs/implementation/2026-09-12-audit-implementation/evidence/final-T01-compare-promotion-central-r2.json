@@ -1,0 +1,18 @@
+{
+  "arguments": [
+    "test",
+    "-p",
+    "bareline",
+    "--bin",
+    "bareline",
+    "windows_app::compare::tests::large_selected_copy_promotes_exact_destination_and_waits_for_durable_actor",
+    "--locked",
+    "--",
+    "--exact"
+  ],
+  "completed_utc": "2026-09-12T14:17:37.8444716Z",
+  "integration_snapshot": "77075af768f3efdc6ca99879d558eb8bddc81d7e",
+  "exit_code": 0,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\final-T01-compare-promotion-central-r2.log"
+}

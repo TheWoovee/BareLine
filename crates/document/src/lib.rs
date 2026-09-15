@@ -70,27 +70,15 @@ impl Budget {
         self.0.used.load(Ordering::Relaxed)
     }
     pub fn limit(&self) -> usize {
-        *self
-            .0
-            .limit
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
+        *self.0.limit.lock().unwrap_or_else(|error| error.into_inner())
     }
     /// Retains every live claim. A lowered cap blocks new reservations until
     /// owners release enough bytes; all clones observe the same admission cap.
     pub fn set_limit(&self, limit: usize) {
-        *self
-            .0
-            .limit
-            .lock()
-            .unwrap_or_else(|error| error.into_inner()) = limit;
+        *self.0.limit.lock().unwrap_or_else(|error| error.into_inner()) = limit;
     }
     fn reserve(&self, bytes: usize) -> Result<Reservation, Error> {
-        let limit = self
-            .0
-            .limit
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
+        let limit = self.0.limit.lock().unwrap_or_else(|error| error.into_inner());
         self.0
             .used
             .fetch_update(Ordering::AcqRel, Ordering::Relaxed, |used| {
@@ -295,11 +283,7 @@ impl DocumentBuilder {
 impl Document {
     /// Share immutable text storage with a complete snapshot while assigning a fresh
     /// document and content identity. Future edits and undo histories are independent.
-    pub fn fork_from_snapshot(
-        snapshot: &DocumentSnapshot,
-        bytes: Budget,
-        history: Budget,
-    ) -> Result<Self, Error> {
+    pub fn fork_from_snapshot(snapshot: &DocumentSnapshot, bytes: Budget, history: Budget) -> Result<Self, Error> {
         if !snapshot.is_complete() {
             return Err(Error::IncompleteSource);
         }
@@ -352,11 +336,7 @@ impl Document {
         self.current.metadata = metadata;
         Ok(())
     }
-    pub fn apply_metadata(
-        &mut self,
-        base_revision: Revision,
-        metadata: DocumentMetadata,
-    ) -> Result<Revision, Error> {
+    pub fn apply_metadata(&mut self, base_revision: Revision, metadata: DocumentMetadata) -> Result<Revision, Error> {
         if base_revision != self.current.revision {
             return Err(Error::StaleRevision);
         }
@@ -364,13 +344,8 @@ impl Document {
             return Ok(base_revision);
         }
         let revision = self.next_revision()?;
-        let charge = history::Charge::new(
-            self.history
-                .reserve(metadata.charge().saturating_add(128))?,
-        );
-        self.undo
-            .try_reserve(1)
-            .map_err(|_| Error::BudgetExceeded)?;
+        let charge = history::Charge::new(self.history.reserve(metadata.charge().saturating_add(128))?);
+        self.undo.try_reserve(1).map_err(|_| Error::BudgetExceeded)?;
         let state = ContentStateId(unique());
         let entry = History {
             before_metadata: self.current.metadata.clone(),
@@ -459,14 +434,9 @@ impl Document {
                     .0
                     .saturating_add(transaction.edits[0].insert.len());
         let mut prepared = self.prepare(transaction)?;
-        metadata.validate(
-            self.current.len(),
-            tree::summary(&prepared.entry.after).bytes,
-        )?;
+        metadata.validate(self.current.len(), tree::summary(&prepared.entry.after).bytes)?;
         for selection in &metadata.before {
-            if !self.current.is_boundary(selection.anchor)
-                || !self.current.is_boundary(selection.caret)
-            {
+            if !self.current.is_boundary(selection.anchor) || !self.current.is_boundary(selection.caret) {
                 return Err(Error::InvalidBoundary);
             }
         }
@@ -477,10 +447,9 @@ impl Document {
                 return Err(Error::InvalidBoundary);
             }
         }
-        let metadata_charge = self.history.reserve(
-            (metadata.before.len() + metadata.after.len())
-                * std::mem::size_of::<history::Selection>(),
-        )?;
+        let metadata_charge = self
+            .history
+            .reserve((metadata.before.len() + metadata.after.len()) * std::mem::size_of::<history::Selection>())?;
         prepared.entry._undo_reservation.add(metadata_charge);
         prepared.entry.metadata = metadata;
         prepared.entry.typing_insert = typing_insert;
@@ -491,26 +460,17 @@ impl Document {
         self.trim_history();
     }
     fn trim_history(&mut self) {
-        let excess = self
-            .undo
-            .len()
-            .saturating_sub(self.history_policy.max_changes);
+        let excess = self.undo.len().saturating_sub(self.history_policy.max_changes);
         self.undo.drain(..excess);
-        let excess = self.redo.len().saturating_sub(
-            self.history_policy
-                .max_changes
-                .saturating_sub(self.undo.len()),
-        );
+        let excess = self
+            .redo
+            .len()
+            .saturating_sub(self.history_policy.max_changes.saturating_sub(self.undo.len()));
         // The end is the next redo; discard the furthest future first.
         self.redo.drain(..excess);
     }
     pub fn history_metadata(&self, undo: bool) -> Option<&history::EditMetadata> {
-        (if undo {
-            self.undo.last()
-        } else {
-            self.redo.last()
-        })
-        .map(|entry| &entry.metadata)
+        (if undo { self.undo.last() } else { self.redo.last() }).map(|entry| &entry.metadata)
     }
     pub fn history_stats(&self) -> history::HistoryStats {
         history::HistoryStats {
@@ -532,9 +492,7 @@ impl Document {
         if transaction.edits.is_empty() {
             return Err(Error::EmptyTransaction);
         }
-        transaction
-            .edits
-            .sort_by_key(|e| (e.range.start, e.range.end));
+        transaction.edits.sort_by_key(|e| (e.range.start, e.range.end));
         let mut undo_bytes = 0usize;
         for (i, edit) in transaction.edits.iter().enumerate() {
             self.current.validate_range(&edit.range)?;
@@ -564,9 +522,7 @@ impl Document {
             let start = after_cursor
                 .checked_add(edit.range.start.0 - before_cursor)
                 .ok_or(Error::BudgetExceeded)?;
-            let end = start
-                .checked_add(edit.insert.len())
-                .ok_or(Error::BudgetExceeded)?;
+            let end = start.checked_add(edit.insert.len()).ok_or(Error::BudgetExceeded)?;
             let (prefix, _) = tree::split(self.current.root.clone(), edit.range.end.0);
             let (_, inverse) = tree::split(prefix, edit.range.start.0);
             owned_edits.push(history::OwnedEdit {
@@ -626,9 +582,7 @@ impl Document {
     }
     pub fn commit_prepared(&mut self, prepared: PreparedEdit) -> Result<Revision, Error> {
         self.validate_prepared(&prepared)?;
-        self.undo
-            .try_reserve(1)
-            .map_err(|_| Error::BudgetExceeded)?;
+        self.undo.try_reserve(1).map_err(|_| Error::BudgetExceeded)?;
         Ok(self.commit_prepared_unchecked(prepared))
     }
     fn commit_prepared_unchecked(&mut self, prepared: PreparedEdit) -> Revision {
@@ -655,13 +609,10 @@ impl Document {
             last.after_state = prepared.entry.after_state;
             last.metadata.after = prepared.entry.metadata.after;
             last.metadata.monotonic_ms = prepared.entry.metadata.monotonic_ms;
-            last.edits[0].inserted = tree::concat(
-                last.edits[0].inserted.clone(),
-                prepared.entry.edits[0].inserted.clone(),
-            );
+            last.edits[0].inserted =
+                tree::concat(last.edits[0].inserted.clone(), prepared.entry.edits[0].inserted.clone());
             last.edits[0].after_range.end = prepared.entry.edits[0].after_range.end;
-            last._undo_reservation
-                .merge(prepared.entry._undo_reservation);
+            last._undo_reservation.merge(prepared.entry._undo_reservation);
         } else {
             self.undo.push(prepared.entry);
         }

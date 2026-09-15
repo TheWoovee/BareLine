@@ -1,0 +1,19 @@
+{
+  "arguments": [
+    "test",
+    "-p",
+    "bareline",
+    "--bin",
+    "bareline",
+    "windows_app::search::menu_projection_tests::composed_shell_file_and_search_popups_fit_supported_heights",
+    "--offline",
+    "--locked",
+    "--",
+    "--exact"
+  ],
+  "completed_utc": "2026-09-12T11:51:21.9518111Z",
+  "integration_snapshot": "acbd4bee99e8a18330a21f12e3f977d1294e27b0",
+  "exit_code": 0,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\U04-composed-menu-r3-central.log"
+}

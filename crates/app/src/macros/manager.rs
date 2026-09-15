@@ -13,9 +13,53 @@ use bareline_ui::{
 };
 use std::collections::BTreeMap;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ManagerEffect {
     Select(String),
     Command(CommandId),
+    Dismiss,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn close_ignores_cached_command_disablement_and_all_dismiss_inputs_match() {
+        let mut manager = MacroManager::default();
+        manager.show(&BTreeMap::new(), None);
+        let mut context = bareline_commands::CommandContext::default();
+        context.states.insert(
+            CommandId("macro.manager_close"),
+            bareline_commands::CommandState::disabled("stale closed-manager state"),
+        );
+        let mut backend = bareline_renderer_recording::RecordingBackend::default();
+        manager
+            .draw(
+                &mut backend,
+                1000.,
+                800.,
+                "loading failed while recording and playing",
+                UiTheme::default(),
+                &context,
+                &mut Vec::new(),
+            )
+            .unwrap();
+        let close = manager
+            .semantics()
+            .into_iter()
+            .find(|node| node.id == ViewId(23205))
+            .unwrap();
+        assert!(!close.disabled);
+        assert!(close.actions.contains(&SemanticAction::Invoke));
+        assert!(close.invalid.is_none());
+        assert_eq!(manager.accessibility(23205, true), Some(ManagerEffect::Dismiss));
+        assert_eq!(
+            manager.event(UiEvent::Key(Key::Escape), false),
+            Some(ManagerEffect::Dismiss)
+        );
+        assert!(manager.open, "the native owner applies the shared dismissal effect");
+    }
 }
 pub struct MacroManager {
     pub open: bool,
@@ -68,12 +112,8 @@ impl MacroManager {
     }
     fn update_name(&mut self) {
         self.name.select_all();
-        self.name.insert(
-            self.names
-                .get(self.selected)
-                .map(String::as_str)
-                .unwrap_or(""),
-        );
+        self.name
+            .insert(self.names.get(self.selected).map(String::as_str).unwrap_or(""));
     }
     pub fn dismiss(&mut self) {
         self.open = false;
@@ -111,8 +151,7 @@ impl MacroManager {
         }
         match event {
             UiEvent::Key(Key::Escape) => {
-                self.dismiss();
-                return None;
+                return Some(ManagerEffect::Dismiss);
             }
             UiEvent::Key(Key::Tab) => {
                 let count = 5 + self.buttons.len();
@@ -126,9 +165,7 @@ impl MacroManager {
             UiEvent::Key(key) if self.focus == 0 => {
                 match key {
                     Key::Up => self.selected = self.selected.saturating_sub(1),
-                    Key::Down => {
-                        self.selected = (self.selected + 1).min(self.names.len().saturating_sub(1))
-                    }
+                    Key::Down => self.selected = (self.selected + 1).min(self.names.len().saturating_sub(1)),
                     Key::Home => self.selected = 0,
                     Key::End => self.selected = self.names.len().saturating_sub(1),
                     _ => return None,
@@ -138,11 +175,7 @@ impl MacroManager {
                     self.first = self.selected - 5;
                 }
                 self.update_name();
-                return self
-                    .names
-                    .get(self.selected)
-                    .cloned()
-                    .map(ManagerEffect::Select);
+                return self.names.get(self.selected).cloned().map(ManagerEffect::Select);
             }
             UiEvent::PointerDown(point) => {
                 if self.list.contains(point) {
@@ -171,7 +204,11 @@ impl MacroManager {
         for (index, (id, button)) in self.buttons.iter_mut().enumerate() {
             button.state.focused = self.focus == index + 5;
             if button.event(event).is_some() {
-                return Some(ManagerEffect::Command(*id));
+                return Some(if id.0 == "macro.manager_close" {
+                    ManagerEffect::Dismiss
+                } else {
+                    ManagerEffect::Command(*id)
+                });
             }
         }
         None
@@ -192,6 +229,7 @@ impl MacroManager {
         self.reasons = context
             .states
             .iter()
+            .filter(|(id, _)| id.0 != "macro.manager_close")
             .filter_map(|(id, state)| state.disabled_reason.clone().map(|reason| (*id, reason)))
             .collect();
         let w = (width - 24.).clamp(1., 700.);
@@ -199,14 +237,7 @@ impl MacroManager {
         ops.push(DrawOp::FillRounded(bounds, theme.elevated, 6.));
         ops.push(DrawOp::StrokeRounded(bounds, theme.border, 6., 1.));
         ops.push(DrawOp::PushClip(bounds));
-        text(
-            ops,
-            bounds.x + 12.,
-            bounds.y + 12.,
-            "Macros",
-            16.,
-            theme.text,
-        );
+        text(ops, bounds.x + 12., bounds.y + 12., "Macros", 16., theme.text);
         self.list = rect(bounds.x + 12., bounds.y + 40., w - 24., 168.);
         if self.names.is_empty() {
             text(
@@ -219,12 +250,7 @@ impl MacroManager {
             );
         }
         for (row, name) in self.names.iter().skip(self.first).take(6).enumerate() {
-            let r = rect(
-                self.list.x,
-                self.list.y + row as f32 * 28.,
-                self.list.width,
-                28.,
-            );
+            let r = rect(self.list.x, self.list.y + row as f32 * 28., self.list.width, 28.);
             if self.selected == self.first + row {
                 ops.push(DrawOp::Fill(r, theme.selection));
                 if self.focus == 0 {
@@ -285,10 +311,8 @@ impl MacroManager {
                 bounds: r,
                 toggle: false,
                 state: ControlState {
-                    disabled: context
-                        .states
-                        .get(&CommandId(id))
-                        .is_some_and(|state| !state.enabled),
+                    disabled: id != "macro.manager_close"
+                        && context.states.get(&CommandId(id)).is_some_and(|state| !state.enabled),
                     focused: self.focus == index + 5,
                     pressed: previous.get(index).is_some_and(|b| b.1.state.pressed),
                     ..Default::default()
@@ -425,7 +449,11 @@ impl MacroManager {
         {
             self.focus = index + 5;
             if invoke {
-                return Some(ManagerEffect::Command(self.buttons[index].0));
+                return Some(if self.buttons[index].0.0 == "macro.manager_close" {
+                    ManagerEffect::Dismiss
+                } else {
+                    ManagerEffect::Command(self.buttons[index].0)
+                });
             }
         }
         None

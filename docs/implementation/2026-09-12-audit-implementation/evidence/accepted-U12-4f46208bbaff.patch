@@ -1,0 +1,20 @@
+diff --git a/crates/app/src/find.rs b/crates/app/src/find.rs
+index f9f53ed..b0c98bd 100644
+--- a/crates/app/src/find.rs
++++ b/crates/app/src/find.rs
+@@ -1511,13 +1511,13 @@ mod find_bar_tests {
+         let label = find.toggle_contract(FindAction::Mode).unwrap().0;
+         let mut backend = bareline_renderer_recording::RecordingBackend::default();
+         let (bounds, wrapped) = find
+-            .tooltip_layout(&mut backend, 480.0, 160.0, FindAction::Mode, label)
++            .tooltip_layout(&mut backend, 480.0, 180.0, FindAction::Mode, label)
+             .unwrap()
+             .unwrap();
+         let replacement = FindController::replacement_bounds(480.0);
+         assert_eq!(wrapped, "Extended escape sequences");
+         assert!(bounds.y >= replacement.y + replacement.height);
+-        assert!(bounds.y + bounds.height <= 160.0 - STATUS_HEIGHT);
++        assert!(bounds.y + bounds.height <= 180.0 - STATUS_HEIGHT);
+ 
+         assert!(
+             find.tooltip_layout(&mut backend, 480.0, 120.0, FindAction::Mode, label)

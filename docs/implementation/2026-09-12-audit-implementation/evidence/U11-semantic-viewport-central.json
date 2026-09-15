@@ -1,0 +1,18 @@
+{
+  "arguments": [
+    "test",
+    "--locked",
+    "-p",
+    "bareline",
+    "--bin",
+    "bareline",
+    "windows_app::accessibility::tests::compare_editor_providers_match_reserved_viewport_above_shared_dock",
+    "--",
+    "--exact"
+  ],
+  "completed_utc": "2026-09-12T13:34:59.6392620Z",
+  "integration_snapshot": "32b04b53ad79838a7925c5f6b038094b368684b1",
+  "exit_code": 0,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\U11-semantic-viewport-central.log"
+}

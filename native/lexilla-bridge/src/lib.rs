@@ -32,11 +32,7 @@ pub struct Output {
     pub fold_levels: Vec<i32>,
 }
 unsafe extern "C" {
-    fn bareline_lexilla_session_create(
-        name: *const c_char,
-        keywords: *const c_char,
-        mode: u32,
-    ) -> *mut c_void;
+    fn bareline_lexilla_session_create(name: *const c_char, keywords: *const c_char, mode: u32) -> *mut c_void;
     fn bareline_lexilla_session_destroy(handle: *mut c_void);
     fn bareline_lexilla_session_next(
         handle: *mut c_void,
@@ -83,8 +79,7 @@ impl LexerSession {
         let name = CString::new(lexer).map_err(|_| Error::InvalidInput)?;
         let words = CString::new(keywords).map_err(|_| Error::InvalidInput)?;
         // SAFETY: native copies options and returns an exclusively owned handle.
-        let handle =
-            unsafe { bareline_lexilla_session_create(name.as_ptr(), words.as_ptr(), mode as u32) };
+        let handle = unsafe { bareline_lexilla_session_create(name.as_ptr(), words.as_ptr(), mode as u32) };
         Ok(Self {
             handle: std::ptr::NonNull::new(handle).ok_or(Error::UnsupportedLexer)?,
             _thread: std::marker::PhantomData,
@@ -93,12 +88,7 @@ impl LexerSession {
     /// Advance from zero in contiguous newline-terminated windows. A terminal
     /// partial line may be styled but cannot be continued. Missing retained
     /// lookbehind is reported explicitly and never reconstructed from guesses.
-    pub fn advance<F: Fn() -> bool>(
-        &mut self,
-        text: &str,
-        origin: usize,
-        cancel: &F,
-    ) -> Result<Output, Error> {
+    pub fn advance<F: Fn() -> bool>(&mut self, text: &str, origin: usize, cancel: &F) -> Result<Output, Error> {
         if text.len() > MAX_BYTES {
             return Err(Error::InvalidInput);
         }
@@ -240,11 +230,7 @@ mod tests {
                 "def return",
             ),
             ("rust", "fn main() { let s = r#\"text\"#; }\n", "fn let"),
-            (
-                "hypertext",
-                "<html><body><!--comment--></body></html>\n",
-                "html body",
-            ),
+            ("hypertext", "<html><body><!--comment--></body></html>\n", "html body"),
             ("xml", "<root attr=\"v\"><!--c--></root>\n", "root"),
             ("css", "body { color: red; /* comment */ }\n", "color"),
             ("json", "{\"key\": true, \"n\": 42}\n", "true false null"),
@@ -253,11 +239,7 @@ mod tests {
                 "SELECT col FROM table WHERE n=42; -- comment\n",
                 "select from where",
             ),
-            (
-                "toml",
-                "[section]\nkey = \"value\" # comment\n",
-                "true false",
-            ),
+            ("toml", "[section]\nkey = \"value\" # comment\n", "true false"),
         ] {
             let output = lex(text, name, words, 0, 0, &|| false).unwrap();
             assert_eq!(output.styles.len(), text.len());
@@ -271,18 +253,12 @@ mod tests {
             lex("x", "missing", "", 0, 0, &|| false).unwrap_err(),
             Error::UnsupportedLexer
         );
-        assert_eq!(
-            lex("x", "cpp\0", "", 0, 0, &|| false).unwrap_err(),
-            Error::InvalidInput
-        );
+        assert_eq!(lex("x", "cpp\0", "", 0, 0, &|| false).unwrap_err(), Error::InvalidInput);
         assert_eq!(
             lex(&"x".repeat(MAX_BYTES + 1), "cpp", "", 0, 0, &|| false).unwrap_err(),
             Error::InvalidInput
         );
-        assert_eq!(
-            lex("/*abc*/", "cpp", "", 0, 0, &|| true).unwrap_err(),
-            Error::Cancelled
-        );
+        assert_eq!(lex("/*abc*/", "cpp", "", 0, 0, &|| true).unwrap_err(), Error::Cancelled);
     }
     #[test]
     fn utf8_crlf_empty_and_nul_are_bounded() {
@@ -359,25 +335,12 @@ mod cpp_profiles {
     #[test]
     fn language_profiles_keep_raw_and_template_contents_in_strings() {
         for (mode, text, marker) in [
-            (
-                CppMode::JavaScript,
-                "const s = `line\n// { raw }`;",
-                "// { raw }",
-            ),
+            (CppMode::JavaScript, "const s = `line\n// { raw }`;", "// { raw }"),
             (CppMode::Go, "var s = `line\n// { raw }`", "// { raw }"),
-            (
-                CppMode::Java,
-                "String s = \"\"\"\n// { raw }\n\"\"\";",
-                "// { raw }",
-            ),
-            (
-                CppMode::CSharp,
-                "var s = \"\"\"\n// { raw }\n\"\"\";",
-                "// { raw }",
-            ),
+            (CppMode::Java, "String s = \"\"\"\n// { raw }\n\"\"\";", "// { raw }"),
+            (CppMode::CSharp, "var s = \"\"\"\n// { raw }\n\"\"\";", "// { raw }"),
         ] {
-            let output =
-                lex_with_mode(text, "cpp", "const var String", 0, 0, &|| false, mode).unwrap();
+            let output = lex_with_mode(text, "cpp", "const var String", 0, 0, &|| false, mode).unwrap();
             let start = text.find(marker).unwrap();
             assert!(
                 output.styles[start..start + marker.len()]
@@ -407,10 +370,7 @@ mod sessions {
             "toml",
         ] {
             let mut session = LexerSession::new(name, "word", CppMode::Default).unwrap();
-            assert_eq!(
-                session.advance(&text, 0, &|| false).unwrap().styles.len(),
-                text.len()
-            );
+            assert_eq!(session.advance(&text, 0, &|| false).unwrap().styles.len(), text.len());
             let mut session = LexerSession::new(name, "word", CppMode::Default).unwrap();
             let calls = std::cell::Cell::new(0);
             assert_eq!(
@@ -461,9 +421,7 @@ mod sessions {
         session.advance("int f() {\n", 0, &|| false).unwrap();
         session.advance("/* comment\n", 10, &|| false).unwrap();
         assert_eq!(
-            session
-                .advance("continued */\n", 21, &|| false)
-                .unwrap_err(),
+            session.advance("continued */\n", 21, &|| false).unwrap_err(),
             Error::UnavailableContext
         );
     }

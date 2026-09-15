@@ -1,0 +1,14 @@
+diff --git a/apps/bareline/src/windows_app/views.rs b/apps/bareline/src/windows_app/views.rs
+index 96ee6d4..c392284 100644
+--- a/apps/bareline/src/windows_app/views.rs
++++ b/apps/bareline/src/windows_app/views.rs
+@@ -1908,7 +1908,8 @@ impl ViewsRuntime {
+             },
+         ];
+         for pane in 0..2 {
+-            if ids[pane] == self.loaded_tabs[pane] {
++            let stale_secondary = pane == 1 && ids[pane].is_none() && self.secondary.is_some();
++            if ids[pane] == self.loaded_tabs[pane] && !stale_secondary {
+                 continue;
+             }
+             self.applied_spacers[pane] = None;

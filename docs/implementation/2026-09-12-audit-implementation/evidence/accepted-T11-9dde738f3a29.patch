@@ -1,0 +1,85 @@
+diff --git a/apps/bareline/src/windows_app/extensions.rs b/apps/bareline/src/windows_app/extensions.rs
+index 65bf343..e14f9ce 100644
+--- a/apps/bareline/src/windows_app/extensions.rs
++++ b/apps/bareline/src/windows_app/extensions.rs
+@@ -544,7 +544,7 @@ mod release_delivery_fixture {
+     use blake2::{Blake2b512, Digest as _};
+     use ed25519_dalek::{Signer as _, SigningKey};
+     use sha2::Sha256;
+-    use std::{fs, sync::atomic::AtomicBool};
++    use std::{fs, path::Path, sync::atomic::AtomicBool};
+ 
+     fn sign(bytes: &[u8], seed: [u8; 32], id: [u8; 8]) -> (String, String) {
+         let key = SigningKey::from_bytes(&seed);
+diff --git a/crates/platform-windows/src/update.rs b/crates/platform-windows/src/update.rs
+index a9d31f1..eb62a04 100644
+--- a/crates/platform-windows/src/update.rs
++++ b/crates/platform-windows/src/update.rs
+@@ -1115,7 +1115,6 @@ mod stage_tests {
+     fn local_fixture_transport_rejects_signature_policy_certificate_cancel_corruption_and_unavailable_runtime() {
+         use bareline_distribution::update::TrustPolicy;
+         use std::collections::BTreeMap;
+-        use std::io::Write as _;
+         let metadata = include_bytes!("../../distribution/tests/fixtures/valid.json").to_vec();
+         let signature = include_bytes!("../../distribution/tests/fixtures/valid.minisig").to_vec();
+         let key: &'static str = include_str!("../../distribution/tests/fixtures/public-key.txt");
+diff --git a/packaging/windows/test-release-fixture.ps1 b/packaging/windows/test-release-fixture.ps1
+index 3cd104d..551492d 100644
+--- a/packaging/windows/test-release-fixture.ps1
++++ b/packaging/windows/test-release-fixture.ps1
+@@ -10,23 +10,37 @@ $previous = $env:BARELINE_PREPARED_RELEASE_CONFIG
+ $previousPackageDir = $env:BARELINE_RELEASE_FIXTURE_PACKAGE_DIR
+ $previousRuntime = $env:BARELINE_RELEASE_FIXTURE_RUNTIME
+ $previousOutput = $env:BARELINE_RELEASE_FIXTURE_OUTPUT
++
++function Invoke-RequiredCargoTest {
++    param([Parameter(Mandatory)][string]$Name, [Parameter(Mandatory)][string[]]$Arguments)
++    $lines = $null
++    & cargo @Arguments | Tee-Object -Variable lines | Out-Host
++    $exitCode = $LASTEXITCODE
++    if ($exitCode) { throw "$Name failed with exit $exitCode" }
++    $text = (@($lines) | ForEach-Object { "$_" }) -join "`n"
++    $summaries = [regex]::Matches($text, 'test result: (?:ok|FAILED)\. (?<passed>\d+) passed; (?<failed>\d+) failed;')
++    $passed = ($summaries | ForEach-Object { [int]$_.Groups['passed'].Value } | Measure-Object -Sum).Sum
++    $failed = ($summaries | ForEach-Object { [int]$_.Groups['failed'].Value } | Measure-Object -Sum).Sum
++    if ($summaries.Count -eq 0 -or $passed -lt 1 -or $failed -ne 0) {
++        throw "$Name did not execute at least one successful test (passed=$passed failed=$failed summaries=$($summaries.Count))"
++    }
++}
++
+ try {
+     $env:BARELINE_PREPARED_RELEASE_CONFIG = $prepared
+     Push-Location $root
+     try {
++        cargo test --locked --release -p bareline --features bareline/fixture-release --no-run fixture_config_drives_catalog_runtime_and_three_component_install_with_tamper_rejection
++        if ($LASTEXITCODE) { throw 'Fixture-specific app test compile failed' }
+         cargo build --locked --release --target wasm32-wasip2 -p bareline-json-tools -p bareline-xml-tools -p bareline-hex-view
+         if ($LASTEXITCODE) { throw 'First-party release component build failed' }
+         $componentPackages = Join-Path $fixtureEvidence 'component-packages'
+         & scripts/package-first-party.ps1 -OutputDir $componentPackages
+         if ($LASTEXITCODE) { throw 'First-party package assembly failed' }
+-        cargo test --locked -p bareline-distribution --test signed_metadata
+-        if ($LASTEXITCODE) { throw 'Signed update metadata fixtures failed' }
+-        cargo test --locked -p bareline-extensions-protocol package::tests::signed_offline_install_tampering_freshness_and_remove
+-        if ($LASTEXITCODE) { throw 'Local catalog install/update fixtures failed' }
+-        cargo test --locked -p bareline-platform-windows update::stage_tests::local_fixture_transport_rejects_signature_policy_certificate_cancel_corruption_and_unavailable_runtime
+-        if ($LASTEXITCODE) { throw 'Local update transport fixtures failed' }
+-        cargo test --locked -p bareline release_without_owner_pins_cannot_open_or_install_catalog
+-        if ($LASTEXITCODE) { throw 'Preview disabled-reason fixture failed' }
++        Invoke-RequiredCargoTest 'Signed update metadata fixtures' @('test', '--locked', '-p', 'bareline-distribution', '--test', 'signed_metadata')
++        Invoke-RequiredCargoTest 'Local catalog install/update fixtures' @('test', '--locked', '-p', 'bareline-extensions-protocol', 'package::signed_tests::signed_offline_install_tampering_freshness_and_remove')
++        Invoke-RequiredCargoTest 'Local update transport fixtures' @('test', '--locked', '-p', 'bareline-platform-windows', 'update::stage_tests::local_fixture_transport_rejects_signature_policy_certificate_cancel_corruption_and_unavailable_runtime')
++        Invoke-RequiredCargoTest 'Preview disabled-reason fixture' @('test', '--locked', '-p', 'bareline', 'release_without_owner_pins_cannot_open_or_install_catalog')
+         cargo build --locked --release -p bareline -p bareline-update-helper -p bareline-extension-host --features bareline/fixture-release,bareline-update-helper/fixture-release,bareline-extension-host/fixture-release
+         if ($LASTEXITCODE) { throw 'Fixture-configured executable build failed' }
+         $fixtureExecutables = Join-Path $fixtureEvidence 'unsigned-executables'
+@@ -38,8 +52,7 @@ try {
+         $env:BARELINE_RELEASE_FIXTURE_PACKAGE_DIR = $componentPackages
+         $env:BARELINE_RELEASE_FIXTURE_RUNTIME = Join-Path $fixtureExecutables 'bareline-extension-host.exe'
+         $env:BARELINE_RELEASE_FIXTURE_OUTPUT = $deliveryEvidence
+-        cargo test --locked --release -p bareline --features bareline/fixture-release fixture_config_drives_catalog_runtime_and_three_component_install_with_tamper_rejection -- --nocapture
+-        if ($LASTEXITCODE) { throw 'Connected fixture-configured catalog/runtime/component delivery failed' }
++        Invoke-RequiredCargoTest 'Connected fixture-configured catalog/runtime/component delivery' @('test', '--locked', '--release', '-p', 'bareline', '--features', 'bareline/fixture-release', 'fixture_config_drives_catalog_runtime_and_three_component_install_with_tamper_rejection', '--', '--nocapture')
+         $installedManifest = Join-Path $deliveryEvidence 'installed-artifacts.json'
+         $installed = Get-Content -Raw -LiteralPath $installedManifest | ConvertFrom-Json
+         $existingT10Runs = @((Get-ChildItem -LiteralPath (Join-Path $root 'target/first-party') -Directory -ErrorAction SilentlyContinue).Name)

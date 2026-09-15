@@ -1,0 +1,138 @@
+diff --git a/docs/implementation/2026-09-12-audit-implementation/PR-T09-R4.md b/docs/implementation/2026-09-12-audit-implementation/PR-T09-R4.md
+new file mode 100644
+index 0000000..7a6ba8e
+--- /dev/null
++++ b/docs/implementation/2026-09-12-audit-implementation/PR-T09-R4.md
+@@ -0,0 +1,7 @@
++# PR-T09 R4 — Source identity framing parity
++
++- Base: `f556f5d10acfe8757d7e71bb46ed19858e8a981c`
++- Scope: make the xtask journey source manifest byte-for-byte compatible with the T09 Python evidence producer while preserving result/capture binding.
++- Reproduction: the Rust producer frames `untracked\0` once for the collection, while both Python producers frame it before each untracked path. Multiple untracked files therefore produce different hashes for one frozen checkout.
++- Result binding: xtask writes the final result before emitting its absolute path and exact file SHA-256. The T09 wrapper retains those lines, and the adapter requires both values to match the supplied result, so no publication change is needed.
++- Verification: a cross-language fixture will compare the Rust manifest helper with the actual Python T09 helper for no untracked files and multiple untracked files including a non-ASCII path and multi-chunk content. Root owns Cargo checks and native journey reruns.
+diff --git a/xtask/src/journey.rs b/xtask/src/journey.rs
+index 25ea2b7..b56ad84 100644
+--- a/xtask/src/journey.rs
++++ b/xtask/src/journey.rs
+@@ -228,6 +228,20 @@ fn run_identity(
+ ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+     let stamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
+     let run_id = format!("{}-{stamp}", std::process::id());
++    let (head, working_tree_dirty, source_manifest_sha256) = source_identity(root)?;
++    Ok(serde_json::json!({
++        "schema_version": 1,
++        "run_id": run_id,
++        "retry_of": retry_of,
++        "head": head,
++        "working_tree_dirty": working_tree_dirty,
++        "source_manifest_sha256": source_manifest_sha256,
++        "executable": exe,
++        "executable_sha256": hash_file(exe)?,
++    }))
++}
++
++fn source_identity(root: &Path) -> Result<(String, bool, String), Box<dyn std::error::Error>> {
+     let head = git_output(root, &["rev-parse", "HEAD"])?;
+     let status = git_output_bytes(root, &["status", "--porcelain=v1", "-z", "--untracked-files=all"])?;
+     let tracked = git_output_bytes(root, &["diff", "--binary", "--no-ext-diff", "HEAD", "--"])?;
+@@ -239,9 +253,9 @@ fn run_identity(
+     source.update(b"tracked-diff\0");
+     source.update((tracked.len() as u64).to_le_bytes());
+     source.update(&tracked);
+-    source.update(b"untracked\0");
+     for raw in untracked.split(|byte| *byte == 0).filter(|path| !path.is_empty()) {
+         let relative = PathBuf::from(String::from_utf8(raw.to_vec())?);
++        source.update(b"untracked\0");
+         source.update((raw.len() as u64).to_le_bytes());
+         source.update(raw);
+         let mut file = std::fs::File::open(root.join(&relative))?;
+@@ -256,16 +270,7 @@ fn run_identity(
+         }
+         source.update(0u64.to_le_bytes());
+     }
+-    Ok(serde_json::json!({
+-        "schema_version": 1,
+-        "run_id": run_id,
+-        "retry_of": retry_of,
+-        "head": head,
+-        "working_tree_dirty": !status.is_empty(),
+-        "source_manifest_sha256": format!("{:x}", source.finalize()),
+-        "executable": exe,
+-        "executable_sha256": hash_file(exe)?,
+-    }))
++    Ok((head, !status.is_empty(), format!("{:x}", source.finalize())))
+ }
+ 
+ fn git_output(root: &Path, args: &[&str]) -> Result<String, Box<dyn std::error::Error>> {
+@@ -1944,6 +1949,70 @@ fn click_button(dialog: HWND, candidates: &[&str]) -> Result<(), String> {
+ mod evidence_tests {
+     use super::*;
+ 
++    struct TempRepo(PathBuf);
++    impl TempRepo {
++        fn new() -> Self {
++            let path = std::env::temp_dir().join(format!(
++                "bareline-source-identity-{}-{}",
++                std::process::id(),
++                SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
++            ));
++            std::fs::create_dir(&path).unwrap();
++            let run_git = |arguments: &[&str]| {
++                let status = Command::new("git").args(arguments).current_dir(&path).status().unwrap();
++                assert!(status.success(), "git {arguments:?} failed");
++            };
++            run_git(&["init", "--quiet"]);
++            run_git(&["config", "user.email", "source-identity@example.invalid"]);
++            run_git(&["config", "user.name", "Source Identity Fixture"]);
++            std::fs::write(path.join("tracked.txt"), b"tracked\n").unwrap();
++            run_git(&["add", "tracked.txt"]);
++            run_git(&["commit", "--quiet", "-m", "fixture"]);
++            Self(path)
++        }
++    }
++    impl Drop for TempRepo {
++        fn drop(&mut self) {
++            let _ = std::fs::remove_dir_all(&self.0);
++        }
++    }
++
++    fn python_source_identity(root: &Path) -> serde_json::Value {
++        let tool = Path::new(env!("CARGO_MANIFEST_DIR"))
++            .parent()
++            .unwrap()
++            .join(".github/workflows/run_test_evidence.py");
++        let script = "import importlib.util,json,pathlib,sys; spec=importlib.util.spec_from_file_location('evidence',sys.argv[1]); module=importlib.util.module_from_spec(spec); spec.loader.exec_module(module); print(json.dumps(module.source_identity(pathlib.Path(sys.argv[2]))))";
++        let output = Command::new("python")
++            .args(["-c", script])
++            .arg(tool)
++            .arg(root)
++            .env("PYTHONDONTWRITEBYTECODE", "1")
++            .output()
++            .unwrap();
++        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
++        serde_json::from_slice(&output.stdout).unwrap()
++    }
++
++    fn assert_source_identity_parity(root: &Path) {
++        let (head, dirty, manifest) = source_identity(root).unwrap();
++        let python = python_source_identity(root);
++        assert_eq!(python["available"], true);
++        assert_eq!(python["head"], head);
++        assert_eq!(python["working_tree_dirty"], dirty);
++        assert_eq!(python["source_manifest_sha256"], manifest);
++    }
++
++    #[test]
++    fn rust_and_t09_python_source_identities_share_exact_untracked_framing() {
++        let repo = TempRepo::new();
++        assert_source_identity_parity(&repo.0);
++
++        std::fs::write(repo.0.join("first.txt"), b"first").unwrap();
++        std::fs::write(repo.0.join("naïve-文.txt"), vec![0x5a; 64 * 1024 + 19]).unwrap();
++        assert_source_identity_parity(&repo.0);
++    }
++
+     #[test]
+     fn failure_classification_keeps_timeout_harness_and_product_results_distinct() {
+         assert_eq!(classify_failure("timed out waiting for prompt"), "timeout");

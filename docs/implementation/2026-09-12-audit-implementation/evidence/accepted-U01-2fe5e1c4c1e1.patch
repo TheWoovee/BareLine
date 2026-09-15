@@ -1,0 +1,1911 @@
+diff --git a/apps/bareline/src/windows_app.rs b/apps/bareline/src/windows_app.rs
+index 89bea89..5a1c9de 100644
+--- a/apps/bareline/src/windows_app.rs
++++ b/apps/bareline/src/windows_app.rs
+@@ -12,6 +12,7 @@ mod launch;
+ mod lifecycle;
+ mod macros;
+ mod migration;
++mod modal;
+ mod performance;
+ mod power;
+ mod recovery;
+@@ -86,6 +87,8 @@ struct Shell {
+     pending_close: Option<PendingClose>,
+     ui_focus: bareline_ui::focus::FocusChain,
+     ui_router: bareline_ui::focus::EventRouter,
++    modal: Option<modal::ModalDescriptor>,
++    modal_identity_serial: u64,
+     ledger: StartupLedger,
+     modifiers: ModifiersState,
+     software: bool,
+@@ -487,6 +490,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
+         pending_close: None,
+         ui_focus: Default::default(),
+         ui_router: Default::default(),
++        modal: None,
++        modal_identity_serial: 0,
+         ledger,
+         modifiers: ModifiersState::empty(),
+         software,
+@@ -804,6 +809,7 @@ impl ApplicationHandler<Wake> for Handler {
+ impl Shell {
+     fn editor_has_input_focus(&self) -> bool {
+         self.window.as_ref().is_some_and(Window::has_focus)
++            && self.modal.is_none()
+             && !self.palette.open
+             && !self.search_modal()
+             && !self.settings.controller.open
+@@ -1865,6 +1871,11 @@ impl Shell {
+         if self.session.closing() {
+             return;
+         }
++        // Modal controls dispatch directly. Reject commands originating from
++        // dimmed editor, menu, toolbar, or stale accessibility state.
++        if self.modal.is_some() {
++            return;
++        }
+         self.sync_contributions();
+         self.record_acknowledged_inputs();
+         if self.route_text_and_clipboard(el, action) {
+@@ -2229,6 +2240,9 @@ impl ApplicationHandler for Shell {
+             self.applied_settings = None;
+         }
+         self.toolbar_refresh();
++        if self.modal_event(el, &event) {
++            return;
++        }
+         // A click on a toast's × dismisses it before any overlay sees the event.
+         if let WindowEvent::MouseInput {
+             state: ElementState::Pressed,
+@@ -3566,6 +3580,7 @@ impl Shell {
+             size.width as f32 / scale,
+             size.height as f32 / scale,
+             self.settings.ui_theme(),
++            self.modal.map_or(modal::GOTO_FIELD_ID, |modal| modal.focused),
+             operations,
+         ) {
+             Ok(Some(caret)) => window.set_ime_cursor_area(
+@@ -3600,6 +3615,7 @@ impl Shell {
+             size.width as f32 / scale,
+             size.height as f32 / scale,
+             self.settings.ui_theme(),
++            self.modal.map_or(modal::RUN_FIELD_ID, |modal| modal.focused),
+             operations,
+         ) {
+             Ok(Some(caret)) => window.set_ime_cursor_area(
+diff --git a/apps/bareline/src/windows_app/accessibility.rs b/apps/bareline/src/windows_app/accessibility.rs
+index 8ab4ce4..e7f0bf6 100644
+--- a/apps/bareline/src/windows_app/accessibility.rs
++++ b/apps/bareline/src/windows_app/accessibility.rs
+@@ -1,6 +1,54 @@
+ // SPDX-License-Identifier: MPL-2.0
+ use super::Shell;
+ use bareline_platform::accessibility::{AccessibilityNode, AccessibilityRole, AccessibilitySnapshot};
++
++const MODAL_TEXT_NAMESPACE: u64 = u64::MAX;
++
++struct ModalTextSource {
++    identity: (u64, u64),
++    value: String,
++}
++impl bareline_platform::accessibility::AccessibilityTextSource for ModalTextSource {
++    fn identity(&self) -> (u64, u64) {
++        self.identity
++    }
++    fn len(&self) -> usize {
++        self.value.len()
++    }
++    fn read(&self, mut start: usize, limit: usize) -> bareline_platform::accessibility::AccessibleRead {
++        use bareline_platform::accessibility::AccessibleRead;
++        if start > self.value.len() || limit > 64 * 1024 {
++            return AccessibleRead::Unavailable;
++        }
++        while start < self.value.len() && !self.value.is_char_boundary(start) {
++            start += 1;
++        }
++        let mut end = start.saturating_add(limit).min(self.value.len());
++        while end > start && !self.value.is_char_boundary(end) {
++            end -= 1;
++        }
++        AccessibleRead::Ready {
++            start,
++            text: self.value[start..end].to_owned(),
++        }
++    }
++}
++
++fn modal_text_selection_matches(modal: super::modal::ModalDescriptor, source_identity: (u64, u64)) -> bool {
++    source_identity == modal_text_identity(modal)
++}
++
++fn modal_text_identity(modal: super::modal::ModalDescriptor) -> (u64, u64) {
++    // Document identities occupy their own source domain. The modal namespace
++    // is also rejected explicitly before applying queued editor selections.
++    // Revision is a shell-wide, non-recycling token allocated on every modal
++    // open and text revision, so different instances cannot share a provider.
++    (MODAL_TEXT_NAMESPACE, modal.revision)
++}
++
++fn editor_text_selection_matches(current: (u64, u64), queued: (u64, u64)) -> bool {
++    queued.0 != MODAL_TEXT_NAMESPACE && current == queued
++}
+ fn semantic_group(nodes: &mut Vec<AccessibilityNode>, id: u64, name: &str, mut children: Vec<AccessibilityNode>) {
+     if children.is_empty() {
+         return;
+@@ -78,9 +126,38 @@ fn apply_modal_layer(snapshot: &mut AccessibilitySnapshot, active_layer: Option<
+     }
+ }
+ impl Shell {
++    fn modal_text_field(&self) -> Option<(u64, (u64, u64), &bareline_ui::text_field::TextField)> {
++        let modal = self.modal?;
++        let owner = modal.active_text_owner?;
++        let field = match modal.surface {
++            super::modal::ModalSurface::Run if self.run_prompt.open && owner == super::modal::RUN_FIELD_ID => {
++                &self.run_prompt.field
++            }
++            super::modal::ModalSurface::Goto if self.goto.open && owner == super::modal::GOTO_FIELD_ID => {
++                &self.goto.field
++            }
++            super::modal::ModalSurface::CompareOptions
++                if self.compare.options_open && self.compare.active_color.is_some() && owner == 59_999 =>
++            {
++                &self.compare.color_field
++            }
++            _ => return None,
++        };
++        Some((owner, modal_text_identity(modal), field))
++    }
++
+     pub(super) fn accessibility_text_source(
+         &self,
+     ) -> Option<std::sync::Arc<dyn bareline_platform::accessibility::AccessibilityTextSource>> {
++        if let Some((_owner, identity, field)) = self.modal_text_field() {
++            return Some(std::sync::Arc::new(ModalTextSource {
++                identity,
++                value: field.value().to_owned(),
++            }));
++        }
++        if self.modal.is_some() {
++            return None;
++        }
+         self.workspace
+             .as_ref()
+             .and_then(|w| self.views.active_workspace_editor(w, self.app.active))
+@@ -105,6 +182,139 @@ impl Shell {
+             "Document tabs",
+             self.views_accessibility_nodes(),
+         );
++        if let Some(modal) = self.modal {
++            let node = |id, role, name: &str, value, bounds: bareline_renderer::Rect, focusable, invokable| {
++                AccessibilityNode {
++                    id,
++                    parent: 1,
++                    role,
++                    name: name.into(),
++                    value,
++                    bounds: [
++                        bounds.x as f64,
++                        bounds.y as f64,
++                        bounds.width as f64,
++                        bounds.height as f64,
++                    ],
++                    disabled: false,
++                    selected: false,
++                    expanded: None,
++                    focusable,
++                    invokable,
++                }
++            };
++            match modal.surface {
++                super::modal::ModalSurface::Run if self.run_prompt.open => {
++                    semantic_group(
++                        &mut chrome,
++                        modal.semantics.group,
++                        "Run command",
++                        vec![
++                            node(
++                                super::modal::RUN_FIELD_ID,
++                                AccessibilityRole::TextField,
++                                "Program and arguments",
++                                Some(self.run_prompt.field.semantic_value()),
++                                self.run_prompt.field_bounds,
++                                true,
++                                false,
++                            ),
++                            node(
++                                super::modal::RUN_STATUS_ID,
++                                AccessibilityRole::Status,
++                                if self.run_prompt.status.is_empty() {
++                                    "Run command help"
++                                } else {
++                                    "Run command status"
++                                },
++                                Some(if self.run_prompt.status.is_empty() {
++                                    "C:\\path\\program.exe arguments — runs directly, never through a shell".into()
++                                } else {
++                                    self.run_prompt.status.clone()
++                                }),
++                                self.run_prompt.bounds,
++                                false,
++                                false,
++                            ),
++                            node(
++                                super::modal::RUN_SUBMIT_ID,
++                                AccessibilityRole::Button,
++                                "Run",
++                                None,
++                                self.run_prompt.submit_bounds,
++                                true,
++                                true,
++                            ),
++                            node(
++                                super::modal::RUN_CANCEL_ID,
++                                AccessibilityRole::Button,
++                                "Cancel",
++                                None,
++                                self.run_prompt.cancel_bounds,
++                                true,
++                                true,
++                            ),
++                        ],
++                    );
++                    focus = super::modal::RUN_FIELD_ID;
++                }
++                super::modal::ModalSurface::Goto if self.goto.open => {
++                    semantic_group(
++                        &mut chrome,
++                        modal.semantics.group,
++                        "Go to line",
++                        vec![
++                            node(
++                                super::modal::GOTO_FIELD_ID,
++                                AccessibilityRole::TextField,
++                                "Line or position",
++                                Some(self.goto.field.semantic_value()),
++                                self.goto.field_bounds,
++                                true,
++                                false,
++                            ),
++                            node(
++                                super::modal::GOTO_STATUS_ID,
++                                AccessibilityRole::Status,
++                                if self.goto.status.is_empty() {
++                                    "Go to help"
++                                } else {
++                                    "Go to status"
++                                },
++                                Some(if self.goto.status.is_empty() {
++                                    "line, line:column, +/- lines or NN%".into()
++                                } else {
++                                    self.goto.status.clone()
++                                }),
++                                self.goto.bounds,
++                                false,
++                                false,
++                            ),
++                            node(
++                                super::modal::GOTO_SUBMIT_ID,
++                                AccessibilityRole::Button,
++                                "Go",
++                                None,
++                                self.goto.submit_bounds,
++                                true,
++                                true,
++                            ),
++                            node(
++                                super::modal::GOTO_CANCEL_ID,
++                                AccessibilityRole::Button,
++                                "Cancel",
++                                None,
++                                self.goto.cancel_bounds,
++                                true,
++                                true,
++                            ),
++                        ],
++                    );
++                    focus = super::modal::GOTO_FIELD_ID;
++                }
++                _ => {}
++            }
++        }
+         semantic_group(
+             &mut chrome,
+             90_000_002,
+@@ -206,7 +416,12 @@ impl Shell {
+         }
+         semantic_group(&mut chrome, 90_000_003, "Toolbar", toolbar_nodes);
+         chrome.extend(self.recovery_accessibility_nodes());
+-        semantic_group(&mut chrome, 90_000_025, "Compare", self.compare_accessibility_nodes());
++        semantic_group(
++            &mut chrome,
++            super::modal::COMPARE_GROUP_ID,
++            "Compare",
++            self.compare_accessibility_nodes(),
++        );
+         chrome.extend(self.panels_accessibility_nodes());
+         chrome.extend(self.extensions_accessibility_nodes());
+         chrome.extend(self.language_accessibility_nodes());
+@@ -286,7 +501,9 @@ impl Shell {
+                 .map(|node| bareline_app::accessibility::semantic_node(node, 1))
+                 .collect(),
+         );
+-        let active_layer = if self.palette.open {
++        let active_layer = if let Some(modal) = self.modal.filter(|modal| modal.inert_background) {
++            Some(modal.semantics.group)
++        } else if self.palette.open {
+             Some(90_000_002)
+         } else if self.search_folder_open() {
+             Some(90_000_030)
+@@ -311,7 +528,9 @@ impl Shell {
+             height,
+             editor.map(|v| v.viewport()),
+             chrome,
+-            if self.palette.open {
++            if let Some(modal) = self.modal {
++                modal.focused
++            } else if self.palette.open {
+                 self.palette
+                     .semantics()
+                     .iter()
+@@ -322,6 +541,27 @@ impl Shell {
+             },
+             active_layer,
+         );
++        if let Some((owner, identity, field)) = self.modal_text_field() {
++            let (anchor, caret) = field.selection();
++            if let Some(mut text) =
++                bareline_app::accessibility::bounded_text(field.value().to_owned(), 0, anchor, caret)
++            {
++                text.editor_id = owner;
++                text.run_id = owner + 10_000;
++                snapshot.text = Some(text);
++                snapshot.text_context = Some(bareline_platform::accessibility::AccessibilityTextContext {
++                    source_identity: identity,
++                    selection: (anchor, caret),
++                    selections: Vec::new(),
++                    composition: field.composition_text().map(str::to_owned),
++                });
++                snapshot.text_geometry.clear();
++            }
++        } else if self.modal.is_some() {
++            snapshot.text = None;
++            snapshot.text_context = None;
++            snapshot.text_geometry.clear();
++        }
+         let pane_bounds = if self.views.open() {
+             self.views.bounds[self.views.pane() as usize]
+         } else {
+@@ -340,7 +580,9 @@ impl Shell {
+         } else {
+             text_bounds.height
+         };
+-        if let (Some(editor), Some(renderer)) = (editor, self.renderer.as_ref()) {
++        if self.modal.is_none()
++            && let (Some(editor), Some(renderer)) = (editor, self.renderer.as_ref())
++        {
+             snapshot.text_geometry = editor
+                 .accessibility_geometry(renderer, text_bounds.width, text_height)
+                 .into_iter()
+@@ -362,7 +604,9 @@ impl Shell {
+                 })
+                 .collect();
+         }
+-        if let Some(bareline_app::workspace::WorkspaceEditor::Paged(editor)) = editor {
++        if self.modal.is_none()
++            && let Some(bareline_app::workspace::WorkspaceEditor::Paged(editor)) = editor
++        {
+             use bareline_document::TextOffset;
+             use bareline_editor_surface::paged_view::SourceAffinity;
+             // A platform text run is contiguous in source coordinates. Keep one
+@@ -414,12 +658,113 @@ impl Shell {
+ }
+ 
+ impl Shell {
++    fn modal_accessibility_action(
++        &mut self,
++        el: &winit::event_loop::ActiveEventLoop,
++        action: &bareline_platform::accessibility::AccessibilityAction,
++    ) -> bool {
++        use bareline_platform::accessibility::AccessibilityAction;
++        let Some(modal) = self.modal else {
++            return false;
++        };
++        match modal.surface {
++            super::modal::ModalSurface::Run => match action {
++                AccessibilityAction::Focus(id)
++                    if [modal.semantics.primary, modal.semantics.submit, modal.semantics.cancel].contains(id) =>
++                {
++                    self.modal_focus(modal.surface, *id);
++                    true
++                }
++                AccessibilityAction::SetValue { id, value } if *id == super::modal::RUN_FIELD_ID => {
++                    self.set_modal_accessibility_value(*id, value)
++                }
++                AccessibilityAction::SetSelection {
++                    source_identity,
++                    anchor,
++                    caret,
++                } if modal_text_selection_matches(modal, *source_identity) => {
++                    self.run_prompt.field.set_selection(*anchor, *caret);
++                    self.modal_changed(modal.surface);
++                    true
++                }
++                AccessibilityAction::Invoke(id) if *id == super::modal::RUN_SUBMIT_ID => {
++                    self.run_prompt_submit();
++                    true
++                }
++                AccessibilityAction::Invoke(id) if *id == super::modal::RUN_CANCEL_ID => {
++                    self.dismiss_modal(modal.surface);
++                    true
++                }
++                _ => true,
++            },
++            super::modal::ModalSurface::Goto => match action {
++                AccessibilityAction::Focus(id)
++                    if [modal.semantics.primary, modal.semantics.submit, modal.semantics.cancel].contains(id) =>
++                {
++                    self.modal_focus(modal.surface, *id);
++                    true
++                }
++                AccessibilityAction::SetValue { id, value } if *id == super::modal::GOTO_FIELD_ID => {
++                    self.set_modal_accessibility_value(*id, value)
++                }
++                AccessibilityAction::SetSelection {
++                    source_identity,
++                    anchor,
++                    caret,
++                } if modal_text_selection_matches(modal, *source_identity) => {
++                    self.goto.field.set_selection(*anchor, *caret);
++                    self.modal_changed(modal.surface);
++                    true
++                }
++                AccessibilityAction::Invoke(id) if *id == super::modal::GOTO_SUBMIT_ID => {
++                    self.goto_submit();
++                    true
++                }
++                AccessibilityAction::Invoke(id) if *id == super::modal::GOTO_CANCEL_ID => {
++                    self.dismiss_modal(modal.surface);
++                    true
++                }
++                _ => true,
++            },
++            super::modal::ModalSurface::CompareOptions => {
++                // Compare owns all actions while its options surface is live;
++                // unknown/stale targets are consumed instead of reaching editors.
++                if let AccessibilityAction::SetSelection {
++                    source_identity,
++                    anchor,
++                    caret,
++                } = action
++                    && modal.active_text_owner == Some(59_999)
++                    && modal_text_selection_matches(modal, *source_identity)
++                {
++                    self.compare.color_field.set_selection(*anchor, *caret);
++                    self.modal_changed(modal.surface);
++                    return true;
++                }
++                let accepted = self.compare_accessibility(el, action);
++                if accepted && matches!(action, AccessibilityAction::SetValue { id: 59_999, .. }) {
++                    self.modal_changed(modal.surface);
++                }
++                if accepted && let Some(focus) = self.compare_accessibility_focus() {
++                    self.modal_focus(modal.surface, focus);
++                }
++                true
++            }
++        }
++    }
++
+     pub(super) fn accessibility_actions(&mut self, el: &winit::event_loop::ActiveEventLoop) {
+         use bareline_app::accessibility::{EDITOR_ID, PAGE_NEXT_ID, PAGE_PREVIOUS_ID, TAB_ID_BASE};
+         use bareline_app::workspace::Input;
+         use bareline_platform::accessibility::AccessibilityAction;
+         let actions = self.accessibility.as_mut().map_or_else(Vec::new, |p| p.drain_actions());
+         for action in actions {
++            if self.modal_accessibility_action(el, &action) {
++                if let Some(window) = &self.window {
++                    window.request_redraw();
++                }
++                continue;
++            }
+             if self.palette.open {
+                 let id = match &action {
+                     AccessibilityAction::Focus(id)
+@@ -655,7 +1000,11 @@ impl Shell {
+                         .as_mut()
+                         .and_then(|w| self.views.active_workspace_editor_mut(w, self.app.active))
+                     {
+-                        if bareline_app::accessibility::source_identity(editor) != source_identity || editor.busy() {
++                        if !editor_text_selection_matches(
++                            bareline_app::accessibility::source_identity(editor),
++                            source_identity,
++                        ) || editor.busy()
++                        {
+                             continue;
+                         }
+                         match editor {
+@@ -795,6 +1144,29 @@ mod tests {
+     type ShellSetup = fn(&mut Shell, &str);
+     type SetupCases = (&'static str, ShellSetup, &'static [&'static str], u64);
+ 
++    #[test]
++    fn modal_text_reads_normalize_every_unicode_byte_start() {
++        use bareline_platform::accessibility::{AccessibilityTextSource, AccessibleRead};
++
++        let source = ModalTextSource {
++            identity: (MODAL_TEXT_NAMESPACE, 1),
++            value: "aé🙂z".into(),
++        };
++        for requested in 0..=source.value.len() {
++            for limit in [0, 1, 2, 3, 4] {
++                let AccessibleRead::Ready { start, text } = source.read(requested, limit) else {
++                    panic!("valid bounded read was unavailable at {requested} with limit {limit}");
++                };
++                assert!(start >= requested);
++                assert!(source.value.is_char_boundary(start));
++                assert!(text.len() <= limit);
++                assert!(source.value[start..].starts_with(&text));
++            }
++        }
++        assert_eq!(source.read(source.value.len() + 1, 1), AccessibleRead::Unavailable);
++        assert_eq!(source.read(0, 64 * 1024 + 1), AccessibleRead::Unavailable);
++    }
++
+     fn headless_shell() -> Shell {
+         let launch = launch::LaunchConfig {
+             performance: None,
+@@ -832,6 +1204,8 @@ mod tests {
+             pending_close: None,
+             ui_focus: Default::default(),
+             ui_router: Default::default(),
++            modal: None,
++            modal_identity_serial: 0,
+             ledger: Default::default(),
+             modifiers: Default::default(),
+             software: true,
+@@ -951,6 +1325,141 @@ mod tests {
+         );
+     }
+ 
++    #[test]
++    fn prompt_and_compare_modals_own_focus_text_and_background_actions() {
++        use bareline_platform::accessibility::AccessibleRead;
++        let mut shell = app_shell("modal");
++        let document_before = shell
++            .workspace
++            .as_ref()
++            .and_then(|workspace| workspace.editors.get(shell.app.active))
++            .map(|editor| editor.snapshot().identity_token())
++            .unwrap();
++        shell.activate_modal(super::super::modal::ModalSurface::Run);
++        shell.run_prompt.open();
++        let mut renderer = bareline_renderer_recording::RecordingBackend::default();
++        let mut ops = Vec::new();
++        shell
++            .run_prompt
++            .draw(
++                &mut renderer,
++                1000.0,
++                800.0,
++                bareline_ui::theme::UiTheme::default(),
++                super::super::modal::RUN_FIELD_ID,
++                &mut ops,
++            )
++            .unwrap();
++        assert!(shell.set_modal_accessibility_value(super::super::modal::RUN_FIELD_ID, r"C:\tool.exe"));
++        let run = shell_snapshot(&shell);
++        run.validate().unwrap();
++        assert_eq!(run.focus, super::super::modal::RUN_FIELD_ID);
++        assert!(
++            run.nodes
++                .iter()
++                .any(|node| { node.id == super::super::modal::RUN_SUBMIT_ID && node.invokable && !node.disabled })
++        );
++        assert!(
++            run.nodes
++                .iter()
++                .any(|node| { node.id == super::super::modal::RUN_CANCEL_ID && node.invokable && !node.disabled })
++        );
++        assert!(
++            run.nodes
++                .iter()
++                .any(|node| { node.id == bareline_app::accessibility::EDITOR_ID && node.disabled && !node.focusable })
++        );
++        assert_eq!(
++            run.text.as_ref().map(|text| text.editor_id),
++            Some(super::super::modal::RUN_FIELD_ID)
++        );
++        let source = shell.accessibility_text_source().unwrap();
++        assert_eq!(source.identity(), run.text_context.as_ref().unwrap().source_identity);
++        let first_run_identity = source.identity();
++        assert_eq!(first_run_identity.0, MODAL_TEXT_NAMESPACE);
++        assert_ne!(first_run_identity, document_before);
++        assert_eq!(
++            source.read(0, 64),
++            AccessibleRead::Ready {
++                start: 0,
++                text: r"C:\tool.exe".into(),
++            }
++        );
++        let document_after = shell
++            .workspace
++            .as_ref()
++            .and_then(|workspace| workspace.editors.get(shell.app.active))
++            .map(|editor| editor.snapshot().identity_token())
++            .unwrap();
++        assert_eq!(
++            document_after, document_before,
++            "UIA prompt value must not edit the document"
++        );
++
++        shell.dismiss_modal(super::super::modal::ModalSurface::Run);
++        assert!(!editor_text_selection_matches(document_before, first_run_identity));
++        assert!(!editor_text_selection_matches(first_run_identity, first_run_identity));
++        shell.activate_modal(super::super::modal::ModalSurface::Run);
++        shell.run_prompt.open = true;
++        let reopened_run = shell_snapshot(&shell);
++        let reopened_identity = reopened_run.text_context.as_ref().unwrap().source_identity;
++        assert_ne!(first_run_identity, reopened_identity);
++        assert!(reopened_identity.1 > first_run_identity.1);
++        assert!(!modal_text_selection_matches(shell.modal.unwrap(), first_run_identity));
++
++        shell.activate_modal(super::super::modal::ModalSurface::Goto);
++        shell.goto.open = true;
++        assert!(
++            !shell.run_prompt.open,
++            "opening an incompatible modal closes the previous owner"
++        );
++        assert!(shell.set_modal_accessibility_value(super::super::modal::GOTO_FIELD_ID, "10:2"));
++        ops.clear();
++        shell
++            .goto
++            .draw(
++                &mut renderer,
++                1000.0,
++                800.0,
++                bareline_ui::theme::UiTheme::default(),
++                super::super::modal::GOTO_FIELD_ID,
++                &mut ops,
++            )
++            .unwrap();
++        let goto = shell_snapshot(&shell);
++        assert_eq!(goto.focus, super::super::modal::GOTO_FIELD_ID);
++        assert_eq!(
++            goto.text.as_ref().map(|text| text.editor_id),
++            Some(super::super::modal::GOTO_FIELD_ID)
++        );
++
++        let mut compare_shell = headless_shell();
++        compare::accessibility_test_setup(&mut compare_shell, "options");
++        compare_shell.activate_modal(super::super::modal::ModalSurface::CompareOptions);
++        compare_shell.compare.options_open = true;
++        let compare = shell_snapshot(&compare_shell);
++        compare.validate().unwrap();
++        assert!(compare.nodes.iter().any(|node| {
++            node.id == super::super::modal::COMPARE_DONE_ID && node.name == "Done" && node.invokable && !node.disabled
++        }));
++        assert!(
++            compare
++                .nodes
++                .iter()
++                .any(|node| { node.id == bareline_app::accessibility::EDITOR_ID && node.disabled && !node.focusable })
++        );
++        assert!(
++            compare.nodes.iter().any(|node| {
++                node.id == super::super::modal::COMPARE_GENERAL_ID && node.role == AccessibilityRole::Tab
++            })
++        );
++        assert!(
++            compare.nodes.iter().any(|node| {
++                node.id == super::super::modal::COMPARE_COLORS_ID && node.role == AccessibilityRole::Tab
++            })
++        );
++    }
++
+     fn app_shell(scenario: &str) -> Shell {
+         let mut shell = headless_shell();
+         views::accessibility_test_setup(&mut shell, "open");
+diff --git a/apps/bareline/src/windows_app/compare.rs b/apps/bareline/src/windows_app/compare.rs
+index dddc0e1..746e44e 100644
+--- a/apps/bareline/src/windows_app/compare.rs
++++ b/apps/bareline/src/windows_app/compare.rs
+@@ -24,6 +24,44 @@ const COLOR_CONTROLS: [(&str, &str); 15] = [
+     ("compare.accentCurrent", "diff.current.overview"),
+     ("compare.gutterCurrent", "diff.current.gutter"),
+ ];
++const MODAL_CONTROL_IDS: &[&str] = &[
++    "compare.themeLight",
++    "compare.themeDark",
++    "compare.themeSystem",
++    "compare.colorAdded",
++    "compare.accentAdded",
++    "compare.gutterAdded",
++    "compare.colorRemoved",
++    "compare.accentRemoved",
++    "compare.gutterRemoved",
++    "compare.colorChanged",
++    "compare.accentChanged",
++    "compare.gutterChanged",
++    "compare.colorMoved",
++    "compare.accentMoved",
++    "compare.gutterMoved",
++    "compare.colorCurrent",
++    "compare.accentCurrent",
++    "compare.gutterCurrent",
++    "compare.resetAdded",
++    "compare.resetRemoved",
++    "compare.resetChanged",
++    "compare.resetMoved",
++    "compare.resetCurrent",
++    "compare.colorblind",
++    "compare.trimEdges",
++    "compare.ignoreWhitespace",
++    "compare.ignoreBlank",
++    "compare.ignoreCase",
++    "compare.ignoreEol",
++    "compare.ignoreBom",
++    "compare.normalizeTabs",
++    "compare.pauseAutomatic",
++    "compare.copyLeftToRight",
++    "compare.copyRightToLeft",
++    "compare.defaults",
++    "compare.applyColor",
++];
+ fn compare_input(editor: &bareline_app::workspace::WorkspaceEditor) -> CompareInput {
+     match editor {
+         bareline_app::workspace::WorkspaceEditor::Resident(e) => CompareInput::Resident(e.snapshot().clone()),
+@@ -106,10 +144,10 @@ pub(super) struct CompareRuntime {
+     hits: Vec<(Rect, &'static str)>,
+     focus: usize,
+     colors_tab: bool,
+-    active_color: Option<&'static str>,
+-    color_field: bareline_ui::text_field::TextField,
+-    color_bounds: Option<Rect>,
+-    color_focus: bool,
++    pub(super) active_color: Option<&'static str>,
++    pub(super) color_field: bareline_ui::text_field::TextField,
++    pub(super) color_bounds: Option<Rect>,
++    pub(super) color_focus: bool,
+     color_blind: bool,
+     saved: Vec<(DocumentSnapshot, String)>,
+     saved_paged: Vec<(bareline_editor_surface::paged_view::PagedReadHandle, String)>,
+@@ -318,6 +356,21 @@ impl Shell {
+     /// Compare chrome has at most two occurrences of any command; reserve sixteen.
+     fn compare_accessibility_hit_id(&self, hit: usize) -> Option<u64> {
+         let (_, id) = self.compare.hits.get(hit)?;
++        if self
++            .modal
++            .is_some_and(|modal| modal.surface == modal::ModalSurface::CompareOptions)
++        {
++            match *id {
++                "compare.generalTab" => return Some(modal::COMPARE_GENERAL_ID),
++                "compare.colorsTab" => return Some(modal::COMPARE_COLORS_ID),
++                "compare.options" => return Some(modal::COMPARE_DONE_ID),
++                _ => {}
++            }
++            return MODAL_CONTROL_IDS
++                .iter()
++                .position(|candidate| candidate == id)
++                .map(|index| 91_001_000 + index as u64);
++        }
+         let occurrence = self.compare.hits[..hit]
+             .iter()
+             .filter(|(_, candidate)| candidate == id)
+@@ -422,7 +475,15 @@ impl Shell {
+                     id: self.compare_accessibility_hit_id(hit)?,
+                     parent: 1,
+                     role,
+-                    name: command.title.into(),
++                    name: if self
++                        .modal
++                        .is_some_and(|modal| modal.surface == modal::ModalSurface::CompareOptions)
++                        && *id == "compare.options"
++                    {
++                        "Done".into()
++                    } else {
++                        command.title.into()
++                    },
+                     value,
+                     bounds: [
+                         (bounds.x + offset.x) as f64,
+@@ -686,6 +747,7 @@ impl Shell {
+         if let Some((_, key)) = COLOR_CONTROLS.iter().find(|(command, _)| *command == id) {
+             self.compare.active_color = Some(key);
+             self.compare.color_focus = true;
++            self.modal_text_owner(modal::ModalSurface::CompareOptions, Some(59_999));
+             self.compare.color_field.select_all();
+             let color = self.settings.theme_color(key).map_or(0, |c| c.0);
+             self.compare.color_field.insert(&format!("#{color:06X}"));
+@@ -769,6 +831,7 @@ impl Shell {
+             self.compare.color_field.set_validation(edit.as_ref().err().cloned());
+             if edit.is_ok() {
+                 self.compare.active_color = None;
++                self.modal_text_owner(modal::ModalSurface::CompareOptions, None);
+             }
+             if let Some(workspace) = &mut self.workspace {
+                 workspace.message = edit.err();
+@@ -794,6 +857,7 @@ impl Shell {
+             return true;
+         }
+         if id == "compare.close" {
++            self.dismiss_modal(modal::ModalSurface::CompareOptions);
+             if let Some(workspace) = &mut self.workspace {
+                 self.views.close_compare(workspace);
+             }
+@@ -810,6 +874,18 @@ impl Shell {
+             self.compare_redraw();
+             return true;
+         }
++        if id == "compare.options" {
++            if self.compare.options_open {
++                self.dismiss_modal(modal::ModalSurface::CompareOptions);
++            } else {
++                self.activate_modal(modal::ModalSurface::CompareOptions);
++                self.compare.options_open = true;
++                self.compare.focus = 0;
++                self.compare.colors_tab = true;
++            }
++            self.compare_redraw();
++            return true;
++        }
+         let Some(indices) = self.workspace.as_ref().and_then(|w| self.compare.indices(w)) else {
+             return true;
+         };
+@@ -959,16 +1035,6 @@ impl Shell {
+                 self.compare.pending_merge = None;
+                 self.compare.merge_promotion = None;
+             }
+-            "compare.options" => {
+-                self.compare.options_open = !self.compare.options_open;
+-                if !self.compare.options_open
+-                    && let Some(renderer) = &mut self.renderer
+-                {
+-                    self.compare.color_field.release(renderer);
+-                }
+-                self.compare.focus = 0;
+-                self.compare.colors_tab = true;
+-            }
+             "compare.pauseAutomatic" => controller.pause_automatic = !controller.pause_automatic,
+             "compare.syncHorizontal" => controller.sync_horizontal = !controller.sync_horizontal,
+             "compare.copyLeftToRight" | "compare.copyRightToLeft" => {
+@@ -1467,6 +1533,12 @@ impl Shell {
+         let Some(indices) = self.compare.indices(workspace) else {
+             if self.compare.controller.is_some() {
+                 self.views.close_compare(workspace);
++                if self
++                    .modal
++                    .is_some_and(|modal| modal.surface == modal::ModalSurface::CompareOptions)
++                {
++                    self.dismiss_modal(modal::ModalSurface::CompareOptions);
++                }
+                 self.compare = Default::default();
+             }
+             return;
+@@ -1493,6 +1565,26 @@ impl Shell {
+             return false;
+         }
+         match event {
++            WindowEvent::Ime(ime)
++                if self.compare.options_open
++                    && self.compare.active_color.is_some()
++                    && self.modal.is_some_and(|modal| modal.active_text_owner == Some(59_999)) =>
++            {
++                match ime {
++                    Ime::Preedit(value, cursor) => self.compare.color_field.preedit(value.clone(), *cursor),
++                    Ime::Commit(value) => {
++                        if value.chars().all(|c| c == '#' || c.is_ascii_hexdigit()) {
++                            self.compare.color_field.commit(value);
++                        } else {
++                            self.compare.color_field.cancel();
++                        }
++                    }
++                    Ime::Disabled => self.compare.color_field.cancel(),
++                    Ime::Enabled => {}
++                }
++                self.compare_redraw();
++                return true;
++            }
+             WindowEvent::MouseInput {
+                 state: ElementState::Pressed,
+                 button: MouseButton::Left,
+@@ -1563,7 +1655,13 @@ impl Shell {
+                         Key::Named(NamedKey::Enter) => {
+                             return self.compare_dispatch(el, "compare.applyColor");
+                         }
+-                        Key::Named(NamedKey::Escape) => self.compare.active_color = None,
++                        Key::Named(NamedKey::Escape) => {
++                            if self.compare.color_field.composing() {
++                                self.compare.color_field.cancel();
++                            } else {
++                                self.dismiss_modal(modal::ModalSurface::CompareOptions);
++                            }
++                        }
+                         Key::Named(NamedKey::Backspace) if self.compare.color_focus => {
+                             self.compare.color_field.delete(false);
+                         }
+@@ -1613,8 +1711,7 @@ impl Shell {
+                         return true;
+                     }
+                     Key::Named(NamedKey::Escape) if self.compare.options_open => {
+-                        self.compare.options_open = false;
+-                        self.compare_redraw();
++                        self.dismiss_modal(modal::ModalSurface::CompareOptions);
+                         return true;
+                     }
+                     Key::Named(NamedKey::F7) => {
+diff --git a/apps/bareline/src/windows_app/goto.rs b/apps/bareline/src/windows_app/goto.rs
+index 8974d52..4952586 100644
+--- a/apps/bareline/src/windows_app/goto.rs
++++ b/apps/bareline/src/windows_app/goto.rs
+@@ -16,6 +16,9 @@ pub(super) struct GotoRuntime {
+     pub open: bool,
+     pub field: TextField,
+     pub bounds: Rect,
++    pub field_bounds: Rect,
++    pub submit_bounds: Rect,
++    pub cancel_bounds: Rect,
+     pub status: String,
+ }
+ 
+@@ -168,6 +171,7 @@ impl GotoRuntime {
+         width: f32,
+         height: f32,
+         theme: bareline_ui::theme::UiTheme,
++        focused: u64,
+         ops: &mut Vec<DrawOp>,
+     ) -> Result<Option<Rect>, LayoutError> {
+         if !self.open {
+@@ -175,21 +179,38 @@ impl GotoRuntime {
+             return Ok(None);
+         }
+         let w = width.clamp(240.0, 360.0);
+-        let y = 60.0f32.min((height - 110.0).max(0.0));
+-        self.bounds = rect((width - w) / 2.0, y, w, 96.0);
++        let y = 60.0f32.min((height - 150.0).max(0.0));
++        self.bounds = rect((width - w) / 2.0, y, w, 136.0);
+         let b = self.bounds;
+         ops.push(DrawOp::Fill(b, theme.elevated));
+         ops.push(DrawOp::Stroke(b, theme.border, 1.0));
+         text(ops, b.x + 16.0, b.y + 12.0, "Go to line", 14.0, theme.text);
+-        let field = rect(b.x + 16.0, b.y + 36.0, b.width - 32.0, 28.0);
+-        let caret = self.field.draw_with_theme(renderer, field, true, theme, ops)?;
++        self.field_bounds = rect(b.x + 16.0, b.y + 36.0, b.width - 32.0, 28.0);
++        let caret =
++            self.field
++                .draw_with_theme(renderer, self.field_bounds, focused == modal::GOTO_FIELD_ID, theme, ops)?;
+         let hint = if self.status.is_empty() {
+             "line, line:column, +/- lines or NN%"
+         } else {
+             self.status.as_str()
+         };
+         text(ops, b.x + 16.0, b.y + 70.0, hint, 12.0, theme.muted);
+-        Ok(Some(caret))
++        self.cancel_bounds = rect(b.x + b.width - 156.0, b.y + 96.0, 66.0, 28.0);
++        self.submit_bounds = rect(b.x + b.width - 80.0, b.y + 96.0, 64.0, 28.0);
++        for (bounds, label, fill, id) in [
++            (self.cancel_bounds, "Cancel", theme.elevated, modal::GOTO_CANCEL_ID),
++            (self.submit_bounds, "Go", theme.focus, modal::GOTO_SUBMIT_ID),
++        ] {
++            ops.push(DrawOp::FillRounded(bounds, fill, 4.0));
++            ops.push(DrawOp::StrokeRounded(
++                bounds,
++                if focused == id { theme.focus } else { theme.border },
++                4.0,
++                if focused == id { 2.0 } else { 1.0 },
++            ));
++            text(ops, bounds.x + 12.0, bounds.y + 6.0, label, 12.0, theme.text);
++        }
++        Ok((focused == modal::GOTO_FIELD_ID).then_some(caret))
+     }
+ }
+ 
+@@ -198,37 +219,36 @@ impl Shell {
+         if id != "search.goto" {
+             return false;
+         }
++        self.palette.dismiss();
++        self.app.palette = false;
++        self.finish_palette_focus();
++        self.activate_modal(modal::ModalSurface::Goto);
+         self.goto.open = true;
+         self.goto.status.clear();
+         self.goto.field.select_all();
+         self.goto.field.insert("");
+-        self.palette.dismiss();
+-        self.app.palette = false;
+         if let Some(window) = &self.window {
+             window.request_redraw();
+         }
+         true
+     }
+-    fn goto_submit(&mut self) {
++    pub(super) fn goto_submit(&mut self) {
+         let Some(request) = parse_goto(self.goto.field.value()) else {
+             self.goto.status = "Enter a line like 120, 120:8, +10, -10 or 50%".into();
+             return;
+         };
+         let height = self.editor_bounds().height.max(1.0);
+         let active = self.app.active;
+-        let Some(workspace) = self.workspace.as_mut() else {
+-            self.goto.status = "Open a document first".into();
+-            return;
+-        };
+-        let Some(editor) = workspace.editors.get_mut(active) else {
+-            self.goto.status = "Open a document first".into();
+-            return;
+-        };
+-        match navigate(editor, request, height) {
++        let result = self
++            .workspace
++            .as_mut()
++            .and_then(|workspace| workspace.editors.get_mut(active))
++            .ok_or_else(|| "Open a document first".to_owned())
++            .and_then(|editor| navigate(editor, request, height));
++        match result {
+             Ok(note) => {
+-                self.goto.open = false;
+-                self.goto.status.clear();
+-                if let Some(note) = note {
++                self.dismiss_modal(modal::ModalSurface::Goto);
++                if let (Some(note), Some(workspace)) = (note, self.workspace.as_mut()) {
+                     workspace.message = Some(note);
+                 }
+             }
+@@ -241,16 +261,33 @@ impl Shell {
+         }
+         match event {
+             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
++                let focused = self.modal.map_or(modal::GOTO_FIELD_ID, |modal| modal.focused);
+                 match &event.logical_key {
+                     Key::Named(NamedKey::Escape) => {
+                         let composing = self.goto.field.composing();
+                         self.goto.field.cancel();
+                         if !composing {
+-                            self.goto.open = false;
++                            self.dismiss_modal(modal::ModalSurface::Goto);
+                         }
+                     }
++                    Key::Named(NamedKey::Tab) => {
++                        let controls = [modal::GOTO_FIELD_ID, modal::GOTO_SUBMIT_ID, modal::GOTO_CANCEL_ID];
++                        let current = controls.iter().position(|id| *id == focused).unwrap_or(0);
++                        let next = if self.modifiers.shift_key() {
++                            (current + controls.len() - 1) % controls.len()
++                        } else {
++                            (current + 1) % controls.len()
++                        };
++                        self.modal_focus(modal::ModalSurface::Goto, controls[next]);
++                    }
++                    Key::Named(NamedKey::Enter | NamedKey::Space) if focused == modal::GOTO_CANCEL_ID => {
++                        self.dismiss_modal(modal::ModalSurface::Goto);
++                    }
++                    Key::Named(NamedKey::Enter | NamedKey::Space) if focused == modal::GOTO_SUBMIT_ID => {
++                        self.goto_submit();
++                    }
+                     Key::Named(NamedKey::Enter) => self.goto_submit(),
+-                    key => {
++                    key if focused == modal::GOTO_FIELD_ID => {
+                         let field = &mut self.goto.field;
+                         match key {
+                             Key::Named(NamedKey::Backspace) => {
+@@ -293,9 +330,14 @@ impl Shell {
+                         }
+                         self.goto.status.clear();
+                     }
++                    _ => {}
+                 }
+             }
+-            WindowEvent::Ime(ime) => {
++            WindowEvent::Ime(ime)
++                if self
++                    .modal
++                    .is_some_and(|modal| modal.active_text_owner == Some(modal::GOTO_FIELD_ID)) =>
++            {
+                 let field = &mut self.goto.field;
+                 match ime {
+                     Ime::Preedit(v, c) => field.preedit(v.clone(), *c),
+@@ -312,12 +354,17 @@ impl Shell {
+                 ..
+             } => {
+                 if !self.goto.bounds.contains(self.pointer) {
+-                    self.goto.open = false;
++                    self.dismiss_modal(modal::ModalSurface::Goto);
++                } else if self.goto.submit_bounds.contains(self.pointer) {
++                    self.goto_submit();
++                } else if self.goto.cancel_bounds.contains(self.pointer) {
++                    self.dismiss_modal(modal::ModalSurface::Goto);
+                 } else if let Some(renderer) = &self.renderer {
+                     let _ = self
+                         .goto
+                         .field
+                         .click(renderer, self.pointer, self.modifiers.shift_key());
++                    self.modal_focus(modal::ModalSurface::Goto, modal::GOTO_FIELD_ID);
+                 }
+             }
+             WindowEvent::Focused(false) => {
+@@ -375,4 +422,21 @@ mod tests {
+         assert_eq!(parse_goto("150%"), None);
+         assert_eq!(parse_goto("-"), None);
+     }
++
++    #[test]
++    fn keyboard_button_focus_has_a_visible_cue_and_hides_the_field_caret() {
++        let mut prompt = GotoRuntime::default();
++        prompt.open = true;
++        let mut renderer = bareline_renderer_recording::RecordingBackend::default();
++        let theme = bareline_ui::theme::UiTheme::default();
++        let mut ops = Vec::new();
++        let caret = prompt
++            .draw(&mut renderer, 1000.0, 800.0, theme, modal::GOTO_SUBMIT_ID, &mut ops)
++            .unwrap();
++        assert!(caret.is_none());
++        assert!(ops.iter().any(|op| {
++            matches!(op, DrawOp::StrokeRounded(bounds, color, _, width)
++                if *bounds == prompt.submit_bounds && *color == theme.focus && *width == 2.0)
++        }));
++    }
+ }
+diff --git a/apps/bareline/src/windows_app/macros.rs b/apps/bareline/src/windows_app/macros.rs
+index 16dd830..dcee060 100644
+--- a/apps/bareline/src/windows_app/macros.rs
++++ b/apps/bareline/src/windows_app/macros.rs
+@@ -595,9 +595,11 @@ impl Shell {
+     }
+     pub(super) fn macros_dispatch(&mut self, _el: &ActiveEventLoop, id: &str) -> bool {
+         if id == "run.prompt" {
+-            self.run_prompt.open();
+             self.palette.dismiss();
+             self.app.palette = false;
++            self.finish_palette_focus();
++            self.activate_modal(modal::ModalSurface::Run);
++            self.run_prompt.open();
+             if let Some(window) = &self.window {
+                 window.request_redraw();
+             }
+diff --git a/apps/bareline/src/windows_app/modal.rs b/apps/bareline/src/windows_app/modal.rs
+new file mode 100644
+index 0000000..78fc243
+--- /dev/null
++++ b/apps/bareline/src/windows_app/modal.rs
+@@ -0,0 +1,381 @@
++// SPDX-License-Identifier: MPL-2.0
++//! One owner for custom modal input, focus, dismissal, and accessibility.
++use super::*;
++
++pub(super) const RUN_GROUP_ID: u64 = 91_000_000;
++pub(super) const RUN_FIELD_ID: u64 = 91_000_001;
++pub(super) const RUN_STATUS_ID: u64 = 91_000_002;
++pub(super) const RUN_SUBMIT_ID: u64 = 91_000_003;
++pub(super) const RUN_CANCEL_ID: u64 = 91_000_004;
++pub(super) const GOTO_GROUP_ID: u64 = 91_000_100;
++pub(super) const GOTO_FIELD_ID: u64 = 91_000_101;
++pub(super) const GOTO_STATUS_ID: u64 = 91_000_102;
++pub(super) const GOTO_SUBMIT_ID: u64 = 91_000_103;
++pub(super) const GOTO_CANCEL_ID: u64 = 91_000_104;
++pub(super) const COMPARE_GROUP_ID: u64 = 90_000_025;
++pub(super) const COMPARE_GENERAL_ID: u64 = 91_000_200;
++pub(super) const COMPARE_COLORS_ID: u64 = 91_000_201;
++pub(super) const COMPARE_DONE_ID: u64 = 91_000_202;
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub(super) enum ModalSurface {
++    Run,
++    Goto,
++    CompareOptions,
++}
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub(super) enum OutsideDismissal {
++    Dismiss,
++    Block,
++}
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub(super) struct ModalSemanticIds {
++    pub group: u64,
++    pub primary: u64,
++    pub submit: u64,
++    pub cancel: u64,
++}
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub(super) struct ModalDescriptor {
++    pub surface: ModalSurface,
++    pub semantics: ModalSemanticIds,
++    pub focused: u64,
++    pub active_text_owner: Option<u64>,
++    pub invoker: u64,
++    pub outside_dismissal: OutsideDismissal,
++    pub inert_background: bool,
++    pub generation: u64,
++    pub revision: u64,
++}
++
++impl ModalDescriptor {
++    fn new(surface: ModalSurface, invoker: u64, generation: u64) -> Self {
++        let (semantics, active_text_owner, outside_dismissal) = match surface {
++            ModalSurface::Run => (
++                ModalSemanticIds {
++                    group: RUN_GROUP_ID,
++                    primary: RUN_FIELD_ID,
++                    submit: RUN_SUBMIT_ID,
++                    cancel: RUN_CANCEL_ID,
++                },
++                Some(RUN_FIELD_ID),
++                OutsideDismissal::Dismiss,
++            ),
++            ModalSurface::Goto => (
++                ModalSemanticIds {
++                    group: GOTO_GROUP_ID,
++                    primary: GOTO_FIELD_ID,
++                    submit: GOTO_SUBMIT_ID,
++                    cancel: GOTO_CANCEL_ID,
++                },
++                Some(GOTO_FIELD_ID),
++                OutsideDismissal::Dismiss,
++            ),
++            ModalSurface::CompareOptions => (
++                ModalSemanticIds {
++                    group: COMPARE_GROUP_ID,
++                    primary: COMPARE_GENERAL_ID,
++                    submit: COMPARE_DONE_ID,
++                    cancel: COMPARE_DONE_ID,
++                },
++                None,
++                OutsideDismissal::Block,
++            ),
++        };
++        Self {
++            surface,
++            semantics,
++            focused: semantics.primary,
++            active_text_owner,
++            invoker,
++            outside_dismissal,
++            inert_background: true,
++            generation,
++            revision: generation,
++        }
++    }
++}
++
++fn capture_modifiers(current: &mut ModifiersState, next: ModifiersState) {
++    *current = next;
++}
++
++impl Shell {
++    fn next_modal_identity(&mut self) -> u64 {
++        self.modal_identity_serial = self
++            .modal_identity_serial
++            .checked_add(1)
++            .expect("modal text identity space exhausted");
++        self.modal_identity_serial
++    }
++
++    fn modal_invoker(&self) -> u64 {
++        self.ui_focus.focused().map_or_else(
++            || {
++                self.workspace.as_ref().map_or(2, |workspace| {
++                    if workspace.find.has_focus() {
++                        workspace
++                            .find
++                            .semantics(1200.0)
++                            .into_iter()
++                            .find(|node| node.focused)
++                            .map_or(6000, |node| node.id.0)
++                    } else if workspace.search_focus {
++                        20000
++                    } else {
++                        2
++                    }
++                })
++            },
++            |id| id.0,
++        )
++    }
++
++    pub(super) fn activate_modal(&mut self, surface: ModalSurface) {
++        if self.modal.is_some() {
++            self.dismiss_active_modal();
++        }
++        let invoker = self.modal_invoker();
++        let identity = self.next_modal_identity();
++        let descriptor = ModalDescriptor::new(surface, invoker, identity);
++        self.ui_focus.set_targets(
++            [invoker, 2]
++                .into_iter()
++                .collect::<std::collections::BTreeSet<_>>()
++                .into_iter()
++                .map(|id| bareline_ui::focus::FocusTarget {
++                    id: bareline_ui::ViewId(id),
++                    enabled: true,
++                })
++                .collect(),
++        );
++        self.ui_focus.focus(bareline_ui::ViewId(invoker));
++        self.ui_focus.open_layer(
++            bareline_ui::ViewId(invoker),
++            vec![bareline_ui::focus::FocusTarget {
++                id: bareline_ui::ViewId(descriptor.semantics.primary),
++                enabled: true,
++            }],
++        );
++        self.modal = Some(descriptor);
++    }
++
++    pub(super) fn dismiss_modal(&mut self, surface: ModalSurface) -> bool {
++        if self.modal.is_none_or(|modal| modal.surface != surface) {
++            return false;
++        }
++        self.dismiss_active_modal();
++        true
++    }
++
++    fn dismiss_active_modal(&mut self) {
++        let Some(modal) = self.modal.take() else {
++            return;
++        };
++        match modal.surface {
++            ModalSurface::Run => {
++                self.run_prompt.open = false;
++                self.run_prompt.field.cancel();
++                self.run_prompt.status.clear();
++            }
++            ModalSurface::Goto => {
++                self.goto.open = false;
++                self.goto.field.cancel();
++                self.goto.status.clear();
++            }
++            ModalSurface::CompareOptions => {
++                self.compare.options_open = false;
++                self.compare.active_color = None;
++                self.compare.color_focus = false;
++                self.compare.color_field.cancel();
++                self.compare.color_bounds = None;
++            }
++        }
++        if let Some(renderer) = &mut self.renderer {
++            match modal.surface {
++                ModalSurface::Run => self.run_prompt.field.release(renderer),
++                ModalSurface::Goto => self.goto.field.release(renderer),
++                ModalSurface::CompareOptions => self.compare.color_field.release(renderer),
++            }
++        }
++        self.ui_focus.close_layer();
++        if let Some(workspace) = &mut self.workspace {
++            match self.ui_focus.focused().map(|id| id.0).unwrap_or(modal.invoker) {
++                6000 | 6001 => {
++                    workspace.find.accessibility_action(modal.invoker, true);
++                    workspace.search_focus = false;
++                }
++                20000 => {
++                    workspace.find.blur();
++                    workspace.search_focus = true;
++                    workspace.search_panel.focused = true;
++                }
++                _ => {
++                    workspace.find.blur();
++                    workspace.search_focus = false;
++                }
++            }
++        }
++        if let Some(window) = &self.window {
++            window.request_redraw();
++        }
++    }
++
++    pub(super) fn modal_changed(&mut self, surface: ModalSurface) {
++        let identity = self.next_modal_identity();
++        if let Some(modal) = &mut self.modal
++            && modal.surface == surface
++        {
++            modal.revision = identity;
++        }
++    }
++
++    pub(super) fn modal_text_owner(&mut self, surface: ModalSurface, owner: Option<u64>) {
++        let identity = self.next_modal_identity();
++        if let Some(modal) = &mut self.modal
++            && modal.surface == surface
++        {
++            modal.active_text_owner = owner;
++            if let Some(owner) = owner {
++                modal.focused = owner;
++            }
++            modal.revision = identity;
++        }
++    }
++
++    pub(super) fn modal_focus(&mut self, surface: ModalSurface, id: u64) {
++        if let Some(modal) = &mut self.modal
++            && modal.surface == surface
++        {
++            modal.focused = id;
++            modal.active_text_owner = match surface {
++                ModalSurface::Run if id == RUN_FIELD_ID => Some(id),
++                ModalSurface::Goto if id == GOTO_FIELD_ID => Some(id),
++                ModalSurface::CompareOptions if id == 59_999 => Some(id),
++                _ => None,
++            };
++        }
++    }
++
++    pub(super) fn set_modal_accessibility_value(&mut self, id: u64, value: &str) -> bool {
++        let Some(modal) = self.modal else {
++            return false;
++        };
++        let changed = match modal.surface {
++            ModalSurface::Run if self.run_prompt.open && id == RUN_FIELD_ID => {
++                self.run_prompt.field.select_all();
++                let changed = self.run_prompt.field.insert(value);
++                self.run_prompt.status.clear();
++                Some(changed)
++            }
++            ModalSurface::Goto if self.goto.open && id == GOTO_FIELD_ID => {
++                self.goto.field.select_all();
++                let changed = self.goto.field.insert(value);
++                self.goto.status.clear();
++                Some(changed)
++            }
++            _ => None,
++        };
++        if changed == Some(true) {
++            self.modal_changed(modal.surface);
++        }
++        changed.is_some()
++    }
++
++    pub(super) fn modal_event(&mut self, el: &ActiveEventLoop, event: &WindowEvent) -> bool {
++        let Some(modal) = self.modal else {
++            return false;
++        };
++        if matches!(event, WindowEvent::CloseRequested) {
++            self.dismiss_modal(modal.surface);
++            return false;
++        }
++        if let WindowEvent::ModifiersChanged(modifiers) = event {
++            capture_modifiers(&mut self.modifiers, modifiers.state());
++        }
++        if let WindowEvent::CursorMoved { position, .. } = event {
++            let scale = self.window.as_ref().map_or(1.0, Window::scale_factor);
++            let logical = position.to_logical::<f32>(scale);
++            self.pointer = Point {
++                x: logical.x,
++                y: logical.y,
++            };
++        }
++        if matches!(
++            event,
++            WindowEvent::MouseInput {
++                state: ElementState::Pressed,
++                button: MouseButton::Left,
++                ..
++            }
++        ) {
++            let inside = match modal.surface {
++                ModalSurface::Run => self.run_prompt.bounds.contains(self.pointer),
++                ModalSurface::Goto => self.goto.bounds.contains(self.pointer),
++                ModalSurface::CompareOptions => true,
++            };
++            if !inside {
++                if modal.outside_dismissal == OutsideDismissal::Dismiss {
++                    self.dismiss_modal(modal.surface);
++                }
++                return true;
++            }
++        }
++        let handled = match modal.surface {
++            ModalSurface::Run => self.run_prompt_event(el, event),
++            ModalSurface::Goto => self.goto_event(el, event),
++            ModalSurface::CompareOptions => self.compare_event(el, event),
++        };
++        if handled
++            && modal.surface == ModalSurface::CompareOptions
++            && let Some(focus) = self.compare_accessibility_focus()
++        {
++            self.modal_focus(modal.surface, focus);
++        }
++        if handled
++            && matches!(
++                event,
++                WindowEvent::KeyboardInput { .. } | WindowEvent::Ime(_) | WindowEvent::MouseInput { .. }
++            )
++        {
++            self.modal_changed(modal.surface);
++        }
++        handled
++            || matches!(
++                event,
++                WindowEvent::KeyboardInput { .. }
++                    | WindowEvent::Ime(_)
++                    | WindowEvent::MouseInput { .. }
++                    | WindowEvent::MouseWheel { .. }
++                    | WindowEvent::DroppedFile(_)
++                    | WindowEvent::CursorMoved { .. }
++                    | WindowEvent::ModifiersChanged(_)
++            )
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn modal_modifier_capture_tracks_press_and_release() {
++        let mut current = ModifiersState::empty();
++        capture_modifiers(&mut current, ModifiersState::CONTROL | ModifiersState::SHIFT);
++        assert!(current.control_key());
++        assert!(current.shift_key());
++        capture_modifiers(&mut current, ModifiersState::empty());
++        assert!(!current.control_key());
++        assert!(!current.shift_key());
++    }
++
++    #[test]
++    fn modal_instances_have_distinct_generations() {
++        let first = ModalDescriptor::new(ModalSurface::Run, 2, 7);
++        let second = ModalDescriptor::new(ModalSurface::Run, 2, 8);
++        assert_ne!((first.generation, first.revision), (second.generation, second.revision));
++    }
++}
+diff --git a/apps/bareline/src/windows_app/run_prompt.rs b/apps/bareline/src/windows_app/run_prompt.rs
+index 7a64baa..3842344 100644
+--- a/apps/bareline/src/windows_app/run_prompt.rs
++++ b/apps/bareline/src/windows_app/run_prompt.rs
+@@ -12,6 +12,9 @@ pub(super) struct RunPromptRuntime {
+     pub open: bool,
+     pub field: TextField,
+     pub bounds: Rect,
++    pub field_bounds: Rect,
++    pub submit_bounds: Rect,
++    pub cancel_bounds: Rect,
+     pub status: String,
+ }
+ 
+@@ -61,6 +64,7 @@ impl RunPromptRuntime {
+         width: f32,
+         height: f32,
+         theme: bareline_ui::theme::UiTheme,
++        focused: u64,
+         ops: &mut Vec<DrawOp>,
+     ) -> Result<Option<Rect>, LayoutError> {
+         if !self.open {
+@@ -68,26 +72,43 @@ impl RunPromptRuntime {
+             return Ok(None);
+         }
+         let w = width.clamp(320.0, 520.0);
+-        let y = 60.0f32.min((height - 110.0).max(0.0));
+-        self.bounds = rect((width - w) / 2.0, y, w, 96.0);
++        let y = 60.0f32.min((height - 150.0).max(0.0));
++        self.bounds = rect((width - w) / 2.0, y, w, 136.0);
+         let b = self.bounds;
+         ops.push(DrawOp::Fill(b, theme.elevated));
+         ops.push(DrawOp::Stroke(b, theme.border, 1.0));
+         text(ops, b.x + 16.0, b.y + 12.0, "Run", 14.0, theme.text);
+-        let field = rect(b.x + 16.0, b.y + 36.0, b.width - 32.0, 28.0);
+-        let caret = self.field.draw_with_theme(renderer, field, true, theme, ops)?;
++        self.field_bounds = rect(b.x + 16.0, b.y + 36.0, b.width - 32.0, 28.0);
++        let caret =
++            self.field
++                .draw_with_theme(renderer, self.field_bounds, focused == modal::RUN_FIELD_ID, theme, ops)?;
+         let hint = if self.status.is_empty() {
+             "C:\\path\\program.exe arguments — runs directly, never through a shell"
+         } else {
+             self.status.as_str()
+         };
+         text(ops, b.x + 16.0, b.y + 70.0, hint, 12.0, theme.muted);
+-        Ok(Some(caret))
++        self.cancel_bounds = rect(b.x + b.width - 166.0, b.y + 96.0, 70.0, 28.0);
++        self.submit_bounds = rect(b.x + b.width - 86.0, b.y + 96.0, 70.0, 28.0);
++        for (bounds, label, fill, id) in [
++            (self.cancel_bounds, "Cancel", theme.elevated, modal::RUN_CANCEL_ID),
++            (self.submit_bounds, "Run", theme.focus, modal::RUN_SUBMIT_ID),
++        ] {
++            ops.push(DrawOp::FillRounded(bounds, fill, 4.0));
++            ops.push(DrawOp::StrokeRounded(
++                bounds,
++                if focused == id { theme.focus } else { theme.border },
++                4.0,
++                if focused == id { 2.0 } else { 1.0 },
++            ));
++            text(ops, bounds.x + 12.0, bounds.y + 6.0, label, 12.0, theme.text);
++        }
++        Ok((focused == modal::RUN_FIELD_ID).then_some(caret))
+     }
+ }
+ 
+ impl Shell {
+-    fn run_prompt_submit(&mut self) {
++    pub(super) fn run_prompt_submit(&mut self) {
+         let input = self.run_prompt.field.value().to_string();
+         match parse_command_line(&input) {
+             Ok((program, arguments)) => {
+@@ -103,9 +124,7 @@ impl Shell {
+                 };
+                 match self.macros_confirm_run(request) {
+                     Ok(()) => {
+-                        self.run_prompt.open = false;
+-                        self.run_prompt.field.cancel();
+-                        self.run_prompt.status.clear();
++                        self.dismiss_modal(modal::ModalSurface::Run);
+                     }
+                     Err(error) => self.run_prompt.status = error,
+                 }
+@@ -119,16 +138,33 @@ impl Shell {
+         }
+         match event {
+             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
++                let focused = self.modal.map_or(modal::RUN_FIELD_ID, |modal| modal.focused);
+                 match &event.logical_key {
+                     Key::Named(NamedKey::Escape) => {
+                         let composing = self.run_prompt.field.composing();
+                         self.run_prompt.field.cancel();
+                         if !composing {
+-                            self.run_prompt.open = false;
++                            self.dismiss_modal(modal::ModalSurface::Run);
+                         }
+                     }
++                    Key::Named(NamedKey::Tab) => {
++                        let controls = [modal::RUN_FIELD_ID, modal::RUN_SUBMIT_ID, modal::RUN_CANCEL_ID];
++                        let current = controls.iter().position(|id| *id == focused).unwrap_or(0);
++                        let next = if self.modifiers.shift_key() {
++                            (current + controls.len() - 1) % controls.len()
++                        } else {
++                            (current + 1) % controls.len()
++                        };
++                        self.modal_focus(modal::ModalSurface::Run, controls[next]);
++                    }
++                    Key::Named(NamedKey::Enter | NamedKey::Space) if focused == modal::RUN_CANCEL_ID => {
++                        self.dismiss_modal(modal::ModalSurface::Run);
++                    }
++                    Key::Named(NamedKey::Enter | NamedKey::Space) if focused == modal::RUN_SUBMIT_ID => {
++                        self.run_prompt_submit();
++                    }
+                     Key::Named(NamedKey::Enter) => self.run_prompt_submit(),
+-                    key => {
++                    key if focused == modal::RUN_FIELD_ID => {
+                         let field = &mut self.run_prompt.field;
+                         match key {
+                             Key::Named(NamedKey::Backspace) => {
+@@ -171,9 +207,14 @@ impl Shell {
+                         }
+                         self.run_prompt.status.clear();
+                     }
++                    _ => {}
+                 }
+             }
+-            WindowEvent::Ime(ime) => {
++            WindowEvent::Ime(ime)
++                if self
++                    .modal
++                    .is_some_and(|modal| modal.active_text_owner == Some(modal::RUN_FIELD_ID)) =>
++            {
+                 let field = &mut self.run_prompt.field;
+                 match ime {
+                     Ime::Preedit(v, c) => field.preedit(v.clone(), *c),
+@@ -190,12 +231,17 @@ impl Shell {
+                 ..
+             } => {
+                 if !self.run_prompt.bounds.contains(self.pointer) {
+-                    self.run_prompt.open = false;
++                    self.dismiss_modal(modal::ModalSurface::Run);
++                } else if self.run_prompt.submit_bounds.contains(self.pointer) {
++                    self.run_prompt_submit();
++                } else if self.run_prompt.cancel_bounds.contains(self.pointer) {
++                    self.dismiss_modal(modal::ModalSurface::Run);
+                 } else if let Some(renderer) = &self.renderer {
+                     let _ = self
+                         .run_prompt
+                         .field
+                         .click(renderer, self.pointer, self.modifiers.shift_key());
++                    self.modal_focus(modal::ModalSurface::Run, modal::RUN_FIELD_ID);
+                 }
+             }
+             WindowEvent::Focused(false) => {
+@@ -241,4 +287,21 @@ mod tests {
+         assert!(parse_command_line("where.exe").is_err());
+         assert!(parse_command_line(r#""C:\unclosed"#).is_err());
+     }
++
++    #[test]
++    fn keyboard_button_focus_has_a_visible_cue_and_hides_the_field_caret() {
++        let mut prompt = RunPromptRuntime::default();
++        prompt.open();
++        let mut renderer = bareline_renderer_recording::RecordingBackend::default();
++        let theme = bareline_ui::theme::UiTheme::default();
++        let mut ops = Vec::new();
++        let caret = prompt
++            .draw(&mut renderer, 1000.0, 800.0, theme, modal::RUN_CANCEL_ID, &mut ops)
++            .unwrap();
++        assert!(caret.is_none());
++        assert!(ops.iter().any(|op| {
++            matches!(op, DrawOp::StrokeRounded(bounds, color, _, width)
++                if *bounds == prompt.cancel_bounds && *color == theme.focus && *width == 2.0)
++        }));
++    }
+ }
+diff --git a/crates/platform-windows/src/accessibility.rs b/crates/platform-windows/src/accessibility.rs
+index f4aae42..3534702 100644
+--- a/crates/platform-windows/src/accessibility.rs
++++ b/crates/platform-windows/src/accessibility.rs
+@@ -219,7 +219,9 @@ impl ActionHandler for Actions {
+                     None
+                 }
+             }
+-            Action::SetTextSelection if target.role == AccessibilityRole::Editor => {
++            Action::SetTextSelection
++                if matches!(target.role, AccessibilityRole::Editor | AccessibilityRole::TextField) =>
++            {
+                 if let (Some(text), Some(ActionData::SetTextSelection(selection))) =
+                     (&state.snapshot.text, request.data)
+                 {
+diff --git a/crates/ui/src/text_field.rs b/crates/ui/src/text_field.rs
+index f474f91..6795e06 100644
+--- a/crates/ui/src/text_field.rs
++++ b/crates/ui/src/text_field.rs
+@@ -81,6 +81,27 @@ impl TextField {
+     pub fn composing(&self) -> bool {
+         self.composition.is_some()
+     }
++    /// Committed byte offsets used by the native text provider. Preedit stays
++    /// separate until IME commit, matching the field's editing contract.
++    pub fn selection(&self) -> (usize, usize) {
++        (self.anchor, self.caret)
++    }
++    pub fn composition_text(&self) -> Option<&str> {
++        self.composition.as_ref().map(|(text, _)| text.as_str())
++    }
++    pub fn set_selection(&mut self, anchor: usize, caret: usize) -> bool {
++        if anchor > self.value.len()
++            || caret > self.value.len()
++            || !self.value.is_char_boundary(anchor)
++            || !self.value.is_char_boundary(caret)
++        {
++            return false;
++        }
++        self.cancel();
++        self.anchor = anchor;
++        self.caret = caret;
++        true
++    }
+     fn range(&self) -> std::ops::Range<usize> {
+         self.anchor.min(self.caret)..self.anchor.max(self.caret)
+     }
+diff --git a/docs/implementation/2026-09-12-audit-implementation/PR-U01.md b/docs/implementation/2026-09-12-audit-implementation/PR-U01.md
+new file mode 100644
+index 0000000..5565672
+--- /dev/null
++++ b/docs/implementation/2026-09-12-audit-implementation/PR-U01.md
+@@ -0,0 +1,45 @@
++# PR-U01 — Modal focus, input ownership, and dismissal
++
++## Baseline
++
++- Base commit: `3c7f4a1681d676b38b49192b594578b914222212`
++- Worktree: `audit-implementation-worktrees/modal`
++
++## Scope
++
++Establish shared modal ownership for Run, Go To, and Compare Options so keyboard, pointer, IME, and accessibility input cannot fall through to the document. Publish the visible modal controls through UI Automation, restore the invoker after dismissal, and preserve native-dialog focus behavior.
++
++Search, recovery, and split-provider expansion remain assigned to PR-U07 and PR-U08.
++
++## Decisions
++
++- A single `ModalDescriptor` owns the active custom modal, semantic IDs, keyboard focus, text owner, invoker, dismissal policy, and background inertness. Opening another custom modal dismisses the prior owner first.
++- Run and Go To dismiss on outside click. Compare Options blocks outside input and closes through Done or Escape. Escape first cancels a live IME composition; the next Escape dismisses the surface.
++- Each modal open and text change receives a shell-wide, monotonic, non-recycling identity token. UIA text providers use a modal-only namespace with that token, and editor selection rejects the namespace after dismissal. This prevents an old provider range from changing either a reopened field or the document.
++- Run, Go To, and the Compare color editor publish their own bounded text providers. While a modal is live, editor text providers and background accessibility actions are unavailable.
++- Run and Go To expose visible submit/cancel buttons, cycle field and buttons with Tab/Shift+Tab, and draw the focus cue on the actual keyboard owner.
++- Modifier changes are captured before modal routing so press and release state are current for shortcuts and reverse traversal.
++- Native platform confirmations remain native; the custom modal layer does not replace their focus behavior. Modal input changes do not rewrite document history or document bytes.
++
++## Changed files
++
++- `apps/bareline/src/windows_app/modal.rs`: shared modal lifecycle, focus, input capture, generations, and dismissal.
++- `apps/bareline/src/windows_app.rs`: shell modal state, early event ownership, background command guard, and focused rendering.
++- `apps/bareline/src/windows_app/{run_prompt,goto,compare,macros}.rs`: modal activation, keyboard/pointer/IME routing, focus cues, and Compare Options ownership.
++- `apps/bareline/src/windows_app/accessibility.rs`: modal UIA groups, fields, buttons, focus, inert background, text providers, and stale-action rejection.
++- `crates/platform-windows/src/accessibility.rs`: text-selection actions for text fields.
++- `crates/ui/src/text_field.rs`: bounded selection and composition state used by UIA.
++- `xtask/src/journey.rs` and `docs/qa/JOURNEYS.md`: Run/Go To open-and-Escape journey coverage.
++
++## Focused checks
++
++- Direct `rustfmt --edition 2024` completed for each changed Rust file.
++- `git diff --check` completed without whitespace errors.
++- Focused regressions cover modifier press/release, distinct modal generations, stale provider identity after reopen/dismissal, bounded Unicode reads from every byte start, modal UIA focus/text/background ownership, and visible Run/Go To button focus cues.
++- No Cargo command or native desktop run was performed in this isolated worktree under the integration resource policy.
++
++## Unresolved qualifications
++
++- Root must run the contained Cargo checks in the integrated checkout.
++- A fresh native audit must verify Narrator/UIA focus, Compare Options Done ownership, outside-click behavior, IME Escape behavior, and the updated `p1-5` journey against the integrated binary.
++- Search, recovery, and split-provider expansion remain with PR-U07/PR-U08.
+diff --git a/docs/qa/JOURNEYS.md b/docs/qa/JOURNEYS.md
+index ca80096..5470ef3 100644
+--- a/docs/qa/JOURNEYS.md
++++ b/docs/qa/JOURNEYS.md
+@@ -71,7 +71,7 @@ chords but is intentionally unused for command invocation.
+ | `p0-7`  | P0-7      | File ▸ Close on a dirty tab shows a prompt with Save / Don't Save / Cancel buttons. |
+ | `p1-1`  | P1-1      | No submenu holds exactly one command whose title equals the submenu. |
+ | `p1-2`  | P1-2      | Top-level menu bar is the curated taxonomy with no Utilities/Workspace/Extensions top-level menus. |
+-| `p1-5`  | P1-5      | Search ▸ Go To Line opens an overlay (visible change in the upper editor region). |
++| `p1-5`  | P1-5/U01  | Search ▸ Go To Line and Run ▸ Run open their prompts; one Escape dismisses each empty prompt. |
+ | `p3-1`  | P3-1      | Toggling a dock panel changes the body without collapsing the window. |
+ | `p3-6a` | P3-6a     | Settings ▸ Preferences opens the Settings surface (visible change). |
+ | `p4-1`  | P4-1      | Making the document dirty shows a marker in the tab strip; the caption has no doubled bullet. |
+diff --git a/xtask/src/journey.rs b/xtask/src/journey.rs
+index eea37b1..2ad7d1a 100644
+--- a/xtask/src/journey.rs
++++ b/xtask/src/journey.rs
+@@ -23,7 +23,7 @@ use windows::Win32::Graphics::Gdi::{
+ use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
+ use windows::Win32::UI::Input::KeyboardAndMouse::{
+     INPUT, INPUT_KEYBOARD, KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, SendInput, SetFocus,
+-    VIRTUAL_KEY, VK_CONTROL, VK_SHIFT,
++    VIRTUAL_KEY, VK_CONTROL, VK_ESCAPE, VK_SHIFT,
+ };
+ use windows::Win32::UI::WindowsAndMessaging::{
+     BringWindowToTop, EnumChildWindows, EnumWindows, GetClassNameW, GetForegroundWindow, GetMenu, GetMenuItemCount,
+@@ -81,7 +81,7 @@ fn journeys() -> Vec<Journey> {
+         },
+         Journey {
+             name: "p1-5",
+-            summary: "Go To Line overlay opens",
++            summary: "Go To and Run modals open and dismiss on Escape",
+             run: journey_p1_5,
+         },
+         Journey {
+@@ -1270,8 +1270,9 @@ fn journey_p1_2(env: &Env) -> Result<(), String> {
+     Ok(())
+ }
+ 
+-/// P1-5: Go To Line opens an overlay (verified via the Search menu command,
+-/// which carries the Ctrl+G accelerator, plus a visible change).
++/// P1-5/U01: Go To Line and Run open as overlays and an empty prompt closes on
++/// the first Escape. IME preedit and Compare Options remain in the UIA/native
++/// qualification matrix because SendInput cannot create a real composition.
+ fn journey_p1_5(env: &Env) -> Result<(), String> {
+     let mut session = Session::launch(env, "p1-5", &[], &[])?;
+     let hwnd = session.wait_window(Duration::from_secs(20))?;
+@@ -1290,7 +1291,37 @@ fn journey_p1_5(env: &Env) -> Result<(), String> {
+     if changed < 0.004 {
+         return Err(format!("Go To Line produced no visible overlay (changed {changed:.4})"));
+     }
+-    let _ = shot(&session, hwnd, "p1-5-overlay");
++    let _ = shot(&session, hwnd, "p1-5-goto-overlay");
++    chord(false, false, VK_ESCAPE);
++    wait_until_stable(hwnd, Duration::from_secs(3));
++    let after_goto = shot(&session, hwnd, "p1-5-goto-dismissed")?;
++    let remaining = before.diff_fraction(&after_goto, region);
++    if remaining >= 0.004 {
++        return Err(format!(
++            "Go To Line did not close on the first Escape (changed {remaining:.4})"
++        ));
++    }
++    let changed = invoke_menu_until_change(
++        hwnd,
++        &["Run", "Run…"],
++        &after_goto,
++        region,
++        0.004,
++        Duration::from_secs(10),
++    )?;
++    if changed < 0.004 {
++        return Err(format!("Run produced no visible prompt (changed {changed:.4})"));
++    }
++    let _ = shot(&session, hwnd, "p1-5-run-overlay");
++    chord(false, false, VK_ESCAPE);
++    wait_until_stable(hwnd, Duration::from_secs(3));
++    let after_run = shot(&session, hwnd, "p1-5-run-dismissed")?;
++    let remaining = after_goto.diff_fraction(&after_run, region);
++    if remaining >= 0.004 {
++        return Err(format!(
++            "Run did not close on the first Escape (changed {remaining:.4})"
++        ));
++    }
+     Ok(())
+ }
+ 

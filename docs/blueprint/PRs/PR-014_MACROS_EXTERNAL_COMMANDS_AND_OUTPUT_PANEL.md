@@ -142,3 +142,22 @@ Evidence: impl=<commit>; tests=<commands + counts>; notes=<known follow-up if an
 - [ ] **AC-014-03**: Cancel a process producing unlimited output; output storage stays bounded, process cleanup completes and the editor remains usable.
 
 Evidence for these cases is **NOT_STARTED**. Record commit, fixture, OS/build, command, result and reviewer in [acceptance and traceability](../10_ACCEPTANCE_AND_TRACEABILITY.md); document edits and images are not application test results.
+
+## External command placeholder safety (SEC-02 / SEC-04, 2026-09-08)
+
+Direct mode passes expanded `${file}` / `${dir}` / `${workspace}` / `${selection}` /
+`${line}` / `${column}` values straight into argv, so no interpreter ever sees them.
+
+Shell mode composes one `cmd.exe /c` string, so an expanded value that contains
+`& | < > ^ % " ( ) !`, a newline, or any control character is **refused** with a
+message asking the user to run the command in direct mode. Safe values that contain
+whitespace are wrapped in double quotes.
+
+Passing placeholders through environment variables (`%BARELINE_FILE%`) was considered
+and rejected: `cmd.exe` expands `%VAR%` while it parses the `/c` string, so a `&`
+inside the value would still separate commands. Refusing the metacharacters is the
+only guarantee that does not depend on the interpreter's expansion order.
+
+Shell-mode children additionally run with `NoDefaultCurrentDirectoryInExePath=1` and
+with the working directory set to the workspace root rather than the document's
+folder, so a document folder cannot shadow an unqualified tool name in the template.

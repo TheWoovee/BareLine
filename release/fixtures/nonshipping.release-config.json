@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "configuration_version": 3,
+  "mode": "fixture",
+  "distribution": {
+    "product": "bareline",
+    "version": "0.1.0",
+    "channel": "stable",
+    "platform": "windows-x64",
+    "core_artifact_type": "bareline-executable-x64",
+    "runtime_artifact_type": "bareline-exthost-x64"
+  },
+  "features": { "updates": true, "extensions": true, "external_runtime": true },
+  "trust": {
+    "release_public_key": "RWRURVNUT05MWQOhB7/zzhC+HXDdGOdLwJln5NYwm6UNXx3chmQSVTG4",
+    "catalog_public_key": "RWQHBwcHBwcHBxl/ayPhbIUyxqvIOPrNXqeJvgx2spIDNAOb+os9No1h",
+    "publisher": "Bareline",
+    "publisher_certificate_sha256": "0707070707070707070707070707070707070707070707070707070707070707"
+  },
+  "updates": {
+    "host": "fixture.invalid",
+    "manifest_path": "/updates/manifest.json",
+    "signature_path": "/updates/manifest.minisig",
+    "artifact_path": "/updates/bareline.exe",
+    "metadata_version": 3,
+    "minimum_metadata_version": 3
+  }
+}

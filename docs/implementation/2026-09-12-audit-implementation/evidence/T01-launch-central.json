@@ -1,0 +1,17 @@
+{
+  "arguments": [
+    "test",
+    "-p",
+    "bareline",
+    "--bin",
+    "bareline",
+    "windows_app::launch::tests",
+    "--offline",
+    "--locked"
+  ],
+  "completed_utc": "2026-09-12T06:55:26.0728775Z",
+  "integration_snapshot": "c3c13f19e377729809451739a4c5026302b3e16c",
+  "exit_code": 0,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\T01-launch-central.log"
+}

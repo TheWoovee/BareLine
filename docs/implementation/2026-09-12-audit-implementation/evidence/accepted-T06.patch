@@ -1,0 +1,890 @@
+diff --git a/apps/bareline/src/windows_app/launch.rs b/apps/bareline/src/windows_app/launch.rs
+index fa3b079..5dade0b 100644
+--- a/apps/bareline/src/windows_app/launch.rs
++++ b/apps/bareline/src/windows_app/launch.rs
+@@ -83,25 +83,39 @@ impl super::Shell {
+                         .as_ref()
+                         .is_some_and(|(path, _)| path == &pending.path)
+                     {
+-                        let result = self.launch.navigation.as_ref().and_then(|(_, task)| task.poll());
+-                        if let Some(result) = result {
+-                            self.launch.navigation = None;
+-                            match result {
+-                                Ok(offset) => {
+-                                    if let bareline_app::workspace::WorkspaceEditor::Paged(paged) = editor {
+-                                        if let Err(e) = paged.restore_selection(
+-                                            bareline_document::TextOffset(offset),
+-                                            bareline_document::TextOffset(offset),
+-                                        ) {
+-                                            workspace.message = Some(e);
++                        match self.launch.navigation.as_ref().expect("matching navigation").1.poll() {
++                            bareline_app::task::TaskPoll::Pending => {
++                                remaining.push(pending);
++                                continue;
++                            }
++                            bareline_app::task::TaskPoll::Complete(result) => {
++                                self.launch.navigation = None;
++                                match result {
++                                    Ok(offset) => {
++                                        if let bareline_app::workspace::WorkspaceEditor::Paged(paged) = editor {
++                                            if let Err(e) = paged.restore_selection(
++                                                bareline_document::TextOffset(offset),
++                                                bareline_document::TextOffset(offset),
++                                            ) {
++                                                workspace.message = Some(e);
++                                            }
+                                         }
+                                     }
++                                    Err(e) => workspace.message = Some(e),
+                                 }
+-                                Err(e) => workspace.message = Some(e),
+                             }
+-                        } else {
+-                            remaining.push(pending);
+-                            continue;
++                            bareline_app::task::TaskPoll::Cancelled => {
++                                self.launch.navigation = None;
++                                workspace.message = Some("Navigation cancelled".into());
++                            }
++                            bareline_app::task::TaskPoll::Failed(error) => {
++                                self.launch.navigation = None;
++                                workspace.message = Some(format!("Navigation failed: {error}"));
++                            }
++                            bareline_app::task::TaskPoll::Consumed => {
++                                self.launch.navigation = None;
++                                workspace.message = Some("Navigation result was already consumed".into());
++                            }
+                         }
+                     } else {
+                         if self.launch.navigation.is_none()
+diff --git a/crates/app/src/accessibility.rs b/crates/app/src/accessibility.rs
+index 379795a..bceddd1 100644
+--- a/crates/app/src/accessibility.rs
++++ b/crates/app/src/accessibility.rs
+@@ -132,7 +132,47 @@ impl AccessibilityTextSource for ResidentText {
+ #[derive(Default)]
+ struct ReadState {
+     pending: bool,
+-    cached: Option<(usize, usize, AccessibleRead)>,
++    cached: Option<((u64, u64), usize, usize, AccessibleRead)>,
++}
++
++fn finish_paged_read(
++    state: &mut ReadState,
++    requested_identity: (u64, u64),
++    current_identity: (u64, u64),
++    start: usize,
++    limit: usize,
++    result: AccessibleRead,
++) {
++    state.pending = false;
++    if current_identity == requested_identity && result != AccessibleRead::Pending {
++        state.cached = Some((requested_identity, start, limit, result));
++    }
++}
++
++fn schedule_paged_read(
++    state: &std::sync::Arc<std::sync::Mutex<ReadState>>,
++    notify: std::sync::Arc<dyn Fn() + Send + Sync>,
++    identity: (u64, u64),
++    start: usize,
++    limit: usize,
++    read: impl FnOnce(std::sync::Weak<std::sync::Mutex<ReadState>>) -> ((u64, u64), AccessibleRead) + Send + 'static,
++) -> Result<(), crate::task::Busy> {
++    let weak = std::sync::Arc::downgrade(state);
++    crate::task::execute(move || {
++        if weak.strong_count() == 0 {
++            return;
++        }
++        // Cleanup remains outside the protected read so an unwind in a paged
++        // source is converted to an unavailable terminal result.
++        let (current_identity, result) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| read(weak.clone())))
++            .unwrap_or((identity, AccessibleRead::Unavailable));
++        if let Some(state) = weak.upgrade() {
++            let mut state = state.lock().unwrap_or_else(|error| error.into_inner());
++            finish_paged_read(&mut state, identity, current_identity, start, limit, result);
++            drop(state);
++            notify();
++        }
++    })
+ }
+ struct PagedText {
+     handle: bareline_editor_surface::paged_view::PagedReadHandle,
+@@ -148,39 +188,39 @@ impl AccessibilityTextSource for PagedText {
+         self.handle.snapshot().len()
+     }
+     fn read(&self, start: usize, limit: usize) -> AccessibleRead {
++        let identity = self.identity();
+         if start > self.len() || limit > MAX_ACCESSIBLE_TEXT_BYTES {
+             return AccessibleRead::Unavailable;
+         }
+         let Ok(mut state) = self.state.try_lock() else {
+             return AccessibleRead::Pending;
+         };
+-        if let Some((at, count, value)) = &state.cached {
+-            if *at == start && *count == limit {
++        if let Some((cached_identity, at, count, value)) = &state.cached {
++            if *cached_identity == identity && *at == start && *count == limit {
+                 return value.clone();
+             }
+         }
+         if state.pending {
+             return AccessibleRead::Pending;
+         }
+-        let weak = std::sync::Arc::downgrade(&self.state);
+         let handle = self.handle.clone();
+         let notify = self.notify.clone();
+         state.pending = true;
+         // Runs on the shared bounded pool; a full pool leaves `pending` clear so the
+         // next read retries rather than reporting a stuck request.
+-        if crate::task::execute(move || {
++        if schedule_paged_read(&self.state, notify, identity, start, limit, move |owner| {
+             use bareline_document::{Budget, TextOffset, paged::WindowPoll};
+-            if weak.strong_count() == 0 {
+-                return;
+-            }
+             let result = (|| {
+-                let mut request = handle
+-                    .snapshot()
++                let snapshot = handle.snapshot();
++                if snapshot.identity_token() != identity {
++                    return None;
++                }
++                let mut request = snapshot
+                     .begin_viewport(TextOffset(start), limit, &Budget::new(MAX_ACCESSIBLE_TEXT_BYTES))
+                     .ok()?;
+                 // One text window and a fixed page-resolution cap per job.
+                 for _ in 0..256 {
+-                    if weak.strong_count() == 0 {
++                    if owner.strong_count() == 0 {
+                         return None;
+                     }
+                     match request.poll() {
+@@ -201,15 +241,7 @@ impl AccessibilityTextSource for PagedText {
+                 None
+             })()
+             .unwrap_or(AccessibleRead::Unavailable);
+-            if let Some(state) = weak.upgrade() {
+-                let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
+-                state.pending = false;
+-                if result != AccessibleRead::Pending {
+-                    state.cached = Some((start, limit, result));
+-                }
+-                drop(state);
+-                notify();
+-            }
++            (handle.snapshot().identity_token(), result)
+         })
+         .is_err()
+         {
+@@ -467,6 +499,63 @@ pub fn snapshot(
+ #[cfg(test)]
+ mod tests {
+     use super::*;
++
++    #[test]
++    fn paged_read_terminal_cleanup_rejects_stale_results() {
++        let state = std::sync::Arc::new(std::sync::Mutex::new(ReadState {
++            pending: true,
++            cached: None,
++        }));
++        let (failed_tx, failed_rx) = std::sync::mpsc::sync_channel(1);
++        schedule_paged_read(
++            &state,
++            std::sync::Arc::new(move || failed_tx.send(()).unwrap()),
++            (7, 11),
++            4,
++            8,
++            |_| panic!("controlled read failure"),
++        )
++        .unwrap();
++        failed_rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
++        let state_after_failure = state.lock().unwrap();
++        assert!(
++            !state_after_failure.pending,
++            "failed scheduled read still clears pending"
++        );
++        assert!(matches!(
++            state_after_failure.cached,
++            Some(((7, 11), 4, 8, AccessibleRead::Unavailable))
++        ));
++        drop(state_after_failure);
++
++        {
++            let mut state = state.lock().unwrap();
++            state.pending = true;
++            state.cached = None;
++        }
++        let (stale_tx, stale_rx) = std::sync::mpsc::sync_channel(1);
++        schedule_paged_read(
++            &state,
++            std::sync::Arc::new(move || stale_tx.send(()).unwrap()),
++            (7, 12),
++            4,
++            8,
++            |_| {
++                (
++                    (7, 13),
++                    AccessibleRead::Ready {
++                        start: 4,
++                        text: "stale".into(),
++                    },
++                )
++            },
++        )
++        .unwrap();
++        stale_rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
++        let state = state.lock().unwrap();
++        assert!(!state.pending, "stale scheduled read still clears pending");
++        assert!(state.cached.is_none(), "stale text is never published");
++    }
+     /// These focused projection regressions inspect selected fields. Complete
+     /// retained native hierarchy/focus/action JSON baselines live in the native
+     /// composition tests, which exercise the actual owner layout fixtures.
+diff --git a/crates/app/src/task.rs b/crates/app/src/task.rs
+index 1d230d8..70050e8 100644
+--- a/crates/app/src/task.rs
++++ b/crates/app/src/task.rs
+@@ -16,8 +16,8 @@
+ 
+ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+ use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
+-use std::sync::{Arc, OnceLock};
+-use std::time::Duration;
++use std::sync::{Arc, Mutex, OnceLock};
++use std::time::{Duration, Instant};
+ 
+ /// A boxed unit of work the pool runs to completion on one of its threads.
+ type Job = Box<dyn FnOnce() + Send + 'static>;
+@@ -49,19 +49,28 @@ impl std::error::Error for Busy {}
+ /// observes the same cancelled state, so a caller keeps one clone and the running
+ /// job holds another.
+ #[derive(Clone, Default)]
+-pub struct Cancel(Arc<AtomicBool>);
++pub struct Cancel(Arc<CancelState>);
++
++#[derive(Default)]
++struct CancelState {
++    cancelled: AtomicBool,
++    /// Serializes cancellation with result consumption. Once `cancel` returns,
++    /// a concurrent or later poll cannot publish success.
++    gate: Mutex<()>,
++}
+ 
+ impl Cancel {
+     /// Request cancellation. Long jobs poll [`Cancel::is_cancelled`] to stop early;
+     /// on completion the pool drops a cancelled job's result instead of delivering
+     /// it, so a cancelled [`Task`] never yields a value.
+     pub fn cancel(&self) {
+-        self.0.store(true, Ordering::SeqCst);
++        let _gate = self.0.gate.lock().unwrap_or_else(|error| error.into_inner());
++        self.0.cancelled.store(true, Ordering::SeqCst);
+     }
+ 
+     /// Whether cancellation has been requested.
+     pub fn is_cancelled(&self) -> bool {
+-        self.0.load(Ordering::SeqCst)
++        self.0.cancelled.load(Ordering::SeqCst)
+     }
+ }
+ 
+@@ -74,6 +83,57 @@ struct Metrics {
+     peak: AtomicUsize,
+ }
+ 
++struct Worker {
++    sender: SyncSender<Job>,
++    alive: Arc<AtomicBool>,
++}
++
++struct WorkerExit(Arc<AtomicBool>);
++
++impl Drop for WorkerExit {
++    fn drop(&mut self) {
++        self.0.store(false, Ordering::SeqCst);
++    }
++}
++
++struct Running(Arc<Metrics>);
++
++impl Running {
++    fn begin(metrics: Arc<Metrics>) -> Self {
++        let running = metrics.running.fetch_add(1, Ordering::SeqCst) + 1;
++        metrics.peak.fetch_max(running, Ordering::SeqCst);
++        Self(metrics)
++    }
++}
++
++impl Drop for Running {
++    fn drop(&mut self) {
++        self.0.running.fetch_sub(1, Ordering::SeqCst);
++    }
++}
++
++struct CompletionSignal {
++    notify: Mutex<Box<dyn Fn() + Send + 'static>>,
++    fired: AtomicBool,
++}
++
++impl CompletionSignal {
++    fn new(notify: impl Fn() + Send + 'static) -> Self {
++        Self {
++            notify: Mutex::new(Box::new(notify)),
++            fired: AtomicBool::new(false),
++        }
++    }
++
++    fn fire(&self) {
++        if self.fired.swap(true, Ordering::SeqCst) {
++            return;
++        }
++        let notify = self.notify.lock().unwrap_or_else(|error| error.into_inner());
++        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| notify()));
++    }
++}
++
+ /// A fixed-size pool of worker threads that run [`Job`]s to completion.
+ ///
+ /// Thread creation is fallible: [`Pool::new`] keeps only the workers that spawned
+@@ -81,7 +141,7 @@ struct Metrics {
+ /// fewer threads (or none, in which case every submission returns [`Busy`]) rather
+ /// than panicking.
+ pub struct Pool {
+-    senders: Vec<SyncSender<Job>>,
++    workers: Mutex<Vec<Worker>>,
+     next: AtomicUsize,
+     metrics: Arc<Metrics>,
+ }
+@@ -90,28 +150,32 @@ impl Pool {
+     /// Build a pool with `threads` workers, each backed by a queue `depth` deep.
+     pub fn new(threads: usize, depth: usize) -> Self {
+         let metrics = Arc::new(Metrics::default());
+-        let mut senders = Vec::with_capacity(threads);
++        let mut workers = Vec::with_capacity(threads);
+         for index in 0..threads {
+             let (sender, receiver) = mpsc::sync_channel::<Job>(depth);
+             let metrics = metrics.clone();
++            let alive = Arc::new(AtomicBool::new(true));
++            let worker_alive = alive.clone();
+             let spawned = std::thread::Builder::new()
+                 .name(format!("bareline-task-{index}"))
+                 .spawn(move || {
++                    let _exit = WorkerExit(worker_alive);
+                     while let Ok(job) = receiver.recv() {
+-                        let running = metrics.running.fetch_add(1, Ordering::SeqCst) + 1;
+-                        metrics.peak.fetch_max(running, Ordering::SeqCst);
+-                        job();
+-                        metrics.running.fetch_sub(1, Ordering::SeqCst);
++                        let _running = Running::begin(metrics.clone());
++                        // Debug/test builds unwind; contain a task panic so the
++                        // bounded worker remains available. Release deliberately
++                        // uses panic=abort, where unwinding cannot be promised.
++                        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job));
+                     }
+                 });
+             // A failed spawn drops `receiver` with the closure; we simply keep the
+             // pool smaller. If it fails, `sender` is dropped here too.
+             if spawned.is_ok() {
+-                senders.push(sender);
++                workers.push(Worker { sender, alive });
+             }
+         }
+         Self {
+-            senders,
++            workers: Mutex::new(workers),
+             next: AtomicUsize::new(0),
+             metrics,
+         }
+@@ -128,9 +192,9 @@ impl Pool {
+     /// Spawn `work` on the pool and return a [`Task`] that receives its result.
+     ///
+     /// `work` is handed a [`Cancel`] to poll. When it finishes, its value is sent
+-    /// to the returned task and `notify` is called — unless the task was cancelled,
+-    /// in which case the value is dropped and `notify` is not called. Returns
+-    /// [`Busy`] if no worker can accept the job.
++    /// to the returned task and `notify` is called. Cancellation publishes its own
++    /// terminal outcome and wakes the owner immediately. Returns [`Busy`] if no
++    /// worker can accept the job.
+     pub fn spawn<T, F, N>(&self, notify: N, work: F) -> Result<Task<T>, Busy>
+     where
+         T: Send + 'static,
+@@ -138,42 +202,64 @@ impl Pool {
+         N: Fn() + Send + 'static,
+     {
+         let cancel = Cancel::default();
+-        let (sender, receiver) = mpsc::sync_channel::<T>(1);
++        let (sender, receiver) = mpsc::sync_channel::<Outcome<T>>(1);
++        let completion = Arc::new(CompletionSignal::new(notify));
++        let job_completion = completion.clone();
+         let job_cancel = cancel.clone();
+         self.submit(Box::new(move || {
+-            let value = work(&job_cancel);
+-            // Cancel suppresses delivery: a cancelled task must never yield a value.
+-            if job_cancel.is_cancelled() {
+-                return;
+-            }
+-            if sender.send(value).is_ok() {
+-                notify();
++            let outcome = if job_cancel.is_cancelled() {
++                Outcome::Cancelled
++            } else {
++                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| work(&job_cancel))) {
++                    Ok(_value) if job_cancel.is_cancelled() => Outcome::Cancelled,
++                    Ok(value) => Outcome::Complete(value),
++                    Err(_) => Outcome::Failed(TaskFailure::Panicked),
++                }
++            };
++            if sender.send(outcome).is_ok() {
++                job_completion.fire();
+             }
+         }))?;
+-        Ok(Task { receiver, cancel })
++        Ok(Task {
++            receiver,
++            cancel,
++            consumed: AtomicBool::new(false),
++            completion,
++        })
+     }
+ 
+     fn submit(&self, mut job: Job) -> Result<(), Busy> {
+-        if self.senders.is_empty() {
++        let mut workers = self.workers.lock().unwrap_or_else(|error| error.into_inner());
++        workers.retain(|worker| worker.alive.load(Ordering::SeqCst));
++        if workers.is_empty() {
+             return Err(Busy);
+         }
+         // Round-robin across workers, then try every worker once so a single busy
+         // queue does not reject a job the pool could still take.
+         let start = self.next.fetch_add(1, Ordering::Relaxed);
+-        for offset in 0..self.senders.len() {
+-            let index = (start + offset) % self.senders.len();
+-            match self.senders[index].try_send(job) {
++        for offset in 0..workers.len() {
++            let index = (start + offset) % workers.len();
++            match workers[index].sender.try_send(job) {
+                 Ok(()) => return Ok(()),
+                 Err(mpsc::TrySendError::Full(returned)) => job = returned,
+-                Err(mpsc::TrySendError::Disconnected(returned)) => job = returned,
++                Err(mpsc::TrySendError::Disconnected(returned)) => {
++                    workers[index].alive.store(false, Ordering::SeqCst);
++                    job = returned;
++                }
+             }
+         }
++        workers.retain(|worker| worker.alive.load(Ordering::SeqCst));
+         Err(Busy)
+     }
+ 
+     /// Number of live worker threads — the ceiling on concurrent jobs.
+     pub fn worker_count(&self) -> usize {
+-        self.senders.len()
++        self.workers
++            .lock()
++            .unwrap_or_else(|error| error.into_inner())
++            .iter()
++            .filter(|worker| worker.alive.load(Ordering::SeqCst))
++            .count()
+     }
+ 
+     /// High-water mark of jobs that have run concurrently. Bounded by
+@@ -195,14 +281,53 @@ impl Pool {
+ /// both signals the running job and guarantees the result is never delivered even
+ /// if the job was already finishing.
+ pub struct Task<T> {
+-    receiver: Receiver<T>,
++    // `Receiver` is deliberately not synchronized. Its `!Sync` boundary makes
++    // the one-shot task a single-consumer API, so `poll` cannot block behind a
++    // concurrent `wait_timeout` call.
++    receiver: Receiver<Outcome<T>>,
+     cancel: Cancel,
++    consumed: AtomicBool,
++    completion: Arc<CompletionSignal>,
++}
++
++enum Outcome<T> {
++    Complete(T),
++    Cancelled,
++    Failed(TaskFailure),
++}
++
++/// The observable state of a one-shot background task.
++#[derive(Debug, PartialEq, Eq)]
++pub enum TaskPoll<T> {
++    Pending,
++    Complete(T),
++    Cancelled,
++    Failed(TaskFailure),
++    /// The terminal outcome was already returned to this task's owner.
++    Consumed,
++}
++
++/// Sanitized task infrastructure failures. Panic payloads are never exposed.
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub enum TaskFailure {
++    Panicked,
++    Disconnected,
++}
++
++impl std::fmt::Display for TaskFailure {
++    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++        match self {
++            Self::Panicked => f.write_str("background task failed"),
++            Self::Disconnected => f.write_str("background worker disconnected"),
++        }
++    }
+ }
+ 
+ impl<T> Task<T> {
+     /// Request cancellation and suppress delivery of any result.
+     pub fn cancel(&self) {
+         self.cancel.cancel();
++        self.completion.fire();
+     }
+ 
+     /// Whether this task has been cancelled.
+@@ -216,19 +341,96 @@ impl<T> Task<T> {
+         self.cancel.clone()
+     }
+ 
+-    /// Non-blocking check for the result. Returns `Some` exactly once, when the job
+-    /// has completed and was not cancelled.
+-    pub fn poll(&self) -> Option<T> {
+-        match self.receiver.try_recv() {
+-            Ok(value) => Some(value),
+-            Err(TryRecvError::Empty) | Err(TryRecvError::Disconnected) => None,
++    /// Non-blocking check for an explicit outcome. A terminal outcome is returned
++    /// once; later calls return [`TaskPoll::Consumed`].
++    pub fn poll(&self) -> TaskPoll<T> {
++        let _gate = self.cancel.0.gate.lock().unwrap_or_else(|error| error.into_inner());
++        if self.consumed.load(Ordering::SeqCst) {
++            return TaskPoll::Consumed;
++        }
++        if self.cancel.is_cancelled() {
++            self.consumed.store(true, Ordering::SeqCst);
++            return TaskPoll::Cancelled;
++        }
++        let outcome = self.receiver.try_recv();
++        match outcome {
++            Ok(outcome) => self.finish(outcome),
++            Err(TryRecvError::Empty) => TaskPoll::Pending,
++            Err(TryRecvError::Disconnected) => {
++                self.consumed.store(true, Ordering::SeqCst);
++                if self.cancel.is_cancelled() {
++                    TaskPoll::Cancelled
++                } else {
++                    TaskPoll::Failed(TaskFailure::Disconnected)
++                }
++            }
+         }
+     }
+ 
+     /// Block up to `timeout` for the result. Intended for tests and synchronous
+     /// call sites; the event loop uses [`Task::poll`] instead.
+-    pub fn wait_timeout(&self, timeout: Duration) -> Option<T> {
+-        self.receiver.recv_timeout(timeout).ok()
++    pub fn wait_timeout(&self, timeout: Duration) -> TaskPoll<T> {
++        let deadline = Instant::now().checked_add(timeout);
++        loop {
++            {
++                let _gate = self.cancel.0.gate.lock().unwrap_or_else(|error| error.into_inner());
++                if self.consumed.load(Ordering::SeqCst) {
++                    return TaskPoll::Consumed;
++                }
++                if self.cancel.is_cancelled() {
++                    self.consumed.store(true, Ordering::SeqCst);
++                    return TaskPoll::Cancelled;
++                }
++            }
++            let remaining = deadline.map_or(timeout, |deadline| deadline.saturating_duration_since(Instant::now()));
++            if remaining.is_zero() {
++                return TaskPoll::Pending;
++            }
++            let slice = remaining.min(Duration::from_millis(10));
++            match self.receiver.recv_timeout(slice) {
++                Ok(outcome) => {
++                    let _gate = self.cancel.0.gate.lock().unwrap_or_else(|error| error.into_inner());
++                    if self.consumed.swap(true, Ordering::SeqCst) {
++                        return TaskPoll::Consumed;
++                    }
++                    return self.map_outcome(outcome);
++                }
++                Err(mpsc::RecvTimeoutError::Timeout) => continue,
++                Err(mpsc::RecvTimeoutError::Disconnected) => {
++                    let _gate = self.cancel.0.gate.lock().unwrap_or_else(|error| error.into_inner());
++                    if self.consumed.swap(true, Ordering::SeqCst) {
++                        return TaskPoll::Consumed;
++                    }
++                    return if self.cancel.is_cancelled() {
++                        TaskPoll::Cancelled
++                    } else {
++                        TaskPoll::Failed(TaskFailure::Disconnected)
++                    };
++                }
++            }
++        }
++    }
++
++    fn finish(&self, outcome: Outcome<T>) -> TaskPoll<T> {
++        self.consumed.store(true, Ordering::SeqCst);
++        self.map_outcome(outcome)
++    }
++
++    fn map_outcome(&self, outcome: Outcome<T>) -> TaskPoll<T> {
++        if self.cancel.is_cancelled() {
++            return TaskPoll::Cancelled;
++        }
++        match outcome {
++            Outcome::Complete(value) => TaskPoll::Complete(value),
++            Outcome::Cancelled => TaskPoll::Cancelled,
++            Outcome::Failed(error) => TaskPoll::Failed(error),
++        }
++    }
++}
++
++impl<T> Drop for Task<T> {
++    fn drop(&mut self) {
++        self.cancel.cancel();
+     }
+ }
+ 
+@@ -401,14 +603,18 @@ mod tests {
+     fn task_completes_and_delivers_its_result() {
+         let pool = Pool::new(2, 8);
+         let woke = Arc::new(AtomicUsize::new(0));
++        let (notified_tx, notified_rx) = mpsc::sync_channel(1);
+         let notify = {
+             let woke = woke.clone();
+             move || {
+                 woke.fetch_add(1, Ordering::SeqCst);
++                notified_tx.send(()).unwrap();
+             }
+         };
+         let task = pool.spawn(notify, |_cancel| 40 + 2).expect("accepted");
+-        assert_eq!(task.wait_timeout(Duration::from_secs(5)), Some(42));
++        assert_eq!(task.wait_timeout(Duration::from_secs(5)), TaskPoll::Complete(42));
++        notified_rx.recv_timeout(Duration::from_secs(5)).unwrap();
++        assert_eq!(task.poll(), TaskPoll::Consumed);
+         assert_eq!(woke.load(Ordering::SeqCst), 1, "notify fires once on delivery");
+     }
+ 
+@@ -424,19 +630,22 @@ mod tests {
+             }
+         };
+         let job_gate = gate.clone();
++        let (started_tx, started_rx) = mpsc::sync_channel(1);
+         let task = pool
+             .spawn(notify, move |_cancel| {
++                started_tx.send(()).unwrap();
+                 job_gate.wait();
+                 99
+             })
+             .expect("accepted");
+         // Cancel while the job is blocked, then let it finish. The finished value
+         // must not be delivered.
++        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+         task.cancel();
++        assert_eq!(task.poll(), TaskPoll::Cancelled);
++        assert_eq!(woke.load(Ordering::SeqCst), 1, "terminal cancellation wakes its owner");
+         gate.release();
+-        assert_eq!(task.wait_timeout(Duration::from_millis(500)), None);
+         assert!(task.is_cancelled());
+-        assert_eq!(woke.load(Ordering::SeqCst), 0, "cancelled task does not notify");
+     }
+ 
+     #[test]
+@@ -470,12 +679,148 @@ mod tests {
+         // Release everyone and drain.
+         gate.release();
+         for task in &tasks {
+-            assert_eq!(task.wait_timeout(Duration::from_secs(5)), Some(1));
++            assert_eq!(task.wait_timeout(Duration::from_secs(5)), TaskPoll::Complete(1));
+         }
+         assert_eq!(started.get(), 3, "all three eventually ran");
+         assert_eq!(pool.peak_concurrency(), 2, "never exceeded the pool bound");
+     }
+ 
++    #[test]
++    fn cancel_before_dequeue_skips_work_and_reports_terminal() {
++        let pool = Pool::new(1, 4);
++        let gate = Arc::new(Gate::default());
++        let started = Arc::new(Started::default());
++        let first_gate = gate.clone();
++        let first_started = started.clone();
++        let first = pool
++            .spawn(
++                || {},
++                move |_| {
++                    first_started.mark();
++                    first_gate.wait();
++                },
++            )
++            .unwrap();
++        started.wait_for(1);
++        let ran = Arc::new(AtomicBool::new(false));
++        let job_ran = ran.clone();
++        let (woke_tx, woke_rx) = mpsc::sync_channel(1);
++        let second = pool
++            .spawn(
++                move || woke_tx.send(()).unwrap(),
++                move |_| job_ran.swap(true, Ordering::SeqCst),
++            )
++            .unwrap();
++        second.cancel();
++        woke_rx.recv_timeout(Duration::from_secs(5)).unwrap();
++        assert_eq!(
++            second.poll(),
++            TaskPoll::Cancelled,
++            "cancellation is terminal before the queued job can start"
++        );
++        gate.release();
++        assert_eq!(first.wait_timeout(Duration::from_secs(5)), TaskPoll::Complete(()));
++        assert!(!ran.load(Ordering::SeqCst));
++    }
++
++    #[test]
++    fn cancel_after_publication_suppresses_buffered_success() {
++        let pool = Pool::new(1, 4);
++        let (woke, wake) = mpsc::sync_channel(1);
++        let task = pool.spawn(move || woke.send(()).unwrap(), |_| 42).unwrap();
++        wake.recv_timeout(Duration::from_secs(5)).unwrap();
++        task.cancel();
++        assert_eq!(task.poll(), TaskPoll::Cancelled);
++        assert_eq!(task.poll(), TaskPoll::Consumed);
++    }
++
++    #[test]
++    fn dropping_owner_signals_running_work_and_send_failure_is_harmless() {
++        let pool = Pool::new(1, 4);
++        let (started_tx, started_rx) = mpsc::sync_channel(1);
++        let (release_tx, release_rx) = mpsc::sync_channel(1);
++        let (observed_tx, observed_rx) = mpsc::sync_channel(1);
++        let task = pool
++            .spawn(
++                || {},
++                move |cancel| {
++                    started_tx.send(()).unwrap();
++                    release_rx.recv().unwrap();
++                    observed_tx.send(cancel.is_cancelled()).unwrap();
++                },
++            )
++            .unwrap();
++        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
++        drop(task);
++        release_tx.send(()).unwrap();
++        assert!(observed_rx.recv_timeout(Duration::from_secs(5)).unwrap());
++        let next = pool.spawn(|| {}, |_| 7).unwrap();
++        assert_eq!(next.wait_timeout(Duration::from_secs(5)), TaskPoll::Complete(7));
++    }
++
++    #[test]
++    fn panicked_work_is_sanitized_and_worker_metrics_recover() {
++        let pool = Pool::new(1, 4);
++        let failed = pool
++            .spawn(|| {}, |_| -> usize { panic!("secret panic payload") })
++            .unwrap();
++        assert_eq!(
++            failed.wait_timeout(Duration::from_secs(5)),
++            TaskPoll::Failed(TaskFailure::Panicked)
++        );
++        let gate = Arc::new(Gate::default());
++        let next_gate = gate.clone();
++        let (started_tx, started_rx) = mpsc::sync_channel(1);
++        let next = pool
++            .spawn(
++                || {},
++                move |_| {
++                    started_tx.send(()).unwrap();
++                    next_gate.wait();
++                    9
++                },
++            )
++            .unwrap();
++        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
++        assert_eq!(pool.running(), 1, "failed job was removed from running metrics");
++        gate.release();
++        assert_eq!(next.wait_timeout(Duration::from_secs(5)), TaskPoll::Complete(9));
++        assert_eq!(pool.worker_count(), 1);
++    }
++
++    #[test]
++    fn panicked_notification_does_not_kill_worker_or_lose_result() {
++        let pool = Pool::new(1, 4);
++        let task = pool.spawn(|| panic!("notify payload"), |_| 5).unwrap();
++        assert_eq!(task.wait_timeout(Duration::from_secs(5)), TaskPoll::Complete(5));
++        let next = pool.spawn(|| {}, |_| 6).unwrap();
++        assert_eq!(next.wait_timeout(Duration::from_secs(5)), TaskPoll::Complete(6));
++        assert_eq!(pool.worker_count(), 1);
++    }
++
++    #[test]
++    fn disconnected_result_is_a_one_shot_failure() {
++        let (sender, receiver) = mpsc::sync_channel(1);
++        drop(sender);
++        let task = Task::<usize> {
++            receiver,
++            cancel: Cancel::default(),
++            consumed: AtomicBool::new(false),
++            completion: Arc::new(CompletionSignal::new(|| {})),
++        };
++        assert_eq!(task.poll(), TaskPoll::Failed(TaskFailure::Disconnected));
++        assert_eq!(task.poll(), TaskPoll::Consumed);
++    }
++
++    #[test]
++    fn dead_worker_entries_are_pruned_from_capacity() {
++        let pool = Pool::new(1, 1);
++        pool.workers.lock().unwrap()[0].alive.store(false, Ordering::SeqCst);
++        assert!(pool.execute(|| {}).is_err());
++        assert_eq!(pool.worker_count(), 0);
++        assert!(pool.workers.lock().unwrap().is_empty());
++    }
++
+     #[test]
+     fn wake_variant_routes_to_exactly_one_pump() {
+         // A per-source counter the dispatch increments.
+diff --git a/docs/implementation/2026-09-12-audit-implementation/PR-T06.md b/docs/implementation/2026-09-12-audit-implementation/PR-T06.md
+new file mode 100644
+index 0000000..d6e1587
+--- /dev/null
++++ b/docs/implementation/2026-09-12-audit-implementation/PR-T06.md
+@@ -0,0 +1,39 @@
++# PR-T06 — Task terminal states
++
++Baseline: `3c7f4a1681d676b38b49192b594578b914222212`
++
++## Scope
++
++- Give background tasks explicit pending, completed, cancelled, and failed outcomes.
++- Make cancellation and owner drop prevent successful publication.
++- Keep worker metrics correct across normal return and unwind, and prune lost workers.
++- Update launch navigation and accessibility consumers to clear terminal work.
++- Preserve the bounded, no-async-runtime architecture and release `panic=abort`.
++
++## Decisions
++
++- `Task::poll` returns `TaskPoll::{Pending, Complete, Cancelled, Failed, Consumed}`. Terminal delivery is one-shot and later observation is explicitly `Consumed`.
++- `Task` remains a single-consumer type through its unsynchronized `Receiver`; cancellation clones share a gate that linearizes cancellation against successful result publication.
++- `Task::cancel` publishes cancellation through the shared cancellation flag and fires the owning wake exactly once, without waiting for queued or gated work. `Drop` signals cancellation without waking an owner that no longer exists.
++- Work panics are converted to sanitized `TaskFailure::Panicked` outcomes when unwinding is available. The worker boundary separately contains task/notification panics and uses guards for running/live metrics. The repository's release `panic = "abort"` remains unchanged.
++- Accessibility reads use the shared bounded fire-and-forget pool, but schedule terminal cleanup outside the protected read. Every failure clears `pending`; cached results include and revalidate document identity and revision.
++- Launch polling changes only the navigation task consumer and clears it on every terminal outcome.
++
++## Changed files
++
++- `crates/app/src/task.rs`
++- `crates/app/src/accessibility.rs`
++- `apps/bareline/src/windows_app/launch.rs`
++- `docs/implementation/2026-09-12-audit-implementation/PR-T06.md`
++
++## Evidence
++
++- `rustc --edition 2024 --test crates/app/src/task.rs ... --test-threads=1`: PASS, 9/9 before the final two pool/disconnection regressions were added; the Cargo run below covers the final suite.
++- `cargo test --offline --locked -p bareline-app task::tests -- --test-threads=1`: PASS, 11 passed, 0 failed, 100 filtered out.
++- `cargo test --offline --locked -p bareline-app accessibility::tests::paged_read_terminal_cleanup_rejects_stale_results -- --exact`: PASS, 1 passed, 0 failed, 110 filtered out. This schedules both a controlled unwind/failure and a stale successful result through the actual shared worker cleanup path.
++- `cargo check --offline --locked -p bareline`: BLOCKED before native consumer compilation by five unrelated save-interface errors in baseline `crates/app/src/workspace.rs`: its `IoRequest` initializers use `target`/`expected` while the dependency artifact visible through the shared target exposes `destination`. No out-of-scope correction or repeat was made.
++- `git diff --check`: PASS (line-ending conversion notices only).
++
++## Unresolved qualification
++
++- Native compilation must be repeated after the concurrent save-interface work is reconciled/integrated. Wider integration and native behavior qualification remain owned by the root coordinator.

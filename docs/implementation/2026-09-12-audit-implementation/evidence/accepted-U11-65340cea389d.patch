@@ -1,0 +1,50 @@
+diff --git a/apps/bareline/src/windows_app/macros.rs b/apps/bareline/src/windows_app/macros.rs
+index 5b77314..8a7fa08 100644
+--- a/apps/bareline/src/windows_app/macros.rs
++++ b/apps/bareline/src/windows_app/macros.rs
+@@ -681,6 +681,7 @@ impl Shell {
+         {
+             self.macros.controller.status = "Profile storage is still being reconciled".into();
+             self.macros.controller.output_open = true;
++            self.request_dock_tab(super::dock::DockTab::Output);
+             return true;
+         }
+         if (matches!(id, "macro.play" | "macro.play_eof" | "macro.play_n")
+diff --git a/crates/app/src/views.rs b/crates/app/src/views.rs
+index 9a6790a..9338179 100644
+--- a/crates/app/src/views.rs
++++ b/crates/app/src/views.rs
+@@ -565,6 +565,9 @@ impl ViewController {
+     }
+     pub fn write_session(&self, manifest: &mut SessionManifest) {
+         self.write_tabs(manifest);
++        let bottom_panel = manifest.layout.bottom_panel.clone();
++        let bottom_panel_collapsed = manifest.layout.bottom_panel_collapsed;
++        let bottom_panel_height_bits = manifest.layout.bottom_panel_height_bits;
+         manifest.layout = SessionLayout {
+             tab_colors: self.tab_colors.clone(),
+             vertical_tabs: self.vertical_tabs,
+@@ -584,6 +587,9 @@ impl ViewController {
+             active_tabs: self.active,
+             sync_horizontal: self.sync_horizontal,
+             sync_vertical: self.sync_vertical,
++            bottom_panel,
++            bottom_panel_collapsed,
++            bottom_panel_height_bits,
+         };
+         let mut seen = std::collections::HashSet::new();
+         manifest.mru = self
+@@ -686,7 +692,13 @@ mod tests {
+                 .collect(),
+             ..Default::default()
+         };
++        manifest.layout.bottom_panel = Some("output".into());
++        manifest.layout.bottom_panel_collapsed = false;
++        manifest.layout.bottom_panel_height_bits = 344.0f32.to_bits();
+         views.write_session(&mut manifest);
++        assert_eq!(manifest.layout.bottom_panel.as_deref(), Some("output"));
++        assert!(!manifest.layout.bottom_panel_collapsed);
++        assert_eq!(f32::from_bits(manifest.layout.bottom_panel_height_bits), 344.0);
+         let restored = ViewController::from_session(&decode(&encode(&manifest).unwrap()).unwrap()).unwrap();
+         assert_eq!(restored.tabs(), views.tabs());
+         assert_eq!(restored.active_tab(1), Some(1));

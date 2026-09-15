@@ -1,0 +1,300 @@
+diff --git a/apps/bareline/src/windows_app/watch.rs b/apps/bareline/src/windows_app/watch.rs
+index 1fadcca..cea8e27 100644
+--- a/apps/bareline/src/windows_app/watch.rs
++++ b/apps/bareline/src/windows_app/watch.rs
+@@ -394,6 +394,7 @@ impl Shell {
+                 if let Some(w) = &mut self.workspace {
+                     if let Some(path) = w.path(self.app.active) {
+                         self.watch.conflicts.remove(path);
++                        self.toasts.resolve(&conflict_notification_id(path));
+                     }
+                     w.message = Some(
+                         "Current buffer kept. Save will still check the disk version; use Save As to preserve both."
+@@ -405,6 +406,65 @@ impl Shell {
+             _ => false,
+         }
+     }
++    fn apply_watch_check_results(&mut self, results: Vec<Checked>) {
++        if let Some(w) = &mut self.workspace {
++            for (path, expected, result) in results {
++                if let Some(index) = (0..w.editors.len()).find(|&i| w.path(i) == Some(path.as_path())) {
++                    if w.editors[index].busy()
++                        || w.fingerprint(index).map(|fingerprint| fingerprint.identity) != Some(expected)
++                    {
++                        self.watch.requested = true;
++                        continue;
++                    }
++                    if result == Ok(false) {
++                        self.watch.conflicts.remove(&path);
++                        self.toasts.resolve(&conflict_notification_id(&path));
++                    }
++                }
++                let index = (0..w.editors.len()).find(|&i| {
++                    w.path(i) == Some(path.as_path()) && w.fingerprint(i).is_some_and(|f| f.identity == expected)
++                });
++                if let Some(index) = index
++                    && !matches!(&w.editors[index], bareline_app::workspace::WorkspaceEditor::Paged(e) if e.follow_status().is_some())
++                    && (result.as_ref().is_err() || result == Ok(true))
++                {
++                    if should_auto_reload(
++                        self.watch.auto_reload_clean,
++                        w.editors[index].dirty(),
++                        w.editors[index].read_only(),
++                        w.editors[index].busy(),
++                        result == Ok(true),
++                        is_network_path(&path),
++                    ) && w.reload(index, false).is_ok()
++                    {
++                        continue;
++                    }
++                    self.watch.conflicts.insert(path.clone());
++                    let document = w.editors[index].snapshot().identity_token();
++                    let name = path.file_name().unwrap_or_default().to_string_lossy();
++                    let message = if w.editors[index].dirty() {
++                        format!("External change detected: {name}. Your edits are preserved.")
++                    } else {
++                        format!("External change or unavailable file: {name}. Current bytes are preserved.")
++                    };
++                    self.toasts.push_typed(
++                        conflict_notification_id(&path),
++                        toast::next_revision(),
++                        bareline_ui::theme::ToastLevel::Warning,
++                        toast::NotificationKind::Outcome,
++                        message,
++                        Some(format!(
++                            "Path: {}\n\nChoose Keep Current Buffer, Save As, or explicitly reload.",
++                            path.display()
++                        )),
++                        Some(document),
++                        toast::NotificationLifetime::Persistent,
++                        Instant::now(),
++                    );
++                }
++            }
++        }
++    }
+     pub(super) fn watch_pump(&mut self, _: &ActiveEventLoop) {
+         // Save acknowledgments can arrive after the filesystem event batch. Recheck
+         // against the new identity even when no further OS event will wake watching.
+@@ -604,64 +664,7 @@ impl Shell {
+             match rx.try_recv() {
+                 Ok(results) => {
+                     self.watch.checking = None;
+-                    if let Some(w) = &mut self.workspace {
+-                        for (path, expected, result) in results {
+-                            if let Some(index) = (0..w.editors.len()).find(|&i| w.path(i) == Some(path.as_path())) {
+-                                if w.editors[index].busy()
+-                                    || w.fingerprint(index)
+-                                        .is_some_and(|fingerprint| fingerprint.identity != expected)
+-                                {
+-                                    self.watch.requested = true;
+-                                    continue;
+-                                }
+-                                if result == Ok(false) {
+-                                    self.watch.conflicts.remove(&path);
+-                                }
+-                            }
+-                            let index = (0..w.editors.len()).find(|&i| {
+-                                w.path(i) == Some(path.as_path())
+-                                    && w.fingerprint(i).is_some_and(|f| f.identity == expected)
+-                            });
+-                            if let Some(index) = index
+-                                && !matches!(&w.editors[index], bareline_app::workspace::WorkspaceEditor::Paged(e) if e.follow_status().is_some())
+-                                && (result.as_ref().is_err() || result == Ok(true))
+-                            {
+-                                if should_auto_reload(
+-                                    self.watch.auto_reload_clean,
+-                                    w.editors[index].dirty(),
+-                                    w.editors[index].read_only(),
+-                                    w.editors[index].busy(),
+-                                    result == Ok(true),
+-                                    is_network_path(&path),
+-                                ) && w.reload(index, false).is_ok()
+-                                {
+-                                    self.watch.conflicts.remove(&path);
+-                                    continue;
+-                                }
+-                                self.watch.conflicts.insert(path.clone());
+-                                let document = w.editors[index].snapshot().identity_token();
+-                                let message = if w.editors[index].dirty() {
+-                                    format!("{} changed outside Bareline. Your edits are preserved.", path.display())
+-                                } else {
+-                                    format!(
+-                                        "{} changed or became unavailable outside Bareline. Current bytes are preserved.",
+-                                        path.display()
+-                                    )
+-                                };
+-                                self.toasts.push_typed(
+-                                    format!("watch-conflict:{}", path.display()),
+-                                    toast::next_revision(),
+-                                    bareline_ui::theme::ToastLevel::Warning,
+-                                    toast::NotificationKind::Outcome,
+-                                    message,
+-                                    Some("Choose Keep Current Buffer, Save As, or explicitly reload.".into()),
+-                                    Some(document),
+-                                    toast::NotificationLifetime::Persistent,
+-                                    Instant::now(),
+-                                );
+-                            }
+-                        }
+-                    }
++                    self.apply_watch_check_results(results);
+                     if let Some(window) = &self.window {
+                         window.request_redraw();
+                     }
+@@ -1016,6 +1019,10 @@ impl Shell {
+ fn should_auto_reload(enabled: bool, dirty: bool, read_only: bool, busy: bool, changed: bool, remote: bool) -> bool {
+     enabled && !dirty && !read_only && !busy && changed && !remote
+ }
++fn conflict_notification_id(path: &Path) -> toast::NotificationId {
++    let encoded = bareline_platform::SerializedPath::from_native(path);
++    toast::NotificationId(format!("watch-conflict:{}", encoded.data))
++}
+ fn launch_follow_index(workspace: &bareline_app::workspace::Workspace, document: (u64, u64)) -> Option<usize> {
+     workspace
+         .editors
+@@ -1045,6 +1052,117 @@ mod tests {
+         assert!(!is_network_path(std::path::Path::new(r"C:\local\log")));
+     }
+     #[test]
++    fn verified_reopen_retires_a_persistent_dirty_period_conflict() {
++        fn settle(workspace: &mut bareline_app::workspace::Workspace) {
++            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
++            while workspace.io_busy() || workspace.editors.iter().any(|editor| editor.busy()) {
++                workspace.pump();
++                assert!(std::time::Instant::now() < deadline, "{:?}", workspace.message);
++                std::thread::yield_now();
++            }
++        }
++
++        let root = std::env::temp_dir().join(format!(
++            "bareline-watch-clean-reopen-{}-{}",
++            std::process::id(),
++            std::time::SystemTime::now()
++                .duration_since(std::time::UNIX_EPOCH)
++                .unwrap()
++                .as_nanos()
++        ));
++        std::fs::create_dir(&root).unwrap();
++        let path = root.join("resident.txt");
++        std::fs::write(&path, b"one two\nthree four\nfive six").unwrap();
++        let mut workspace = bareline_app::workspace::Workspace::new(
++            std::sync::Arc::new(|| {}),
++            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
++        )
++        .unwrap();
++        workspace.open(path);
++        settle(&mut workspace);
++        workspace.editors[0].enqueue(bareline_editor_surface::Input::SetCaret(27, false));
++        workspace.editors[0].enqueue(bareline_editor_surface::Input::Insert("YX".into()));
++        settle(&mut workspace);
++
++        let mut shell = super::super::accessibility::tests::headless_shell();
++        shell.workspace = Some(workspace);
++        let canonical = shell.workspace.as_ref().unwrap().path(0).unwrap().to_owned();
++        let dirty_identity = shell.workspace.as_ref().unwrap().fingerprint(0).unwrap().identity;
++        shell.apply_watch_check_results(vec![(canonical.clone(), dirty_identity, Ok(true))]);
++        assert!(shell.watch.conflicts.contains(&canonical));
++        assert_eq!(shell.toasts.persistent_len(), 1);
++        shell.toasts.draw(
++            &mut bareline_renderer_recording::RecordingBackend::default(),
++            800.0,
++            600.0,
++            Default::default(),
++            &mut Vec::new(),
++        );
++        let warning = shell.toasts.accessibility().remove(0);
++        assert!(warning.text.starts_with("External change detected: resident.txt"));
++        let details = warning.details.unwrap();
++        assert!(details.contains(&canonical.display().to_string()));
++        assert!(details.contains("Choose Keep Current Buffer, Save As, or explicitly reload."));
++
++        let workspace = shell.workspace.as_mut().unwrap();
++        assert!(workspace.save(0, canonical.clone()));
++        settle(workspace);
++        assert!(!workspace.editors[0].dirty());
++        assert_eq!(std::fs::read(&canonical).unwrap(), b"one two\nthree four\nfive sixYX");
++        let closed_document = workspace.editors[0].snapshot().identity_token();
++        workspace
++            .close(0, false, &mut bareline_renderer_recording::RecordingBackend::default())
++            .unwrap();
++        shell.toasts.clear_document(closed_document);
++        assert_eq!(shell.toasts.persistent_len(), 1);
++
++        shell.workspace.as_mut().unwrap().open(canonical.clone());
++        settle(shell.workspace.as_mut().unwrap());
++        let reopened = shell.workspace.as_ref().unwrap();
++        assert!(!reopened.editors[0].dirty());
++        assert_eq!(std::fs::read(&canonical).unwrap(), b"one two\nthree four\nfive sixYX");
++        let reopened_identity = reopened.fingerprint(0).unwrap().identity;
++        let opened = WindowsPathTrustProvider
++            .open_read(&canonical, PathOrigin::User)
++            .unwrap();
++        let actual_identity = WindowsFileSystem.identity(&opened.file).unwrap();
++        assert_eq!(actual_identity, reopened_identity);
++        drop(opened);
++        assert_ne!(dirty_identity, reopened_identity);
++        shell.watch.requested = false;
++        shell.apply_watch_check_results(vec![(canonical.clone(), dirty_identity, Ok(false))]);
++        assert!(shell.watch.requested);
++        assert!(shell.watch.conflicts.contains(&canonical));
++        assert_eq!(shell.toasts.persistent_len(), 1);
++
++        shell.watch.auto_reload_clean = true;
++        shell.apply_watch_check_results(vec![(canonical.clone(), reopened_identity, Ok(true))]);
++        assert_eq!(
++            shell.toasts.persistent_len(),
++            1,
++            "scheduling reload is not terminal verification"
++        );
++        assert!(shell.watch.conflicts.contains(&canonical));
++        settle(shell.workspace.as_mut().unwrap());
++        let verified_identity = shell.workspace.as_ref().unwrap().fingerprint(0).unwrap().identity;
++        let opened = WindowsPathTrustProvider
++            .open_read(&canonical, PathOrigin::User)
++            .unwrap();
++        let actual_identity = WindowsFileSystem.identity(&opened.file).unwrap();
++        assert_eq!(actual_identity, verified_identity);
++        shell.apply_watch_check_results(vec![(
++            canonical.clone(),
++            verified_identity,
++            Ok(actual_identity != verified_identity),
++        )]);
++        assert!(!shell.watch.conflicts.contains(&canonical));
++        assert!(shell.toasts.is_empty());
++
++        drop(opened);
++        drop(shell);
++        std::fs::remove_dir_all(root).unwrap();
++    }
++    #[test]
+     fn launch_follow_resolves_its_workspace_document_when_secondary_is_active() {
+         let root = std::env::temp_dir().join(format!(
+             "bareline-launch-follow-{}-{}",
+diff --git a/docs/implementation/2026-09-12-audit-implementation/PR-U10-R7.md b/docs/implementation/2026-09-12-audit-implementation/PR-U10-R7.md
+new file mode 100644
+index 0000000..fa097d0
+--- /dev/null
++++ b/docs/implementation/2026-09-12-audit-implementation/PR-U10-R7.md
+@@ -0,0 +1,21 @@
++# PR-U10-R7 — Retire verified stale external-change warnings
++
++Baseline: `64e27f10300a798616dbf388b5a05e0eac1ff209`.
++
++## Observed behavior
++
++The native audit saved a 29-byte resident document with SHA-256 `A3990C6DD24462834E429057064471A74B5932D988B9D6C4329EE8D88F280609`, closed its clean clone views, reopened the same path with matching UIA and disk bytes, then saw the dirty-document external-change warning without another write. The warning text is emitted only while an editor is dirty. Retained evidence is `target/qualification/final-native-audit/evidence/r6-resident-false-external-alert-uia.json`, the adjacent `r6-resident-false-external-alert.jpg` screenshot, and `r6-resident-false-external-alert-file.json`. The screenshot also shows that the extended path consumed both visible toast lines, hiding the external-change meaning.
++
++## Cause
++
++Watcher conflicts publish a persistent typed notification keyed by the lossless path. A later identity check returning unchanged removed the internal conflict set entry but did not resolve that notification. Persistent operation ownership correctly let the warning survive document closure; after a clean reopen verified the current disk identity, the already-resolved warning could therefore remain visible. The evidence supports stale notification lifecycle as the cause, rather than a fresh identity mismatch after reopen.
++
++## Correction
++
++Use one lossless serialized path-derived notification identity for publication and resolution. A matching asynchronous identity check or explicit Keep Current Buffer action now resolves both the watcher conflict and its typed notification. Scheduling automatic reload is not treated as success; the warning remains until a later matching check verifies the resulting disk identity. Changed/error results still publish a persistent warning, dirty bytes remain untouched, and stale checks whose expected identity is missing or no longer matches the current document continue to request a fresh check.
++
++The visible warning now leads with the external-change or unavailable-file meaning and the concise filename. Its complete extended display path and all recovery actions remain in notification details.
++
++## Contained evidence plan
++
++A headless regression creates a dirty-period warning, performs a real save, closes the clean document, reopens the same canonical path, and applies the matching identity result. It asserts exact disk bytes, clean reopened state, visible warning meaning and complete path details, persistence across close and pending automatic reload, rejection of a stale pre-save result, then terminal removal only after verified equality. Root owns rebuilt native qualification and the contained command `cargo test -p bareline --bin bareline windows_app::watch::tests::verified_reopen_retires_a_persistent_dirty_period_conflict --offline --locked`.

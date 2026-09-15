@@ -139,9 +139,7 @@ impl FileSource {
             .page
             .checked_mul(self.source.page_size() as u64)
             .filter(|start| *start < self.identity.length)
-            .ok_or_else(|| {
-                std::io::Error::new(std::io::ErrorKind::InvalidInput, "page outside source")
-            })?;
+            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "page outside source"))?;
         self.check()?;
         let end = start + (self.identity.length - start).min(self.source.page_size() as u64);
         if matches!(
@@ -151,13 +149,10 @@ impl FileSource {
             return Ok(());
         }
         self.file.seek(SeekFrom::Start(start))?;
-        let mut buffer = self
-            .publisher
-            .prepare_page(ticket)
-            .map_err(|error| match error {
-                bareline_document::Error::BudgetExceeded => FileError::Budget,
-                _ => FileError::Changed,
-            })?;
+        let mut buffer = self.publisher.prepare_page(ticket).map_err(|error| match error {
+            bareline_document::Error::BudgetExceeded => FileError::Budget,
+            _ => FileError::Changed,
+        })?;
         for chunk in buffer.bytes_mut().chunks_mut(64 * 1024) {
             if let Err(error) = self.cancellation.check() {
                 self.publisher.cancel();
@@ -338,10 +333,7 @@ mod tests {
         let source = producer.source();
         let ticket = pending(&source, 0..4);
         cancellation.cancel();
-        assert!(matches!(
-            producer.read_page(ticket),
-            Err(FileError::Cancelled)
-        ));
+        assert!(matches!(producer.read_page(ticket), Err(FileError::Cancelled)));
         assert!(matches!(
             source.read(0..4),
             SourceRead::Unavailable(Unavailable::Cancelled)

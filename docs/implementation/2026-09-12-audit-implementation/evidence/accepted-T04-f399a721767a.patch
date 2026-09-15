@@ -1,0 +1,24 @@
+diff --git a/crates/platform-windows/src/files.rs b/crates/platform-windows/src/files.rs
+index 2568ac9..266d143 100644
+--- a/crates/platform-windows/src/files.rs
++++ b/crates/platform-windows/src/files.rs
+@@ -1675,7 +1675,8 @@ mod tests {
+                 actual_displaced,
+                 ..
+             }) => (proposed, displaced, actual_displaced),
+-            other => panic!("the actual displaced version must be reported as a conflict: {other:?}"),
++            Err(error) => panic!("the actual displaced version must be reported as a conflict: {error:?}"),
++            Ok(_) => panic!("the actual displaced version must be reported as a conflict: unexpected success"),
+         };
+         assert_eq!(std::fs::read(&target).unwrap(), b"editor bytes");
+         assert_eq!(std::fs::read(&proposed).unwrap(), b"editor bytes");
+@@ -1712,7 +1713,8 @@ mod tests {
+         );
+         let proposed = match result {
+             Err(FileError::ConflictAfterCreate { proposed, .. }) => proposed,
+-            other => panic!("a competing create must fail without replacing either version: {other:?}"),
++            Err(error) => panic!("a competing create must fail without replacing either version: {error:?}"),
++            Ok(_) => panic!("a competing create must fail without replacing either version: unexpected success"),
+         };
+         assert_eq!(std::fs::read(&new_target).unwrap(), b"competing create");
+         assert_eq!(std::fs::read(&proposed).unwrap(), b"editor bytes");

@@ -65,17 +65,11 @@ impl Shell {
                 .map(|id| self.app.commands.lookup(id))
                 .collect();
             if let Some(ids) = ids {
-                let _ = self
-                    .toolbar
-                    .controller
-                    .model
-                    .set_commands(ids, &self.app.commands);
+                let _ = self.toolbar.controller.model.set_commands(ids, &self.app.commands);
                 self.toolbar.applied = Some(settings.toolbar_commands);
             } else {
-                self.settings.controller.error = Some(
-                    "Toolbar contains an unknown command. Correct toolbar.commands in settings."
-                        .into(),
-                );
+                self.settings.controller.error =
+                    Some("Toolbar contains an unknown command. Correct toolbar.commands in settings.".into());
             }
         }
         let context = self.command_context();
@@ -84,12 +78,9 @@ impl Shell {
             .as_ref()
             .map(|w| w.inner_size().to_logical::<f32>(w.scale_factor()).width)
             .unwrap_or(800.);
-        self.toolbar.controller.refresh(
-            &self.app.commands,
-            &context,
-            &self.settings.keymap.keymap,
-            width,
-        );
+        self.toolbar
+            .controller
+            .refresh(&self.app.commands, &context, &self.settings.keymap.keymap, width);
     }
     pub(super) fn toolbar_save(&mut self) {
         let commands: Vec<_> = self
@@ -127,10 +118,11 @@ impl Shell {
                 let visible = !self.settings.effective().toolbar_visible;
                 let scope = self.settings.controller.scope;
                 self.settings.controller.scope = bareline_settings::Scope::User;
-                if let Err(error) = self.settings.controller.edit(
-                    "toolbar.visible",
-                    bareline_settings::SettingValue::Bool(visible),
-                ) {
+                if let Err(error) = self
+                    .settings
+                    .controller
+                    .edit("toolbar.visible", bareline_settings::SettingValue::Bool(visible))
+                {
                     self.settings.controller.error = Some(error);
                 }
                 self.settings.controller.scope = scope;
@@ -150,9 +142,7 @@ impl Shell {
     }
     pub(super) fn toolbar_event(&mut self, el: &ActiveEventLoop, event: &WindowEvent) -> bool {
         // Higher transient layers keep their own input and Escape behavior.
-        if self.palette.open
-            || (self.settings.controller.open && !self.toolbar.controller.customizing)
-        {
+        if self.palette.open || (self.settings.controller.open && !self.toolbar.controller.customizing) {
             return false;
         }
         let mut command = None;
@@ -170,9 +160,7 @@ impl Shell {
                 button: MouseButton::Left,
                 ..
             } => {
-                if self.toolbar.controller.customizing
-                    || self.pointer.y < self.toolbar.controller.height()
-                {
+                if self.toolbar.controller.customizing || self.pointer.y < self.toolbar.controller.height() {
                     command = self
                         .toolbar
                         .controller

@@ -1,0 +1,34 @@
+diff --git a/.github/workflows/clippy-baseline.json b/.github/workflows/clippy-baseline.json
+index 0f0070a..97f89a4 100644
+--- a/.github/workflows/clippy-baseline.json
++++ b/.github/workflows/clippy-baseline.json
+@@ -5883,29 +5883,6 @@
+           "priority": "style-design",
+           "justification": "`AppliedChange::owned` records document identity, before/after revision and content-state fences, direction, edits, and budget as one immutable history change. The parallel before/after fields are deliberate validation evidence; a construction record would only improve ergonomics."
+         },
+-        {
+-          "id": "ac63f4ae544d19c7dc98efe22ea273a5d4dce2c8de88f5cfdf24d7e02c1f925f",
+-          "lint": "clippy::collapsible_if",
+-          "owner_id": "impl Shell",
+-          "item_id": "fn request_close_now",
+-          "source_id": "b288fabec338637e64ffcc7c164c77da1764d8b1f0925893bc10d5b88b296611",
+-          "diagnostic": "this `if` statement can be collapsed",
+-          "context": [
+-            "return;",
+-            "}",
+-            "if let Some(workspace) = &self.workspace {",
+-            "if workspace.io_busy() {",
+-            "self.platform.as_ref().unwrap().pending_operation_notice();"
+-          ],
+-          "evidence": {
+-            "path": "apps\\bareline\\src\\windows_app.rs",
+-            "line": 1956,
+-            "column": 9
+-          },
+-          "count": 2,
+-          "priority": "style-design",
+-          "justification": "impl Shell::fn request_close_now: `workspace.io_busy()` is evaluated only after `let Some(workspace) = &self.workspace` establishes the required value/state; a combined let-chain preserves binding scope and evaluation order, so this is style debt."
+-        },
+         {
+           "id": "acf7b6cb7b603d8c38e3e1ce196aa0fa4450e22fd3bed823f6b248fa0f974470",
+           "lint": "clippy::collapsible_if",

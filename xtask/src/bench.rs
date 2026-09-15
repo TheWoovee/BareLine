@@ -80,10 +80,7 @@ pub fn run(args: &[String]) -> Result<()> {
             "--long-line" => long_line = true,
             "--product" => include_product = true,
             _ => {
-                return Err(
-                    "Usage: perf document [--bytes N] [--samples N] [--long-line] [--product]"
-                        .into(),
-                );
+                return Err("Usage: perf document [--bytes N] [--samples N] [--long-line] [--product]".into());
             }
         }
         i += 1;
@@ -130,11 +127,7 @@ pub fn run(args: &[String]) -> Result<()> {
 fn measure(path: &Path, bytes: u64, samples: usize) -> Result<Vec<serde_json::Value>> {
     let mut records = Vec::new();
     for sample in 0..samples {
-        for resident in if sample % 2 == 0 {
-            [true, false]
-        } else {
-            [false, true]
-        } {
+        for resident in if sample % 2 == 0 { [true, false] } else { [false, true] } {
             // Full resident fills above the current product threshold are intentionally omitted.
             if resident && bytes > 256 * 1024 * 1024 {
                 continue;
@@ -158,17 +151,9 @@ fn measure(path: &Path, bytes: u64, samples: usize) -> Result<Vec<serde_json::Va
                 Cancellation::default(),
             )
             .map_err(|e| format!("open: {e:?}"))?;
-            let snapshot =
-                PagedSnapshot::utf8(file.source(), 0).map_err(|e| format!("snapshot: {e:?}"))?;
+            let snapshot = PagedSnapshot::utf8(file.source(), 0).map_err(|e| format!("snapshot: {e:?}"))?;
             let mut doc = PagedDocument::new(snapshot.clone(), budget.clone(), Budget::new(CACHE));
-            let view = window(
-                &snapshot,
-                &mut file,
-                0,
-                (bytes as usize).min(PAGE),
-                &budget,
-                &mut pages,
-            )?;
+            let view = window(&snapshot, &mut file, 0, (bytes as usize).min(PAGE), &budget, &mut pages)?;
             let viewport_us = started.elapsed().as_micros();
             let viewport_budget_bytes = budget.used();
             let viewport_pages = pages;
@@ -220,10 +205,7 @@ mod tests {
         let path = std::env::temp_dir().join(format!(
             "bareline-perf-fixture-{}-{}",
             std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
         ));
         fixture(&path, PAGE as u64 + 7, false).unwrap();
         let bytes = fs::read(&path).unwrap();

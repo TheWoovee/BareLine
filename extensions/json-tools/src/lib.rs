@@ -44,9 +44,7 @@ impl<R: Read, W: Write> Parser<R, W> {
             .map_err(|e| self.error(&e.to_string()))
     }
     fn take(&mut self) -> Result<u8, Error> {
-        let b = self
-            .peek()?
-            .ok_or_else(|| self.error("unexpected end of JSON"))?;
+        let b = self.peek()?.ok_or_else(|| self.error("unexpected end of JSON"))?;
         self.input.consume(1);
         self.offset += 1;
         if b == b'\n' {
@@ -56,9 +54,7 @@ impl<R: Read, W: Write> Parser<R, W> {
     }
     fn emit(&mut self, bytes: &[u8]) -> Result<(), Error> {
         if !matches!(self.layout, Layout::Validate) {
-            self.out
-                .write_all(bytes)
-                .map_err(|e| self.error(&e.to_string()))?;
+            self.out.write_all(bytes).map_err(|e| self.error(&e.to_string()))?;
         }
         Ok(())
     }
@@ -92,9 +88,7 @@ impl<R: Read, W: Write> Parser<R, W> {
     fn hex(&mut self) -> Result<u16, Error> {
         let mut value = 0;
         for _ in 0..4 {
-            let b = self
-                .peek()?
-                .ok_or_else(|| self.error("truncated Unicode escape"))?;
+            let b = self.peek()?.ok_or_else(|| self.error("truncated Unicode escape"))?;
             let digit = (b as char)
                 .to_digit(16)
                 .ok_or_else(|| self.error("invalid Unicode escape"))?;
@@ -125,9 +119,7 @@ impl<R: Read, W: Write> Parser<R, W> {
                 self.offset += span as u64;
                 continue;
             }
-            let b = self
-                .peek()?
-                .ok_or_else(|| self.error("unterminated string"))?;
+            let b = self.peek()?.ok_or_else(|| self.error("unterminated string"))?;
             match b {
                 b'"' => {
                     self.copy()?;
@@ -322,14 +314,7 @@ mod tests {
                 "{source}"
             );
         }
-        assert!(
-            process(
-                "[".repeat(129).as_bytes(),
-                std::io::sink(),
-                Layout::Validate
-            )
-            .is_err()
-        );
+        assert!(process("[".repeat(129).as_bytes(), std::io::sink(), Layout::Validate).is_err());
     }
     #[test]
     fn tree_is_bounded() {
@@ -369,10 +354,7 @@ mod tests {
 
     #[test]
     fn ascii_spans_preserve_lexemes_across_special_byte_boundaries() {
-        let source = format!(
-            "\"{}\\\"\\\\\\uD83D\\uDE00é🦀\u{7f}tail\"",
-            "a".repeat(65534)
-        );
+        let source = format!("\"{}\\\"\\\\\\uD83D\\uDE00é🦀\u{7f}tail\"", "a".repeat(65534));
         for limit in [1, 2, 3, 7, 65536] {
             for layout in [Layout::Validate, Layout::Minify, Layout::Pretty] {
                 let mut output = Vec::new();
@@ -408,15 +390,8 @@ mod tests {
             let mut source = prefix.as_bytes().to_vec();
             source.extend_from_slice(tail);
             for limit in [1, 7, 65536] {
-                let error = process(
-                    ShortReads {
-                        bytes: &source,
-                        limit,
-                    },
-                    std::io::sink(),
-                    Layout::Validate,
-                )
-                .unwrap_err();
+                let error =
+                    process(ShortReads { bytes: &source, limit }, std::io::sink(), Layout::Validate).unwrap_err();
                 assert_eq!(error.offset, prefix.len() as u64 + advance);
                 assert_eq!(error.line, 2);
                 assert_eq!(error.message, message);
@@ -446,15 +421,9 @@ pub fn run<T: bareline_first_party_common::Transport>(
             stage.finish()
         }
         "ext.json.validate" => {
-            process(
-                Snapshot::new(client.clone()),
-                std::io::sink(),
-                Layout::Validate,
-            )
-            .map_err(|e| format!("TextOffset {}, line {}: {}", e.offset, e.line, e.message))?;
-            client
-                .borrow_mut()
-                .panel("ext.json.tree", "Valid JSON".into())
+            process(Snapshot::new(client.clone()), std::io::sink(), Layout::Validate)
+                .map_err(|e| format!("TextOffset {}, line {}: {}", e.offset, e.line, e.message))?;
+            client.borrow_mut().panel("ext.json.tree", "Valid JSON".into())
         }
         "ext.json.tree" => tree::run(client.clone()),
         _ => Err("unsupported JSON command".into()),

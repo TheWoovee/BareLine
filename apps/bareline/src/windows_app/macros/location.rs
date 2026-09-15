@@ -30,7 +30,7 @@ pub(super) fn paged_line_column(
                     if cancel.load(Ordering::Relaxed) {
                         return Err("Command preparation cancelled".into());
                     }
-                    if !source.resolve_page(ticket)? {
+                    if !source.resolve_page(ticket).map_err(|error| error.to_string())? {
                         return Err("Document is busy; run the command again".into());
                     }
                 }
@@ -68,24 +68,16 @@ impl Shell {
             if let Some(base) = self.macros.output_directory.as_ref() {
                 link.path = base.join(link.path);
             } else {
-                self.macros.controller.status =
-                    "Relative output location has no captured process directory".into();
+                self.macros.controller.status = "Relative output location has no captured process directory".into();
                 return;
             }
         }
         self.macros.location_cancel.store(true, Ordering::Relaxed);
         if let Some(workspace) = &mut self.workspace {
-            if !(0..workspace.editors.len())
-                .any(|index| workspace.path(index) == Some(link.path.as_path()))
-            {
+            if !(0..workspace.editors.len()).any(|index| workspace.path(index) == Some(link.path.as_path())) {
                 workspace.open(link.path.clone());
             }
-            self.macros.controller.status = format!(
-                "Opening {}:{}:{}",
-                link.path.display(),
-                link.line,
-                link.column
-            );
+            self.macros.controller.status = format!("Opening {}:{}:{}", link.path.display(), link.line, link.column);
             self.macros.output_target = Some(link);
         }
     }
@@ -125,8 +117,8 @@ impl Shell {
         let Some(workspace) = &mut self.workspace else {
             return;
         };
-        let Some(index) = (0..workspace.editors.len())
-            .find(|index| workspace.path(*index) == Some(link.path.as_path()))
+        let Some(index) =
+            (0..workspace.editors.len()).find(|index| workspace.path(*index) == Some(link.path.as_path()))
         else {
             if !workspace.path_loading(&link.path) {
                 self.macros.output_target = None;
@@ -144,8 +136,7 @@ impl Shell {
                     let range = editor
                         .snapshot()
                         .line_range(
-                            usize::try_from(link.line.saturating_sub(1))
-                                .map_err(|_| "Line number is too large")?,
+                            usize::try_from(link.line.saturating_sub(1)).map_err(|_| "Line number is too large")?,
                         )
                         .map_err(|_| "Output line is outside the document")?;
                     let mut end = range.start.0.saturating_add(1024 * 1024).min(range.end.0);
@@ -224,7 +215,7 @@ fn locate_paged(
                     if cancel.load(Ordering::Relaxed) {
                         return Err("Output navigation cancelled".into());
                     }
-                    if !source.resolve_page(ticket)? {
+                    if !source.resolve_page(ticket).map_err(|error| error.to_string())? {
                         return Err("Document is busy; activate the output location again".into());
                     }
                 }

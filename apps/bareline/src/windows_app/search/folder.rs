@@ -22,6 +22,8 @@ pub(super) struct FolderControls {
     count_beyond_limit: bool,
     error: Option<String>,
     pub ime_caret: Option<Rect>,
+    accessibility_revision: std::cell::Cell<u64>,
+    accessibility_fingerprint: std::cell::Cell<u64>,
 }
 impl Default for FolderControls {
     fn default() -> Self {
@@ -38,6 +40,8 @@ impl Default for FolderControls {
             count_beyond_limit: false,
             error: None,
             ime_caret: None,
+            accessibility_revision: std::cell::Cell::new(0),
+            accessibility_fingerprint: std::cell::Cell::new(0),
         }
     }
 }
@@ -46,11 +50,7 @@ fn filters(value: &str, extensions: bool) -> Result<Vec<String>, String> {
         return Err("Filters must fit within 4096 bytes".into());
     }
     let mut result = Vec::new();
-    for entry in value
-        .split([',', ';'])
-        .map(str::trim)
-        .filter(|v| !v.is_empty())
-    {
+    for entry in value.split([',', ';']).map(str::trim).filter(|v| !v.is_empty()) {
         let entry = if extensions {
             entry
                 .strip_prefix("*.")
@@ -67,19 +67,12 @@ fn filters(value: &str, extensions: bool) -> Result<Vec<String>, String> {
         }
         if entry.is_empty()
             || entry.len() > 128
-            || entry
-                .chars()
-                .any(|c| c.is_control() || "/\\:*?\"<>|".contains(c))
+            || entry.chars().any(|c| c.is_control() || "/\\:*?\"<>|".contains(c))
             || (!extensions && matches!(entry, "." | ".."))
         {
-            return Err(
-                "Use comma-separated exact names; extension filters also accept *.rs".into(),
-            );
+            return Err("Use comma-separated exact names; extension filters also accept *.rs".into());
         }
-        if !result
-            .iter()
-            .any(|v: &String| v.eq_ignore_ascii_case(entry))
-        {
+        if !result.iter().any(|v: &String| v.eq_ignore_ascii_case(entry)) {
             result.push(entry.to_owned());
         }
         if result.len() > 64 {
@@ -98,6 +91,12 @@ impl FolderControls {
         self.focus = index;
     }
     pub fn show(&mut self, root: PathBuf, query: bareline_search::SearchQuery) {
+        self.accessibility_revision.set(
+            self.accessibility_revision
+                .get()
+                .checked_add(1)
+                .expect("folder search accessibility revision exhausted"),
+        );
         self.root = Some(root);
         self.fields[0].select_all();
         self.fields[0].insert(&query.pattern);
@@ -106,7 +105,7 @@ impl FolderControls {
         self.focus = 0;
         self.error = None;
     }
-    fn close(&mut self) {
+    pub(in crate::windows_app) fn close(&mut self) {
         self.open = false;
         for field in &mut self.fields {
             field.cancel();
@@ -145,21 +144,12 @@ impl FolderControls {
         ops.push(DrawOp::Fill(panel, theme.elevated));
         ops.push(DrawOp::Stroke(panel, theme.interactive, 1.0));
         ops.push(DrawOp::PushClip(panel));
-        text(
-            ops,
-            16.0,
-            panel.y + 10.0,
-            "Find in Folder",
-            16.0,
-            theme.text,
-        );
+        text(ops, 16.0, panel.y + 10.0, "Find in Folder", 16.0, theme.text);
         text(
             ops,
             16.0,
             panel.y + 34.0,
-            self.root
-                .as_ref()
-                .map_or_else(String::new, |p| p.display().to_string()),
+            self.root.as_ref().map_or_else(String::new, |p| p.display().to_string()),
             12.0,
             theme.muted,
         );
@@ -174,13 +164,7 @@ impl FolderControls {
             let y = panel.y + 58.0 + index as f32 * 52.0;
             text(ops, 16.0, y, label, 12.0, theme.muted);
             self.bounds[index] = rect(16.0, y + 17.0, (width - 32.0).max(1.0), 30.0);
-            match self.fields[index].draw_with_theme(
-                renderer,
-                self.bounds[index],
-                self.focus == index,
-                theme,
-                ops,
-            ) {
+            match self.fields[index].draw_with_theme(renderer, self.bounds[index], self.focus == index, theme, ops) {
                 Ok(caret) => {
                     if self.focus == index {
                         self.ime_caret = Some(caret);
@@ -294,6 +278,15 @@ impl FolderControls {
     }
 }
 impl Shell {
+    #[cfg(test)]
+    pub(in crate::windows_app) fn search_folder_accessibility_test_setup(&mut self, focus: usize) {
+        self.search.folder.show(
+            PathBuf::from("accessibility-folder"),
+            bareline_search::SearchQuery::literal("needle"),
+        );
+        self.search.folder.focus_control(focus);
+    }
+
     pub(in crate::windows_app) fn search_folder_open(&self) -> bool {
         self.search.folder.open
     }
@@ -321,6 +314,48 @@ impl Shell {
             _ => {}
         }
     }
+    pub(in crate::windows_app) fn search_folder_field(&mut self) -> Option<&mut TextField> {
+        if self.search.folder.open && self.search.folder.focus < 3 {
+            Some(&mut self.search.folder.fields[self.search.folder.focus])
+        } else {
+            None
+        }
+    }
+    pub(in crate::windows_app) fn search_folder_accessibility_text_field(&self) -> Option<(u64, u64, &TextField)> {
+        (self.search.folder.open && self.search.folder.focus < 3).then(|| {
+            let index = self.search.folder.focus;
+            let field = &self.search.folder.fields[index];
+            use std::hash::{Hash, Hasher};
+            let mut state = std::collections::hash_map::DefaultHasher::new();
+            index.hash(&mut state);
+            field.value().hash(&mut state);
+            field.selection().hash(&mut state);
+            field.composition_text().hash(&mut state);
+            let fingerprint = state.finish();
+            if fingerprint != self.search.folder.accessibility_fingerprint.get() {
+                self.search.folder.accessibility_fingerprint.set(fingerprint);
+                self.search.folder.accessibility_revision.set(
+                    self.search
+                        .folder
+                        .accessibility_revision
+                        .get()
+                        .checked_add(1)
+                        .expect("folder search accessibility revision exhausted"),
+                );
+            }
+            (
+                BASE + index as u64,
+                self.search.folder.accessibility_revision.get(),
+                field,
+            )
+        })
+    }
+    pub(in crate::windows_app) fn search_folder_accessibility_focus(&self) -> Option<u64> {
+        self.search
+            .folder
+            .open
+            .then_some(BASE + self.search.folder.focus as u64)
+    }
     pub(in crate::windows_app) fn search_folder_event(&mut self, event: &WindowEvent) -> bool {
         if !self.search.folder.open || self.palette.open {
             return false;
@@ -338,13 +373,7 @@ impl Shell {
                 button: MouseButton::Left,
                 ..
             } => {
-                if let Some(index) = self
-                    .search
-                    .folder
-                    .bounds
-                    .iter()
-                    .position(|r| r.contains(self.pointer))
-                {
+                if let Some(index) = self.search.folder.bounds.iter().position(|r| r.contains(self.pointer)) {
                     self.search.folder.focus_control(index);
                     if index < 3 {
                         if let Some(renderer) = &self.renderer {
@@ -362,9 +391,9 @@ impl Shell {
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
                 let focus = self.search.folder.focus;
                 if event.logical_key == Key::Named(NamedKey::Tab) {
-                    self.search.folder.focus_control(
-                        (focus + if self.modifiers.shift_key() { 6 } else { 1 }) % 7,
-                    );
+                    self.search
+                        .folder
+                        .focus_control((focus + if self.modifiers.shift_key() { 6 } else { 1 }) % 7);
                 } else if event.logical_key == Key::Named(NamedKey::Escape) {
                     if focus < 3 && self.search.folder.fields[focus].composing() {
                         self.search.folder.fields[focus].cancel();
@@ -386,18 +415,13 @@ impl Shell {
                                     "c" | "x" => {
                                         if !field.selected().is_empty() {
                                             if let Some(platform) = &self.platform {
-                                                match platform
-                                                    .set_clipboard_text(field.selected())
-                                                {
+                                                match platform.set_clipboard_text(field.selected()) {
                                                     Ok(()) => {
                                                         if key.eq_ignore_ascii_case("x") {
                                                             field.insert("");
                                                         }
                                                     }
-                                                    Err(error) => {
-                                                        self.search.folder.error =
-                                                            Some(error.to_string())
-                                                    }
+                                                    Err(error) => self.search.folder.error = Some(error.to_string()),
                                                 }
                                             }
                                         }
@@ -408,10 +432,7 @@ impl Shell {
                                                 Ok(value) => {
                                                     field.insert(&value);
                                                 }
-                                                Err(error) => {
-                                                    self.search.folder.error =
-                                                        Some(error.to_string())
-                                                }
+                                                Err(error) => self.search.folder.error = Some(error.to_string()),
                                             }
                                         }
                                     }
@@ -450,9 +471,7 @@ impl Shell {
                 if focus < 3 {
                     let field = &mut self.search.folder.fields[focus];
                     match ime {
-                        winit::event::Ime::Preedit(value, cursor) => {
-                            field.preedit(value.clone(), *cursor)
-                        }
+                        winit::event::Ime::Preedit(value, cursor) => field.preedit(value.clone(), *cursor),
                         winit::event::Ime::Commit(value) => {
                             field.commit(value);
                         }
@@ -471,9 +490,7 @@ impl Shell {
                 self.modifiers = modifiers.state();
                 return false;
             }
-            WindowEvent::MouseInput { .. }
-            | WindowEvent::MouseWheel { .. }
-            | WindowEvent::KeyboardInput { .. } => {}
+            WindowEvent::MouseInput { .. } | WindowEvent::MouseWheel { .. } | WindowEvent::KeyboardInput { .. } => {}
             _ => return false,
         }
         if let Some(window) = &self.window {

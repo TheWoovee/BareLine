@@ -5,3 +5,17 @@
 *.pdb
 /tests/e2e/results/
 __pycache__/
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+/graft/
+
+# Local packaging output and agent/tool state — regenerable, not committed.
+/dist/
+/.claude/
+/.cursor/
+/.gemini/
+/.grok/
+/.mcp.json
+/opencode.json
+/GEMINI.md
+*.cdx.json

@@ -3,6 +3,8 @@
 //! navigation anchors, not an AST or claims about complete semantic scope.
 use bareline_document::{DocumentSnapshot, TextOffset};
 use bareline_renderer::{DrawOp, Point, Rect};
+pub use bareline_syntax::outline::LexicalSymbol as Symbol;
+use bareline_syntax::outline::{rust_symbols, toml_symbols};
 use bareline_syntax::{Cancellation, Language, MAX_REQUEST_BYTES, lex};
 use bareline_ui::{
     controls::{Key, visible_rows},
@@ -15,8 +17,6 @@ use std::{
         mpsc::{self, Receiver},
     },
 };
-pub use bareline_syntax::outline::LexicalSymbol as Symbol;
-use bareline_syntax::outline::{rust_symbols, toml_symbols};
 struct Batch {
     symbols: Vec<Symbol>,
     finished: bool,
@@ -76,7 +76,9 @@ impl OutlinePanel {
         self.definition = Some(Arc::new(definition));
         self.definition_extension = extension.to_ascii_lowercase();
     }
-    pub fn definition(&self) -> Option<&bareline_syntax::outline::Definition> { self.definition.as_deref() }
+    pub fn definition(&self) -> Option<&bareline_syntax::outline::Definition> {
+        self.definition.as_deref()
+    }
     pub fn clear(&mut self) {
         self.generation = self.generation.wrapping_add(1);
         self.cancel.cancel();
@@ -102,13 +104,20 @@ impl OutlinePanel {
             self.source = None;
             return;
         }
-        let ext = path.and_then(Path::extension).and_then(|s| s.to_str()).unwrap_or("").to_ascii_lowercase();
-        if self.active_extension == ext && self.title == title && self.source.as_ref().is_some_and(|old| {
-            old.same_document(source)
-                && old.revision == source.revision
-                && old.len() == source.len()
-                && old.is_complete() == source.is_complete()
-        }) {
+        let ext = path
+            .and_then(Path::extension)
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if self.active_extension == ext
+            && self.title == title
+            && self.source.as_ref().is_some_and(|old| {
+                old.same_document(source)
+                    && old.revision == source.revision
+                    && old.len() == source.len()
+                    && old.is_complete() == source.is_complete()
+            })
+        {
             return;
         }
         self.cancel.cancel();
@@ -122,7 +131,19 @@ impl OutlinePanel {
         self.source = Some(source.clone());
         self.title = title.into();
         self.active_extension = ext.clone();
-        let definition = self.definition.clone().filter(|_| ext == self.definition_extension);
+        let definition = self
+            .definition
+            .clone()
+            .filter(|_| ext == self.definition_extension)
+            .or_else(|| {
+                // .rs and .toml keep their higher-fidelity native lexer paths below;
+                // every other known language uses a built-in regex definition.
+                if ext == "rs" || ext == "toml" {
+                    None
+                } else {
+                    bareline_syntax::outline::builtin_definition(&ext).map(Arc::new)
+                }
+            });
         if ext != "rs" && ext != "toml" && definition.is_none() {
             self.status = "No outline provider for this language".into();
             return;
@@ -134,117 +155,123 @@ impl OutlinePanel {
         let search_cancel = self.search_cancel.clone();
         let (tx, rx) = mpsc::sync_channel(1);
         self.status = "Indexing…".into();
-        match std::thread::Builder::new()
-            .name("outline".into())
-            .spawn(move || {
-                let mut start = 0;
-                let mut checkpoint = None;
-                let mut total = 0;
-                let mut toml_quote = None;
-                while start < source.len() && !cancel.is_cancelled() {
-                    let mut end = source.len().min(start + MAX_REQUEST_BYTES);
-                    while end > start && !source.is_boundary(TextOffset(end)) {
-                        end -= 1;
-                    }
-                    let Ok(mut text) =
-                        source.read(TextOffset(start)..TextOffset(end), MAX_REQUEST_BYTES)
-                    else {
+        match std::thread::Builder::new().name("outline".into()).spawn(move || {
+            let mut start = 0;
+            let mut checkpoint = None;
+            let mut total = 0;
+            let mut toml_quote = None;
+            while start < source.len() && !cancel.is_cancelled() {
+                let mut end = source.len().min(start + MAX_REQUEST_BYTES);
+                while end > start && !source.is_boundary(TextOffset(end)) {
+                    end -= 1;
+                }
+                let Ok(mut text) = source.read(TextOffset(start)..TextOffset(end), MAX_REQUEST_BYTES) else {
+                    let _ = tx.send(Batch {
+                        symbols: vec![],
+                        finished: true,
+                        status: "Outline unavailable: source changed or bytes pending".into(),
+                    });
+                    notify();
+                    return;
+                };
+                if end < source.len() {
+                    let Some(newline) = text.rfind('\n') else {
                         let _ = tx.send(Batch {
                             symbols: vec![],
                             finished: true,
-                            status: "Outline unavailable: source changed or bytes pending".into(),
+                            status: "Partial outline: line exceeds indexing budget".into(),
                         });
                         notify();
                         return;
                     };
-                    if end < source.len() {
-                        let Some(newline) = text.rfind('\n') else {
-                            let _ = tx.send(Batch {
-                                symbols: vec![],
-                                finished: true,
-                                status: "Partial outline: line exceeds indexing budget".into(),
-                            });
-                            notify();
-                            return;
-                        };
-                        text.truncate(newline + 1);
-                        end = start + text.len();
-                    }
-                    let symbols = if let Some(definition) = &definition {
-                        let result = bareline_document::Document::from_utf8(&text, bareline_document::Budget::new(MAX_REQUEST_BYTES * 4), bareline_document::Budget::new(4096))
-                            .map_err(|e| format!("{e:?}"))
-                            .and_then(|doc| definition.extract(&doc.snapshot(), &search_cancel));
-                        match result {
-                            Ok(projection) => projection.symbols.into_iter().map(|s| Symbol {
+                    text.truncate(newline + 1);
+                    end = start + text.len();
+                }
+                let symbols = if let Some(definition) = &definition {
+                    let result = bareline_document::Document::from_utf8(
+                        &text,
+                        bareline_document::Budget::new(MAX_REQUEST_BYTES * 4),
+                        bareline_document::Budget::new(4096),
+                    )
+                    .map_err(|e| format!("{e:?}"))
+                    .and_then(|doc| definition.extract(&doc.snapshot(), &search_cancel));
+                    match result {
+                        Ok(projection) => projection
+                            .symbols
+                            .into_iter()
+                            .map(|s| Symbol {
                                 name: s.name,
                                 kind: if s.kind == "class" { "class" } else { "fn" },
                                 offset: TextOffset(start + s.name_range.start.0),
                                 end: TextOffset(start + s.range.end.0),
                                 depth: s.depth,
-                            }).collect(),
-                            Err(error) => {
-                                let _ = tx.send(Batch { symbols: vec![], finished: true, status: format!("Partial outline: {error}") });
-                                notify(); return;
-                            }
-                        }
-                    } else if ext == "rs" {
-                        let Ok(result) = lex(
-                            source.clone(),
-                            Language::Rust,
-                            TextOffset(start)..TextOffset(end),
-                            checkpoint.as_ref(),
-                            &cancel,
-                        ) else {
+                            })
+                            .collect(),
+                        Err(error) => {
+                            let _ = tx.send(Batch {
+                                symbols: vec![],
+                                finished: true,
+                                status: format!("Partial outline: {error}"),
+                            });
+                            notify();
                             return;
-                        };
-                        let found = rust_symbols(&text, start, &result.spans);
-                        checkpoint = result.checkpoint;
-                        found
-                    } else {
-                        toml_symbols(&text, start, &mut toml_quote)
-                    };
-                    let symbols: Vec<_> = symbols
-                        .into_iter()
-                        .take(8192usize.saturating_sub(total))
-                        .collect();
-                    total += symbols.len();
-                    start = end;
-                    let finished = start == source.len() || total >= 8192;
-                    let status = if total >= 8192 {
-                        "Partial outline: symbol budget reached"
-                    } else if finished && definition.is_some() {
-                        "Imported outline · bounded expression ranges"
-                    } else if finished && source.is_complete() {
-                        ""
-                    } else if finished {
-                        "Partial outline: document loading"
-                    } else {
-                        "Indexing…"
-                    };
-                    if tx
-                        .send(Batch {
-                            symbols,
-                            finished,
-                            status: status.into(),
-                        })
-                        .is_err()
-                    {
-                        return;
+                        }
                     }
-                    notify();
-                    if finished {
+                } else if ext == "rs" {
+                    let Ok(result) = lex(
+                        source.clone(),
+                        Language::Rust,
+                        TextOffset(start)..TextOffset(end),
+                        checkpoint.as_ref(),
+                        &cancel,
+                    ) else {
                         return;
-                    }
+                    };
+                    let found = rust_symbols(&text, start, &result.spans);
+                    checkpoint = result.checkpoint;
+                    found
+                } else {
+                    toml_symbols(&text, start, &mut toml_quote)
+                };
+                let symbols: Vec<_> = symbols.into_iter().take(8192usize.saturating_sub(total)).collect();
+                total += symbols.len();
+                start = end;
+                let finished = start == source.len() || total >= 8192;
+                let status = if total >= 8192 {
+                    "Partial outline: symbol budget reached"
+                } else if finished && definition.is_some() {
+                    "Imported outline · bounded expression ranges"
+                } else if finished && source.is_complete() {
+                    ""
+                } else if finished {
+                    "Partial outline: document loading"
+                } else {
+                    "Indexing…"
+                };
+                if tx
+                    .send(Batch {
+                        symbols,
+                        finished,
+                        status: status.into(),
+                    })
+                    .is_err()
+                {
+                    return;
                 }
-                if source.is_empty() {
-                    let _ = tx.send(Batch {
-                        symbols: vec![],
-                        finished: true,
-                        status: String::new(),
-                    });
-                    notify();
+                notify();
+                if finished {
+                    return;
                 }
-            }) {
+            }
+            if source.is_empty() {
+                let _ = tx.send(Batch {
+                    symbols: vec![],
+                    finished: true,
+                    status: String::new(),
+                });
+                notify();
+            }
+        }) {
             Ok(_) => self.pending = Some(rx),
             Err(e) => self.status = e.to_string(),
         }
@@ -286,11 +313,7 @@ impl OutlinePanel {
         self.selected = self.selected.min(self.filtered.len().saturating_sub(1));
     }
     pub fn follow_caret(&mut self, caret: TextOffset) {
-        if let Some(index) = self
-            .filtered
-            .iter()
-            .rposition(|i| self.symbols[*i].offset <= caret)
-        {
+        if let Some(index) = self.filtered.iter().rposition(|i| self.symbols[*i].offset <= caret) {
             self.selected = index;
             let top = index as f64 * 28.0;
             if top < self.offset {
@@ -315,9 +338,7 @@ impl OutlinePanel {
     pub fn key(&mut self, key: Key, current: &DocumentSnapshot) -> Option<TextOffset> {
         match key {
             Key::Up => self.selected = self.selected.saturating_sub(1),
-            Key::Down => {
-                self.selected = (self.selected + 1).min(self.filtered.len().saturating_sub(1))
-            }
+            Key::Down => self.selected = (self.selected + 1).min(self.filtered.len().saturating_sub(1)),
             Key::Home => self.selected = 0,
             Key::End => self.selected = self.filtered.len().saturating_sub(1),
             Key::Enter => return self.activate(current),
@@ -338,30 +359,82 @@ impl OutlinePanel {
         self.selected = ((point.y - self.bounds.y) as f64 / 28.0 + self.offset / 28.0) as usize;
         self.activate(current)
     }
-    pub fn semantics(&self, parent: bareline_ui::ViewId, prefix: u64, focused: bool) -> Vec<bareline_ui::semantics::SemanticEntry> {
-        use bareline_ui::{controls::ControlState, widgets::{Semantics, SemanticRole, SemanticAction}};
-        if !self.open { return Vec::new(); }
-        visible_rows(self.offset, self.bounds.height as f64, 28.0, Some(self.filtered.len()), 0).take(4096).map(|row| {
+    pub fn semantics(
+        &self,
+        parent: bareline_ui::ViewId,
+        prefix: u64,
+        focused: bool,
+    ) -> Vec<bareline_ui::semantics::SemanticEntry> {
+        use bareline_ui::{
+            controls::ControlState,
+            widgets::{SemanticAction, SemanticRole, Semantics},
+        };
+        if !self.open {
+            return Vec::new();
+        }
+        visible_rows(
+            self.offset,
+            self.bounds.height as f64,
+            28.0,
+            Some(self.filtered.len()),
+            0,
+        )
+        .take(4096)
+        .map(|row| {
             let index = self.filtered[row];
             let symbol = &self.symbols[index];
-            let mut node = Semantics::new(bareline_ui::ViewId(prefix + 65536 + self.generation * 8192 + index as u64), SemanticRole::TreeItem,
-                &format!("{} {}", symbol.kind, symbol.name), "outline.navigate", Rect { y: self.bounds.y + row as f32 * 28.0 - self.offset as f32, height: 28.0, ..self.bounds },
-                ControlState { focused: focused && row == self.selected, ..Default::default() }).action(SemanticAction::Focus).action(SemanticAction::Invoke);
+            let mut node = Semantics::new(
+                bareline_ui::ViewId(prefix + 65536 + self.generation * 8192 + index as u64),
+                SemanticRole::TreeItem,
+                &format!("{} {}", symbol.kind, symbol.name),
+                "outline.navigate",
+                Rect {
+                    y: self.bounds.y + row as f32 * 28.0 - self.offset as f32,
+                    height: 28.0,
+                    ..self.bounds
+                },
+                ControlState {
+                    focused: focused && row == self.selected,
+                    ..Default::default()
+                },
+            )
+            .action(SemanticAction::Focus)
+            .action(SemanticAction::Invoke);
             node.selected = row == self.selected;
-            node.value = Some(format!("bytes {}–{}, nesting {}", symbol.offset.0, symbol.end.0, symbol.depth));
+            node.value = Some(format!(
+                "bytes {}–{}, nesting {}",
+                symbol.offset.0, symbol.end.0, symbol.depth
+            ));
             bareline_ui::semantics::SemanticEntry { parent, node }
-        }).collect()
+        })
+        .collect()
     }
-    pub fn accessibility_action(&mut self, id: u64, prefix: u64, invoke: bool, current: &DocumentSnapshot) -> Option<TextOffset> {
-        let row = visible_rows(self.offset, self.bounds.height as f64, 28.0, Some(self.filtered.len()), 0).find(|&row| prefix + 65536 + self.generation * 8192 + self.filtered[row] as u64 == id)?;
+    pub fn accessibility_action(
+        &mut self,
+        id: u64,
+        prefix: u64,
+        invoke: bool,
+        current: &DocumentSnapshot,
+    ) -> Option<TextOffset> {
+        let row = visible_rows(
+            self.offset,
+            self.bounds.height as f64,
+            28.0,
+            Some(self.filtered.len()),
+            0,
+        )
+        .find(|&row| prefix + 65536 + self.generation * 8192 + self.filtered[row] as u64 == id)?;
         self.selected = row;
         if invoke { self.activate(current) } else { None }
     }
     pub fn draw(&mut self, bounds: Rect, ops: &mut Vec<DrawOp>) {
+        self.draw_with_theme(bounds, Theme::default(), ops);
+    }
+    pub fn draw_with_theme(&mut self, bounds: Rect, theme: Theme, ops: &mut Vec<DrawOp>) {
         if !self.open {
             return;
         }
-        let theme = Theme::default();
+
         ops.push(DrawOp::Fill(bounds, theme.surface));
         ops.push(DrawOp::PushClip(bounds));
         ops.push(DrawOp::Text {
@@ -429,19 +502,41 @@ mod tests {
     use bareline_document::{Budget, Document};
     #[test]
     fn document_switch_discards_old_batches_and_semantic_actions() {
-        let old = Document::from_utf8("fn first() {}", Budget::new(4096), Budget::new(4096)).unwrap().snapshot();
-        let new = Document::from_utf8("[second]", Budget::new(4096), Budget::new(4096)).unwrap().snapshot();
+        let old = Document::from_utf8("fn first() {}", Budget::new(4096), Budget::new(4096))
+            .unwrap()
+            .snapshot();
+        let new = Document::from_utf8("[second]", Budget::new(4096), Budget::new(4096))
+            .unwrap()
+            .snapshot();
         let mut panel = OutlinePanel::default();
         panel.open = true;
         panel.source = Some(old.clone());
-        panel.symbols = vec![Symbol { name: "first".into(), kind: "fn", offset: TextOffset(3), end: TextOffset(13), depth: 0 }];
+        panel.symbols = vec![Symbol {
+            name: "first".into(),
+            kind: "fn",
+            offset: TextOffset(3),
+            end: TextOffset(13),
+            depth: 0,
+        }];
         panel.rebuild();
-        panel.bounds = Rect { x: 0.0, y: 0.0, width: 240.0, height: 280.0 };
+        panel.bounds = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 240.0,
+            height: 280.0,
+        };
         let stale_id = panel.semantics(bareline_ui::ViewId(1), 100, true)[0].node.id.0;
         let (tx, rx) = mpsc::sync_channel(1);
         panel.pending = Some(rx);
         panel.clear();
-        assert!(tx.send(Batch { symbols: vec![], finished: true, status: "old".into() }).is_err());
+        assert!(
+            tx.send(Batch {
+                symbols: vec![],
+                finished: true,
+                status: "old".into()
+            })
+            .is_err()
+        );
         panel.source = Some(new.clone());
         panel.symbols = toml_symbols("[second]", 0, &mut None);
         panel.rebuild();
@@ -451,13 +546,9 @@ mod tests {
     }
     #[test]
     fn lexical_outline_ignores_comment_functions_and_rejects_other_document() {
-        let source = Document::from_utf8(
-            "// fn fake() {}\nfn real() {}\n",
-            Budget::new(4096),
-            Budget::new(4096),
-        )
-        .unwrap()
-        .snapshot();
+        let source = Document::from_utf8("// fn fake() {}\nfn real() {}\n", Budget::new(4096), Budget::new(4096))
+            .unwrap()
+            .snapshot();
         let syntax = lex(
             source.clone(),
             Language::Rust,
@@ -466,9 +557,7 @@ mod tests {
             &Cancellation::default(),
         )
         .unwrap();
-        let text = source
-            .read(TextOffset(0)..TextOffset(source.len()), 4096)
-            .unwrap();
+        let text = source.read(TextOffset(0)..TextOffset(source.len()), 4096).unwrap();
         let symbols = rust_symbols(&text, 0, &syntax.spans);
         assert_eq!(symbols.len(), 1);
         assert_eq!(symbols[0].name, "real");

@@ -11,11 +11,7 @@ pub struct AnchoredPanel {
 }
 impl AnchoredPanel {
     pub fn event(&mut self, event: UiEvent) -> Option<ControlAction> {
-        if self.sticky {
-            None
-        } else {
-            self.popover.event(event)
-        }
+        if self.sticky { None } else { self.popover.event(event) }
     }
     pub fn dismiss(&mut self) -> Option<ControlAction> {
         if !self.popover.open {
@@ -27,12 +23,7 @@ impl AnchoredPanel {
     pub fn paint(&self, theme: Theme, ops: &mut Vec<DrawOp>) {
         if self.popover.open {
             ops.push(DrawOp::FillRounded(self.popover.bounds, theme.surface, 6.0));
-            ops.push(DrawOp::StrokeRounded(
-                self.popover.bounds,
-                theme.border,
-                6.0,
-                1.0,
-            ));
+            ops.push(DrawOp::StrokeRounded(self.popover.bounds, theme.border, 6.0, 1.0));
         }
     }
     pub fn semantics(&self, id: ViewId, name: &str) -> Option<Semantics> {
@@ -71,40 +62,28 @@ impl Tooltip {
     pub fn visible(&self, now_ms: u64) -> bool {
         self.show_at.is_some_and(|at| now_ms >= at)
     }
-    pub fn paint(
-        &self,
-        now_ms: u64,
-        bounds: Rect,
-        label: &str,
-        theme: Theme,
-        ops: &mut Vec<DrawOp>,
-    ) {
+    pub fn paint(&self, now_ms: u64, bounds: Rect, label: &str, theme: Theme, ops: &mut Vec<DrawOp>) {
         if !self.visible(now_ms) {
             return;
         }
         ops.push(DrawOp::FillRounded(bounds, theme.surface, 4.0));
         ops.push(DrawOp::StrokeRounded(bounds, theme.border, 4.0, 1.0));
         ops.push(DrawOp::PushClip(bounds));
-        text(ops, bounds.x + 8.0, bounds.y + 6.0, label, 13.0, theme.text);
+        for (line, label) in label.lines().enumerate() {
+            text(
+                ops,
+                bounds.x + 8.0,
+                bounds.y + 6.0 + line as f32 * 18.0,
+                label,
+                13.0,
+                theme.text,
+            );
+        }
         ops.push(DrawOp::PopClip);
     }
-    pub fn semantics(
-        &self,
-        now_ms: u64,
-        id: ViewId,
-        name: &str,
-        bounds: Rect,
-    ) -> Option<Semantics> {
-        self.visible(now_ms).then(|| {
-            Semantics::new(
-                id,
-                SemanticRole::Tooltip,
-                name,
-                "",
-                bounds,
-                ControlState::default(),
-            )
-        })
+    pub fn semantics(&self, now_ms: u64, id: ViewId, name: &str, bounds: Rect) -> Option<Semantics> {
+        self.visible(now_ms)
+            .then(|| Semantics::new(id, SemanticRole::Tooltip, name, "", bounds, ControlState::default()))
     }
 }
 
@@ -126,12 +105,7 @@ impl Banner {
             close: crate::controls::Button {
                 id: close_id,
                 label: "×".into(),
-                bounds: rect(
-                    bounds.x + bounds.width - 28.0,
-                    bounds.y,
-                    28.0,
-                    bounds.height,
-                ),
+                bounds: rect(bounds.x + bounds.width - 28.0, bounds.y, 28.0, bounds.height),
                 toggle: false,
                 state: ControlState::default(),
             },
@@ -181,14 +155,7 @@ impl Banner {
             28.0,
             self.bounds.height,
         );
-        text(
-            ops,
-            close_bounds.x + 8.0,
-            close_bounds.y + 6.0,
-            "×",
-            13.0,
-            theme.muted,
-        );
+        text(ops, close_bounds.x + 8.0, close_bounds.y + 6.0, "×", 13.0, theme.muted);
         if self.close.state.focused {
             ops.push(DrawOp::Stroke(close_bounds, theme.focus, 2.0));
         }

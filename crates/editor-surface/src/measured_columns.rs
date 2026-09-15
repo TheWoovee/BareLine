@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Bounded UI-thread row measurement; source acquisition belongs to the caller.
-use bareline_renderer::{TextBackend, MAX_LAYOUT_BYTES};
+use bareline_renderer::{MAX_LAYOUT_BYTES, TextBackend};
 use unicode_segmentation::UnicodeSegmentation;
 
 /// Logical display-column stops, measured from shaped grapheme ink ranges.
@@ -19,19 +19,30 @@ pub fn measure_column_text(
     if !font_pixels.is_finite() || font_pixels <= 0.0 || !(1..=16).contains(&tab_width) {
         return Err("Invalid column measurement settings.".into());
     }
-    let space = backend.shape_with_font_family(" ", font_pixels, 1_000_000.0, font_family).map_err(|error| format!("{error:?}"))?;
-    let unit = backend.layout_size(space).map(|size| size.0).map_err(|error| format!("{error:?}"));
+    let space = backend
+        .shape_with_font_family(" ", font_pixels, 1_000_000.0, font_family)
+        .map_err(|error| format!("{error:?}"))?;
+    let unit = backend
+        .layout_size(space)
+        .map(|size| size.0)
+        .map_err(|error| format!("{error:?}"));
     backend.release_layout(space);
     let unit = unit?;
-    if !unit.is_finite() || unit <= 0.0 { return Err("Invalid space advance.".into()); }
-    let layout = backend.shape_with_font_family(text, font_pixels, 1_000_000.0, font_family).map_err(|error| format!("{error:?}"))?;
+    if !unit.is_finite() || unit <= 0.0 {
+        return Err("Invalid space advance.".into());
+    }
+    let layout = backend
+        .shape_with_font_family(text, font_pixels, 1_000_000.0, font_family)
+        .map_err(|error| format!("{error:?}"))?;
     let result = (|| {
         let mut stops = Vec::with_capacity(text.graphemes(true).count() + 1);
         stops.push((0, 0));
         let mut column = 0usize;
         let mut row_y: Option<f32> = None;
         for (start, grapheme) in text.grapheme_indices(true) {
-            let rects = backend.range_rects(layout, start..start + grapheme.len()).map_err(|error| format!("{error:?}"))?;
+            let rects = backend
+                .range_rects(layout, start..start + grapheme.len())
+                .map_err(|error| format!("{error:?}"))?;
             let mut advance = 0.0f32;
             for rect in rects {
                 if !rect.width.is_finite() || rect.width < 0.0 || !rect.y.is_finite() {
@@ -43,9 +54,14 @@ pub fn measure_column_text(
                 row_y = Some(rect.y);
                 advance += rect.width;
             }
-            if !advance.is_finite() { return Err("Column width overflow.".into()); }
-            let width = if grapheme == "\t" { tab_width - column % tab_width }
-                else { (advance / unit).round().max(1.0) as usize };
+            if !advance.is_finite() {
+                return Err("Column width overflow.".into());
+            }
+            let width = if grapheme == "\t" {
+                tab_width - column % tab_width
+            } else {
+                (advance / unit).round().max(1.0) as usize
+            };
             column = column.checked_add(width).ok_or("Column width overflow.")?;
             stops.push((start + grapheme.len(), column));
         }
@@ -56,7 +72,9 @@ pub fn measure_column_text(
 }
 
 impl crate::EditorSurface {
-    pub fn configured_font_pixels(&self) -> f32 { self.font_pixels }
+    pub fn configured_font_pixels(&self) -> f32 {
+        self.font_pixels
+    }
 }
 
 #[cfg(test)]
@@ -67,7 +85,9 @@ mod tests {
         let mut backend = bareline_renderer_recording::RecordingBackend::default();
         let text = "e\u{301}\tதமிழ் مرحبا 👩🏽‍💻";
         let map = measure_column_text(&mut backend, text, 16.0, "Cascadia Mono", 4).unwrap();
-        let boundaries: Vec<_> = std::iter::once(0).chain(text.grapheme_indices(true).map(|(i, g)| i + g.len())).collect();
+        let boundaries: Vec<_> = std::iter::once(0)
+            .chain(text.grapheme_indices(true).map(|(i, g)| i + g.len()))
+            .collect();
         assert_eq!(map.stops.iter().map(|stop| stop.0).collect::<Vec<_>>(), boundaries);
         assert_eq!(map.column("e\u{301}\t".len()), 4);
         assert!(map.stops.windows(2).all(|pair| pair[0].1 <= pair[1].1));
@@ -76,6 +96,15 @@ mod tests {
             measure_column_text(&mut backend, "a\tb", 16.0, "Cascadia Mono", 4).unwrap();
         }
         assert!(measure_column_text(&mut backend, "a\nb", 16.0, "Cascadia Mono", 4).is_err());
-        assert!(measure_column_text(&mut backend, &"x".repeat(MAX_LAYOUT_BYTES + 1), 16.0, "Cascadia Mono", 4).is_err());
+        assert!(
+            measure_column_text(
+                &mut backend,
+                &"x".repeat(MAX_LAYOUT_BYTES + 1),
+                16.0,
+                "Cascadia Mono",
+                4
+            )
+            .is_err()
+        );
     }
 }

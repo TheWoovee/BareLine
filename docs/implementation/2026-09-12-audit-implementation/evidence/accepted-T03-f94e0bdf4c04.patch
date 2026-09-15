@@ -1,0 +1,101 @@
+diff --git a/crates/app/src/workspace.rs b/crates/app/src/workspace.rs
+index e27ca60..69da74a 100644
+--- a/crates/app/src/workspace.rs
++++ b/crates/app/src/workspace.rs
+@@ -3063,26 +3063,6 @@ mod tests {
+             assert_eq!(std::fs::read_to_string(&original).unwrap(), original_text);
+             assert!(workspace.editors[0].dirty());
+             assert_eq!(workspace.path(0), Some(original.as_path()));
+-            let stale_path = root.join(if paged { "paged-stale.txt" } else { "resident-stale.txt" });
+-            let stale = PreparedDestination {
+-                path: stale_path.clone(),
+-                condition: DestinationCondition::MustBeAbsent,
+-                consent: DestinationConsent::NotRequired,
+-                document: workspace.editors[0].document_identity(),
+-                operation: SaveOperation::SaveCopy,
+-            };
+-            workspace.editors[0].enqueue(Input::Insert("Y".into()));
+-            settle(&mut workspace);
+-            workspace.save_prepared(0, stale);
+-            assert!(!stale_path.exists());
+-            assert!(
+-                workspace
+-                    .message
+-                    .as_deref()
+-                    .is_some_and(|message| message.contains("expired"))
+-            );
+-            workspace.editors[0].enqueue(Input::Undo);
+-            settle(&mut workspace);
+             let alias = root.join(if paged { "paged-alias.txt" } else { "resident-alias.txt" });
+             std::fs::hard_link(&original, &alias).unwrap();
+             workspace.save_copy(0, alias);
+@@ -3147,6 +3127,69 @@ mod tests {
+         std::fs::remove_dir_all(root).unwrap();
+     }
+     #[test]
++    fn stale_prepared_destination_rejects_content_revision_for_resident_and_paged() {
++        fn settle(workspace: &mut Workspace) {
++            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
++            loop {
++                workspace.pump();
++                if !workspace.io_busy() && !workspace.editors.iter().any(|editor| editor.busy()) {
++                    break;
++                }
++                assert!(std::time::Instant::now() < deadline, "{:?}", workspace.message);
++                std::thread::sleep(std::time::Duration::from_millis(2));
++            }
++        }
++
++        let root = std::env::temp_dir().join(format!(
++            "bareline-stale-save-{}-{}",
++            std::process::id(),
++            std::time::SystemTime::now()
++                .duration_since(std::time::UNIX_EPOCH)
++                .unwrap()
++                .as_nanos()
++        ));
++        std::fs::create_dir(&root).unwrap();
++        for paged in [false, true] {
++            let source = root.join(if paged { "paged.txt" } else { "resident.txt" });
++            let target = root.join(if paged { "paged-copy.txt" } else { "resident-copy.txt" });
++            let source_text = if paged {
++                "abcdef\n".repeat(1_000)
++            } else {
++                "abcdef".into()
++            };
++            std::fs::write(&source, &source_text).unwrap();
++            let mut workspace = Workspace::new(Arc::new(|| {}), Arc::new(PagedFileSystem)).unwrap();
++            if paged {
++                workspace.resident_max_bytes = 4;
++            }
++            workspace.open(source.clone());
++            settle(&mut workspace);
++            let captured_document = workspace.editors[0].document_identity();
++            let stale = PreparedDestination {
++                path: target.clone(),
++                condition: DestinationCondition::MustBeAbsent,
++                consent: DestinationConsent::NotRequired,
++                document: captured_document,
++                operation: SaveOperation::SaveCopy,
++            };
++
++            workspace.editors[0].enqueue(Input::Insert("Y".into()));
++            settle(&mut workspace);
++            assert_ne!(workspace.editors[0].document_identity(), captured_document);
++            assert!(workspace.editors[0].dirty());
++            assert!(!workspace.save_prepared(0, stale));
++            assert!(!target.exists());
++            assert_eq!(std::fs::read_to_string(source).unwrap(), source_text);
++            assert!(
++                workspace
++                    .message
++                    .as_deref()
++                    .is_some_and(|message| message.contains("expired"))
++            );
++        }
++        std::fs::remove_dir_all(root).unwrap();
++    }
++    #[test]
+     fn streamed_large_edit_undo_redo_restart_uses_compact_recipe_and_terminal_receipt() {
+         use bareline_document::paged::{OwnedTextRange, SourceEdit, SourceTransactionPoll};
+         use std::io::Write;

@@ -15,9 +15,7 @@ fn main() {
             build.file(path);
         }
     }
-    for name in [
-        "CPP", "Python", "Rust", "HTML", "CSS", "JSON", "SQL", "TOML",
-    ] {
+    for name in ["CPP", "Python", "Rust", "HTML", "CSS", "JSON", "SQL", "TOML"] {
         build.file(format!("bundled/lexilla/lexers/Lex{name}.cxx"));
     }
     build.flag_if_supported("/EHsc").compile("bareline_lexilla");

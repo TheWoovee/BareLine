@@ -1,0 +1,21 @@
+{
+  "arguments": [
+    "test",
+    "-p",
+    "bareline",
+    "--bin",
+    "bareline",
+    "--features",
+    "qa-inventory",
+    "toast::tests",
+    "--offline",
+    "--locked",
+    "--",
+    "--nocapture"
+  ],
+  "completed_utc": "2026-09-12T12:33:57.6929462Z",
+  "integration_snapshot": "bb15b41b4af8a40e545cea88b48faf8a92d1ace0",
+  "exit_code": 101,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\U02-toast-central.log"
+}

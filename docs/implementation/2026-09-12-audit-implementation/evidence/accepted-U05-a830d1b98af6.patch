@@ -1,0 +1,31 @@
+diff --git a/apps/bareline/src/windows_app/recovery.rs b/apps/bareline/src/windows_app/recovery.rs
+index 39f08c1..687afe5 100644
+--- a/apps/bareline/src/windows_app/recovery.rs
++++ b/apps/bareline/src/windows_app/recovery.rs
+@@ -511,7 +511,7 @@ impl Shell {
+             "recovery.discard" => {
+                 self.recovery.confirm_discard = self
+                     .recovery
+-                    .rows
++                    .rows()
+                     .get(self.recovery.selected)
+                     .map(|row| row.group.clone());
+             }
+@@ -826,7 +826,7 @@ impl Shell {
+         }
+         let selected_preview = self
+             .recovery
+-            .rows
++            .rows()
+             .get(self.recovery.selected)
+             .map(|row| row.directory.clone());
+         if !self.recovery.open || selected_preview != self.recovery.preview_path {
+@@ -837,7 +837,7 @@ impl Shell {
+         if self.recovery.open && self.recovery.preview.is_none() {
+             let path = self
+                 .recovery
+-                .rows
++                .rows()
+                 .get(self.recovery.selected)
+                 .map(|row| row.directory.clone());
+             if path != self.recovery.preview_path {

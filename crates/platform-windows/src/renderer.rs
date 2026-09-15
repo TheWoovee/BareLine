@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 use bareline_renderer::{Color, DrawOp, FrameStatus, Rect, RenderBackend};
 use bareline_renderer::{
-    LayoutError, LayoutId, MAX_LAYOUT_BYTES, MAX_LAYOUTS, Point, TextBackend, TextHit,
-    balanced_clips,
+    LayoutError, LayoutId, MAX_LAYOUT_BYTES, MAX_LAYOUTS, Point, TextBackend, TextHit, balanced_clips,
 };
 use std::collections::BTreeMap;
 use windows::{
@@ -18,6 +17,10 @@ use windows::{
     },
     core::{Interface, w},
 };
+/// Cached DirectWrite text formats, evicted least-recently-used past this point.
+const MAX_FORMATS: usize = 128;
+/// Cached Direct2D colour brushes; the palette is flushed when it overflows.
+const MAX_BRUSHES: usize = 256;
 fn color(value: Color) -> D2D1_COLOR_F {
     D2D1_COLOR_F {
         r: ((value.0 >> 16) & 255) as f32 / 255.0,
@@ -41,9 +44,13 @@ pub struct WindowsRenderer {
     write: IDWriteFactory,
     target: Option<ID2D1RenderTarget>,
     surface: Option<Surface>,
-    formats: BTreeMap<(String, u32), IDWriteTextFormat>,
+    formats: BTreeMap<(String, u32), (IDWriteTextFormat, u64)>,
+    format_clock: u64,
     font_family: Option<String>,
     brushes: BTreeMap<u32, ID2D1SolidColorBrush>,
+    /// Upper bound on live shaped lines; set by the shell from the open editor
+    /// count so a retained-layout regression trips in debug builds.
+    layout_budget: Option<usize>,
     layouts: BTreeMap<LayoutId, ShapedLine>,
     size: (u32, u32),
     scale: f32,
@@ -64,7 +71,9 @@ impl WindowsRenderer {
                 target: None,
                 surface: None,
                 formats: BTreeMap::new(),
+                format_clock: 0,
                 font_family: None,
+                layout_budget: None,
                 brushes: BTreeMap::new(),
                 layouts: BTreeMap::new(),
                 size: (1, 1),
@@ -114,10 +123,7 @@ impl WindowsRenderer {
             ..Default::default()
         };
         // SAFETY: valid HWND and initialized property structures; result owns its resources.
-        let target = unsafe {
-            self.factory
-                .CreateHwndRenderTarget(&properties, &hwnd_properties)
-        };
+        let target = unsafe { self.factory.CreateHwndRenderTarget(&properties, &hwnd_properties) };
         let target = target?;
         self.target = Some(target.cast()?);
         self.surface = Some(Surface::Software(target));
@@ -150,10 +156,7 @@ impl WindowsRenderer {
                 Width: self.size.0,
                 Height: self.size.1,
                 Format: DXGI_FORMAT_B8G8R8A8_UNORM,
-                SampleDesc: DXGI_SAMPLE_DESC {
-                    Count: 1,
-                    Quality: 0,
-                },
+                SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
                 BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
                 BufferCount: 2,
                 SwapEffect: DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
@@ -183,13 +186,17 @@ impl WindowsRenderer {
         Ok(brush)
     }
     fn format(&mut self, size: f32) -> windows::core::Result<IDWriteTextFormat> {
-        let name = self.font_family.as_deref().unwrap_or(if size >= 16.0 { "Cascadia Mono" } else { "Segoe UI" }).to_owned();
+        let name = self
+            .font_family
+            .as_deref()
+            .unwrap_or(if size >= 16.0 { "Cascadia Mono" } else { "Segoe UI" })
+            .to_owned();
         let key = (name.clone(), size.to_bits());
-        if let Some(format) = self.formats.get(&key) {
-            return Ok(format.clone());
-        }
-        if self.formats.len() >= MAX_LAYOUTS {
-            return Err(windows::core::Error::from_hresult(E_OUTOFMEMORY));
+        self.format_clock = self.format_clock.wrapping_add(1);
+        let clock = self.format_clock;
+        if let Some(entry) = self.formats.get_mut(&key) {
+            entry.1 = clock;
+            return Ok(entry.0.clone());
         }
         let family: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
         let format = unsafe {
@@ -206,8 +213,38 @@ impl WindowsRenderer {
         unsafe {
             format.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)?;
         }
-        self.formats.insert(key, format.clone());
+        self.formats.insert(key, (format.clone(), clock));
         Ok(format)
+    }
+    /// Bound the resource caches between frames. Eviction never runs inside a
+    /// frame: the render prepass resolves every brush and format it will index.
+    fn trim_caches(&mut self) {
+        if self.brushes.len() > MAX_BRUSHES {
+            self.brushes.clear();
+        }
+        while self.formats.len() > MAX_FORMATS {
+            let Some(oldest) = self
+                .formats
+                .iter()
+                .min_by_key(|(_, (_, used))| *used)
+                .map(|(key, _)| key.clone())
+            else {
+                break;
+            };
+            self.formats.remove(&oldest);
+        }
+    }
+    /// Release cached colour brushes; the shell calls this when the theme changes
+    /// so retired palette entries do not accumulate for the life of the session.
+    pub fn clear_brushes(&mut self) {
+        self.brushes.clear();
+    }
+    /// Record how many shaped lines may legitimately be live.
+    pub fn set_layout_budget(&mut self, editors: usize, visible_rows: usize) {
+        self.layout_budget = Some(editors.saturating_mul(visible_rows).saturating_mul(2));
+    }
+    pub fn layout_count(&self) -> usize {
+        self.layouts.len()
     }
     pub fn invalidate_device(&mut self) {
         self.brushes.clear();
@@ -256,6 +293,7 @@ impl RenderBackend for WindowsRenderer {
         if self.target.is_none() {
             self.create_target()?;
         }
+        self.trim_caches();
         // Resolve fallible resources before BeginDraw so error paths cannot leave an open frame.
         for op in operations {
             match op {
@@ -320,14 +358,24 @@ impl RenderBackend for WindowsRenderer {
                     }
                     pixel.swap(0, 2);
                 }
-                let bitmap = unsafe { target.CreateBitmap(
-                    D2D_SIZE_U { width: image.width(), height: image.height() },
-                    Some(pixels.as_ptr().cast()), image.width() * 4,
-                    &D2D1_BITMAP_PROPERTIES {
-                        pixelFormat: D2D1_PIXEL_FORMAT { format: DXGI_FORMAT_B8G8R8A8_UNORM, alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED },
-                        dpiX: 96.0, dpiY: 96.0,
-                    },
-                )? };
+                let bitmap = unsafe {
+                    target.CreateBitmap(
+                        D2D_SIZE_U {
+                            width: image.width(),
+                            height: image.height(),
+                        },
+                        Some(pixels.as_ptr().cast()),
+                        image.width() * 4,
+                        &D2D1_BITMAP_PROPERTIES {
+                            pixelFormat: D2D1_PIXEL_FORMAT {
+                                format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                                alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
+                            },
+                            dpiX: 96.0,
+                            dpiY: 96.0,
+                        },
+                    )?
+                };
                 images.insert(index, bitmap);
             }
         }
@@ -372,19 +420,31 @@ impl RenderBackend for WindowsRenderer {
                         };
                         target.DrawText(
                             &text.encode_utf16().collect::<Vec<_>>(),
-                            &self.formats[&(if *size >= 16.0 { "Cascadia Mono" } else { "Segoe UI" }.to_owned(), size.to_bits())],
+                            &self.formats[&(
+                                if *size >= 16.0 { "Cascadia Mono" } else { "Segoe UI" }.to_owned(),
+                                size.to_bits(),
+                            )]
+                                .0,
                             &bounds,
                             &self.brushes[&color.0],
-                            D2D1_DRAW_TEXT_OPTIONS_CLIP,
+                            // Colour-font so the system fallback (Segoe UI Emoji)
+                            // paints emoji in colour instead of monochrome boxes.
+                            D2D1_DRAW_TEXT_OPTIONS_CLIP | D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT,
                             DWRITE_MEASURING_MODE_NATURAL,
                         );
                     }
-                    DrawOp::PushClip(r) => target
-                        .PushAxisAlignedClip(&rectangle(*r), D2D1_ANTIALIAS_MODE_PER_PRIMITIVE),
+                    DrawOp::PushClip(r) => {
+                        target.PushAxisAlignedClip(&rectangle(*r), D2D1_ANTIALIAS_MODE_PER_PRIMITIVE)
+                    }
                     DrawOp::PopClip => target.PopAxisAlignedClip(),
-                    DrawOp::Image { destination, opacity, .. } => target.DrawBitmap(
-                        &images[&index], Some(&rectangle(*destination)), *opacity,
-                        D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, None,
+                    DrawOp::Image {
+                        destination, opacity, ..
+                    } => target.DrawBitmap(
+                        &images[&index],
+                        Some(&rectangle(*destination)),
+                        *opacity,
+                        D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
+                        None,
                     ),
                     DrawOp::PushLayer { bounds, opacity } => target.PushLayer(
                         &D2D1_LAYER_PARAMETERS {
@@ -393,31 +453,21 @@ impl RenderBackend for WindowsRenderer {
                             maskTransform: windows_numerics::Matrix3x2::identity(),
                             opacity: *opacity,
                             ..Default::default()
-                        }, None::<&ID2D1Layer>,
+                        },
+                        None::<&ID2D1Layer>,
                     ),
                     DrawOp::PopLayer => target.PopLayer(),
-                    DrawOp::Layout {
-                        origin,
-                        layout,
-                        color,
-                    } => target.DrawTextLayout(
+                    DrawOp::Layout { origin, layout, color } => target.DrawTextLayout(
                         vector(*origin),
                         &self.layouts[layout].layout,
                         &self.brushes[&color.0],
-                        D2D1_DRAW_TEXT_OPTIONS_NONE,
+                        // Emoji in editor text render in colour via the DirectWrite
+                        // system fallback chain (Segoe UI Emoji).
+                        D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT,
                     ),
-                    DrawOp::Line {
-                        from,
-                        to,
-                        color,
-                        width,
-                    } => target.DrawLine(
-                        vector(*from),
-                        vector(*to),
-                        &self.brushes[&color.0],
-                        *width,
-                        None,
-                    ),
+                    DrawOp::Line { from, to, color, width } => {
+                        target.DrawLine(vector(*from), vector(*to), &self.brushes[&color.0], *width, None)
+                    }
                 }
             }
             if let Err(error) = target.EndDraw(None, None) {
@@ -455,28 +505,31 @@ impl ShapedLine {
             .map_err(|_| LayoutError::InvalidOffset)
     }
     fn utf16_to_byte(&self, offset: u32) -> usize {
-        let i = self
-            .boundaries
-            .partition_point(|&(_, u)| u <= offset)
-            .saturating_sub(1);
+        let i = self.boundaries.partition_point(|&(_, u)| u <= offset).saturating_sub(1);
         self.boundaries[i].0
     }
 }
 fn vector(point: Point) -> windows_numerics::Vector2 {
-    windows_numerics::Vector2 {
-        X: point.x,
-        Y: point.y,
-    }
+    windows_numerics::Vector2 { X: point.x, Y: point.y }
 }
 impl TextBackend for WindowsRenderer {
     fn shape_wrapped(&mut self, text: &str, size: f32, width: f32, family: &str) -> Result<LayoutId, LayoutError> {
         let id = self.shape_with_font_family(text, size, width, family)?;
         let result = unsafe {
-            self.layouts[&id].layout.SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP)
-                .and_then(|_| self.layouts[&id].layout.SetLineSpacing(DWRITE_LINE_SPACING_METHOD_UNIFORM, size*1.2, size*0.9))
+            self.layouts[&id]
+                .layout
+                .SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP)
+                .and_then(|_| {
+                    self.layouts[&id]
+                        .layout
+                        .SetLineSpacing(DWRITE_LINE_SPACING_METHOD_UNIFORM, size * 1.2, size * 0.9)
+                })
                 .and_then(|_| self.layouts[&id].layout.SetMaxHeight(1.0e9))
         };
-        if result.is_err() { self.release_layout(id); return Err(LayoutError::BackendFailure); }
+        if result.is_err() {
+            self.release_layout(id);
+            return Err(LayoutError::BackendFailure);
+        }
         Ok(id)
     }
     fn layout_size(&self, id: LayoutId) -> Result<(f32, f32), LayoutError> {
@@ -485,22 +538,23 @@ impl TextBackend for WindowsRenderer {
         unsafe { line.layout.GetMetrics(&mut metrics) }.map_err(|_| LayoutError::BackendFailure)?;
         Ok((metrics.widthIncludingTrailingWhitespace, metrics.height))
     }
-    fn shape_with_font_family(&mut self, text: &str, size: f32, width: f32, family: &str) -> Result<LayoutId, LayoutError> {
-        if !bareline_renderer::valid_font_family(family) { return Err(LayoutError::InvalidOffset); }
+    fn shape_with_font_family(
+        &mut self,
+        text: &str,
+        size: f32,
+        width: f32,
+        family: &str,
+    ) -> Result<LayoutId, LayoutError> {
+        if !bareline_renderer::valid_font_family(family) {
+            return Err(LayoutError::InvalidOffset);
+        }
         self.font_family = Some(family.to_owned());
         let result = self.shape(text, size, width);
         self.font_family = None;
         result
     }
-    fn set_styles(
-        &mut self,
-        id: LayoutId,
-        styles: &[bareline_renderer::TextStyle],
-    ) -> Result<(), LayoutError> {
-        let line = self
-            .layouts
-            .get_mut(&id)
-            .ok_or(LayoutError::InvalidHandle)?;
+    fn set_styles(&mut self, id: LayoutId, styles: &[bareline_renderer::TextStyle]) -> Result<(), LayoutError> {
+        let line = self.layouts.get_mut(&id).ok_or(LayoutError::InvalidHandle)?;
         let mut mapped = Vec::with_capacity(styles.len());
         let mut previous = 0;
         for style in styles {
@@ -527,14 +581,17 @@ impl TextBackend for WindowsRenderer {
         {
             return Err(LayoutError::ResourceLimit);
         }
+        debug_assert!(
+            self.layout_budget.is_none_or(|budget| self.layouts.len() <= budget),
+            "shaped lines ({}) exceeded the budget ({:?}); an editor was dropped without retiring it",
+            self.layouts.len(),
+            self.layout_budget,
+        );
         let format = self.format(size).map_err(|_| LayoutError::BackendFailure)?;
         let utf16: Vec<_> = text.encode_utf16().collect();
         // SAFETY: input slice is valid for the call; DirectWrite owns the resulting text copy.
-        let layout = unsafe {
-            self.write
-                .CreateTextLayout(&utf16, &format, width, size * 2.0)
-        }
-        .map_err(|_| LayoutError::BackendFailure)?;
+        let layout = unsafe { self.write.CreateTextLayout(&utf16, &format, width, size * 2.0) }
+            .map_err(|_| LayoutError::BackendFailure)?;
         let mut units = 0;
         let mut boundaries = Vec::with_capacity(text.chars().count() + 1);
         for (byte, c) in text.char_indices() {
@@ -563,12 +620,7 @@ impl TextBackend for WindowsRenderer {
                 .HitTestPoint(point.x, point.y, &mut trailing, &mut inside, &mut metrics)
         }
         .map_err(|_| LayoutError::BackendFailure)?;
-        let position = metrics.textPosition
-            + if trailing.as_bool() {
-                metrics.length
-            } else {
-                0
-            };
+        let position = metrics.textPosition + if trailing.as_bool() { metrics.length } else { 0 };
         Ok(TextHit {
             byte_offset: line.utf16_to_byte(position),
             inside: inside.as_bool(),
@@ -596,11 +648,7 @@ impl TextBackend for WindowsRenderer {
     fn release_layout(&mut self, id: LayoutId) {
         self.layouts.remove(&id);
     }
-    fn range_rects(
-        &self,
-        id: LayoutId,
-        bytes: std::ops::Range<usize>,
-    ) -> Result<Vec<Rect>, LayoutError> {
+    fn range_rects(&self, id: LayoutId, bytes: std::ops::Range<usize>) -> Result<Vec<Rect>, LayoutError> {
         if bytes.start > bytes.end {
             return Err(LayoutError::InvalidOffset);
         }
@@ -621,14 +669,8 @@ impl TextBackend for WindowsRenderer {
         }
         let mut metrics = vec![DWRITE_HIT_TEST_METRICS::default(); count as usize];
         unsafe {
-            line.layout.HitTestTextRange(
-                start,
-                end - start,
-                0.0,
-                0.0,
-                Some(&mut metrics),
-                &mut count,
-            )
+            line.layout
+                .HitTestTextRange(start, end - start, 0.0, 0.0, Some(&mut metrics), &mut count)
         }
         .map_err(|_| LayoutError::BackendFailure)?;
         Ok(metrics
@@ -690,8 +732,7 @@ impl WindowsRenderer {
             return Err(windows::core::Error::from_hresult(E_INVALIDARG));
         }
         unsafe {
-            let factory: IWICImagingFactory =
-                CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)?;
+            let factory: IWICImagingFactory = CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)?;
             let bitmap = factory.CreateBitmap(
                 self.size.0,
                 self.size.1,
@@ -708,10 +749,7 @@ impl WindowsRenderer {
                 dpiY: 96.0 * self.scale,
                 ..Default::default()
             };
-            self.target = Some(
-                self.factory
-                    .CreateWicBitmapRenderTarget(&bitmap, &properties)?,
-            );
+            self.target = Some(self.factory.CreateWicBitmapRenderTarget(&bitmap, &properties)?);
             self.surface = Some(Surface::Bitmap(bitmap));
         }
         Ok(())
@@ -746,9 +784,7 @@ impl HardwareSurface {
                 bitmapOptions: D2D1_BITMAP_OPTIONS_TARGET | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
                 ..Default::default()
             };
-            let bitmap = self
-                .context
-                .CreateBitmapFromDxgiSurface(&buffer, Some(&properties))?;
+            let bitmap = self.context.CreateBitmapFromDxgiSurface(&buffer, Some(&properties))?;
             self.context.SetTarget(&bitmap);
             self.context.SetDpi(scale * 96.0, scale * 96.0);
             Ok(())
@@ -758,13 +794,8 @@ impl HardwareSurface {
         // Release the context's last back-buffer reference before ResizeBuffers.
         unsafe {
             self.context.SetTarget(None);
-            self.swap.ResizeBuffers(
-                0,
-                size.0,
-                size.1,
-                DXGI_FORMAT_UNKNOWN,
-                DXGI_SWAP_CHAIN_FLAG(0),
-            )?;
+            self.swap
+                .ResizeBuffers(0, size.0, size.1, DXGI_FORMAT_UNKNOWN, DXGI_SWAP_CHAIN_FLAG(0))?;
         }
         self.bind(scale)
     }
@@ -774,21 +805,54 @@ impl HardwareSurface {
 mod tests {
     use super::*;
     #[test]
+    fn text_formats_evict_least_recently_used_instead_of_failing() {
+        let mut renderer = WindowsRenderer::new(HWND::default(), true).unwrap();
+        // Keep one size hot while the cache is filled well past its bound.
+        renderer.format(9.0).unwrap();
+        for step in 0..(MAX_FORMATS as u32 * 2) {
+            renderer.format(10.0 + step as f32).unwrap();
+            renderer.format(9.0).unwrap();
+            renderer.trim_caches();
+            assert!(renderer.formats.len() <= MAX_FORMATS);
+        }
+        assert!(
+            renderer
+                .formats
+                .contains_key(&("Segoe UI".to_owned(), 9.0f32.to_bits()))
+        );
+    }
+    #[test]
     fn retained_context_keeps_arabic_joining_and_combining_cluster_metrics() {
-        let mut renderer=WindowsRenderer::new(HWND::default(),true).unwrap();
-        let text=format!("{}مرحبا a\u{301} 👩🏽‍💻 தமிழ்{}","x".repeat(4088),"z".repeat(100));
-        let full=renderer.shape_with_font_family(&text,16.0,1.0e6,"Segoe UI").unwrap();
-        let start=2048;
-        let retained=renderer.shape_with_font_family(&text[start..],16.0,1.0e6,"Segoe UI").unwrap();
-        let word=text.find("مرحبا").unwrap();
-        let a=renderer.range_rects(full,word..word+"مرحبا".len()).unwrap();
-        let b=renderer.range_rects(retained,word-start..word-start+"مرحبا".len()).unwrap();
-        assert_eq!(a.len(),b.len());
-        for (a,b) in a.iter().zip(&b){assert!((a.width-b.width).abs()<0.1);}
-        let mark=text.find("a\u{301}").unwrap();
-        assert!(renderer.range_rects(retained,mark-start..mark-start+"a\u{301}".len()).unwrap().iter().all(|r|r.width>=0.0));
-        let leading=renderer.caret(full,word).unwrap();let next=renderer.caret(full,word+"م".len()).unwrap();
-        assert!(leading.x>next.x,"RTL visual-left follows the next logical Arabic cluster");
+        let mut renderer = WindowsRenderer::new(HWND::default(), true).unwrap();
+        let text = format!("{}مرحبا a\u{301} 👩🏽‍💻 தமிழ்{}", "x".repeat(4088), "z".repeat(100));
+        let full = renderer.shape_with_font_family(&text, 16.0, 1.0e6, "Segoe UI").unwrap();
+        let start = 2048;
+        let retained = renderer
+            .shape_with_font_family(&text[start..], 16.0, 1.0e6, "Segoe UI")
+            .unwrap();
+        let word = text.find("مرحبا").unwrap();
+        let a = renderer.range_rects(full, word..word + "مرحبا".len()).unwrap();
+        let b = renderer
+            .range_rects(retained, word - start..word - start + "مرحبا".len())
+            .unwrap();
+        assert_eq!(a.len(), b.len());
+        for (a, b) in a.iter().zip(&b) {
+            assert!((a.width - b.width).abs() < 0.1);
+        }
+        let mark = text.find("a\u{301}").unwrap();
+        assert!(
+            renderer
+                .range_rects(retained, mark - start..mark - start + "a\u{301}".len())
+                .unwrap()
+                .iter()
+                .all(|r| r.width >= 0.0)
+        );
+        let leading = renderer.caret(full, word).unwrap();
+        let next = renderer.caret(full, word + "م".len()).unwrap();
+        assert!(
+            leading.x > next.x,
+            "RTL visual-left follows the next logical Arabic cluster"
+        );
     }
     #[cfg(feature = "offscreen")]
     #[test]
@@ -895,20 +959,9 @@ mod tests {
                 let a = renderer.caret(id, arabic).unwrap();
                 let b = renderer.caret(id, after_first).unwrap();
                 assert!(b.x < a.x, "Arabic logical advance must move visually left");
-                assert_eq!(
-                    renderer.caret(id, arabic + 1),
-                    Err(LayoutError::InvalidOffset)
-                );
+                assert_eq!(renderer.caret(id, arabic + 1), Err(LayoutError::InvalidOffset));
                 for x in (0..400).step_by(3) {
-                    let hit = renderer
-                        .hit_test(
-                            id,
-                            Point {
-                                x: x as f32,
-                                y: 8.0,
-                            },
-                        )
-                        .unwrap();
+                    let hit = renderer.hit_test(id, Point { x: x as f32, y: 8.0 }).unwrap();
                     assert!(text.is_char_boundary(hit.byte_offset));
                 }
                 let ranges = renderer.range_rects(id, arabic..text.len()).unwrap();
@@ -929,10 +982,7 @@ mod tests {
                         color: Color(0xE6E8EA),
                     },
                 ];
-                assert_eq!(
-                    renderer.render(&operations).unwrap(),
-                    FrameStatus::Presented
-                );
+                assert_eq!(renderer.render(&operations).unwrap(), FrameStatus::Presented);
                 assert_eq!(
                     renderer.software, software,
                     "this run must exercise the requested renderer"
@@ -943,13 +993,81 @@ mod tests {
                     a,
                     "device loss must preserve text geometry"
                 );
-                assert_eq!(
-                    renderer.render(&operations).unwrap(),
-                    FrameStatus::Presented
-                );
+                assert_eq!(renderer.render(&operations).unwrap(), FrameStatus::Presented);
                 renderer.release_layout(id);
                 assert_eq!(renderer.caret(id, 0), Err(LayoutError::InvalidHandle));
             }
         }
+    }
+}
+
+/// An installed font family: the family name plus whether the face is monospaced.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InstalledFontFamily {
+    pub name: String,
+    pub monospace: bool,
+}
+
+/// Enumerate installed font families through DirectWrite. Monospaced families come
+/// first, then the rest, each group sorted by name. Returns an empty list when the
+/// system font collection cannot be read, so callers can fall back to typed entry.
+pub fn installed_font_families() -> Vec<InstalledFontFamily> {
+    // SAFETY: every interface is created and released on the calling thread; the
+    // shared DirectWrite factory is thread-safe and no pointer escapes this call.
+    unsafe {
+        let Ok(write): windows::core::Result<IDWriteFactory> = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED) else {
+            return Vec::new();
+        };
+        let mut collection: Option<IDWriteFontCollection> = None;
+        if write.GetSystemFontCollection(&mut collection, false).is_err() {
+            return Vec::new();
+        }
+        let Some(collection) = collection else {
+            return Vec::new();
+        };
+        let locale: Vec<u16> = "en-us\0".encode_utf16().collect();
+        let mut families = Vec::new();
+        for index in 0..collection.GetFontFamilyCount() {
+            let Ok(family) = collection.GetFontFamily(index) else {
+                continue;
+            };
+            let Ok(names) = family.GetFamilyNames() else {
+                continue;
+            };
+            let mut position = 0u32;
+            let mut exists = windows::core::BOOL(0);
+            let _ = names.FindLocaleName(windows::core::PCWSTR(locale.as_ptr()), &mut position, &mut exists);
+            if !exists.as_bool() {
+                position = 0;
+            }
+            let Ok(length) = names.GetStringLength(position) else {
+                continue;
+            };
+            let mut buffer = vec![0u16; length as usize + 1];
+            if names.GetString(position, &mut buffer).is_err() {
+                continue;
+            }
+            let name = String::from_utf16_lossy(&buffer[..length as usize]);
+            if name.is_empty() {
+                continue;
+            }
+            let monospace = family
+                .GetFirstMatchingFont(
+                    DWRITE_FONT_WEIGHT_NORMAL,
+                    DWRITE_FONT_STRETCH_NORMAL,
+                    DWRITE_FONT_STYLE_NORMAL,
+                )
+                .ok()
+                .and_then(|font| font.cast::<IDWriteFont1>().ok())
+                .is_some_and(|font| font.IsMonospacedFont().as_bool());
+            families.push(InstalledFontFamily { name, monospace });
+        }
+        families.sort_by(|a, b| {
+            b.monospace
+                .cmp(&a.monospace)
+                .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+        });
+        families.dedup_by(|a, b| a.name == b.name);
+        families
     }
 }

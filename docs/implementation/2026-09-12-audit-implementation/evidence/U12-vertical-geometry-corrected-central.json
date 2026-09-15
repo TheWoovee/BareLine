@@ -1,0 +1,15 @@
+{
+  "arguments": [
+    "test",
+    "-p",
+    "bareline",
+    "--bin",
+    "bareline",
+    "vertical_tabs_share_find_draw_and_hover_geometry"
+  ],
+  "completed_utc": "2026-09-12T09:30:11.6045138Z",
+  "integration_snapshot": "8c38e8b520bb85cc141f6842dfaea7588f39f389",
+  "exit_code": 0,
+  "zero_tests": false,
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\2026-09-12-audit-implementation\\evidence\\U12-vertical-geometry-corrected-central.log"
+}

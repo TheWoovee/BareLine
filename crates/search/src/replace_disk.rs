@@ -4,14 +4,12 @@ use super::*;
 use bareline_document::Budget;
 use bareline_file_io::{
     lifecycle::{
-        DecodeOptions, Fingerprint, Opened, open_encoded_streaming, save_encoded_cancellable,
-        save_utf8_cancellable,
+        DecodeOptions, Fingerprint, Opened, open_encoded_streaming, save_encoded_cancellable, save_utf8_cancellable,
     },
     session::publish_json,
 };
 use bareline_platform::{
-    FileIdentity, LocalFileSystem, PathOperation, PathOrigin, PathTrustProvider, SerializedPath,
-    TrustedRead,
+    FileIdentity, LocalFileSystem, PathOperation, PathOrigin, PathTrustProvider, SerializedPath, TrustedRead,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -106,11 +104,7 @@ impl DiskReplacePreview {
         }
     }
     pub fn set_match_included(&mut self, file: usize, matched: usize, included: bool) -> bool {
-        if let Some(change) = self
-            .files
-            .get_mut(file)
-            .and_then(|file| file.changes.get_mut(matched))
-        {
+        if let Some(change) = self.files.get_mut(file).and_then(|file| file.changes.get_mut(matched)) {
             change.included = included;
             true
         } else {
@@ -148,11 +142,7 @@ fn approved(path: &Path, trust: &dyn PathTrustProvider, write: bool) -> io::Resu
     }
     Ok(guard)
 }
-fn open(
-    guard: TrustedRead,
-    platform: &dyn LocalFileSystem,
-    job: &SearchJob,
-) -> io::Result<(Opened, Vec<File>)> {
+fn open(guard: TrustedRead, platform: &dyn LocalFileSystem, job: &SearchJob) -> io::Result<(Opened, Vec<File>)> {
     let ancestors = guard.ancestors;
     let expected = platform.identity(&guard.file)?;
     let opened = open_encoded_streaming(
@@ -208,8 +198,7 @@ pub fn preview_disk_files_options(
     if query.selection.is_some() || replacement.len() > MAX_PATTERN_BYTES {
         return Err(io::Error::other("invalid folder replacement options"));
     }
-    let template = decode_replacement(replacement, query.mode)
-        .map_err(|e| io::Error::other(format!("{e:?}")))?;
+    let template = decode_replacement(replacement, query.mode).map_err(|e| io::Error::other(format!("{e:?}")))?;
     let mut remaining = ram_bytes.min(MAX_RESULT_BYTES);
     let mut files: Vec<DiskPreviewFile> = Vec::new();
     for (number, path) in paths.into_iter().enumerate() {
@@ -272,10 +261,8 @@ pub fn preview_disk_files_options(
                 end -= 1;
             }
             let after = edit.insert[..end].to_owned();
-            let used = std::mem::size_of::<DiskChange>()
-                + before.capacity()
-                + after.capacity()
-                + edit.insert.capacity();
+            let used =
+                std::mem::size_of::<DiskChange>() + before.capacity() + after.capacity() + edit.insert.capacity();
             remaining = remaining
                 .checked_sub(used)
                 .ok_or_else(|| io::Error::other("preview budget"))?;
@@ -351,8 +338,7 @@ pub fn preview_disk_files_with_paging_options(
         let guard = approved(&path, trust, false)?;
         let identity = platform.identity(&guard.file)?;
         if files.iter().any(|file: &DiskPreviewFile| {
-            file.fingerprint.identity.volume == identity.volume
-                && file.fingerprint.identity.file == identity.file
+            file.fingerprint.identity.volume == identity.volume && file.fingerprint.identity.file == identity.file
         }) {
             return Err(io::Error::other("duplicate file identity"));
         }
@@ -379,8 +365,7 @@ pub fn preview_disk_files_with_paging_options(
             let snapshot = opened.transcoded.document.snapshot();
             let mut cursor = 0;
             while !options.include_binary && cursor < snapshot.len() {
-                let window =
-                    super::disk_source::window(&mut opened, &snapshot, cursor, 1024 * 1024, job)?;
+                let window = super::disk_source::window(&mut opened, &snapshot, cursor, 1024 * 1024, job)?;
                 if window.text().as_bytes().contains(&0) {
                     return Err(io::Error::other("binary source excluded"));
                 }
@@ -407,20 +392,14 @@ pub fn preview_disk_files_with_paging_options(
                 |_| {},
             );
             let transaction = results
-                .prepare_replace_streaming(
-                    &snapshot,
-                    replacement,
-                    ReplaceScope::All,
-                    job,
-                    |ticket| {
-                        opened
-                            .transcoded
-                            .source
-                            .read_page(ticket)
-                            .map(|_| true)
-                            .map_err(|error| format!("{error:?}"))
-                    },
-                )
+                .prepare_replace_streaming(&snapshot, replacement, ReplaceScope::All, job, |ticket| {
+                    opened
+                        .transcoded
+                        .source
+                        .read_page(ticket)
+                        .map(|_| true)
+                        .map_err(|error| format!("{error:?}"))
+                })
                 .map_err(|error| io::Error::other(format!("{error:?}")))?;
             let mut changes = Vec::new();
             for mut edit in transaction.edits {
@@ -434,13 +413,7 @@ pub fn preview_disk_files_with_paging_options(
                     )?;
                     edit.insert = preserve_replacement_case(original.text(), &edit.insert);
                 }
-                let before = super::disk_source::window(
-                    &mut opened,
-                    &snapshot,
-                    edit.range.start.0,
-                    160,
-                    job,
-                )?;
+                let before = super::disk_source::window(&mut opened, &snapshot, edit.range.start.0, 160, job)?;
                 let mut end = edit.insert.len().min(160);
                 while !edit.insert.is_char_boundary(end) {
                     end -= 1;
@@ -502,11 +475,7 @@ impl Drop for OpenFileLease {
 impl OpenFileRegistry {
     /// Called before exposing a loaded file as an open document; Busy must defer that
     /// admission. Keep the lease for its whole open lifetime. Never blocks the UI.
-    pub fn try_register(
-        &self,
-        canonical: PathBuf,
-        identity: &FileIdentity,
-    ) -> io::Result<OpenFileLease> {
+    pub fn try_register(&self, canonical: PathBuf, identity: &FileIdentity) -> io::Result<OpenFileLease> {
         let mut entries = match self.0.try_lock() {
             Ok(entries) => entries,
             Err(TryLockError::WouldBlock) => {
@@ -559,33 +528,19 @@ impl DiskApplySummary {
         self.receipt
             .files
             .iter()
-            .filter(|f| {
-                matches!(
-                    f.state,
-                    ReceiptState::Committed | ReceiptState::ReconciledCommitted
-                )
-            })
+            .filter(|f| matches!(f.state, ReceiptState::Committed | ReceiptState::ReconciledCommitted))
             .count()
     }
     pub fn replaced_matches(&self) -> usize {
         self.receipt
             .files
             .iter()
-            .filter(|f| {
-                matches!(
-                    f.state,
-                    ReceiptState::Committed | ReceiptState::ReconciledCommitted
-                )
-            })
+            .filter(|f| matches!(f.state, ReceiptState::Committed | ReceiptState::ReconciledCommitted))
             .map(|f| f.matches)
             .sum()
     }
 }
-fn persist(
-    path: &Path,
-    receipt: &ReplaceReceipt,
-    platform: &dyn LocalFileSystem,
-) -> io::Result<()> {
+fn persist(path: &Path, receipt: &ReplaceReceipt, platform: &dyn LocalFileSystem) -> io::Result<()> {
     let bytes = serde_json::to_vec(receipt).map_err(io::Error::other)?;
     if bytes.len() > MAX_RECEIPT {
         return Err(io::Error::other("receipt budget"));
@@ -617,10 +572,7 @@ fn snapshot_hash(snapshot: &DocumentSnapshot, bom: bool) -> [u8; 32] {
     if bom {
         hash.update([0xef, 0xbb, 0xbf]);
     }
-    for chunk in snapshot
-        .chunks(TextOffset(0)..TextOffset(snapshot.len()))
-        .unwrap()
-    {
+    for chunk in snapshot.chunks(TextOffset(0)..TextOffset(snapshot.len())).unwrap() {
         hash.update(chunk.as_bytes());
     }
     hash.finalize().into()
@@ -639,10 +591,7 @@ fn backup(
     if platform.identity(&file)? != expected.identity {
         return Err(io::Error::other("changed before backup"));
     }
-    let mut output = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(target)?;
+    let mut output = OpenOptions::new().write(true).create_new(true).open(target)?;
     let mut buffer = [0u8; 65536];
     let mut hash = Sha256::new();
     let mut total = 0usize;
@@ -661,9 +610,7 @@ fn backup(
         hash.update(&buffer[..n]);
         output.write_all(&buffer[..n])?;
     }
-    if <[u8; 32]>::from(hash.finalize()) != expected.sha256
-        || platform.identity(&file)? != expected.identity
-    {
+    if <[u8; 32]>::from(hash.finalize()) != expected.sha256 || platform.identity(&file)? != expected.identity {
         return Err(io::Error::other("changed during backup"));
     }
     output.sync_all()
@@ -750,8 +697,7 @@ fn apply_disk_files_impl(
                     || (entry.volume == file.fingerprint.identity.volume
                         && entry.file == file.fingerprint.identity.file))
         }) {
-            receipt.files[index].state =
-                ReceiptState::Skipped("File is open; review its document revision".into());
+            receipt.files[index].state = ReceiptState::Skipped("File is open; review its document revision".into());
             persist(&receipt_path, &receipt, platform)?;
             continue;
         }
@@ -760,9 +706,8 @@ fn apply_disk_files_impl(
             .and_then(|guard| guard.file.metadata())
             .map(|metadata| metadata.permissions().readonly());
         if matches!(read_only, Ok(true)) {
-            receipt.files[index].state = ReceiptState::Skipped(
-                "File is read-only; change its permissions and preview again".into(),
-            );
+            receipt.files[index].state =
+                ReceiptState::Skipped("File is read-only; change its permissions and preview again".into());
             persist(&receipt_path, &receipt, platform)?;
             continue;
         }
@@ -773,8 +718,7 @@ fn apply_disk_files_impl(
                 let platform_arc = paging
                     .as_ref()
                     .ok_or_else(|| io::Error::other("Paged save service unavailable"))?;
-                let mut opened =
-                    super::disk_source::open(&file.path, trust, platform_arc.clone(), job)?;
+                let mut opened = super::disk_source::open(&file.path, trust, platform_arc.clone(), job)?;
                 if opened.fingerprint != file.fingerprint {
                     review_changed = true;
                     return Err(io::Error::other("Source changed; review again"));
@@ -946,10 +890,7 @@ fn apply_disk_files_impl(
         })?;
         drop(admission);
     }
-    Ok(DiskApplySummary {
-        receipt_path,
-        receipt,
-    })
+    Ok(DiskApplySummary { receipt_path, receipt })
 }
 fn current_fingerprint(
     path: &Path,
@@ -998,14 +939,7 @@ pub fn rollback_receipt_with_paging(
     trust: &dyn PathTrustProvider,
     platform: Arc<dyn LocalFileSystem>,
 ) -> io::Result<ReplaceReceipt> {
-    rollback_receipt_impl(
-        path,
-        open_files,
-        job,
-        trust,
-        platform.as_ref(),
-        Some(platform.clone()),
-    )
+    rollback_receipt_impl(path, open_files, job, trust, platform.as_ref(), Some(platform.clone()))
 }
 fn rollback_receipt_impl(
     path: &Path,
@@ -1054,8 +988,7 @@ fn rollback_receipt_impl(
             if admission.iter().any(|entry| {
                 entry.active.load(Ordering::Acquire)
                     && (entry.path == target
-                        || (entry.volume == current.identity.volume
-                            && entry.file == current.identity.file))
+                        || (entry.volume == current.identity.volume && entry.file == current.identity.file))
             }) {
                 return Err(io::Error::other("Target is open; close it before rollback"));
             }
@@ -1068,8 +1001,7 @@ fn rollback_receipt_impl(
                 let platform_arc = paging
                     .as_ref()
                     .ok_or_else(|| io::Error::other("Paged rollback service unavailable"))?;
-                let original =
-                    super::disk_source::open(&backup_path, trust, platform_arc.clone(), job)?;
+                let original = super::disk_source::open(&backup_path, trust, platform_arc.clone(), job)?;
                 if original.fingerprint.sha256 != record.original.sha256 {
                     return Err(io::Error::other("Backup fingerprint changed"));
                 }
@@ -1092,8 +1024,7 @@ fn rollback_receipt_impl(
                 .map_err(|error| io::Error::other(format!("{error:?}")))?;
                 return Ok(());
             }
-            let (original, _backup_ancestors) =
-                open(approved(&backup_path, trust, false)?, platform, job)?;
+            let (original, _backup_ancestors) = open(approved(&backup_path, trust, false)?, platform, job)?;
             if original.fingerprint.sha256 != record.original.sha256 {
                 return Err(io::Error::other("Backup fingerprint changed"));
             }
@@ -1145,10 +1076,7 @@ pub fn reconcile_receipt(
 ) -> io::Result<ReplaceReceipt> {
     let guard = approved(path, trust, true)?;
     let mut bytes = Vec::new();
-    guard
-        .file
-        .take((MAX_RECEIPT + 1) as u64)
-        .read_to_end(&mut bytes)?;
+    guard.file.take((MAX_RECEIPT + 1) as u64).read_to_end(&mut bytes)?;
     if bytes.len() > MAX_RECEIPT {
         return Err(io::Error::other("receipt budget"));
     }
@@ -1159,10 +1087,7 @@ pub fn reconcile_receipt(
     for record in &mut receipt.files {
         if !matches!(
             record.state,
-            ReceiptState::Planned
-                | ReceiptState::Staged
-                | ReceiptState::Uncertain(_)
-                | ReceiptState::RollbackStaged
+            ReceiptState::Planned | ReceiptState::Staged | ReceiptState::Uncertain(_) | ReceiptState::RollbackStaged
         ) {
             continue;
         }
@@ -1182,8 +1107,7 @@ pub fn reconcile_receipt(
                 record.state = ReceiptState::ReconciledCommitted
             }
             Ok(fingerprint) if record.original.sha256 == fingerprint.sha256 => {
-                record.state =
-                    ReceiptState::Skipped("Interrupted before commit; no automatic retry".into())
+                record.state = ReceiptState::Skipped("Interrupted before commit; no automatic retry".into())
             }
             Ok(_) => record.state = ReceiptState::Conflict,
             Err(error) => record.state = ReceiptState::Failed(error.to_string()),
@@ -1258,15 +1182,9 @@ mod tests {
         assert_eq!(summary.changed_files(), 1);
         assert_eq!(summary.replaced_matches(), 1);
         assert_eq!(fs::read(&path).unwrap(), b"\xef\xbb\xbfY\r\nx\n");
-        let backup = summary.receipt.files[0]
-            .backup
-            .as_ref()
-            .unwrap()
-            .to_native()
-            .unwrap();
+        let backup = summary.receipt.files[0].backup.as_ref().unwrap().to_native().unwrap();
         assert_eq!(fs::read(backup).unwrap(), original);
-        let receipt: ReplaceReceipt =
-            serde_json::from_slice(&fs::read(summary.receipt_path).unwrap()).unwrap();
+        let receipt: ReplaceReceipt = serde_json::from_slice(&fs::read(summary.receipt_path).unwrap()).unwrap();
         assert_eq!(receipt.files[0].state, ReceiptState::Committed);
     }
     #[test]
@@ -1393,6 +1311,8 @@ mod tests {
         )
         .unwrap();
         let mut permissions = fs::metadata(&locked).unwrap().permissions();
+        // The fixture deliberately clears the read-only bit it set above.
+        #[allow(clippy::permissions_set_readonly_false)]
         permissions.set_readonly(false);
         fs::set_permissions(&locked, permissions).unwrap();
         assert_eq!(summary.changed_files(), 1);
@@ -1401,8 +1321,7 @@ mod tests {
         );
         assert_eq!(fs::read(locked).unwrap(), b"x");
         assert_eq!(fs::read(eligible).unwrap(), b"Y");
-        let receipt: ReplaceReceipt =
-            serde_json::from_slice(&fs::read(summary.receipt_path).unwrap()).unwrap();
+        let receipt: ReplaceReceipt = serde_json::from_slice(&fs::read(summary.receipt_path).unwrap()).unwrap();
         assert_eq!(receipt.open_outcomes, options.open_outcomes);
     }
     #[test]
@@ -1422,10 +1341,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(summary.changed_files(), 0);
-        assert!(matches!(
-            summary.receipt.files[0].state,
-            ReceiptState::Skipped(_)
-        ));
+        assert!(matches!(summary.receipt.files[0].state, ReceiptState::Skipped(_)));
         assert_eq!(fs::read(&path).unwrap(), b"external");
         fs::write(&path, b"x").unwrap();
         let reviewed = preview(vec![path.clone()], &job);
@@ -1446,10 +1362,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(summary.changed_files(), 0);
-        assert!(matches!(
-            summary.receipt.files[0].state,
-            ReceiptState::Skipped(_)
-        ));
+        assert!(matches!(summary.receipt.files[0].state, ReceiptState::Skipped(_)));
         drop(lease);
         assert_eq!(fs::read(&path).unwrap(), b"x");
     }
@@ -1461,6 +1374,9 @@ mod tests {
         cancel: Option<SearchJob>,
     }
     impl LocalFileSystem for Injected {
+        fn guard_directory(&self, path: &Path) -> io::Result<std::sync::Arc<dyn Send + Sync>> {
+            WindowsFileSystem.guard_directory(path)
+        }
         fn validate_source(&self, path: &Path) -> io::Result<()> {
             WindowsFileSystem.validate_source(path)
         }
@@ -1470,26 +1386,46 @@ mod tests {
         fn identity(&self, file: &File) -> io::Result<FileIdentity> {
             WindowsFileSystem.identity(file)
         }
-        fn commit(&self, stage: &Path, target: &Path, existed: bool) -> io::Result<()> {
-            if target == self.source && self.fail_source {
+        fn prepare_commit(
+            &self,
+            staged: &Path,
+            target: &Path,
+            mode: bareline_platform::CommitMode,
+            cancellation: &dyn bareline_platform::CommitCancellation,
+        ) -> io::Result<bareline_platform::PreparedCommit> {
+            bareline_platform::prepare_simulated_commit(self, staged, target, mode, cancellation)
+        }
+        fn commit_transaction(
+            &self,
+            transaction: bareline_platform::PreparedCommit,
+        ) -> io::Result<bareline_platform::CommitReceipt> {
+            if transaction.target == self.source && self.fail_source {
                 return Err(io::Error::other("injected disk full before commit"));
             }
+            let source = transaction.target == self.source;
+            let receipt = bareline_platform::simulate_commit_transaction(self, transaction)?;
+            if source {
+                self.committed.store(true, Ordering::Release);
+            }
+            Ok(receipt)
+        }
+        fn cleanup_commit(&self, receipt: &mut bareline_platform::CommitReceipt) -> io::Result<()> {
+            WindowsFileSystem.cleanup_commit(receipt)?;
+            if self.committed.load(Ordering::Acquire)
+                && let Some(job) = &self.cancel
+            {
+                job.cancel();
+            }
+            Ok(())
+        }
+        fn commit(&self, stage: &Path, target: &Path, existed: bool) -> io::Result<()> {
             if self.fail_receipt
                 && self.committed.load(Ordering::Acquire)
                 && target.file_name().is_some_and(|n| n == "receipt.json")
             {
-                return Err(io::Error::other(
-                    "injected receipt failure after source commit",
-                ));
+                return Err(io::Error::other("injected receipt failure after source commit"));
             }
-            WindowsFileSystem.commit(stage, target, existed)?;
-            if target == self.source {
-                self.committed.store(true, Ordering::Release);
-                if let Some(job) = &self.cancel {
-                    job.cancel();
-                }
-            }
-            Ok(())
+            WindowsFileSystem.commit(stage, target, existed)
         }
     }
     #[test]
@@ -1525,16 +1461,9 @@ mod tests {
             .unwrap()
             .path();
         let receipt_path = directory.join("receipt.json");
-        let staged: ReplaceReceipt =
-            serde_json::from_slice(&fs::read(&receipt_path).unwrap()).unwrap();
+        let staged: ReplaceReceipt = serde_json::from_slice(&fs::read(&receipt_path).unwrap()).unwrap();
         assert_eq!(staged.files[0].state, ReceiptState::Staged);
-        let recovered = reconcile_receipt(
-            &receipt_path,
-            &job,
-            &WindowsPathTrustProvider,
-            &WindowsFileSystem,
-        )
-        .unwrap();
+        let recovered = reconcile_receipt(&receipt_path, &job, &WindowsPathTrustProvider, &WindowsFileSystem).unwrap();
         assert_eq!(recovered.files[0].state, ReceiptState::ReconciledCommitted);
         assert_eq!(fs::read(&path).unwrap(), b"Y");
     }
@@ -1564,10 +1493,7 @@ mod tests {
         assert_eq!(summary.changed_files(), 1);
         assert_eq!(fs::read(a).unwrap(), b"Y");
         assert_eq!(fs::read(b).unwrap(), b"x");
-        assert!(matches!(
-            summary.receipt.files[1].state,
-            ReceiptState::Skipped(_)
-        ));
+        assert!(matches!(summary.receipt.files[1].state, ReceiptState::Skipped(_)));
     }
     #[test]
     fn failed_source_commit_keeps_original_and_receipt_reconciliation_is_safe() {
@@ -1592,10 +1518,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(summary.changed_files(), 0);
-        assert!(matches!(
-            summary.receipt.files[0].state,
-            ReceiptState::Uncertain(_)
-        ));
+        assert!(matches!(summary.receipt.files[0].state, ReceiptState::Uncertain(_)));
         assert_eq!(fs::read(&path).unwrap(), b"x");
         let recovered = reconcile_receipt(
             &summary.receipt_path,

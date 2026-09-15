@@ -1,0 +1,465 @@
+diff --git a/apps/bareline/src/windows_app/extensions.rs b/apps/bareline/src/windows_app/extensions.rs
+index 6af2159..65bf343 100644
+--- a/apps/bareline/src/windows_app/extensions.rs
++++ b/apps/bareline/src/windows_app/extensions.rs
+@@ -725,7 +725,7 @@ mod release_delivery_fixture {
+             &AtomicBool::new(false),
+         )
+         .unwrap();
+-        assert_eq!(fs::read(runtime.executable).unwrap(), runtime_bytes);
++        assert_eq!(fs::read(&runtime.executable).unwrap(), runtime_bytes);
+         let corrupt_runtime = evidence_root.join("corrupt-runtime.exe");
+         fs::write(&corrupt_runtime, [&runtime_bytes[..], b"tamper"].concat()).unwrap();
+         let corrupt_root = evidence_root.join("corrupt-installation");
+diff --git a/apps/extension-host/tests/first_party.rs b/apps/extension-host/tests/first_party.rs
+index efeadd3..2fceea1 100644
+--- a/apps/extension-host/tests/first_party.rs
++++ b/apps/extension-host/tests/first_party.rs
+@@ -191,6 +191,28 @@ fn configure_qualification_process(
+     }
+ }
+ 
++fn selected_host() -> std::path::PathBuf {
++    std::env::var_os("BARELINE_T10_HOST_PATH")
++        .map(std::path::PathBuf::from)
++        .unwrap_or_else(|| std::path::PathBuf::from(env!("CARGO_BIN_EXE_bareline-extension-host")))
++}
++
++fn selected_component(crate_name: &str) -> std::path::PathBuf {
++    let variable = match crate_name {
++        "json_tools" => "BARELINE_T10_JSON_COMPONENT_PATH",
++        "xml_tools" => "BARELINE_T10_XML_COMPONENT_PATH",
++        "hex_view" => "BARELINE_T10_HEX_COMPONENT_PATH",
++        _ => panic!("unknown first-party component {crate_name}"),
++    };
++    std::env::var_os(variable)
++        .map(std::path::PathBuf::from)
++        .unwrap_or_else(|| {
++            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
++                .join("../../target/wasm32-wasip2/release")
++                .join(format!("bareline_{crate_name}.wasm"))
++        })
++}
++
+ fn component_case(
+     crate_name: &str,
+     command: &str,
+@@ -200,9 +222,7 @@ fn component_case(
+     budget: ExecutionBudget,
+     mut broker: impl FnMut(Envelope) -> Result<BrokerValue, String>,
+ ) -> CaseResult {
+-    let file = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+-        .join("../../target/wasm32-wasip2/release")
+-        .join(format!("bareline_{crate_name}.wasm"));
++    let file = selected_component(crate_name);
+     let hash_read_started = Instant::now();
+     let component = std::fs::read(&file).expect("build actual components first");
+     assert!(component.starts_with(b"\0asm\x0d\0\x01\0"));
+@@ -211,8 +231,8 @@ fn component_case(
+     let case_id = qualification_case_id(command);
+     let mut telemetry = HostTelemetry::create(&case_id);
+     let server = PipeServer::create().unwrap();
+-    let executable = std::path::Path::new(env!("CARGO_BIN_EXE_bareline-extension-host"));
+-    let mut process = Command::new(executable);
++    let executable = selected_host();
++    let mut process = Command::new(&executable);
+     process
+         .args([server.name(), &std::process::id().to_string()])
+         .arg(&file)
+@@ -224,10 +244,10 @@ fn component_case(
+         .stdin(Stdio::null())
+         .stdout(Stdio::null())
+         .stderr(Stdio::inherit());
+-    configure_qualification_process(&mut process, executable, &case_id, &telemetry.path);
++    configure_qualification_process(&mut process, &executable, &case_id, &telemetry.path);
+     let started = Instant::now();
+     let (child, mut job) = SandboxedProcessLauncher::default()
+-        .spawn_host(&mut process, &[executable, &file])
++        .spawn_host(&mut process, &[executable.as_path(), file.as_path()])
+         .unwrap();
+     let host_pid = child.id();
+     let restricted = child.is_restricted();
+@@ -588,14 +608,13 @@ fn fast_release_components_cover_semantics_permissions_and_provenance() {
+ }
+ 
+ fn interrupt_actual_component(cancel: bool) -> String {
+-    let file = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+-        .join("../../target/wasm32-wasip2/release/bareline_json_tools.wasm");
++    let file = selected_component("json_tools");
+     let component = std::fs::read(&file).expect("build actual components first");
+-    let executable = std::path::Path::new(env!("CARGO_BIN_EXE_bareline-extension-host"));
++    let executable = selected_host();
+     let case_id = qualification_case_id(if cancel { "cancel" } else { "timeout" });
+     let mut telemetry = HostTelemetry::create(&case_id);
+     let server = PipeServer::create().unwrap();
+-    let mut process = Command::new(executable);
++    let mut process = Command::new(&executable);
+     process
+         .args([server.name(), &std::process::id().to_string()])
+         .arg(&file)
+@@ -604,9 +623,9 @@ fn interrupt_actual_component(cancel: bool) -> String {
+         .stdin(Stdio::null())
+         .stdout(Stdio::null())
+         .stderr(Stdio::inherit());
+-    configure_qualification_process(&mut process, executable, &case_id, &telemetry.path);
++    configure_qualification_process(&mut process, &executable, &case_id, &telemetry.path);
+     let (mut child, mut job) = SandboxedProcessLauncher::default()
+-        .spawn_host(&mut process, &[executable, &file])
++        .spawn_host(&mut process, &[executable.as_path(), file.as_path()])
+         .unwrap();
+     let host_pid = child.id();
+     let sandbox = if child.is_restricted() {
+diff --git a/build-support/release_config.rs b/build-support/release_config.rs
+index dc79d26..0bbd455 100644
+--- a/build-support/release_config.rs
++++ b/build-support/release_config.rs
+@@ -27,8 +27,32 @@ const KEYS: &[&str] = &[
+ ];
+ 
+ fn watch_release_source(root: &std::path::Path) {
+-    for control in [root.join(".git/HEAD"), root.join(".git/index")] {
+-        println!("cargo:rerun-if-changed={}", control.display());
++    let mut controls = vec!["HEAD".to_owned(), "index".to_owned(), "packed-refs".to_owned()];
++    let symbolic = std::process::Command::new("git")
++        .args(["symbolic-ref", "-q", "HEAD"])
++        .current_dir(root)
++        .output()
++        .expect("configured release source watching requires git");
++    if symbolic.status.success() {
++        controls.push(
++            String::from_utf8(symbolic.stdout)
++                .expect("git ref must be UTF-8")
++                .trim()
++                .to_owned(),
++        );
++    }
++    for control in controls {
++        let output = std::process::Command::new("git")
++            .args(["rev-parse", "--git-path", &control])
++            .current_dir(root)
++            .output()
++            .expect("configured release source watching requires git");
++        if !output.status.success() {
++            panic!("cannot resolve configured release git control path");
++        }
++        let path = PathBuf::from(String::from_utf8(output.stdout).expect("git path must be UTF-8").trim());
++        let path = if path.is_absolute() { path } else { root.join(path) };
++        println!("cargo:rerun-if-changed={}", path.display());
+     }
+     let output = std::process::Command::new("git")
+         .args(["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--"])
+diff --git a/docs/implementation/2026-09-12-audit-implementation/PR-T11.md b/docs/implementation/2026-09-12-audit-implementation/PR-T11.md
+index c7a03df..afb9e83 100644
+--- a/docs/implementation/2026-09-12-audit-implementation/PR-T11.md
++++ b/docs/implementation/2026-09-12-audit-implementation/PR-T11.md
+@@ -23,7 +23,8 @@
+ - `python scripts/release_config.py validate --config release/preview.release-config.json` — PASS.
+ - `python scripts/release_config.py validate --config release/fixtures/nonshipping.release-config.json` — PASS.
+ - Fixture preparation and revalidation probe — PASS; canonical config and named source identity matched, with no endpoint contacted. This parser receipt is not runtime qualification.
+-- PowerShell parser accepted `build-configured.ps1`, `assemble-extension-assets.ps1`, `test-release-fixture.ps1`, and `package-first-party.ps1`.
++- PowerShell parser accepted `build-configured.ps1`, `assemble-extension-assets.ps1`, `test-release-fixture.ps1`, `test-first-party.ps1`, and `package-first-party.ps1`.
++- A bounded synthetic parser/report probe accepted the actual four-field T09/T10 source-receipt shape, rejected a changed source identity and default artifact inputs, and linked installed/package/inventory/capability hashes. It did not execute or qualify a runtime.
+ - Synthetic assembly probe produced separate runtime, catalog, and three-component assets plus their three unsigned JSON inventories, then removed its scratch tree.
+ - Python AST parsing, exact `rustfmt`, and `git diff --check` passed.
+ 
+diff --git a/packaging/windows/test-release-fixture.ps1 b/packaging/windows/test-release-fixture.ps1
+index 26b21b1..3cd104d 100644
+--- a/packaging/windows/test-release-fixture.ps1
++++ b/packaging/windows/test-release-fixture.ps1
+@@ -29,9 +29,14 @@ try {
+         if ($LASTEXITCODE) { throw 'Preview disabled-reason fixture failed' }
+         cargo build --locked --release -p bareline -p bareline-update-helper -p bareline-extension-host --features bareline/fixture-release,bareline-update-helper/fixture-release,bareline-extension-host/fixture-release
+         if ($LASTEXITCODE) { throw 'Fixture-configured executable build failed' }
++        $fixtureExecutables = Join-Path $fixtureEvidence 'unsigned-executables'
++        [IO.Directory]::CreateDirectory($fixtureExecutables) | Out-Null
++        foreach ($name in @('bareline.exe', 'bareline-update-helper.exe', 'bareline-extension-host.exe')) {
++            [IO.File]::Copy((Join-Path $root "target/release/$name"), (Join-Path $fixtureExecutables $name), $false)
++        }
+         $deliveryEvidence = Join-Path $fixtureEvidence 'connected-delivery'
+         $env:BARELINE_RELEASE_FIXTURE_PACKAGE_DIR = $componentPackages
+-        $env:BARELINE_RELEASE_FIXTURE_RUNTIME = Join-Path $root 'target/release/bareline-extension-host.exe'
++        $env:BARELINE_RELEASE_FIXTURE_RUNTIME = Join-Path $fixtureExecutables 'bareline-extension-host.exe'
+         $env:BARELINE_RELEASE_FIXTURE_OUTPUT = $deliveryEvidence
+         cargo test --locked --release -p bareline --features bareline/fixture-release fixture_config_drives_catalog_runtime_and_three_component_install_with_tamper_rejection -- --nocapture
+         if ($LASTEXITCODE) { throw 'Connected fixture-configured catalog/runtime/component delivery failed' }
+@@ -45,9 +50,9 @@ try {
+         $t10Manifest = Join-Path $newT10Runs[0].FullName 'run.json'
+         & packaging/windows/assemble-extension-assets.ps1 -Runtime $env:BARELINE_RELEASE_FIXTURE_RUNTIME -Catalog (Join-Path $deliveryEvidence 'catalog.json') -CatalogSignature (Join-Path $deliveryEvidence 'catalog.minisig') -JsonTools (Join-Path $componentPackages 'json-tools.blex') -XmlTools (Join-Path $componentPackages 'xml-tools.blex') -HexView (Join-Path $componentPackages 'hex-view.blex') -PreparedConfig $prepared -OutputDir (Join-Path $fixtureEvidence 'delivery-assets')
+         if ($LASTEXITCODE) { throw 'Connected fixture resource inventory failed' }
+-        & python scripts/release_config.py manifest --prepared $prepared --artifact "editor=$(Join-Path $root 'target/release/bareline.exe')" --artifact "helper=$(Join-Path $root 'target/release/bareline-update-helper.exe')" --artifact "runtime=$(Join-Path $root 'target/release/bareline-extension-host.exe')" --output (Join-Path $fixtureEvidence 'build-capabilities.json')
++        & python scripts/release_config.py manifest --prepared $prepared --artifact "editor=$(Join-Path $fixtureExecutables 'bareline.exe')" --artifact "helper=$(Join-Path $fixtureExecutables 'bareline-update-helper.exe')" --artifact "runtime=$(Join-Path $fixtureExecutables 'bareline-extension-host.exe')" --output (Join-Path $fixtureEvidence 'build-capabilities.json')
+         if ($LASTEXITCODE) { throw 'Fixture capability assertion failed' }
+-        & python scripts/release_config.py verify-manifest --manifest (Join-Path $fixtureEvidence 'build-capabilities.json') --artifact-dir (Join-Path $root 'target/release')
++        & python scripts/release_config.py verify-manifest --manifest (Join-Path $fixtureEvidence 'build-capabilities.json') --artifact-dir $fixtureExecutables
+         if ($LASTEXITCODE) { throw 'Fixture capability manifest byte verification failed' }
+         & python scripts/release_config.py fixture-report --prepared $prepared --t10-manifest $t10Manifest --installed-manifest $installedManifest --capability-manifest (Join-Path $fixtureEvidence 'build-capabilities.json') --inventory (Join-Path $fixtureEvidence 'delivery-assets/runtime-inventory.json') --inventory (Join-Path $fixtureEvidence 'delivery-assets/catalog-inventory.json') --inventory (Join-Path $fixtureEvidence 'delivery-assets/components-inventory.json') --output (Join-Path $fixtureEvidence 'fixture-delivery-report.json')
+         if ($LASTEXITCODE) { throw 'Fixture execution/resource provenance report failed' }
+diff --git a/scripts/release_config.py b/scripts/release_config.py
+index f4d3120..06723f8 100644
+--- a/scripts/release_config.py
++++ b/scripts/release_config.py
+@@ -568,6 +568,15 @@ def fixture_report(
+     artifacts = t10.get("artifacts")
+     if not isinstance(artifacts, dict):
+         raise ConfigurationError("T10 fixture dependency lacks artifacts")
++    artifact_inputs = t10.get("artifact_inputs")
++    if not isinstance(artifact_inputs, dict) or set(artifact_inputs) != {"mode", "validated_before_execution"} or artifact_inputs.get("mode") != "explicit":
++        raise ConfigurationError("T10 fixture dependency did not use explicit installed artifact inputs")
++    validated_inputs = artifact_inputs.get("validated_before_execution")
++    if not isinstance(validated_inputs, dict) or set(validated_inputs) != {"host", "json", "xml", "hex"}:
++        raise ConfigurationError("T10 fixture dependency lacks pre-execution artifact identities")
++    observed = t10.get("observed_suites")
++    if not isinstance(observed, list) or len(observed) != 1 or not isinstance(observed[0], dict) or any(observed[0].get(key) != value for key, value in {"suite": "fast", "expected": 3, "passed": 3, "failed": 0}.items()):
++        raise ConfigurationError("T10 fixture dependency requires one three-case Fast execution")
+     for role in ("host", "json", "xml", "hex"):
+         record = artifacts.get(role)
+         if not isinstance(record, dict) or not isinstance(record.get("path"), str):
+@@ -577,8 +586,14 @@ def fixture_report(
+         if digest != record.get("sha256") or size != record.get("bytes"):
+             raise ConfigurationError(f"T10 {role} component changed after execution")
+         expected = installed_artifacts[role]
+-        if path.resolve() != Path(expected["path"]).resolve() or digest != expected["sha256"] or size != expected["bytes"]:
++        try:
++            same_file = os.path.samefile(path, expected["path"])
++        except OSError:
++            same_file = False
++        if not same_file or digest != expected["sha256"] or size != expected["bytes"]:
+             raise ConfigurationError(f"T10 {role} input was not the retained fixture installation")
++        if validated_inputs[role] != record:
++            raise ConfigurationError(f"T10 {role} post-execution identity differs from its validated input")
+     verify_manifest(capability, capability.parent / "unsigned-executables" if (capability.parent / "unsigned-executables").is_dir() else ROOT / "target" / "debug")
+     capability_document = load_json(capability)
+     assert isinstance(capability_document, dict)
+diff --git a/scripts/test-first-party.ps1 b/scripts/test-first-party.ps1
+index 553d441..fff9986 100644
+--- a/scripts/test-first-party.ps1
++++ b/scripts/test-first-party.ps1
+@@ -2,10 +2,54 @@
+ [CmdletBinding()]
+ param(
+     [ValidateSet('Fast', 'Large', 'All')]
+-    [string] $Suite = 'Fast'
++    [string] $Suite = 'Fast',
++    [string] $HostPath,
++    [string] $JsonPath,
++    [string] $XmlPath,
++    [string] $HexPath
+ )
+ $ErrorActionPreference = 'Stop'
+ $repository = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
++
++function Resolve-QualificationArtifact {
++    param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][ValidateSet('host', 'component')][string]$Kind)
++    $item = Get-Item -LiteralPath (Resolve-Path -LiteralPath $Path).Path
++    if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
++        throw "Qualification $Kind input must be a regular non-link file: $Path"
++    }
++    $stream = [IO.File]::OpenRead($item.FullName)
++    try {
++        $prefix = [byte[]]::new(8)
++        $read = $stream.Read($prefix, 0, $prefix.Length)
++    } finally { $stream.Dispose() }
++    if ($Kind -eq 'host' -and ($item.Extension -ne '.exe' -or $read -lt 2 -or $prefix[0] -ne 0x4d -or $prefix[1] -ne 0x5a)) {
++        throw "Qualification host input is not a Windows executable: $Path"
++    }
++    if ($Kind -eq 'component' -and ($read -ne 8 -or [Convert]::ToHexString($prefix) -ne '0061736D0D000100')) {
++        throw "Qualification component input lacks WASI component magic: $Path"
++    }
++    return $item.FullName
++}
++
++$providedInputs = @($HostPath, $JsonPath, $XmlPath, $HexPath) | Where-Object { ![string]::IsNullOrWhiteSpace($_) }
++if ($providedInputs.Count -notin @(0, 4)) { throw 'HostPath, JsonPath, XmlPath and HexPath are all-or-none' }
++$artifactInputMode = if ($providedInputs.Count -eq 4) { 'explicit' } else { 'default' }
++if ($artifactInputMode -eq 'explicit') {
++    $HostPath = Resolve-QualificationArtifact -Path $HostPath -Kind host
++    $JsonPath = Resolve-QualificationArtifact -Path $JsonPath -Kind component
++    $XmlPath = Resolve-QualificationArtifact -Path $XmlPath -Kind component
++    $HexPath = Resolve-QualificationArtifact -Path $HexPath -Kind component
++    $distinctInputCount = (@($HostPath, $JsonPath, $XmlPath, $HexPath) | Sort-Object -Unique).Count
++    if ($distinctInputCount -ne 4) {
++        throw 'Qualification artifact inputs must be four distinct files'
++    }
++}
++$selectedPaths = [ordered]@{
++    host = if ($artifactInputMode -eq 'explicit') { $HostPath } else { Join-Path $repository 'target/release/bareline-extension-host.exe' }
++    json = if ($artifactInputMode -eq 'explicit') { $JsonPath } else { Join-Path $repository 'target/wasm32-wasip2/release/bareline_json_tools.wasm' }
++    xml = if ($artifactInputMode -eq 'explicit') { $XmlPath } else { Join-Path $repository 'target/wasm32-wasip2/release/bareline_xml_tools.wasm' }
++    hex = if ($artifactInputMode -eq 'explicit') { $HexPath } else { Join-Path $repository 'target/wasm32-wasip2/release/bareline_hex_view.wasm' }
++}
+ $runId = '{0}-{1}-{2}' -f [DateTime]::UtcNow.ToString('yyyyMMddTHHmmss.fffffffZ'), $PID, ([guid]::NewGuid().ToString('N').Substring(0, 8))
+ $runDirectory = Join-Path $repository (Join-Path 'target/first-party' $runId)
+ New-Item -ItemType Directory -Force $runDirectory | Out-Null
+@@ -122,6 +166,18 @@ $lastSourceIdentity = $null
+ $sourceIdentityFailure = $null
+ $verifiedSourceStages = @()
+ $testExecutable = $null
++$validatedArtifactInputs = $null
++$artifactEnvironment = [ordered]@{
++    BARELINE_T10_HOST_PATH = if ($artifactInputMode -eq 'explicit') { $selectedPaths.host } else { $null }
++    BARELINE_T10_JSON_COMPONENT_PATH = if ($artifactInputMode -eq 'explicit') { $selectedPaths.json } else { $null }
++    BARELINE_T10_XML_COMPONENT_PATH = if ($artifactInputMode -eq 'explicit') { $selectedPaths.xml } else { $null }
++    BARELINE_T10_HEX_COMPONENT_PATH = if ($artifactInputMode -eq 'explicit') { $selectedPaths.hex } else { $null }
++}
++$previousArtifactEnvironment = @{}
++foreach ($name in $artifactEnvironment.Keys) {
++    $previousArtifactEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
++    [Environment]::SetEnvironmentVariable($name, $artifactEnvironment[$name], 'Process')
++}
+ $plans = @()
+ if ($Suite -in @('Fast', 'All')) {
+     $plans += [ordered]@{ name = 'fast'; filter = 'fast_release_'; expected = 3; timeout = 300 }
+@@ -184,6 +240,15 @@ try {
+         }
+     }
+ 
++    if ($null -eq $failure) {
++        $validatedArtifactInputs = [ordered]@{}
++        foreach ($role in $selectedPaths.Keys) {
++            $identity = Get-ArtifactIdentity $selectedPaths[$role]
++            if ($null -eq $identity) { throw "Selected $role qualification artifact is unavailable" }
++            $validatedArtifactInputs[$role] = $identity
++        }
++    }
++
+     foreach ($plan in $plans) {
+         if ($null -ne $failure) { break }
+         $testExit = Invoke-RetainedCommand -Name ("test-{0}" -f $plan.name) -TimeoutSeconds $plan.timeout -Command @(
+@@ -227,6 +292,9 @@ try {
+     $failure = $_.Exception.Message
+ } finally {
+     Pop-Location
++    foreach ($name in $artifactEnvironment.Keys) {
++        [Environment]::SetEnvironmentVariable($name, $previousArtifactEnvironment[$name], 'Process')
++    }
+     if ($null -eq $sourceIdentity) {
+         $targetReceiptPath = Join-Path $runDirectory 'wasi-target.json'
+         if (Test-Path -LiteralPath $targetReceiptPath) {
+@@ -254,11 +322,20 @@ try {
+             }
+     )
+     $artifacts = [ordered]@{
+-        host = Get-ArtifactIdentity (Join-Path $repository 'target/release/bareline-extension-host.exe')
++        host = Get-ArtifactIdentity $selectedPaths.host
+         test_runner = if ($null -eq $testExecutable) { $null } else { Get-ArtifactIdentity $testExecutable }
+-        json = Get-ArtifactIdentity (Join-Path $repository 'target/wasm32-wasip2/release/bareline_json_tools.wasm')
+-        xml = Get-ArtifactIdentity (Join-Path $repository 'target/wasm32-wasip2/release/bareline_xml_tools.wasm')
+-        hex = Get-ArtifactIdentity (Join-Path $repository 'target/wasm32-wasip2/release/bareline_hex_view.wasm')
++        json = Get-ArtifactIdentity $selectedPaths.json
++        xml = Get-ArtifactIdentity $selectedPaths.xml
++        hex = Get-ArtifactIdentity $selectedPaths.hex
++    }
++    if ($null -ne $validatedArtifactInputs) {
++        foreach ($role in $selectedPaths.Keys) {
++            if ($artifacts[$role].path -ne $validatedArtifactInputs[$role].path -or
++                $artifacts[$role].bytes -ne $validatedArtifactInputs[$role].bytes -or
++                $artifacts[$role].sha256 -ne $validatedArtifactInputs[$role].sha256) {
++                $failure = "Selected $role qualification artifact changed during execution"
++            }
++        }
+     }
+     $manifest = [ordered]@{
+         schema_version = 1
+@@ -278,6 +355,7 @@ try {
+             $verifiedSourceStages.Count -eq (2 + $plans.Count)
+         )
+         command_receipts = $commandReceipts
++        artifact_inputs = [ordered]@{ mode = $artifactInputMode; validated_before_execution = $validatedArtifactInputs }
+         artifacts = $artifacts
+         artifact_note = 'Hashes identify files observed after the retained commands; a failed compile may leave a pre-existing artifact and does not qualify it.'
+         evidence_directory = $runDirectory
+diff --git a/scripts/test_release_config.py b/scripts/test_release_config.py
+index 9f03134..5bf2eb1 100644
+--- a/scripts/test_release_config.py
++++ b/scripts/test_release_config.py
+@@ -5,10 +5,12 @@
+ import copy
+ import base64
+ import importlib.util
++import hashlib
+ import json
+ import os
+ import subprocess
+ import tempfile
++import zipfile
+ from pathlib import Path
+ 
+ import release_config
+@@ -123,13 +125,76 @@ def main() -> None:
+         try: release_config.verify_manifest(manifest, artifact_dir)
+         except release_config.ConfigurationError: pass
+         else: raise AssertionError("tampered artifact bytes accepted")
++    with tempfile.TemporaryDirectory(prefix="bareline-release-report-") as temporary:
++        root = Path(temporary)
++        fixture_path = root / "fixture.json"; fixture_path.write_text(json.dumps(fixture), encoding="utf-8")
++        prepared = root / "prepared.txt"; release_config.prepare(fixture_path, prepared, "fixture")
++        values = release_config.verify_prepared(prepared, "fixture")
++        executables = root / "unsigned-executables"; executables.mkdir()
++        component_names = {"editor": "editor", "helper": "update-helper", "runtime": "extension-runtime"}
++        artifact_arguments = []
++        for role, component in component_names.items():
++            filename = {"editor": "bareline.exe", "helper": "bareline-update-helper.exe", "runtime": "bareline-extension-host.exe"}[role]
++            marker = (
++                f"BARELINE-CAPABILITY|component={component}|mode=fixture|config-version={values['BARELINE_CONFIG_VERSION']}|"
++                f"config={values['BARELINE_CONFIG_DIGEST']}|source={values['BARELINE_SOURCE_DIGEST']}|"
++                f"version={values['BARELINE_RELEASE_VERSION']}|features={values['BARELINE_BUILD_FEATURES']}"
++            ).encode("ascii")
++            path = executables / filename; path.write_bytes(b"MZ-static-fixture\0" + marker); artifact_arguments.append(f"{role}={path}")
++        capability = root / "build-capabilities.json"; release_config.manifest(prepared, artifact_arguments, capability)
++        delivery = root / "connected-delivery"; installation = delivery / "installation"; installation.mkdir(parents=True)
++        installed_paths = {
++            "host": installation / "runtimes/hash/bareline-extension-host.exe",
++            "json": installation / "json/extension.wasm",
++            "xml": installation / "xml/extension.wasm",
++            "hex": installation / "hex/extension.wasm",
++        }
++        installed_paths["host"].parent.mkdir(parents=True); installed_paths["host"].write_bytes((executables / "bareline-extension-host.exe").read_bytes())
++        for role in ("json", "xml", "hex"):
++            installed_paths[role].parent.mkdir(parents=True); installed_paths[role].write_bytes(b"\0asm\x0d\0\x01\0" + role.encode("ascii"))
++        def identity(path: Path) -> dict:
++            payload = path.read_bytes()
++            return {"path": str(path.resolve()), "sha256": hashlib.sha256(payload).hexdigest(), "bytes": len(payload)}
++        installed_artifacts = {role: identity(path) for role, path in installed_paths.items()}
++        installed_manifest = delivery / "installed-artifacts.json"
++        installed_manifest.write_text(json.dumps({"schema_version": 1, "nonshipping": True, "artifacts": installed_artifacts}), encoding="utf-8")
++        assets = root / "delivery-assets"; assets.mkdir()
++        (assets / "bareline-exthost-x64.exe").write_bytes(installed_paths["host"].read_bytes())
++        (assets / "catalog.json").write_text("{}", encoding="ascii"); (assets / "catalog.minisig").write_text("fixture", encoding="ascii")
++        package_roles = {"json-tools": "json", "xml-tools": "xml", "hex-view": "hex"}
++        for package_role, role in package_roles.items():
++            with zipfile.ZipFile(assets / f"{package_role}.blex", "w") as archive:
++                archive.writestr("extension.wasm", installed_paths[role].read_bytes())
++        runtime_inventory = assets / "runtime-inventory.json"
++        catalog_inventory = assets / "catalog-inventory.json"
++        component_inventory = assets / "components-inventory.json"
++        release_config.inventory(prepared, "runtime", [f"host={assets / 'bareline-exthost-x64.exe'}"], runtime_inventory)
++        release_config.inventory(prepared, "catalog", [f"catalog={assets / 'catalog.json'}", f"signature={assets / 'catalog.minisig'}"], catalog_inventory)
++        release_config.inventory(prepared, "components", [f"{role}={assets / (role + '.blex')}" for role in package_roles], component_inventory)
++        source = release_config.source_identity()
++        t10 = {
++            "status": "passed", "source_identity_chain_verified": True,
++            "source_identity": source, "source_identity_after": copy.deepcopy(source),
++            "observed_suites": [{"suite": "fast", "expected": 3, "passed": 3, "failed": 0}],
++            "artifact_inputs": {"mode": "explicit", "validated_before_execution": installed_artifacts},
++            "artifacts": copy.deepcopy(installed_artifacts),
++        }
++        t10_manifest = root / "t10-run.json"; t10_manifest.write_text(json.dumps(t10), encoding="utf-8")
++        report = root / "fixture-report.json"
++        release_config.fixture_report(prepared, t10_manifest, installed_manifest, capability, [runtime_inventory, catalog_inventory, component_inventory], report)
++        assert report.is_file()
++        changed_t10 = copy.deepcopy(t10); changed_t10["artifact_inputs"]["mode"] = "default"
++        changed_t10_path = root / "changed-t10.json"; changed_t10_path.write_text(json.dumps(changed_t10), encoding="utf-8")
++        try: release_config.fixture_report(prepared, changed_t10_path, installed_manifest, capability, [runtime_inventory, catalog_inventory, component_inventory], root / "rejected-report.json")
++        except release_config.ConfigurationError: pass
++        else: raise AssertionError("fixture report accepted non-explicit T10 artifacts")
+     duplicate = '{"schema_version":1,"schema_version":1}'
+     with tempfile.TemporaryDirectory(prefix="bareline-release-config-") as temporary:
+         duplicate_path = Path(temporary) / "duplicate.json"; duplicate_path.write_text(duplicate, encoding="utf-8")
+         try: release_config.load_json(duplicate_path)
+         except release_config.ConfigurationError: pass
+         else: raise AssertionError("duplicate JSON key accepted")
+-    print(f"PASS: modes, {len(cases)} invalid configs, prepared/source/receipt binding, manifest claims/roles/paths/bytes, duplicate keys")
++    print(f"PASS: modes, {len(cases)} invalid configs, prepared/source/receipt binding, strict manifests, linked fixture-report parser probe, duplicate keys")
+ 
+ 
+ if __name__ == "__main__":

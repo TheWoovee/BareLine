@@ -1,0 +1,67 @@
+diff --git a/apps/bareline/src/windows_app/accessibility.rs b/apps/bareline/src/windows_app/accessibility.rs
+index 0d67640..f52b1ca 100644
+--- a/apps/bareline/src/windows_app/accessibility.rs
++++ b/apps/bareline/src/windows_app/accessibility.rs
+@@ -2076,6 +2076,40 @@ pub(super) mod tests {
+         }
+     }
+ 
++    #[test]
++    fn compare_editor_providers_match_reserved_viewport_above_shared_dock() {
++        let mut shell = headless_shell();
++        compare::accessibility_test_setup(&mut shell, "open");
++        let snapshot = shell_snapshot(&shell);
++        let editor_origin = bareline_ui::rect(
++            shell.panels.width_left(),
++            shell.toolbar.controller.height(),
++            (1000.0 - shell.panels.width_left() - shell.panels.width_right()).max(0.0),
++            (800.0 - shell.toolbar.controller.height()).max(0.0),
++        );
++        let dock_top = editor_origin.y + shell.dock.current_layout().unwrap().outer.y;
++
++        for pane in 0..2 {
++            let pane_bounds = shell.views.bounds[pane].expect("compare pane layout");
++            let provider = editor_provider_id(shell.views.pane_token(pane).expect("compare pane token"));
++            let node = snapshot
++                .nodes
++                .iter()
++                .find(|node| node.id == provider)
++                .expect("compare editor provider");
++            let provider_bottom = node.bounds[1] + node.bounds[3];
++            let pane_bottom = (editor_origin.y + pane_bounds.y + pane_bounds.height) as f64;
++            assert_eq!(
++                provider_bottom, pane_bottom,
++                "pane {pane} provider must use its rendered viewport"
++            );
++            assert_eq!(
++                pane_bottom, dock_top as f64,
++                "pane {pane} viewport must stop at the shared dock"
++            );
++        }
++    }
++
+     #[test]
+     fn provider_identity_follows_tab_move_clone_and_session_restore() {
+         use bareline_app::views::{SessionTab, ViewController, ViewState};
+diff --git a/apps/bareline/src/windows_app/compare.rs b/apps/bareline/src/windows_app/compare.rs
+index 360baea..89186ef 100644
+--- a/apps/bareline/src/windows_app/compare.rs
++++ b/apps/bareline/src/windows_app/compare.rs
+@@ -2498,6 +2498,9 @@ pub(super) fn accessibility_test_setup(shell: &mut Shell, scenario: &str) {
+             CompareState::Exact | CompareState::Coarse(_)
+         ));
+     }
++    // Match the production frame order: the dock reserves editor height before
++    // split-pane layout publishes the bounds consumed by accessibility.
++    shell.sync_bottom_dock(1000.0, 800.0);
+     match scenario {
+         "open" | "populated" => {}
+         "options" => {
+@@ -2551,7 +2554,6 @@ pub(super) fn accessibility_test_setup(shell: &mut Shell, scenario: &str) {
+             )
+             .unwrap();
+     }
+-    shell.sync_bottom_dock(1000.0, 800.0);
+     let body = shell.dock.current_layout().unwrap().body;
+     shell.compare.draw_dock(&shell.settings, body, &mut ops);
+     shell

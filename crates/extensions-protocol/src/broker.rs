@@ -37,9 +37,15 @@ pub struct ExtensionSession {
     pending: BTreeMap<u64, Pending>,
     staged: BTreeMap<u64, Staged>,
     enabled: bool,
+    budget: ExecutionBudget,
 }
 impl ExtensionSession {
     pub fn new(id: String) -> Result<Self, BrokerError> {
+        Self::new_with_budget(id, ExecutionBudget::Interactive)
+    }
+    /// The invocation's declared budget decides how long staged work may stay
+    /// pending; background commands stream for up to two minutes, not five seconds.
+    pub fn new_with_budget(id: String, budget: ExecutionBudget) -> Result<Self, BrokerError> {
         if !valid_id(&id) {
             return Err(BrokerError::Denied);
         }
@@ -50,6 +56,7 @@ impl ExtensionSession {
             pending: BTreeMap::new(),
             staged: BTreeMap::new(),
             enabled: false,
+            budget,
         })
     }
     pub fn generation(&self) -> u64 {
@@ -80,24 +87,21 @@ impl ExtensionSession {
             return Err(BrokerError::Denied);
         }
         let expected = match &message.request {
-            Request::ReadTextRange { document, .. }
-            | Request::ReadOriginalBytes { document, .. } => {
+            Request::ReadTextRange { document, .. } | Request::ReadOriginalBytes { document, .. } => {
                 (Capability::DocumentRead, Scope::Document(*document))
             }
             Request::ApplyEdits { document, .. } | Request::BeginEdits { document, .. } => {
                 (Capability::DocumentEdit, Scope::Document(*document))
             }
-            Request::AppendChunk { transaction, .. } | Request::CommitEdits { transaction, .. } => {
-                (
-                    Capability::DocumentEdit,
-                    Scope::Document(
-                        self.staged
-                            .get(transaction)
-                            .ok_or(BrokerError::UnknownRequest)?
-                            .document,
-                    ),
-                )
-            }
+            Request::AppendChunk { transaction, .. } | Request::CommitEdits { transaction, .. } => (
+                Capability::DocumentEdit,
+                Scope::Document(
+                    self.staged
+                        .get(transaction)
+                        .ok_or(BrokerError::UnknownRequest)?
+                        .document,
+                ),
+            ),
             Request::Panel { .. } => (Capability::UiPanel, Scope::Extension),
             // Commands are resolved by the editor registry, with their own required grant.
             Request::InvokeCommand { .. } => return Err(BrokerError::Denied),
@@ -137,7 +141,7 @@ impl ExtensionSession {
         self.pending.insert(
             message.request_id,
             Pending {
-                deadline: now + Duration::from_millis(INTERACTIVE_TIMEOUT_MS),
+                deadline: now + Duration::from_millis(self.budget.timeout_ms()),
             },
         );
         Ok(())
@@ -157,28 +161,16 @@ impl ExtensionSession {
             self.cancel(id);
         }
     }
-    pub fn accept_reply(
-        &mut self,
-        request: u64,
-        generation: u64,
-        now: Instant,
-    ) -> Result<(), BrokerError> {
+    pub fn accept_reply(&mut self, request: u64, generation: u64, now: Instant) -> Result<(), BrokerError> {
         self.expire(now);
         if !self.enabled || generation != self.generation {
             return Err(BrokerError::Denied);
         }
-        self.pending
-            .remove(&request)
-            .ok_or(BrokerError::UnknownRequest)?;
+        self.pending.remove(&request).ok_or(BrokerError::UnknownRequest)?;
         self.staged.remove(&request);
         Ok(())
     }
-    pub fn begin_edits(
-        &mut self,
-        message: &Envelope,
-        current_revision: u64,
-        now: Instant,
-    ) -> Result<(), BrokerError> {
+    pub fn begin_edits(&mut self, message: &Envelope, current_revision: u64, now: Instant) -> Result<(), BrokerError> {
         let Request::BeginEdits { document, revision } = message.request else {
             return Err(BrokerError::InvalidEdits);
         };
@@ -199,11 +191,7 @@ impl ExtensionSession {
     pub fn append(&mut self, message: &Envelope, now: Instant) -> Result<(), BrokerError> {
         self.expire(now);
         self.authorize(message)?;
-        let Request::AppendChunk {
-            transaction,
-            ref chunk,
-        } = message.request
-        else {
+        let Request::AppendChunk { transaction, ref chunk } = message.request else {
             return Err(BrokerError::InvalidEdits);
         };
         if chunk.len() > MAX_CHUNK_BYTES {
@@ -245,23 +233,15 @@ impl ExtensionSession {
     ) -> Result<Vec<TextEdit>, BrokerError> {
         self.expire(now);
         self.authorize(message)?;
-        let Request::CommitEdits {
-            transaction,
-            revision,
-        } = message.request
-        else {
+        let Request::CommitEdits { transaction, revision } = message.request else {
             return Err(BrokerError::InvalidEdits);
         };
-        let staged = self
-            .staged
-            .remove(&transaction)
-            .ok_or(BrokerError::UnknownRequest)?;
+        let staged = self.staged.remove(&transaction).ok_or(BrokerError::UnknownRequest)?;
         self.pending.remove(&transaction);
         if revision != current_revision || staged.revision != revision {
             return Err(BrokerError::StaleRevision);
         }
-        let BoundedEdits(edits) =
-            postcard::from_bytes(&staged.bytes).map_err(|_| BrokerError::InvalidEdits)?;
+        let BoundedEdits(edits) = postcard::from_bytes(&staged.bytes).map_err(|_| BrokerError::InvalidEdits)?;
         validate(&edits)?;
         Ok(edits)
     }
@@ -283,11 +263,7 @@ pub fn validate_edits(edits: &[TextEdit], text: &str) -> Result<(), BrokerError>
     }
     Ok(())
 }
-pub fn approve_update(
-    previous: &[Capability],
-    requested: &[Capability],
-    approved: bool,
-) -> Result<(), BrokerError> {
+pub fn approve_update(previous: &[Capability], requested: &[Capability], approved: bool) -> Result<(), BrokerError> {
     let old: BTreeSet<_> = previous.iter().collect();
     if !approved && requested.iter().any(|c| !old.contains(c)) {
         Err(BrokerError::ApprovalRequired)
@@ -322,10 +298,7 @@ mod tests {
             Capability::WorkspaceWrite,
             Capability::ProcessSpawn,
         ] {
-            assert_eq!(
-                session.check_grant(cap, &Scope::Extension),
-                Err(BrokerError::Denied)
-            );
+            assert_eq!(session.check_grant(cap, &Scope::Extension), Err(BrokerError::Denied));
         }
         session.approve(vec![Grant {
             capability: Capability::DocumentEdit,
@@ -343,6 +316,27 @@ mod tests {
             session.accept_reply(1, msg.context.grant_generation, now),
             Err(BrokerError::Denied)
         );
+        assert!(session.staged.is_empty());
+    }
+    #[test]
+    fn background_budget_keeps_pending_work_alive_past_the_interactive_deadline() {
+        let mut session = ExtensionSession::new_with_budget("fixture".into(), ExecutionBudget::Background).unwrap();
+        session.approve(vec![Grant {
+            capability: Capability::DocumentEdit,
+            scope: Scope::Document(1),
+        }]);
+        let msg = message(&session);
+        let now = Instant::now();
+        session.begin_edits(&msg, 2, now).unwrap();
+        session.expire(now + Duration::from_secs(6));
+        assert_eq!(
+            session.pending_count(),
+            1,
+            "background work must survive the interactive deadline"
+        );
+        assert!(session.staged.contains_key(&1));
+        session.expire(now + Duration::from_millis(ExecutionBudget::Background.timeout_ms() + 1));
+        assert_eq!(session.pending_count(), 0);
         assert!(session.staged.is_empty());
     }
     #[test]
@@ -384,10 +378,7 @@ impl<'de> serde::Deserialize<'de> for BoundedEdits {
             fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
                 f.write_str("at most 4096 edits")
             }
-            fn visit_seq<A: serde::de::SeqAccess<'de>>(
-                self,
-                mut seq: A,
-            ) -> Result<Self::Value, A::Error> {
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
                 if seq.size_hint().is_some_and(|n| n > 4096) {
                     return Err(serde::de::Error::custom("edit count limit"));
                 }
@@ -410,9 +401,7 @@ impl<'de> serde::Deserialize<'de> for BoundedEdits {
     }
 }
 
-pub(crate) fn deserialize_edits<'de, D: serde::Deserializer<'de>>(
-    deserializer: D,
-) -> Result<Vec<TextEdit>, D::Error> {
+pub(crate) fn deserialize_edits<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Vec<TextEdit>, D::Error> {
     <BoundedEdits as serde::Deserialize>::deserialize(deserializer).map(|value| value.0)
 }
 
@@ -429,9 +418,7 @@ mod allocation_tests {
         // Each zero edit is range 0..0 plus an empty replacement (three varints).
         let mut complete = vec![0x81, 0x20];
         complete.resize(2 + 4097 * 3, 0);
-        let error = postcard::from_bytes::<BoundedEdits>(&complete)
-            .err()
-            .unwrap();
+        let error = postcard::from_bytes::<BoundedEdits>(&complete).err().unwrap();
         assert_eq!(error, postcard::Error::SerdeDeCustom);
     }
 }

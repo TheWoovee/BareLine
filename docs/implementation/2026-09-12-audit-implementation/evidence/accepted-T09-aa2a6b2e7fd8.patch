@@ -1,0 +1,498 @@
+diff --git a/docs/implementation/2026-09-12-audit-implementation/PR-T09-R5.md b/docs/implementation/2026-09-12-audit-implementation/PR-T09-R5.md
+index b6eb133..19e3a9b 100644
+--- a/docs/implementation/2026-09-12-audit-implementation/PR-T09-R5.md
++++ b/docs/implementation/2026-09-12-audit-implementation/PR-T09-R5.md
+@@ -12,4 +12,6 @@
+ - R6 input correction: retained P0-7 evidence under `p0-7-27100-1789233341310762400` observed the exact visible phrase but correctly rejected the requested trailing LF. Raw Unicode LF is not the app's Enter command contract, and a single-line edit is sufficient to make P0-7 and P0-5 dirty, so those fixtures no longer request or claim a newline. Exact content matching remains unchanged.
+ - R6 Exit diagnosis: retained P0-3 evidence under `p0-3-22424-1789233242071517200` shows one dynamically resolved File > Exit command and no prompt. Menu receipts now retain the same-HWND root menu, exact matched labels/positions/id, a second observation immediately before posting, and whether that lookup changed. A stable lookup posts its dynamically resolved id once. A changed or missing second lookup returns both snapshots and explicitly records that no command was posted; the harness does not hardcode, substitute or reinject Exit.
+ - R6 Unicode diagnosis: retained P4-4 evidence under `p4-4-9172-1789233424038018700` reports successful standalone `WM_CHAR` posts and `SendInput` insertion counts while TextPattern stayed empty; sanctioned native typing immediately produced the exact emoji and colour glyphs. Winit 0.30's Windows keyboard builder explicitly ignores `WM_CHAR` without pending key-event state and collects consecutive surrogate `WM_CHAR` units after `WM_KEYDOWN`. The primary targeted injector now posts one `VK_PACKET` keydown, the scalar's one or two UTF-16 `WM_CHAR` units, and one keyup as a single ordered transaction. Exact TextPattern and colour-glyph assertions remain required; the retained failed run is not reclassified.
++- R6 long-input correction: the framed P4-4 input subsequently passed exact text and colour checks, while retained P0-3 evidence under `p0-3-10592-1789234456492457900` queued all 1,620 messages at once and observed only 518 of 540 characters. The editor source has a confirmed 256-input bound and rejects further inputs while its async worker is pending; attribution of this exact suffix loss to that bound is evidence-backed but inferred because the accessibility receipt does not expose the transient queue error. Restoring the prior bounded 6 ms pause after each complete scalar transaction lets the event loop and worker drain during the single submission. It does not poll, retry, duplicate or weaken the exact 540-character assertion.
++- Prompt-observer diagnostic: the existing oracle is confirmed to depend on Win32 descendant text containing `save` and an exact Win32 `Button` for consent, so a native owned dialog implemented through another control surface could be missed. Whether such a dialog existed during the retained prompt timeouts remains unproven. Each app process now receives a unique `BARELINE_QA_COMMAND_TRACE` artifact path. Prompt waits retain at most eight same-process snapshots at the first disabled-main/owned-window topology changes and at the terminal match or timeout. Each snapshot caps Win32 descendants at 128 and UIA Control View nodes at 256, records UIA button names and Invoke availability, and excludes content from unrelated processes. The consent oracle, one-command rule, and failure classification are unchanged.
+ - Root verification: focused xtask helper tests followed by isolated P0-3, P0-7 and P4-4 against the integrated native binary.
+diff --git a/xtask/src/journey.rs b/xtask/src/journey.rs
+index ff75282..c2f6256 100644
+--- a/xtask/src/journey.rs
++++ b/xtask/src/journey.rs
+@@ -29,18 +29,20 @@ use windows::Win32::System::Com::{
+ };
+ use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
+ use windows::Win32::UI::Accessibility::{
+-    CUIAutomation8, IUIAutomation, IUIAutomationTextPattern, TextPatternRangeEndpoint_End,
+-    TextPatternRangeEndpoint_Start, UIA_EditControlTypeId, UIA_TextPatternId,
++    CUIAutomation8, IUIAutomation, IUIAutomationInvokePattern, IUIAutomationTextPattern, TextPatternRangeEndpoint_End,
++    TextPatternRangeEndpoint_Start, UIA_ButtonControlTypeId, UIA_EditControlTypeId, UIA_InvokePatternId,
++    UIA_TextPatternId,
+ };
+ use windows::Win32::UI::Input::KeyboardAndMouse::{
+-    INPUT, INPUT_KEYBOARD, KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, SendInput, SetFocus,
+-    VIRTUAL_KEY, VK_CONTROL, VK_ESCAPE, VK_PACKET, VK_SHIFT,
++    INPUT, INPUT_KEYBOARD, IsWindowEnabled, KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE,
++    SendInput, SetFocus, VIRTUAL_KEY, VK_CONTROL, VK_ESCAPE, VK_PACKET, VK_SHIFT,
+ };
+ use windows::Win32::UI::WindowsAndMessaging::{
+-    BringWindowToTop, EnumChildWindows, EnumWindows, GetClassNameW, GetClientRect, GetForegroundWindow, GetMenu,
+-    GetMenuItemCount, GetMenuItemID, GetMenuStringW, GetSubMenu, GetWindowRect, GetWindowTextW,
+-    GetWindowThreadProcessId, HWND_TOP, IsWindowVisible, MF_BYPOSITION, PostMessageW, SW_SHOW, SWP_NOMOVE, SWP_NOSIZE,
+-    SWP_SHOWWINDOW, SetForegroundWindow, SetWindowPos, ShowWindow, WM_CHAR, WM_COMMAND, WM_KEYDOWN, WM_KEYUP,
++    BringWindowToTop, EnumChildWindows, EnumWindows, GW_OWNER, GetClassNameW, GetClientRect, GetDlgCtrlID,
++    GetForegroundWindow, GetMenu, GetMenuItemCount, GetMenuItemID, GetMenuStringW, GetSubMenu, GetWindow,
++    GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, HWND_TOP, IsWindowVisible, MF_BYPOSITION, PostMessageW,
++    SW_SHOW, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SetForegroundWindow, SetWindowPos, ShowWindow, WM_CHAR,
++    WM_COMMAND, WM_KEYDOWN, WM_KEYUP,
+ };
+ use windows::core::BOOL;
+ 
+@@ -397,6 +399,7 @@ struct Session {
+     run_id: String,
+     launch_files: Vec<PathBuf>,
+     hwnd: Option<HWND>,
++    command_traces: Vec<PathBuf>,
+ }
+ 
+ impl Drop for Session {
+@@ -419,6 +422,8 @@ impl Session {
+             command.arg(file);
+         }
+         isolate(&mut command, &home);
++        let command_trace = home.join("evidence/command-trace-launch-1.jsonl");
++        command.env("BARELINE_QA_COMMAND_TRACE", &command_trace);
+         command.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+         let child = command.spawn().map_err(|e| format!("spawn failed: {e}"))?;
+         let pid = child.id();
+@@ -430,6 +435,7 @@ impl Session {
+             run_id: env.run_id.clone(),
+             launch_files: files.to_vec(),
+             hwnd: None,
++            command_traces: vec![command_trace],
+         })
+     }
+ 
+@@ -457,15 +463,33 @@ impl Session {
+         let mut command = Command::new(&env.exe);
+         command.args(["--software", "--no-session", "--no-extensions", "--new-instance"]);
+         isolate(&mut command, &self.home);
++        let command_trace = self.home.join(format!(
++            "evidence/command-trace-launch-{}.jsonl",
++            self.command_traces.len() + 1
++        ));
++        command.env("BARELINE_QA_COMMAND_TRACE", &command_trace);
+         command.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+         self.child = command
+             .spawn()
+             .map_err(|error| format!("restart spawn failed: {error}"))?;
+         self.pid = self.child.id();
+         self.hwnd = None;
++        self.command_traces.push(command_trace);
+         self.wait_window(Duration::from_secs(20))
+     }
+ 
++    fn command_trace_evidence(&self) -> serde_json::Value {
++        serde_json::json!(
++            self.command_traces
++                .iter()
++                .map(|path| serde_json::json!({
++                    "path": path,
++                    "present": path.is_file(),
++                }))
++                .collect::<Vec<_>>()
++        )
++    }
++
+     /// Give the editor time to settle a frame after an input.
+     fn settle(&self) {
+         std::thread::sleep(Duration::from_millis(450));
+@@ -684,6 +708,197 @@ fn child_texts(parent: HWND) -> Vec<String> {
+         .collect()
+ }
+ 
++struct BoundedWindows {
++    handles: Vec<HWND>,
++    limit: usize,
++    limit_reached: bool,
++}
++
++unsafe extern "system" fn collect_bounded_windows(hwnd: HWND, lparam: LPARAM) -> BOOL {
++    // SAFETY: `lparam` carries the BoundedWindows used only during enumeration.
++    let found = unsafe { &mut *(lparam.0 as *mut BoundedWindows) };
++    if found.handles.len() == found.limit {
++        found.limit_reached = true;
++        return BOOL(0);
++    }
++    found.handles.push(hwnd);
++    BOOL(1)
++}
++
++fn bounded_descendants(parent: HWND, limit: usize) -> BoundedWindows {
++    let mut found = BoundedWindows {
++        handles: Vec::new(),
++        limit,
++        limit_reached: false,
++    };
++    // SAFETY: callback state outlives this synchronous enumeration.
++    unsafe {
++        let _ = EnumChildWindows(
++            Some(parent),
++            Some(collect_bounded_windows),
++            LPARAM(&mut found as *mut BoundedWindows as isize),
++        );
++    }
++    found
++}
++
++fn dialog_uia_buttons(hwnd: HWND) -> serde_json::Value {
++    const NODE_LIMIT: usize = 256;
++    let initialized = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.ok();
++    if let Err(error) = initialized {
++        return serde_json::json!({"available": false, "error": error.to_string()});
++    }
++    let result = (|| -> windows::core::Result<serde_json::Value> {
++        let automation: IUIAutomation = unsafe { CoCreateInstance(&CUIAutomation8, None, CLSCTX_INPROC_SERVER) }?;
++        let root = unsafe { automation.ElementFromHandle(hwnd) }?;
++        let walker = unsafe { automation.ControlViewWalker() }?;
++        let mut pending = VecDeque::new();
++        if let Ok(first) = unsafe { walker.GetFirstChildElement(&root) } {
++            pending.push_back(first);
++        }
++        let mut visited = 0usize;
++        let mut buttons = Vec::new();
++        while visited < NODE_LIMIT {
++            let Some(element) = pending.pop_front() else { break };
++            visited += 1;
++            if let Ok(child) = unsafe { walker.GetFirstChildElement(&element) } {
++                pending.push_back(child);
++            }
++            if let Ok(sibling) = unsafe { walker.GetNextSiblingElement(&element) } {
++                pending.push_back(sibling);
++            }
++            if unsafe { element.CurrentControlType() }.ok().map(|value| value.0) != Some(UIA_ButtonControlTypeId.0) {
++                continue;
++            }
++            buttons.push(serde_json::json!({
++                "name": unsafe { element.CurrentName() }.ok().map(|value| value.to_string()),
++                "enabled": unsafe { element.CurrentIsEnabled() }.ok().map(|value| value.as_bool()),
++                "invoke_available": unsafe {
++                    element.GetCurrentPatternAs::<IUIAutomationInvokePattern>(UIA_InvokePatternId)
++                }.is_ok(),
++            }));
++        }
++        Ok(serde_json::json!({
++            "available": true,
++            "visited_nodes": visited,
++            "node_limit": NODE_LIMIT,
++            "limit_reached": !pending.is_empty(),
++            "buttons": buttons,
++        }))
++    })();
++    unsafe { CoUninitialize() };
++    result.unwrap_or_else(|error| serde_json::json!({"available": false, "error": error.to_string()}))
++}
++
++fn prompt_observer_snapshot(session: &Session, main: HWND) -> serde_json::Value {
++    let foreground = unsafe { GetForegroundWindow() };
++    let foreground_pid = window_pid(foreground);
++    let windows = top_level_windows()
++        .into_iter()
++        .filter(|window| {
++            if *window == main || window_pid(*window) != session.pid {
++                return *window == main;
++            }
++            unsafe { GetWindow(*window, GW_OWNER) }.ok() == Some(main)
++        })
++        .map(|window| {
++            let owner = unsafe { GetWindow(window, GW_OWNER) }.ok();
++            let descendants = bounded_descendants(window, 128);
++            let controls = descendants
++                .handles
++                .into_iter()
++                .map(|control| {
++                    serde_json::json!({
++                        "hwnd": control.0 as usize,
++                        "class": window_class(control),
++                        "title": window_title(control),
++                        "control_id": unsafe { GetDlgCtrlID(control) },
++                        "enabled": unsafe { IsWindowEnabled(control) }.as_bool(),
++                        "visible": is_visible(control),
++                    })
++                })
++                .collect::<Vec<_>>();
++            serde_json::json!({
++                "hwnd": window.0 as usize,
++                "owner_hwnd": owner.map(|owner| owner.0 as usize),
++                "owned_by_main": owner == Some(main),
++                "class": window_class(window),
++                "title": window_title(window),
++                "enabled": unsafe { IsWindowEnabled(window) }.as_bool(),
++                "visible": is_visible(window),
++                "rect": window_rect(window).map(|rect| [rect.left, rect.top, rect.right, rect.bottom]),
++                "descendant_limit": descendants.limit,
++                "descendant_limit_reached": descendants.limit_reached,
++                "descendants": controls,
++                "uia": (window != main).then(|| dialog_uia_buttons(window)),
++            })
++        })
++        .collect::<Vec<_>>();
++    serde_json::json!({
++        "main_hwnd": main.0 as usize,
++        "main_enabled": unsafe { IsWindowEnabled(main) }.as_bool(),
++        "foreground_hwnd": foreground.0 as usize,
++        "foreground_pid": foreground_pid,
++        "foreground_same_process": foreground_pid == session.pid,
++        "foreground_class": (foreground_pid == session.pid).then(|| window_class(foreground)),
++        "same_process_top_level_windows": windows,
++    })
++}
++
++#[derive(Clone, Debug, Eq, PartialEq)]
++struct PromptTopology {
++    main_enabled: bool,
++    candidates: Vec<(usize, Option<usize>, bool)>,
++}
++
++fn prompt_topology(session: &Session, main: HWND) -> PromptTopology {
++    let mut candidates = top_level_windows()
++        .into_iter()
++        .filter(|window| {
++            *window != main
++                && window_pid(*window) == session.pid
++                && unsafe { GetWindow(*window, GW_OWNER) }.ok() == Some(main)
++        })
++        .map(|window| {
++            let owner = unsafe { GetWindow(window, GW_OWNER) }
++                .ok()
++                .map(|owner| owner.0 as usize);
++            (window.0 as usize, owner, is_visible(window))
++        })
++        .collect::<Vec<_>>();
++    candidates.sort_unstable();
++    PromptTopology {
++        main_enabled: unsafe { IsWindowEnabled(main) }.as_bool(),
++        candidates,
++    }
++}
++
++struct PromptWait {
++    dialog: Option<HWND>,
++    observations: Vec<serde_json::Value>,
++}
++
++fn retain_prompt_observation(
++    observations: &mut Vec<serde_json::Value>,
++    observation: serde_json::Value,
++    terminal: bool,
++) {
++    const LIMIT: usize = 8;
++    if observations.len() < LIMIT {
++        observations.push(observation);
++    } else if terminal {
++        observations[LIMIT - 1] = observation;
++    }
++}
++
++fn prompt_observation(session: &Session, main: HWND, trigger: &str, elapsed: Duration) -> serde_json::Value {
++    serde_json::json!({
++        "trigger": trigger,
++        "elapsed_ms": elapsed.as_millis(),
++        "snapshot": prompt_observer_snapshot(session, main),
++    })
++}
++
+ fn window_evidence(session: &Session, hwnd: HWND) -> serde_json::Value {
+     let window = window_rect(hwnd).map(|rect| [rect.left, rect.top, rect.right, rect.bottom]);
+     let mut client = RECT::default();
+@@ -1166,6 +1381,7 @@ fn packet_message_plan(text: &str) -> Vec<(u32, usize, isize)> {
+ /// a standalone WM_CHAR when no preceding keydown created its event state; the
+ /// framing also keeps both surrogate WM_CHAR units in one logical key event.
+ fn type_text(hwnd: HWND, text: &str) -> serde_json::Value {
++    const SCALAR_PACING: Duration = Duration::from_millis(6);
+     let plan = packet_message_plan(text);
+     let mut posted = 0usize;
+     let mut posted_units = 0usize;
+@@ -1183,6 +1399,9 @@ fn type_text(hwnd: HWND, text: &str) -> serde_json::Value {
+                 "error": error.to_string(),
+             })),
+         }
++        if *message == WM_KEYUP {
++            std::thread::sleep(SCALAR_PACING);
++        }
+     }
+     serde_json::json!({
+         "channel": "PostMessage VK_PACKET transaction",
+@@ -1192,6 +1411,7 @@ fn type_text(hwnd: HWND, text: &str) -> serde_json::Value {
+         "requested_messages": plan.len(),
+         "posted_messages": posted,
+         "posted_units": posted_units,
++        "per_scalar_pacing_ms": SCALAR_PACING.as_millis(),
+         "errors": errors,
+     })
+ }
+@@ -1777,19 +1997,58 @@ fn invoke_menu(hwnd: HWND, path: &[&str]) -> Result<serde_json::Value, String> {
+ /// Wait for an owned save prompt to exist *and* expose its buttons. Dialog
+ /// creation is incremental, so a listed top-level window may be empty for a
+ /// moment; waiting on the button text removes that race.
+-fn await_save_prompt(session: &Session, hwnd: HWND, timeout: Duration) -> Option<HWND> {
++fn await_save_prompt(session: &Session, hwnd: HWND, timeout: Duration) -> PromptWait {
++    let started = Instant::now();
+     let deadline = Instant::now() + timeout;
++    let mut observations = Vec::new();
++    let mut previous = None;
+     loop {
++        let current = prompt_topology(session, hwnd);
++        let transitioned = previous.as_ref() != Some(&current);
++        let interesting = !current.main_enabled
++            || current
++                .candidates
++                .iter()
++                .any(|(_, owner, _)| *owner == Some(hwnd.0 as usize));
++        if transitioned && interesting {
++            retain_prompt_observation(
++                &mut observations,
++                prompt_observation(
++                    session,
++                    hwnd,
++                    "disabled-owner-or-owned-window-transition",
++                    started.elapsed(),
++                ),
++                false,
++            );
++        }
++        previous = Some(current);
+         for (candidate, _, _) in auxiliary_windows(session.pid, hwnd) {
+             let has_save = child_texts(candidate)
+                 .iter()
+                 .any(|text| text.to_lowercase().contains("save"));
+             if has_save {
+-                return Some(candidate);
++                retain_prompt_observation(
++                    &mut observations,
++                    prompt_observation(session, hwnd, "save-prompt-oracle-matched", started.elapsed()),
++                    true,
++                );
++                return PromptWait {
++                    dialog: Some(candidate),
++                    observations,
++                };
+             }
+         }
+         if Instant::now() >= deadline {
+-            return None;
++            retain_prompt_observation(
++                &mut observations,
++                prompt_observation(session, hwnd, "timeout", started.elapsed()),
++                true,
++            );
++            return PromptWait {
++                dialog: None,
++                observations,
++            };
+         }
+         std::thread::sleep(Duration::from_millis(100));
+     }
+@@ -2036,7 +2295,11 @@ fn journey_p0_3(env: &Env) -> Result<(), String> {
+     // Issue exactly one Exit request. If recovery is busy, the product owns
+     // retaining and resuming that intent; reinjection would hide a lost request.
+     let command = invoke_menu(hwnd, &["File", "Exit"])?;
+-    let Some(dialog) = await_save_prompt(&session, hwnd, Duration::from_secs(15)) else {
++    let PromptWait {
++        dialog,
++        observations: prompt_observations,
++    } = await_save_prompt(&session, hwnd, Duration::from_secs(15));
++    let Some(dialog) = dialog else {
+         let _ = shot(&session, hwnd, "p0-3-prompt-missing");
+         let failure = serde_json::json!({
+             "checkpoint": "discard consent prerequisite",
+@@ -2046,6 +2309,8 @@ fn journey_p0_3(env: &Env) -> Result<(), String> {
+             "screenshot": session.home.join("shots/p0-3-prompt-missing.bmp"),
+             "consent_observed": false,
+             "discard_requested": false,
++            "prompt_observations": prompt_observations,
++            "command_traces": session.command_trace_evidence(),
+         });
+         let evidence = write_session_evidence(&session, "p0-3-prompt-missing", &failure)?;
+         return Err(format!(
+@@ -2064,6 +2329,8 @@ fn journey_p0_3(env: &Env) -> Result<(), String> {
+         "recovery_directories": session.recovery_dir_count(),
+         "consent_observed": true,
+         "screenshot": session.home.join("shots/p0-3-consent.bmp"),
++        "prompt_observations": prompt_observations,
++        "command_traces": session.command_trace_evidence(),
+     });
+     let _ = write_session_evidence(&session, "p0-3-consent", &consent)?;
+     click_button(dialog, &["don't save", "dont save", "discard"])?;
+@@ -2082,6 +2349,7 @@ fn journey_p0_3(env: &Env) -> Result<(), String> {
+                 "consent_observed": true,
+                 "discard_requested": true,
+                 "application_exited": false,
++                "command_traces": session.command_trace_evidence(),
+             });
+             let evidence = write_session_evidence(&session, "p0-3-exit-pending", &failure)?;
+             return Err(format!(
+@@ -2109,6 +2377,7 @@ fn journey_p0_3(env: &Env) -> Result<(), String> {
+         "consent_observed": true,
+         "discard_requested": true,
+         "application_exited": true,
++        "command_traces": session.command_trace_evidence(),
+     });
+     let terminal_evidence = write_session_evidence(&session, "p0-3-terminal", &terminal)?;
+     if terminal["recovery"]["production_discovery_candidates"].as_u64() != Some(0) {
+@@ -2130,6 +2399,7 @@ fn journey_p0_3(env: &Env) -> Result<(), String> {
+         "window": restart_window,
+         "recovery": restart_recovery,
+         "diagnostics_tail": restart_diagnostics.iter().rev().take(32).cloned().collect::<Vec<_>>(),
++        "command_traces": session.command_trace_evidence(),
+         "production_discovery_rule": "only successfully inspected non-Discarded generations are listed",
+     });
+     let restart_evidence = write_session_evidence(&session, "p0-3-restart", &restart)?;
+@@ -2285,7 +2555,11 @@ fn journey_p0_7(env: &Env) -> Result<(), String> {
+     // lost deferred document-close intent in the product.
+     focus(hwnd);
+     let command = invoke_menu(hwnd, &["File", "Close"])?;
+-    let dialog = match await_save_prompt(&session, hwnd, Duration::from_secs(15)) {
++    let PromptWait {
++        dialog,
++        observations: prompt_observations,
++    } = await_save_prompt(&session, hwnd, Duration::from_secs(15));
++    let dialog = match dialog {
+         Some(dialog) => dialog,
+         None => {
+             let _ = shot(&session, hwnd, "p0-7-no-prompt");
+@@ -2293,6 +2567,8 @@ fn journey_p0_7(env: &Env) -> Result<(), String> {
+                 "checkpoint": "save prompt timeout",
+                 "window": window_evidence(&session, hwnd),
+                 "command": command,
++                "prompt_observations": prompt_observations,
++                "command_traces": session.command_trace_evidence(),
+             });
+             let evidence = write_session_evidence(&session, "p0-7-no-prompt", &failure)?;
+             let listed: Vec<String> = auxiliary_windows(session.pid, hwnd)
+@@ -2313,6 +2589,8 @@ fn journey_p0_7(env: &Env) -> Result<(), String> {
+         "command": command,
+         "dialog_hwnd": dialog.0 as usize,
+         "dialog_children": child_texts(dialog),
++        "prompt_observations": prompt_observations,
++        "command_traces": session.command_trace_evidence(),
+     });
+     let _ = write_session_evidence(&session, "p0-7-prompt", &prompt_evidence)?;
+     let mut buttons = child_texts(dialog);
+@@ -2793,6 +3071,22 @@ mod evidence_tests {
+         assert!(!resolution.same_target(&MenuResolution { id: 48, ..same }));
+     }
+ 
++    #[test]
++    fn prompt_observations_are_bounded_and_always_retain_terminal_state() {
++        let mut observations = Vec::new();
++        for index in 0..10 {
++            retain_prompt_observation(&mut observations, serde_json::json!({"transition": index}), false);
++        }
++        assert_eq!(observations.len(), 8);
++        assert_eq!(observations[0]["transition"], 0);
++        assert_eq!(observations[7]["transition"], 7);
++
++        retain_prompt_observation(&mut observations, serde_json::json!({"trigger": "timeout"}), true);
++        assert_eq!(observations.len(), 8);
++        assert_eq!(observations[0]["transition"], 0);
++        assert_eq!(observations[7]["trigger"], "timeout");
++    }
++
+     #[test]
+     fn packet_message_plan_frames_astral_text_in_one_winit_key_event() {
+         let plan = packet_message_plan("A🎉");

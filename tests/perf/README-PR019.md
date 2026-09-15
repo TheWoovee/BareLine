@@ -21,7 +21,10 @@ python tests/perf/perf_suite.py report <printed-run-directory> <new-report.json>
 Manifest preparation requires `--bareline`, `--bareline-version`,
 `--bareline-config` (settings.toml), corresponding `--notepadpp` options
 (config.xml), `--fixture`, `--expected-text-bytes`, one or more `--scenario`,
-`--machine-id`, `--configuration`, and `--destination`. `--renderer` selects the
+`--machine-id`, `--configuration`, `--qualification-environment`, and
+`--destination`. The environment JSON uses the structured schema shown in
+`README-NATIVE-NIGHTLY.md`; font files are hashed and host OS/build/architecture,
+hostname and logical CPU count are verified before execution. `--renderer` selects the
 Bareline renderer; repeat the series separately for software and hardware. The
 configuration identity must describe OS/build, CPU, display/DPI, theme/font,
 wrapping, syntax and power settings. Exact copied configuration hashes are also
@@ -44,6 +47,15 @@ completion. Other generated comparison lists are empty. A matching metric
 name is insufficient: Bareline present receipts and Notepad++ Scintilla message
 roundtrips have different endpoints. Search primitives and termination boundaries
 also differ. No report automatically becomes eligible for marketing claims.
+
+The manifest and report use schema version 2. Manifest preparation calls the
+PR-T09 `run_test_evidence.py` source-identity implementation directly, excluding
+only the create-new manifest path. Execution refuses a changed source pin and
+records the identity again after all trials. Reports expose stable trial/row IDs,
+the pinned executable/configuration/environment, failed and missing coverage,
+and explicit claim-ineligibility reasons; an unavailable metric is never zero.
+Source-drifted trials remain as raw evidence but their observations and paired
+rows are unqualified and cannot enter rolling regression history.
 
 `bareline_driver.py` launches only its suspended/Job-contained process, with
 session disabled and all state under the temporary performance root. Extensions
