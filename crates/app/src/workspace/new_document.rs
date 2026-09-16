@@ -148,7 +148,19 @@ mod tests {
                 w.editors[0].enqueue(Input::Insert(prefix.into()));
                 settle(&mut w);
             }
-            w.encoding_eol(0, Eol::Lf, false).unwrap();
+            // A completion can precede release of the scheduler admission lock.
+            // Retry only a rejected submission; never resubmit an accepted edit.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            loop {
+                match w.encoding_eol(0, Eol::Lf, false) {
+                    Ok(()) => break,
+                    Err(error) if error == "Document worker is busy" => {
+                        assert!(std::time::Instant::now() < deadline, "{error}");
+                        std::thread::yield_now();
+                    }
+                    Err(error) => panic!("{error}"),
+                }
+            }
             settle(&mut w);
             assert_eq!(w.editors[0].snapshot().insertion_eol(), "\n");
             assert!(w.editors[0].dirty());
