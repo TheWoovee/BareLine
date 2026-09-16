@@ -2655,6 +2655,25 @@ mod tests {
     }
     #[test]
     fn power_carets_typing_bookmarks_and_group_undo_use_committed_snapshots() {
+        fn admit_group(
+            mut submit: impl FnMut() -> Result<group_view::SurfaceGroup, String>,
+        ) -> group_view::SurfaceGroup {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            loop {
+                match submit() {
+                    Ok(group) => return group,
+                    // Completion can precede scheduler-slot release. Retry only
+                    // unadmitted work, as in the document-service group tests.
+                    Err(error)
+                        if error == "Grouped edit could not be queued: Saturated"
+                            && std::time::Instant::now() < deadline =>
+                    {
+                        std::thread::yield_now();
+                    }
+                    Err(error) => panic!("group admission failed: {error}"),
+                }
+            }
+        }
         let scheduler = Scheduler::new(2, 16).unwrap();
         let make = |text| {
             let document = Document::from_utf8(text, Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
@@ -2684,20 +2703,21 @@ mod tests {
         let mut second = make("z");
         let before1 = first.snapshot.clone();
         let before2 = second.snapshot.clone();
-        let edit1 = power::replace(
-            &before1,
-            &Selection { anchor: 0, caret: 1 }.into(),
-            "",
-            power::Limits::default(),
-        )
-        .unwrap();
-        let edit2 = power::replace(&before2, &Selection::default().into(), "a", power::Limits::default()).unwrap();
-        let mut group = group_view::SurfaceGroup::apply(
-            &scheduler,
-            &mut [&mut first, &mut second],
-            vec![(before1, edit1), (before2, edit2)],
-        )
-        .unwrap();
+        let mut group = admit_group(|| {
+            let edit1 = power::replace(
+                &before1,
+                &Selection { anchor: 0, caret: 1 }.into(),
+                "",
+                power::Limits::default(),
+            )
+            .unwrap();
+            let edit2 = power::replace(&before2, &Selection::default().into(), "a", power::Limits::default()).unwrap();
+            group_view::SurfaceGroup::apply(
+                &scheduler,
+                &mut [&mut first, &mut second],
+                vec![(before1.clone(), edit1), (before2.clone(), edit2)],
+            )
+        });
         let until = std::time::Instant::now() + std::time::Duration::from_secs(2);
         let id = loop {
             if let Some(id) = group.pump(&mut [&mut first, &mut second]).unwrap() {
@@ -2707,7 +2727,8 @@ mod tests {
             std::thread::yield_now();
         };
         assert_eq!(first.linked_undo_group(), Some(id));
-        let mut undo = group_view::SurfaceGroup::undo(&scheduler, &mut [&mut first, &mut second], id).unwrap();
+        let mut undo = admit_group(|| group_view::SurfaceGroup::undo(&scheduler, &mut [&mut first, &mut second], id));
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(2);
         loop {
             if undo.pump(&mut [&mut first, &mut second]).unwrap().is_some() {
                 break;
