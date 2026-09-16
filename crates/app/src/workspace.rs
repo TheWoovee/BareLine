@@ -1033,7 +1033,7 @@ impl Workspace {
                 }
             }
         }
-        if let Some(warning) = bareline_file_io::recovery_retirement::take_cleanup_warning() {
+        if let Some(warning) = bareline_file_io::recovery_retirement::take_cleanup_warning(&self.notify) {
             self.message = Some(format!("{warning}. Use Retry Recovery to try cleanup again."));
             changed = true;
         }

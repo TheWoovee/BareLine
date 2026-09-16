@@ -79,8 +79,6 @@ jobs:
       # Use the actual host compiler (including native C++ build scripts), not
       # --cfg simulation. Covers helpers/host and every neutral workspace target.
       - run: cargo check --workspace --all-targets --locked
-      # Includes shared RecordingBackend UI and portable state/path tests.
-      - run: cargo test --workspace --locked
       - name: Complete Clippy census and exact debt ratchet
         shell: pwsh
         run: |
@@ -107,4 +105,6 @@ jobs:
             target/clippy-census.stderr.log
             target/clippy-ratchet.log
       - run: cargo check -p bareline-platform-linux -p bareline-platform-macos --examples --locked
+      # Includes shared RecordingBackend UI and portable state/path tests.
+      - run: cargo test --workspace --locked
       # Native menu/dialog/renderer readiness is separate from headless test success.

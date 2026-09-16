@@ -86,7 +86,10 @@ impl Drop for RunGuard<'_> {
         if self.finished {
             return;
         }
-        warn("Recovery discard tombstone pending: Recovery retirement worker unwound".into());
+        warn(
+            self.notify,
+            "Recovery discard tombstone pending: Recovery retirement worker unwound".into(),
+        );
         let mut current = self.state.lock().unwrap_or_else(|error| error.into_inner());
         if let Some(ownership) = self.ownership.take() {
             current.ownership = Some(ownership);
@@ -120,8 +123,13 @@ fn retained_discards() -> &'static Mutex<Vec<RetainedDiscard>> {
     RETAINED.get_or_init(|| Mutex::new(Vec::new()))
 }
 
-fn warnings() -> &'static Mutex<Vec<String>> {
-    static WARNINGS: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
+struct CleanupWarning {
+    owner: std::sync::Weak<dyn Fn() + Send + Sync>,
+    message: String,
+}
+
+fn warnings() -> &'static Mutex<Vec<CleanupWarning>> {
+    static WARNINGS: OnceLock<Mutex<Vec<CleanupWarning>>> = OnceLock::new();
     WARNINGS.get_or_init(|| Mutex::new(Vec::new()))
 }
 
@@ -197,20 +205,30 @@ fn defer_held_cleanup(cleanup: RetainedCleanup) {
     }
 }
 
-fn warn(message: String) {
+fn warn(notify: &Arc<dyn Fn() + Send + Sync>, message: String) {
     const MAX_WARNINGS: usize = 32;
     let mut warnings = warnings().lock().unwrap_or_else(|error| error.into_inner());
-    if warnings.last() == Some(&message) {
+    let owner = Arc::downgrade(notify);
+    warnings.retain(|warning| warning.owner.strong_count() != 0);
+    if warnings
+        .last()
+        .is_some_and(|warning| warning.owner.ptr_eq(&owner) && warning.message == message)
+    {
         return;
     }
     if warnings.len() == MAX_WARNINGS {
         warnings.remove(0);
     }
-    warnings.push(message);
+    warnings.push(CleanupWarning { owner, message });
 }
 
-pub fn take_cleanup_warning() -> Option<String> {
-    warnings().lock().ok().and_then(|mut warnings| warnings.pop())
+/// Deliver cleanup failures only to the workspace that supplied the notifier.
+pub fn take_cleanup_warning(notify: &Arc<dyn Fn() + Send + Sync>) -> Option<String> {
+    let owner = Arc::downgrade(notify);
+    warnings().lock().ok().and_then(|mut warnings| {
+        let index = warnings.iter().rposition(|warning| warning.owner.ptr_eq(&owner))?;
+        Some(warnings.remove(index).message)
+    })
 }
 
 pub fn retry_pending_cleanup() -> usize {
@@ -361,7 +379,7 @@ fn submit(state: Arc<Mutex<State>>, notify: Arc<dyn Fn() + Send + Sync>) {
     let job_notify = notify.clone();
     let submitted = executor().submit(WorkKind::Maintenance, Box::new(move || run(job_state, job_notify)));
     if let Err(error) = submitted {
-        warn(format!("Recovery discard admission pending: {error:?}"));
+        warn(&notify, format!("Recovery discard admission pending: {error:?}"));
         let mut current = state.lock().unwrap_or_else(|failure| failure.into_inner());
         current.running = false;
         current.phase = Phase::TombstoneFailed(format!("Recovery cleanup admission failed: {error:?}"));
@@ -443,7 +461,7 @@ fn run(state: Arc<Mutex<State>>, notify: Arc<dyn Fn() + Send + Sync>) {
     let receipts = match tombstone {
         Ok(receipts) => receipts,
         Err(error) => {
-            warn(format!("Recovery discard tombstone pending: {error}"));
+            warn(&notify, format!("Recovery discard tombstone pending: {error}"));
             let mut current = state.lock().unwrap_or_else(|failure| failure.into_inner());
             current.ownership = guard.ownership.take();
             current.running = false;
@@ -519,7 +537,7 @@ fn run(state: Arc<Mutex<State>>, notify: Arc<dyn Fn() + Send + Sync>) {
         }
     }
     if let Some(error) = &failure {
-        warn(error.clone());
+        warn(&notify, error.clone());
         retain_cleanup(RetainedCleanup {
             receipts: unresolved,
             holds: Vec::new(),
@@ -537,7 +555,7 @@ fn run(state: Arc<Mutex<State>>, notify: Arc<dyn Fn() + Send + Sync>) {
 }
 
 fn terminal_failure(state: &Arc<Mutex<State>>, notify: &Arc<dyn Fn() + Send + Sync>, error: String) {
-    warn(format!("Recovery discard tombstone pending: {error}"));
+    warn(notify, format!("Recovery discard tombstone pending: {error}"));
     let mut current = state.lock().unwrap_or_else(|failure| failure.into_inner());
     current.running = false;
     current.phase = Phase::TombstoneFailed(error);
@@ -585,7 +603,7 @@ fn schedule_cleanup(cleanup: RetainedCleanup) {
             cleanup.receipts = unresolved;
             let notify = cleanup.notify.clone();
             if let Some(error) = failure {
-                warn(format!("Recovery cleanup retry pending: {error}"));
+                warn(&notify, format!("Recovery cleanup retry pending: {error}"));
                 retain_cleanup(cleanup);
             }
             notify();
@@ -597,7 +615,7 @@ fn schedule_cleanup(cleanup: RetainedCleanup) {
             .unwrap_or_else(|error| error.into_inner())
             .take()
     {
-        warn("Recovery cleanup retry admission pending".into());
+        warn(&cleanup.notify, "Recovery cleanup retry admission pending".into());
         retain_cleanup(cleanup);
     }
 }
@@ -838,6 +856,22 @@ mod tests {
     }
 
     #[test]
+    fn cleanup_warnings_stay_with_the_originating_workspace() {
+        let _registry = registry_test_lock().lock().unwrap_or_else(|error| error.into_inner());
+        let first: Arc<dyn Fn() + Send + Sync> = Arc::new(|| {});
+        let second: Arc<dyn Fn() + Send + Sync> = Arc::new(|| {});
+        let message = "Recovery cleanup retry pending: injected failure";
+        warn(&first, message.into());
+        assert_eq!(take_cleanup_warning(&second), None);
+        // Identical failures from different workspaces must not deduplicate.
+        warn(&second, message.into());
+        assert_eq!(take_cleanup_warning(&first), Some(message.into()));
+        assert_eq!(take_cleanup_warning(&first), None);
+        assert_eq!(take_cleanup_warning(&second), Some(message.into()));
+        assert_eq!(take_cleanup_warning(&second), None);
+    }
+
+    #[test]
     fn delayed_drain_failed_tombstone_and_retained_cleanup_are_truthful() {
         let _registry = registry_test_lock().lock().unwrap_or_else(|error| error.into_inner());
         retained().lock().unwrap().clear();
@@ -980,13 +1014,14 @@ mod tests {
         let path = root.join("journal");
         journal(&path, platform.as_ref());
         platform.deny_cleanup.store(true, Ordering::SeqCst);
+        let pending_notify: Arc<dyn Fn() + Send + Sync> = Arc::new(|| {});
         let pending = DiscardTicket::request(
             RecoveryOwnership {
                 recoveries: Vec::new(),
                 paths: vec![path.clone()],
                 platform: platform.clone(),
             },
-            Arc::new(|| {}),
+            pending_notify.clone(),
         );
         assert!(matches!(
             wait_for(&pending, |outcome| matches!(outcome, DiscardPoll::CleanupPending(_))),
@@ -996,13 +1031,13 @@ mod tests {
             crate::recovery::inspect(&path, &Default::default()).unwrap().status,
             RecoveryStatus::Discarded
         );
-        assert!(take_cleanup_warning().is_some());
+        assert!(take_cleanup_warning(&pending_notify).is_some());
         platform.deny_cleanup.store(false, Ordering::SeqCst);
         platform.panic_cleanup.store(true, Ordering::SeqCst);
         assert_eq!(retry_pending_cleanup(), 1);
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
-            if take_cleanup_warning().is_some_and(|warning| warning.contains("worker failed")) {
+            if take_cleanup_warning(&pending_notify).is_some_and(|warning| warning.contains("worker failed")) {
                 break;
             }
             assert!(

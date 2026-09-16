@@ -27,3 +27,11 @@ macOS execution exposed a shared resident-recovery race: an old retirement ackno
 The clean-build notices now pass. SBOM generation then revealed that cargo-cyclonedx's default output name does not match the workflow's `bom.json` input. Set `--override-filename bom` explicitly in both generation steps and verify the actual merged package SBOM with the pinned generator. Keep lockfile and missing-output checks.
 
 The complete nonshipping release-fixture pipeline passed with stable source at `a576de5`: actual fixture-configured editor/helper/runtime binaries, signed fixture catalog/packages, tamper rejection, installed-artifact Fast tests and verified capability/resource manifests. The pinned PCRE2 search suite passed. The deterministic retirement test failed before the fix (`checkpoint started before retirement acknowledgment`), then all four resident recovery tests passed after it. Fresh editor/helper SBOMs and their normalized merge passed with the lockfile unchanged. Final consolidated checks and hosted reruns follow these corrections.
+
+## Final hosted integration findings
+
+The full Windows workspace suite, normal preview build, hardware/software hidden render smoke and real first-party All suite passed on `c33cb6f`. macOS workspace tests passed too. Linux exposed a process-global recovery warning queue: a workspace can consume another workspace's asynchronous cleanup failure. Route each warning using the originating notification owner, retain the bounded queue and real failure reporting, and test isolation between two owners. Do not relax the workspace's terminal-banner assertion.
+
+The macOS native Clippy census has 223 distinct identities / 420 occurrences, every one matching the existing reviewed Windows source/item/lint/context. Add that exact native qualification with the existing per-occurrence justifications and retained census hash. Linux still needs its own actual native census.
+
+The clean-build SBOM correction succeeded. The last version lookup used unrestricted offline metadata, unnecessarily resolving other platforms after a Windows-only fetch. Use `--no-deps` for that workspace package-version lookup; retain offline/locked checks. No dependency graph is needed to read the editor package version.

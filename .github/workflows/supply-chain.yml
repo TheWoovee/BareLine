@@ -98,7 +98,7 @@ jobs:
           git diff --exit-code -- Cargo.lock
           if ($LASTEXITCODE -ne 0) { throw 'SBOM generation changed Cargo.lock' }
           ./packaging/windows/generate-sbom.ps1 -CargoSbom apps/bareline/bom.json -HelperCargoSbom apps/update-helper/bom.json -OutputFile payload/SBOM.json
-          $metadata = cargo metadata --locked --offline --format-version 1 | ConvertFrom-Json
+          $metadata = cargo metadata --locked --offline --no-deps --format-version 1 | ConvertFrom-Json
           if ($LASTEXITCODE -ne 0) { throw 'Package metadata failed' }
           $version = ($metadata.packages | Where-Object name -eq bareline).version
           ./packaging/windows/build.ps1 -PayloadDir payload -Version $version -OutputDir unsigned-package
