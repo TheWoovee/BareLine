@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "journey": {
+    "id": "code_config",
+    "title": "Code/config edit",
+    "timeout_seconds": 300,
+    "cases": [
+      "AC-008-01",
+      "AC-013-01"
+    ],
+    "steps": [
+      {
+        "id": "s1",
+        "action": "Open generated UTF-8 code/config",
+        "expected": "Highlighting matches selected language"
+      },
+      {
+        "id": "s2",
+        "action": "Use completion and indentation",
+        "expected": "Completion and indentation preserve surrounding text"
+      },
+      {
+        "id": "s3",
+        "action": "Save and reopen",
+        "expected": "Saved configuration equals expected bytes"
+      }
+    ]
+  },
+  "executable": "C:\\Users\\Woovee\\AppData\\Local\\Programs\\Bareline\\bareline.exe",
+  "binary_sha256": "64bb428b5bc61dd2f6042a15ba03314af0e4f21290b0d210091ee9bc4d80adb4",
+  "scratch": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\564a0881-eac6-4de3-a557-a77f168db0ff\\scratch",
+  "os_build": "26200.9457",
+  "hardware": "AMD Ryzen 5 3600; 128 GiB RAM; local Windows x64",
+  "mode": "keyboard",
+  "theme": "dark",
+  "dpi": "100",
+  "response": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\564a0881-eac6-4de3-a557-a77f168db0ff\\response.json"
+}

@@ -1,0 +1,29 @@
+{
+  "artifacts": [
+    {
+      "bytes": 1075,
+      "file": "catalog.json",
+      "role": "catalog",
+      "sha256": "ae9084ff0109678fa10293e2d48c7ad723b2a437b2560b2a1d608c4a1dd3425c"
+    },
+    {
+      "bytes": 276,
+      "file": "catalog.json.minisig",
+      "role": "signature",
+      "sha256": "7d232f0578a2f2eb480df9f00d1f38f14997dec8f1a6cf79bab055bf823d22b3"
+    }
+  ],
+  "build_mode": "fixture",
+  "channel": "stable",
+  "configuration_sha256": "bb98d47fa62e325beb58e39ed7d2a4d60f57b6176179933f887c7033aa9efd92",
+  "configuration_version": 5,
+  "distribution_version": "0.1.0",
+  "features": "updates=configured,extensions=configured,runtime=external",
+  "inventory": "catalog",
+  "schema_version": 1,
+  "signed": false,
+  "source_identity_algorithm": "git-status-diff-untracked-v1",
+  "source_revision": "a576de58e3115fb59bfe529d3dd5fe2924f335df",
+  "source_sha256": "c05ae878b9de51316baefd7bc4c28c80b947f0f26ecb6fa8b1dbb5ab7a96bc09",
+  "source_working_tree_dirty": false
+}

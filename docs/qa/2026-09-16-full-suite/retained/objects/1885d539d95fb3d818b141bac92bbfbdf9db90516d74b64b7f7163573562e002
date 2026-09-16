@@ -1,0 +1,248 @@
+{
+  "schema_version": 1,
+  "run_id": "20260916T111338.4533536Z-9044-a4369eae",
+  "suite": "fast",
+  "started_utc": "2026-09-16T11:13:38.4660805Z",
+  "completed_utc": "2026-09-16T11:24:55.5960845Z",
+  "status": "passed",
+  "failure": null,
+  "expected_test_counts": {
+    "fast": 3,
+    "large": 2
+  },
+  "observed_suites": [
+    {
+      "suite": "fast",
+      "filter": "fast_release_",
+      "receipt": "D:\\a\\BareLine\\BareLine\\target\\first-party\\20260916T111338.4533536Z-9044-a4369eae\\test-fast.json",
+      "expected": 3,
+      "passed": 3,
+      "failed": 0
+    }
+  ],
+  "source_identity": {
+    "available": true,
+    "head": "6badda3bba8038cec1f7c470555bae4c811af3ca",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "949ab2ee34569b4de20e890bc21b0d5ef15c3505fa18a7eef319744f6b37fcf2"
+  },
+  "source_identity_after": {
+    "available": true,
+    "head": "6badda3bba8038cec1f7c470555bae4c811af3ca",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "949ab2ee34569b4de20e890bc21b0d5ef15c3505fa18a7eef319744f6b37fcf2"
+  },
+  "source_identity_verified_stages": [
+    "component-build",
+    "host-test-compile",
+    "test-fast"
+  ],
+  "source_identity_chain_verified": true,
+  "command_receipts": [
+    {
+      "name": "component-build",
+      "path": "D:\\a\\BareLine\\BareLine\\target\\first-party\\20260916T111338.4533536Z-9044-a4369eae\\component-build.json",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--release",
+        "--target",
+        "wasm32-wasip2",
+        "-p",
+        "bareline-json-tools",
+        "-p",
+        "bareline-xml-tools",
+        "-p",
+        "bareline-hex-view"
+      ],
+      "status": "completed",
+      "exit_code": 0,
+      "elapsed_ms": 44747,
+      "source_before": {
+        "available": true,
+        "head": "6badda3bba8038cec1f7c470555bae4c811af3ca",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "949ab2ee34569b4de20e890bc21b0d5ef15c3505fa18a7eef319744f6b37fcf2"
+      },
+      "source_after": {
+        "available": true,
+        "head": "6badda3bba8038cec1f7c470555bae4c811af3ca",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "949ab2ee34569b4de20e890bc21b0d5ef15c3505fa18a7eef319744f6b37fcf2"
+      },
+      "source_changed_during_run": false,
+      "stdout": {
+        "path": "D:\\a\\BareLine\\BareLine\\target\\first-party\\20260916T111338.4533536Z-9044-a4369eae\\component-build.json.stdout.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "stderr": {
+        "path": "D:\\a\\BareLine\\BareLine\\target\\first-party\\20260916T111338.4533536Z-9044-a4369eae\\component-build.json.stderr.log",
+        "sha256": "bc9dfb65ce260e3f8b5366c204fb3927a59604551660edf00fde44052c5c0620"
+      }
+    },
+    {
+      "name": "host-test-compile",
+      "path": "D:\\a\\BareLine\\BareLine\\target\\first-party\\20260916T111338.4533536Z-9044-a4369eae\\host-test-compile.json",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--release",
+        "-p",
+        "bareline-extension-host",
+        "--test",
+        "first_party",
+        "--no-run",
+        "--message-format=json"
+      ],
+      "status": "completed",
+      "exit_code": 0,
+      "elapsed_ms": 616252,
+      "source_before": {
+        "available": true,
+        "head": "6badda3bba8038cec1f7c470555bae4c811af3ca",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "949ab2ee34569b4de20e890bc21b0d5ef15c3505fa18a7eef319744f6b37fcf2"
+      },
+      "source_after": {
+        "available": true,
+        "head": "6badda3bba8038cec1f7c470555bae4c811af3ca",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "949ab2ee34569b4de20e890bc21b0d5ef15c3505fa18a7eef319744f6b37fcf2"
+      },
+      "source_changed_during_run": false,
+      "stdout": {
+        "path": "D:\\a\\BareLine\\BareLine\\target\\first-party\\20260916T111338.4533536Z-9044-a4369eae\\host-test-compile.json.stdout.log",
+        "sha256": "124d8867bd522230062a079f27e3646a8847b7620af46e706606853658674d84"
+      },
+      "stderr": {
+        "path": "D:\\a\\BareLine\\BareLine\\target\\first-party\\20260916T111338.4533536Z-9044-a4369eae\\host-test-compile.json.stderr.log",
+        "sha256": "cb4805361aa5c6c00817c6be57d8385512b713fce854d4b26732a85d8bb00d22"
+      }
+    },
+    {
+      "name": "test-fast",
+      "path": "D:\\a\\BareLine\\BareLine\\target\\first-party\\20260916T111338.4533536Z-9044-a4369eae\\test-fast.json",
+      "command": [
+        "D:\\a\\BareLine\\BareLine\\target\\release\\deps\\first_party-a1639c4802e36c58.exe",
+        "fast_release_",
+        "--ignored",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "status": "completed",
+      "exit_code": 0,
+      "elapsed_ms": 10804,
+      "source_before": {
+        "available": true,
+        "head": "6badda3bba8038cec1f7c470555bae4c811af3ca",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "949ab2ee34569b4de20e890bc21b0d5ef15c3505fa18a7eef319744f6b37fcf2"
+      },
+      "source_after": {
+        "available": true,
+        "head": "6badda3bba8038cec1f7c470555bae4c811af3ca",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "949ab2ee34569b4de20e890bc21b0d5ef15c3505fa18a7eef319744f6b37fcf2"
+      },
+      "source_changed_during_run": false,
+      "stdout": {
+        "path": "D:\\a\\BareLine\\BareLine\\target\\first-party\\20260916T111338.4533536Z-9044-a4369eae\\test-fast.json.stdout.log",
+        "sha256": "f534d01e3d77c8071706b02c8bf6d622cd0f505d4beb2bb47eb2552f4a8ccfa9"
+      },
+      "stderr": {
+        "path": "D:\\a\\BareLine\\BareLine\\target\\first-party\\20260916T111338.4533536Z-9044-a4369eae\\test-fast.json.stderr.log",
+        "sha256": "0c1209f73410da7de02034dcc0a1112516b57c9cad9eb28c35756808beeabfc5"
+      }
+    },
+    {
+      "name": "wasi-target",
+      "path": "D:\\a\\BareLine\\BareLine\\target\\first-party\\20260916T111338.4533536Z-9044-a4369eae\\wasi-target.json",
+      "command": [
+        "rustup",
+        "target",
+        "add",
+        "wasm32-wasip2"
+      ],
+      "status": "completed",
+      "exit_code": 0,
+      "elapsed_ms": 2762,
+      "source_before": {
+        "available": true,
+        "head": "6badda3bba8038cec1f7c470555bae4c811af3ca",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "949ab2ee34569b4de20e890bc21b0d5ef15c3505fa18a7eef319744f6b37fcf2"
+      },
+      "source_after": {
+        "available": true,
+        "head": "6badda3bba8038cec1f7c470555bae4c811af3ca",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "949ab2ee34569b4de20e890bc21b0d5ef15c3505fa18a7eef319744f6b37fcf2"
+      },
+      "source_changed_during_run": false,
+      "stdout": {
+        "path": "D:\\a\\BareLine\\BareLine\\target\\first-party\\20260916T111338.4533536Z-9044-a4369eae\\wasi-target.json.stdout.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "stderr": {
+        "path": "D:\\a\\BareLine\\BareLine\\target\\first-party\\20260916T111338.4533536Z-9044-a4369eae\\wasi-target.json.stderr.log",
+        "sha256": "831ad8906cd548d1be0b512110752469e0a5b4f23e8ea459eb4bf438761bef31"
+      }
+    }
+  ],
+  "artifact_inputs": {
+    "mode": "default",
+    "validated_before_execution": {
+      "host": {
+        "path": "D:\\a\\BareLine\\BareLine\\target\\release\\bareline-extension-host.exe",
+        "bytes": 11446272,
+        "sha256": "590f8038dcfe9aa628fbc3b7b440daa2fa9a611280ea4ffe21e0b578d2cead91"
+      },
+      "json": {
+        "path": "D:\\a\\BareLine\\BareLine\\target\\wasm32-wasip2\\release\\bareline_json_tools.wasm",
+        "bytes": 7276242,
+        "sha256": "d565c57a40a1243ac75b1ba50d0409225c83598b1dafd47f8fbac1abda85079d"
+      },
+      "xml": {
+        "path": "D:\\a\\BareLine\\BareLine\\target\\wasm32-wasip2\\release\\bareline_xml_tools.wasm",
+        "bytes": 8096695,
+        "sha256": "bc88a7d9e5c11a6db244f87924ca98358c70fe4d589eb96d1e8f850d55371d65"
+      },
+      "hex": {
+        "path": "D:\\a\\BareLine\\BareLine\\target\\wasm32-wasip2\\release\\bareline_hex_view.wasm",
+        "bytes": 7118358,
+        "sha256": "fd09d9177337ff504de5347b79f62dab2808803dbe66bca92fbdb9abca9d30b4"
+      }
+    }
+  },
+  "artifacts": {
+    "host": {
+      "path": "D:\\a\\BareLine\\BareLine\\target\\release\\bareline-extension-host.exe",
+      "bytes": 11446272,
+      "sha256": "590f8038dcfe9aa628fbc3b7b440daa2fa9a611280ea4ffe21e0b578d2cead91"
+    },
+    "test_runner": {
+      "path": "D:\\a\\BareLine\\BareLine\\target\\release\\deps\\first_party-a1639c4802e36c58.exe",
+      "bytes": 992256,
+      "sha256": "82f5b60021a22d3fb113637463372b5a23426f573ed15bd010804bea091a406e"
+    },
+    "json": {
+      "path": "D:\\a\\BareLine\\BareLine\\target\\wasm32-wasip2\\release\\bareline_json_tools.wasm",
+      "bytes": 7276242,
+      "sha256": "d565c57a40a1243ac75b1ba50d0409225c83598b1dafd47f8fbac1abda85079d"
+    },
+    "xml": {
+      "path": "D:\\a\\BareLine\\BareLine\\target\\wasm32-wasip2\\release\\bareline_xml_tools.wasm",
+      "bytes": 8096695,
+      "sha256": "bc88a7d9e5c11a6db244f87924ca98358c70fe4d589eb96d1e8f850d55371d65"
+    },
+    "hex": {
+      "path": "D:\\a\\BareLine\\BareLine\\target\\wasm32-wasip2\\release\\bareline_hex_view.wasm",
+      "bytes": 7118358,
+      "sha256": "fd09d9177337ff504de5347b79f62dab2808803dbe66bca92fbdb9abca9d30b4"
+    }
+  },
+  "artifact_note": "Hashes identify files observed after the retained commands; a failed compile may leave a pre-existing artifact and does not qualify it.",
+  "evidence_directory": "D:\\a\\BareLine\\BareLine\\target\\first-party\\20260916T111338.4533536Z-9044-a4369eae"
+}

@@ -1,0 +1,225 @@
+#!/usr/bin/env python3
+"""Run one top-level test command and retain its raw output and exact result."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import signal
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import time
+
+
+def bounded_capture(command, cwd, output, timeout, max_output_bytes=32*1024*1024):
+    """Drain to bounded files inside an owned Job/process group, including on timeout."""
+    stdout_path = output.with_suffix(output.suffix + '.stdout.log')
+    stderr_path = output.with_suffix(output.suffix + '.stderr.log')
+    request_path = output.with_suffix(output.suffix + '.request.json')
+    result_path = output.with_suffix(output.suffix + '.terminal.json')
+    for path in (request_path,result_path):
+        if path.exists(): raise FileExistsError('Refusing existing capture control file: '+str(path))
+    request = dict(command=command,cwd=str(cwd.resolve()),stdout=str(stdout_path.resolve()),stderr=str(stderr_path.resolve()),
+                   result=str(result_path.resolve()),max_output_bytes=max_output_bytes)
+    request_path.write_text(json.dumps(request),encoding='utf-8')
+    argv = [sys.executable,str(Path(__file__).with_name('bounded_command.py').resolve()),str(request_path.resolve())]
+    started=time.monotonic();child=None;status='spawn_error';code=None
+    try:
+        if os.name == 'nt':
+            sys.path.insert(0,str(Path(__file__).resolve().parents[2]/'tests/perf'))
+            from windows_process_metrics import OwnedProcessTree
+            child=OwnedProcessTree(argv,cwd);poll=child.poll_exit_code
+        else:
+            child=subprocess.Popen(argv,cwd=cwd,start_new_session=True,stdin=subprocess.DEVNULL,
+                                   stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL);poll=child.poll
+        while poll() is None:
+            if timeout is not None and time.monotonic()-started >= timeout:
+                status='timeout';break
+            time.sleep(0.05)
+        else:
+            if poll() == 0 and result_path.exists() and result_path.stat().st_size <= 65536:
+                terminal=json.loads(result_path.read_text(encoding='utf-8'));status=terminal['status'];code=terminal['exit_code']
+            else: status='supervisor_error'
+    finally:
+        if child:
+            if os.name == 'nt': child.close()
+            else:
+                try: os.killpg(child.pid,signal.SIGKILL)
+                except ProcessLookupError: pass
+                child.wait(timeout=5)
+        for path in (stdout_path,stderr_path):
+            if not path.exists(): path.write_bytes(b'')
+    stdout=stdout_path.read_bytes();stderr=stderr_path.read_bytes()
+    if len(stdout)>max_output_bytes or len(stderr)>max_output_bytes: status='output_limit'
+    return status,code,stdout,stderr
+
+
+def git_bytes(cwd: Path, arguments: list[str]) -> bytes:
+    result = subprocess.run(["git", *arguments], cwd=cwd, capture_output=True, check=False)
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.decode("utf-8", "replace").strip())
+    return result.stdout
+
+
+def source_identity(cwd: Path, excluded: tuple[Path, ...] = ()) -> dict:
+    try:
+        pathspec = ["--", "."]
+        for path in excluded:
+            try:
+                relative = path.resolve().relative_to(cwd.resolve())
+            except ValueError:
+                continue
+            pathspec.append(f":(exclude){relative.as_posix()}")
+        head = git_bytes(cwd, ["rev-parse", "HEAD"]).decode("ascii").strip()
+        status = git_bytes(cwd, ["status", "--porcelain=v1", "-z", "--untracked-files=all", *pathspec])
+        diff = git_bytes(cwd, ["diff", "--binary", "--no-ext-diff", "HEAD", *pathspec])
+        untracked = git_bytes(cwd, ["ls-files", "--others", "--exclude-standard", "-z", *pathspec])
+        fingerprint = hashlib.sha256()
+        for label, value in ((b"status", status), (b"tracked-diff", diff)):
+            fingerprint.update(label + b"\0" + len(value).to_bytes(8, "little") + value)
+        for raw_path in (entry for entry in untracked.split(b"\0") if entry):
+            fingerprint.update(b"untracked\0" + len(raw_path).to_bytes(8, "little") + raw_path)
+            with (cwd / os.fsdecode(raw_path)).open("rb") as stream:
+                while block := stream.read(64 * 1024):
+                    fingerprint.update(len(block).to_bytes(8, "little") + block)
+            fingerprint.update((0).to_bytes(8, "little"))
+        return {
+            "available": True,
+            "head": head,
+            "working_tree_dirty": bool(status),
+            "source_manifest_sha256": fingerprint.hexdigest(),
+        }
+    except (OSError, RuntimeError, UnicodeError) as error:
+        return {"available": False, "reason": str(error)}
+
+
+def run_receipt(output: Path, command: list[str], cwd: Path, timeout: float | None) -> dict:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    stdout_path = output.with_suffix(output.suffix + ".stdout.log")
+    stderr_path = output.with_suffix(output.suffix + ".stderr.log")
+    for path in (output, stdout_path, stderr_path):
+        if path.exists():
+            raise FileExistsError(f"refusing to replace retained evidence: {path}")
+
+    excluded = (output, stdout_path, stderr_path, output.with_suffix(output.suffix+'.request.json'),
+                output.with_suffix(output.suffix+'.terminal.json'))
+    source_before = source_identity(cwd, excluded)
+    started = time.time_ns()
+    status = "completed"
+    try:
+        status, exit_code, stdout, stderr = bounded_capture(command, cwd, output, timeout)
+    except OSError as error:
+        status = "spawn_error"
+        exit_code = None
+        stdout = stdout_path.read_bytes() if stdout_path.exists() else b""
+        with stderr_path.open('ab') as stream:
+            stream.write(str(error).encode("utf-8", "replace"))
+        stderr = stderr_path.read_bytes()
+    elapsed_ms = (time.time_ns() - started) // 1_000_000
+    source_after = source_identity(cwd, excluded)
+    if not stdout_path.exists(): stdout_path.write_bytes(stdout)
+    if not stderr_path.exists(): stderr_path.write_bytes(stderr)
+    summaries = [
+        line.decode("utf-8", "replace")
+        for line in stdout.splitlines() + stderr.splitlines()
+        if b"test result:" in line
+    ]
+    passed = status == "completed" and exit_code == 0
+    receipt = {
+        "schema_version": 1,
+        "command": command,
+        "cwd": str(cwd.resolve()),
+        "source_before": source_before,
+        "source_after": source_after,
+        "source_changed_during_run": (
+            source_before.get("available") is True
+            and source_after.get("available") is True
+            and (
+                source_before.get("head") != source_after.get("head")
+                or source_before.get("source_manifest_sha256") != source_after.get("source_manifest_sha256")
+            )
+        ),
+        "status": status,
+        "exit_code": exit_code,
+        "elapsed_ms": elapsed_ms,
+        "top_level_total": 1,
+        "top_level_passed": int(passed),
+        "top_level_failed": int(not passed),
+        "observed_nested_or_parent_summaries": summaries,
+        "summary_lines_are_not_aggregate_counts": True,
+        "stdout": {"path": str(stdout_path), "sha256": hashlib.sha256(stdout).hexdigest()},
+        "stderr": {"path": str(stderr_path), "sha256": hashlib.sha256(stderr).hexdigest()},
+    }
+    with output.open("x", encoding="utf-8", newline="\n") as stream:
+        json.dump(receipt, stream, indent=2, ensure_ascii=False)
+        stream.write("\n")
+    return receipt
+
+
+def self_test() -> None:
+    with tempfile.TemporaryDirectory(prefix="bareline-test-evidence-") as directory:
+        root = Path(directory)
+        receipt_path = root / "failed.json"
+        fixture = (
+            "print('running 1 test')\n"
+            "print('test child::fixture ... ok')\n"
+            "print('test result: ok. 1 passed; 0 failed')\n"
+            "print('test parent::owns_child ... FAILED')\n"
+            "print('test result: FAILED. 0 passed; 1 failed')\n"
+            "raise SystemExit(1)\n"
+        )
+        receipt = run_receipt(receipt_path, [sys.executable, "-c", fixture], root, 10)
+        assert receipt["top_level_total"] == 1
+        assert receipt["top_level_passed"] == 0
+        assert receipt["top_level_failed"] == 1
+        assert len(receipt["observed_nested_or_parent_summaries"]) == 2
+        assert receipt_path.is_file()
+        assert receipt_path.with_suffix(".json.stdout.log").is_file()
+        try:
+            run_receipt(receipt_path, [sys.executable, "-c", "pass"], root, 10)
+        except FileExistsError:
+            pass
+        else:
+            raise AssertionError("a retry replaced retained raw evidence")
+        spawn_path = root / "spawn-error.json"
+        spawn = run_receipt(spawn_path, [str(root / "missing-command")], root, 10)
+        assert spawn["status"] == "spawn_error"
+        assert spawn["top_level_failed"] == 1
+        assert spawn_path.is_file()
+        bounded = root / 'bounded.json'
+        status, _, stdout, _ = bounded_capture([sys.executable, '-c', 'print("x"*10000)'], root, bounded, 10, 128)
+        assert status == 'output_limit' and len(stdout) == 128
+        exact = root / 'exact.json'
+        status, code, stdout, _ = bounded_capture([sys.executable, '-c', 'import sys;sys.stdout.write("x"*128)'], root, exact, 10, 128)
+        assert status == 'completed' and code == 0 and len(stdout) == 128
+        timed = run_receipt(root/'timed.json',[sys.executable,'-c','import time;print("started",flush=True);time.sleep(60)'],root,1)
+        assert timed['status'] == 'timeout' and timed['top_level_failed'] == 1
+        assert (root/'timed.json.stdout.log').read_bytes().strip() == b'started'
+    print("run_test_evidence self-test: passed")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--output", type=Path)
+    parser.add_argument("--cwd", type=Path, default=Path.cwd())
+    parser.add_argument("--timeout", type=float)
+    parser.add_argument("--self-test", action="store_true")
+    parser.add_argument("command", nargs=argparse.REMAINDER)
+    args = parser.parse_args()
+    if args.self_test:
+        self_test()
+        return 0
+    command = args.command[1:] if args.command[:1] == ["--"] else args.command
+    if args.output is None or not command:
+        parser.error("--output and a command after -- are required")
+    receipt = run_receipt(args.output, command, args.cwd, args.timeout)
+    print(args.output)
+    return 0 if receipt["top_level_failed"] == 0 else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

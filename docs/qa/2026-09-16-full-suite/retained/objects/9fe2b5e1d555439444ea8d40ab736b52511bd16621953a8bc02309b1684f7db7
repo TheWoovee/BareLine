@@ -1,0 +1,8 @@
+[alias]
+xtask = "run --package xtask --"
+
+[env]
+# Search uses the compiled-pattern limit supplied by the locked PCRE2 sources.
+# A host's older system library can lack that API; keep every build on the
+# bundled implementation, including when pkg-config finds a system installation.
+PCRE2_SYS_STATIC = { value = "1", force = true }

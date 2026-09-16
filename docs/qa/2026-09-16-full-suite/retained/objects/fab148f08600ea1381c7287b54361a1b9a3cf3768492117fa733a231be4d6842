@@ -1,0 +1,11 @@
+   Compiling bareline-file-io v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\crates\file-io)
+   Compiling bareline-search v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\crates\search)
+   Compiling bareline-syntax v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\crates\syntax)
+   Compiling bareline-editor-surface v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\crates\editor-surface)
+   Compiling bareline-app v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\crates\app)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 22.10s
+     Running unittests src\lib.rs (target\debug\deps\bareline_app-fbd115c03ca5322a.exe)
+     Running unittests src\lib.rs (target\debug\deps\bareline_file_io-e3cf9f697cd9e410.exe)
+     Running tests\recovery_process_death.rs (target\debug\deps\recovery_process_death-dd39f6a193d4867d.exe)
+   Doc-tests bareline_app
+   Doc-tests bareline_file_io

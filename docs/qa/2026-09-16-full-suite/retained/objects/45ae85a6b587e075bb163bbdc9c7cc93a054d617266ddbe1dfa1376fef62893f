@@ -1,0 +1,5 @@
+   Compiling accesskit_windows v0.35.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\vendor\accesskit_windows-0.35.0)
+   Compiling bareline-platform-windows v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\crates\platform-windows)
+   Compiling xtask v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\xtask)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 24.11s
+     Running `target\debug\xtask.exe perf smoke`

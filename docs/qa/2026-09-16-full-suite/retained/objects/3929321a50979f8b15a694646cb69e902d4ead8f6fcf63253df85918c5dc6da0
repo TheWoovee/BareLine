@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "command": [
+    "python",
+    "tests/e2e/runner.py",
+    "run",
+    "code_config",
+    "--commit",
+    "dc1bf2389e7bd2551a8fa36a960c6c12173939d7",
+    "--reviewer",
+    "Codex local smoke (not independent acceptance)",
+    "--os-build",
+    "26200.9457",
+    "--hardware",
+    "AMD Ryzen 5 3600; 128 GiB RAM; local Windows x64",
+    "--executable",
+    "C:\\Users\\Woovee\\AppData\\Local\\Programs\\Bareline\\bareline.exe",
+    "--dpi",
+    "100",
+    "--mode",
+    "keyboard",
+    "--theme",
+    "dark",
+    "--adapter",
+    "C:\\Users\\Woovee\\AppData\\Local\\Microsoft\\WindowsApps\\python.exe",
+    "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_adapter.py"
+  ],
+  "cwd": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor",
+  "source_before": {
+    "available": true,
+    "head": "dc1bf2389e7bd2551a8fa36a960c6c12173939d7",
+    "working_tree_dirty": false,
+    "source_manifest_sha256": "c05ae878b9de51316baefd7bc4c28c80b947f0f26ecb6fa8b1dbb5ab7a96bc09"
+  },
+  "source_after": {
+    "available": true,
+    "head": "dc1bf2389e7bd2551a8fa36a960c6c12173939d7",
+    "working_tree_dirty": false,
+    "source_manifest_sha256": "c05ae878b9de51316baefd7bc4c28c80b947f0f26ecb6fa8b1dbb5ab7a96bc09"
+  },
+  "source_changed_during_run": false,
+  "status": "completed",
+  "exit_code": 0,
+  "elapsed_ms": 17573,
+  "top_level_total": 1,
+  "top_level_passed": 1,
+  "top_level_failed": 0,
+  "observed_nested_or_parent_summaries": [],
+  "summary_lines_are_not_aggregate_counts": true,
+  "stdout": {
+    "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\full-suite-20260916\\46-code-config.json.stdout.log",
+    "sha256": "675fee33db7e0174b10ab15064493af66e515a642dbacac0b04f521f08613b4c"
+  },
+  "stderr": {
+    "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\full-suite-20260916\\46-code-config.json.stderr.log",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+}

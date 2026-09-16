@@ -1,0 +1,2183 @@
+﻿2026-09-16T11:05:01.9791800Z Current runner version: '2.337.0'
+2026-09-16T11:05:01.9808920Z ##[group]Runner Image Provisioner
+2026-09-16T11:05:01.9809500Z Hosted Compute Agent
+2026-09-16T11:05:01.9809890Z Version: 20260828.587
+2026-09-16T11:05:01.9810300Z Commit: abac92662cab4cc7352de4f9f9d2e2419aad9c29
+2026-09-16T11:05:01.9810790Z Build Date: 2026-08-28T16:44:25Z
+2026-09-16T11:05:01.9811330Z Worker ID: {07b8cb36-6385-42db-9959-da6ec733e5da}
+2026-09-16T11:05:01.9812040Z Azure Region: westus
+2026-09-16T11:05:01.9812550Z ##[endgroup]
+2026-09-16T11:05:01.9813660Z ##[group]Operating System
+2026-09-16T11:05:01.9814140Z macOS
+2026-09-16T11:05:01.9814510Z 26.6.2
+2026-09-16T11:05:01.9814850Z 25G83
+2026-09-16T11:05:01.9815210Z ##[endgroup]
+2026-09-16T11:05:01.9815600Z ##[group]Runner Image
+2026-09-16T11:05:01.9816030Z Image: macos-26-arm64
+2026-09-16T11:05:01.9816410Z Version: 20260907.0351.1
+2026-09-16T11:05:01.9817360Z Included Software: https://github.com/actions/runner-images/blob/macos-26-arm64/20260907.0351/images/macos/macos-26-arm64-Readme.md
+2026-09-16T11:05:01.9818760Z Image Release: https://github.com/actions/runner-images/releases/tag/macos-26-arm64%2F20260907.0351
+2026-09-16T11:05:01.9819430Z ##[endgroup]
+2026-09-16T11:05:01.9820200Z ##[group]GITHUB_TOKEN Permissions
+2026-09-16T11:05:01.9821810Z Contents: read
+2026-09-16T11:05:01.9822290Z Metadata: read
+2026-09-16T11:05:01.9822660Z ##[endgroup]
+2026-09-16T11:05:01.9827180Z Secret source: Actions
+2026-09-16T11:05:01.9828800Z Cache mode: write
+2026-09-16T11:05:01.9830040Z Prepare workflow directory
+2026-09-16T11:05:02.0187130Z Prepare all required actions
+2026-09-16T11:05:02.0286550Z Getting action download info
+2026-09-16T11:05:02.4967080Z Download action repository 'actions/checkout@v4' (SHA:11d5960a326750d5838078e36cf38b85af677262)
+2026-09-16T11:05:02.8635170Z Download action repository 'dtolnay/rust-toolchain@master' (SHA:02cb101ec7c40f2c49e1d9714d64511d8e1b74de)
+2026-09-16T11:05:03.1388830Z Download action repository 'actions/setup-python@v5' (SHA:a26af69be951a213d495a4c3e4e4022e16d87065)
+2026-09-16T11:05:03.2511810Z Download action repository 'actions/upload-artifact@v4' (SHA:ea165f8d65b6e75b540449e92b4886f43607fa02)
+2026-09-16T11:05:03.6289180Z Complete job name: neutral (macos-latest)
+2026-09-16T11:05:03.7312680Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-09-16T11:05:03.7323800Z ##[group]Run actions/checkout@v4
+2026-09-16T11:05:03.7324740Z with:
+2026-09-16T11:05:03.7325350Z   repository: TheWoovee/BareLine
+2026-09-16T11:05:03.7331040Z   token: ***
+2026-09-16T11:05:03.7331650Z   ssh-strict: true
+2026-09-16T11:05:03.7332250Z   ssh-user: git
+2026-09-16T11:05:03.7332860Z   persist-credentials: true
+2026-09-16T11:05:03.7333540Z   clean: true
+2026-09-16T11:05:03.7334230Z   sparse-checkout-cone-mode: true
+2026-09-16T11:05:03.7334980Z   fetch-depth: 1
+2026-09-16T11:05:03.7335570Z   fetch-tags: false
+2026-09-16T11:05:03.7336970Z   show-progress: true
+2026-09-16T11:05:03.7337630Z   lfs: false
+2026-09-16T11:05:03.7338270Z   submodules: false
+2026-09-16T11:05:03.7338910Z   set-safe-directory: true
+2026-09-16T11:05:03.7339670Z   allow-unsafe-pr-checkout: false
+2026-09-16T11:05:03.7341380Z ##[endgroup]
+2026-09-16T11:05:04.1251560Z Syncing repository: TheWoovee/BareLine
+2026-09-16T11:05:04.1255390Z ##[group]Getting Git version info
+2026-09-16T11:05:04.1331450Z Working directory is '/Users/runner/work/BareLine/BareLine'
+2026-09-16T11:05:04.1337320Z [command]/opt/homebrew/bin/git version
+2026-09-16T11:05:04.1914230Z git version 2.55.0
+2026-09-16T11:05:04.1931130Z ##[endgroup]
+2026-09-16T11:05:04.1941070Z Copying '/Users/runner/.gitconfig' to '/Users/runner/work/_temp/6bf8ba3d-81b8-4355-bb70-69cdf785c90c/.gitconfig'
+2026-09-16T11:05:04.1951380Z Temporarily overriding HOME='/Users/runner/work/_temp/6bf8ba3d-81b8-4355-bb70-69cdf785c90c' before making global git config changes
+2026-09-16T11:05:04.1959320Z Adding repository directory to the temporary git global config as a safe directory
+2026-09-16T11:05:04.1979000Z [command]/opt/homebrew/bin/git config --global --add safe.directory /Users/runner/work/BareLine/BareLine
+2026-09-16T11:05:04.2150720Z Deleting the contents of '/Users/runner/work/BareLine/BareLine'
+2026-09-16T11:05:04.2152380Z ##[group]Initializing the repository
+2026-09-16T11:05:04.2153570Z [command]/opt/homebrew/bin/git init /Users/runner/work/BareLine/BareLine
+2026-09-16T11:05:04.2528590Z hint: Using 'master' as the name for the initial branch. This default branch name
+2026-09-16T11:05:04.2532290Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+2026-09-16T11:05:04.2589840Z hint: to use in all of your new repositories, which will suppress this warning,
+2026-09-16T11:05:04.2591590Z hint: call:
+2026-09-16T11:05:04.2592730Z hint:
+2026-09-16T11:05:04.2593910Z hint: 	git config --global init.defaultBranch <name>
+2026-09-16T11:05:04.2595230Z hint:
+2026-09-16T11:05:04.2596460Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2026-09-16T11:05:04.2598160Z hint: 'development'. The just-created branch can be renamed via this command:
+2026-09-16T11:05:04.2599630Z hint:
+2026-09-16T11:05:04.2601430Z hint: 	git branch -m <name>
+2026-09-16T11:05:04.2602590Z hint:
+2026-09-16T11:05:04.2610110Z hint: Disable this message with "git config set advice.defaultBranchName false"
+2026-09-16T11:05:04.2625810Z Initialized empty Git repository in /Users/runner/work/BareLine/BareLine/.git/
+2026-09-16T11:05:04.2640390Z [command]/opt/homebrew/bin/git remote add origin https://github.com/TheWoovee/BareLine
+2026-09-16T11:05:04.2715810Z ##[endgroup]
+2026-09-16T11:05:04.2717660Z ##[group]Disabling automatic garbage collection
+2026-09-16T11:05:04.2729350Z [command]/opt/homebrew/bin/git config --local gc.auto 0
+2026-09-16T11:05:04.2846540Z ##[endgroup]
+2026-09-16T11:05:04.2849690Z ##[group]Setting up auth
+2026-09-16T11:05:04.2852940Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-09-16T11:05:04.2998090Z [command]/opt/homebrew/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-09-16T11:05:04.4656450Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-09-16T11:05:04.4790210Z [command]/opt/homebrew/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-09-16T11:05:04.6402800Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-09-16T11:05:04.6711970Z [command]/opt/homebrew/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-09-16T11:05:04.8777650Z [command]/opt/homebrew/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-09-16T11:05:04.8845580Z ##[endgroup]
+2026-09-16T11:05:04.8847380Z ##[group]Fetching the repository
+2026-09-16T11:05:04.8849520Z [command]/opt/homebrew/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +6badda3bba8038cec1f7c470555bae4c811af3ca:refs/remotes/origin/master
+2026-09-16T11:05:08.4118490Z From https://github.com/TheWoovee/BareLine
+2026-09-16T11:05:08.4128040Z  * [new ref]         6badda3bba8038cec1f7c470555bae4c811af3ca -> origin/master
+2026-09-16T11:05:08.4132560Z ##[endgroup]
+2026-09-16T11:05:08.4133290Z ##[group]Determining the checkout info
+2026-09-16T11:05:08.4133890Z ##[endgroup]
+2026-09-16T11:05:08.4134430Z [command]/opt/homebrew/bin/git sparse-checkout disable
+2026-09-16T11:05:08.4234490Z [command]/opt/homebrew/bin/git config --local --unset-all extensions.worktreeConfig
+2026-09-16T11:05:08.4343700Z ##[group]Checking out the ref
+2026-09-16T11:05:08.4345550Z [command]/opt/homebrew/bin/git checkout --progress --force -B master refs/remotes/origin/master
+2026-09-16T11:05:09.5357030Z Updating files:  68% (2405/3531)
+2026-09-16T11:05:09.5488560Z Updating files:  69% (2437/3531)
+2026-09-16T11:05:09.5551450Z Updating files:  70% (2472/3531)
+2026-09-16T11:05:09.5613200Z Updating files:  71% (2508/3531)
+2026-09-16T11:05:09.5677170Z Updating files:  72% (2543/3531)
+2026-09-16T11:05:09.5749850Z Updating files:  73% (2578/3531)
+2026-09-16T11:05:09.5869220Z Updating files:  74% (2613/3531)
+2026-09-16T11:05:09.5932890Z Updating files:  75% (2649/3531)
+2026-09-16T11:05:09.6072220Z Updating files:  76% (2684/3531)
+2026-09-16T11:05:09.6217600Z Updating files:  77% (2719/3531)
+2026-09-16T11:05:09.6274240Z Updating files:  78% (2755/3531)
+2026-09-16T11:05:09.6308890Z Updating files:  79% (2790/3531)
+2026-09-16T11:05:09.7482250Z Updating files:  80% (2825/3531)
+2026-09-16T11:05:09.7691480Z Updating files:  81% (2861/3531)
+2026-09-16T11:05:09.9131180Z Updating files:  82% (2896/3531)
+2026-09-16T11:05:09.9282460Z Updating files:  83% (2931/3531)
+2026-09-16T11:05:09.9366560Z Updating files:  84% (2967/3531)
+2026-09-16T11:05:09.9446100Z Updating files:  85% (3002/3531)
+2026-09-16T11:05:09.9634610Z Updating files:  86% (3037/3531)
+2026-09-16T11:05:09.9768490Z Updating files:  87% (3072/3531)
+2026-09-16T11:05:10.1271380Z Updating files:  88% (3108/3531)
+2026-09-16T11:05:10.1467520Z Updating files:  89% (3143/3531)
+2026-09-16T11:05:10.1758770Z Updating files:  90% (3178/3531)
+2026-09-16T11:05:10.2254610Z Updating files:  91% (3214/3531)
+2026-09-16T11:05:10.2485110Z Updating files:  92% (3249/3531)
+2026-09-16T11:05:10.2652000Z Updating files:  93% (3284/3531)
+2026-09-16T11:05:10.2783030Z Updating files:  94% (3320/3531)
+2026-09-16T11:05:10.2903690Z Updating files:  95% (3355/3531)
+2026-09-16T11:05:10.3024550Z Updating files:  96% (3390/3531)
+2026-09-16T11:05:10.3143270Z Updating files:  97% (3426/3531)
+2026-09-16T11:05:10.3220570Z Updating files:  98% (3461/3531)
+2026-09-16T11:05:10.3280210Z Updating files:  99% (3496/3531)
+2026-09-16T11:05:10.3281880Z Updating files: 100% (3531/3531)
+2026-09-16T11:05:10.3299750Z Updating files: 100% (3531/3531), done.
+2026-09-16T11:05:10.3388920Z Reset branch 'master'
+2026-09-16T11:05:10.3425720Z branch 'master' set up to track 'origin/master'.
+2026-09-16T11:05:10.3496990Z ##[endgroup]
+2026-09-16T11:05:10.3766480Z [command]/opt/homebrew/bin/git log -1 --format=%H
+2026-09-16T11:05:10.3931960Z 6badda3bba8038cec1f7c470555bae4c811af3ca
+2026-09-16T11:05:10.4618080Z ##[group]Run dtolnay/rust-toolchain@master
+2026-09-16T11:05:10.4618570Z with:
+2026-09-16T11:05:10.4618860Z   toolchain: 1.98.1
+2026-09-16T11:05:10.4619170Z   components: clippy
+2026-09-16T11:05:10.4619560Z ##[endgroup]
+2026-09-16T11:05:10.4768300Z ##[start-action display=Parse toolchain version;id=__dtolnay_rust-toolchain.parse]
+2026-09-16T11:05:10.4961160Z ##[group]Run if [[ -z $toolchain ]]; then
+2026-09-16T11:05:10.4961650Z [36;1mif [[ -z $toolchain ]]; then[0m
+2026-09-16T11:05:10.4964130Z [36;1m  # GitHub does not enforce `required: true` inputs itself. https://github.com/actions/runner/issues/1070[0m
+2026-09-16T11:05:10.4966210Z [36;1m  echo "'toolchain' is a required input" >&2[0m
+2026-09-16T11:05:10.4967040Z [36;1m  exit 1[0m
+2026-09-16T11:05:10.4967420Z [36;1melif [[ $toolchain =~ ^stable' '[0-9]+' '(year|month|week|day)s?' 'ago$ ]]; then[0m
+2026-09-16T11:05:10.4968130Z [36;1m  if [[ macOS == macOS ]]; then[0m
+2026-09-16T11:05:10.4969950Z [36;1m    echo "toolchain=1.$((($(date -v-$(sed 's/stable \([0-9]*\) \(.\).*/\1\2/' <<< $toolchain) +%s)/60/60/24-16569)/7/6))" >> $GITHUB_OUTPUT[0m
+2026-09-16T11:05:10.4970370Z [36;1m  else[0m
+2026-09-16T11:05:10.4970680Z [36;1m    echo "toolchain=1.$((($(date --date "${toolchain#stable }" +%s)/60/60/24-16569)/7/6))" >> $GITHUB_OUTPUT[0m
+2026-09-16T11:05:10.4971060Z [36;1m  fi[0m
+2026-09-16T11:05:10.4972160Z [36;1melif [[ $toolchain =~ ^stable' 'minus' '[0-9]+' 'releases?$ ]]; then[0m
+2026-09-16T11:05:10.4997390Z [36;1m  echo "toolchain=1.$((($(date +%s)/60/60/24-16569)/7/6-${toolchain//[^0-9]/}))" >> $GITHUB_OUTPUT[0m
+2026-09-16T11:05:10.4998050Z [36;1melif [[ $toolchain =~ ^1\.[0-9]+$ ]]; then[0m
+2026-09-16T11:05:10.4998530Z [36;1m  echo "toolchain=1.$((i=${toolchain#1.}, c=($(date +%s)/60/60/24-16569)/7/6, i+9*i*(10*i<=c)+90*i*(100*i<=c)))" >> $GITHUB_OUTPUT[0m
+2026-09-16T11:05:10.4998920Z [36;1melse[0m
+2026-09-16T11:05:10.4999120Z [36;1m  echo "toolchain=$toolchain" >> $GITHUB_OUTPUT[0m
+2026-09-16T11:05:10.4999460Z [36;1mfi[0m
+2026-09-16T11:05:10.5181940Z shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+2026-09-16T11:05:10.5182250Z env:
+2026-09-16T11:05:10.5182550Z   toolchain: 1.98.1
+2026-09-16T11:05:10.5182760Z ##[endgroup]
+2026-09-16T11:05:10.6043740Z ##[end-action id=__dtolnay_rust-toolchain.parse;outcome=success;conclusion=success;duration_ms=127]
+2026-09-16T11:05:10.6062750Z ##[start-action display=Construct rustup command line;id=__dtolnay_rust-toolchain.flags]
+2026-09-16T11:05:10.6100170Z ##[group]Run echo "targets=$(for t in ${targets//,/ }; do echo -n ' --target' $t; done)" >> $GITHUB_OUTPUT
+2026-09-16T11:05:10.6100860Z [36;1mecho "targets=$(for t in ${targets//,/ }; do echo -n ' --target' $t; done)" >> $GITHUB_OUTPUT[0m
+2026-09-16T11:05:10.6103100Z [36;1mecho "components=$(for c in ${components//,/ }; do echo -n ' --component' $c; done)" >> $GITHUB_OUTPUT[0m
+2026-09-16T11:05:10.6103970Z [36;1mecho "downgrade=" >> $GITHUB_OUTPUT[0m
+2026-09-16T11:05:10.6151200Z shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+2026-09-16T11:05:10.6151490Z env:
+2026-09-16T11:05:10.6151680Z   targets: 
+2026-09-16T11:05:10.6151830Z   components: clippy
+2026-09-16T11:05:10.6152000Z ##[endgroup]
+2026-09-16T11:05:10.6443380Z ##[end-action id=__dtolnay_rust-toolchain.flags;outcome=success;conclusion=success;duration_ms=37]
+2026-09-16T11:05:10.6445950Z ##[start-action display=Set $CARGO_HOME;id=__dtolnay_rust-toolchain.__run]
+2026-09-16T11:05:10.6467570Z ##[group]Run echo CARGO_HOME=${CARGO_HOME:-"$HOME/.cargo"} >> $GITHUB_ENV
+2026-09-16T11:05:10.6468030Z [36;1mecho CARGO_HOME=${CARGO_HOME:-"$HOME/.cargo"} >> $GITHUB_ENV[0m
+2026-09-16T11:05:10.6501650Z shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+2026-09-16T11:05:10.6501930Z ##[endgroup]
+2026-09-16T11:05:10.7027630Z ##[end-action id=__dtolnay_rust-toolchain.__run;outcome=success;conclusion=success;duration_ms=58]
+2026-09-16T11:05:10.7094130Z ##[start-action display=Install rustup if needed;id=__dtolnay_rust-toolchain.__run_2]
+2026-09-16T11:05:10.7127290Z ##[group]Run if ! command -v rustup &>/dev/null; then
+2026-09-16T11:05:10.7127650Z [36;1mif ! command -v rustup &>/dev/null; then[0m
+2026-09-16T11:05:10.7128350Z [36;1m  curl --proto '=https' --tlsv1.2 --retry 10 --retry-connrefused --location --silent --show-error --fail https://sh.rustup.rs | sh -s -- --default-toolchain none -y[0m
+2026-09-16T11:05:10.7128950Z [36;1m  echo "$CARGO_HOME/bin" >> $GITHUB_PATH[0m
+2026-09-16T11:05:10.7129200Z [36;1mfi[0m
+2026-09-16T11:05:10.7190200Z shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+2026-09-16T11:05:10.7190580Z env:
+2026-09-16T11:05:10.7190990Z   CARGO_HOME: /Users/runner/.cargo
+2026-09-16T11:05:10.7191290Z ##[endgroup]
+2026-09-16T11:05:10.7532450Z ##[end-action id=__dtolnay_rust-toolchain.__run_2;outcome=success;conclusion=success;duration_ms=43]
+2026-09-16T11:05:10.7535770Z ##[start-action display=Install rustup if needed on windows;id=__dtolnay_rust-toolchain.__run_3]
+2026-09-16T11:05:10.7545610Z ##[end-action id=__dtolnay_rust-toolchain.__run_3;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-09-16T11:05:10.7556650Z ##[start-action display=rustup toolchain install 1.98.1;id=__dtolnay_rust-toolchain.__run_4]
+2026-09-16T11:05:10.7698470Z ##[group]Run rustup toolchain install 1.98.1 --component clippy --profile minimal --no-self-update --force-non-host
+2026-09-16T11:05:10.7699100Z [36;1mrustup toolchain install 1.98.1 --component clippy --profile minimal --no-self-update --force-non-host[0m
+2026-09-16T11:05:10.7736190Z shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+2026-09-16T11:05:10.7736720Z env:
+2026-09-16T11:05:10.7736920Z   CARGO_HOME: /Users/runner/.cargo
+2026-09-16T11:05:10.7737160Z   RUSTUP_PERMIT_COPY_RENAME: 1
+2026-09-16T11:05:10.7737350Z ##[endgroup]
+2026-09-16T11:05:10.8752750Z info: syncing channel updates for 1.98.1-aarch64-apple-darwin
+2026-09-16T11:05:10.9929220Z info: latest update on 2026-09-03 for version 1.98.1 (48a229cea 2026-09-01)
+2026-09-16T11:05:10.9944150Z info: downloading 4 components
+2026-09-16T11:05:18.2483420Z 
+2026-09-16T11:05:18.3016030Z   1.98.1-aarch64-apple-darwin installed - rustc 1.98.1 (48a229cea 2026-09-01)
+2026-09-16T11:05:18.3017210Z info: self-update is disabled for this build of rustup
+2026-09-16T11:05:18.3017830Z info: any updates to rustup will need to be fetched with your system package manager
+2026-09-16T11:05:18.3018110Z 
+2026-09-16T11:05:18.3231850Z ##[end-action id=__dtolnay_rust-toolchain.__run_4;outcome=success;conclusion=success;duration_ms=7563]
+2026-09-16T11:05:18.3246170Z ##[start-action display=rustup default 1.98.1;id=__dtolnay_rust-toolchain.__run_5]
+2026-09-16T11:05:18.3284390Z ##[group]Run rustup default 1.98.1 --force-non-host
+2026-09-16T11:05:18.3284910Z [36;1mrustup default 1.98.1 --force-non-host[0m
+2026-09-16T11:05:18.3333010Z shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+2026-09-16T11:05:18.3333500Z env:
+2026-09-16T11:05:18.3333840Z   CARGO_HOME: /Users/runner/.cargo
+2026-09-16T11:05:18.3334120Z ##[endgroup]
+2026-09-16T11:05:18.4349720Z info: using existing install for 1.98.1-aarch64-apple-darwin
+2026-09-16T11:05:18.4426980Z info: default toolchain set to 1.98.1-aarch64-apple-darwin
+2026-09-16T11:05:18.4427700Z 
+2026-09-16T11:05:18.4672320Z   1.98.1-aarch64-apple-darwin unchanged - rustc 1.98.1 (48a229cea 2026-09-01)
+2026-09-16T11:05:18.4686040Z info: note that the toolchain '1.98.1-aarch64-apple-darwin' is currently in use (overridden by '/Users/runner/work/BareLine/BareLine/rust-toolchain.toml')
+2026-09-16T11:05:18.4686710Z 
+2026-09-16T11:05:18.4719850Z ##[end-action id=__dtolnay_rust-toolchain.__run_5;outcome=success;conclusion=success;duration_ms=147]
+2026-09-16T11:05:18.4722500Z ##[start-action display=Create cachekey;id=__dtolnay_rust-toolchain.rustc-version]
+2026-09-16T11:05:18.4755770Z ##[group]Run DATE=$(rustc +1.98.1 --version --verbose | sed -ne 's/^commit-date: \(20[0-9][0-9]\)-\([01][0-9]\)-\([0-3][0-9]\)$/\1\2\3/p')
+2026-09-16T11:05:18.4772270Z [36;1mDATE=$(rustc +1.98.1 --version --verbose | sed -ne 's/^commit-date: \(20[0-9][0-9]\)-\([01][0-9]\)-\([0-3][0-9]\)$/\1\2\3/p')[0m
+2026-09-16T11:05:18.4773110Z [36;1mHASH=$(rustc +1.98.1 --version --verbose | sed -ne 's/^commit-hash: //p')[0m
+2026-09-16T11:05:18.4773620Z [36;1mecho "cachekey=$(echo $DATE$HASH | head -c12)" >> $GITHUB_OUTPUT[0m
+2026-09-16T11:05:18.4812450Z shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+2026-09-16T11:05:18.4812940Z env:
+2026-09-16T11:05:18.4813360Z   CARGO_HOME: /Users/runner/.cargo
+2026-09-16T11:05:18.4813660Z ##[endgroup]
+2026-09-16T11:05:18.5953270Z ##[end-action id=__dtolnay_rust-toolchain.rustc-version;outcome=success;conclusion=success;duration_ms=122]
+2026-09-16T11:05:18.5956080Z ##[start-action display=Disable incremental compilation;id=__dtolnay_rust-toolchain.__run_6]
+2026-09-16T11:05:18.6006770Z ##[group]Run if [ -z "${CARGO_INCREMENTAL+set}" ]; then
+2026-09-16T11:05:18.6007910Z [36;1mif [ -z "${CARGO_INCREMENTAL+set}" ]; then[0m
+2026-09-16T11:05:18.6008540Z [36;1m  echo CARGO_INCREMENTAL=0 >> $GITHUB_ENV[0m
+2026-09-16T11:05:18.6008990Z [36;1mfi[0m
+2026-09-16T11:05:18.6053690Z shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+2026-09-16T11:05:18.6054070Z env:
+2026-09-16T11:05:18.6054400Z   CARGO_HOME: /Users/runner/.cargo
+2026-09-16T11:05:18.6054690Z ##[endgroup]
+2026-09-16T11:05:18.6440430Z ##[end-action id=__dtolnay_rust-toolchain.__run_6;outcome=success;conclusion=success;duration_ms=48]
+2026-09-16T11:05:18.6445760Z ##[start-action display=Enable colors in Cargo output;id=__dtolnay_rust-toolchain.__run_7]
+2026-09-16T11:05:18.6471020Z ##[group]Run if [ -z "${CARGO_TERM_COLOR+set}" ]; then
+2026-09-16T11:05:18.6471450Z [36;1mif [ -z "${CARGO_TERM_COLOR+set}" ]; then[0m
+2026-09-16T11:05:18.6471790Z [36;1m  echo CARGO_TERM_COLOR=always >> $GITHUB_ENV[0m
+2026-09-16T11:05:18.6472020Z [36;1mfi[0m
+2026-09-16T11:05:18.6510430Z shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+2026-09-16T11:05:18.6510710Z env:
+2026-09-16T11:05:18.6510950Z   CARGO_HOME: /Users/runner/.cargo
+2026-09-16T11:05:18.6511190Z   CARGO_INCREMENTAL: 0
+2026-09-16T11:05:18.6511390Z ##[endgroup]
+2026-09-16T11:05:18.6774000Z ##[end-action id=__dtolnay_rust-toolchain.__run_7;outcome=success;conclusion=success;duration_ms=32]
+2026-09-16T11:05:18.6777380Z ##[start-action display=Enable Cargo sparse registry;id=__dtolnay_rust-toolchain.__run_8]
+2026-09-16T11:05:18.6805160Z ##[group]Run # implemented in 1.66, stabilized in 1.68, made default in 1.70
+2026-09-16T11:05:18.6805710Z [36;1m# implemented in 1.66, stabilized in 1.68, made default in 1.70[0m
+2026-09-16T11:05:18.6806380Z [36;1mif [ -z "${CARGO_REGISTRIES_CRATES_IO_PROTOCOL+set}" -o -f "/Users/runner/work/_temp"/.implicit_cargo_registries_crates_io_protocol ]; then[0m
+2026-09-16T11:05:18.6807570Z [36;1m  if rustc +1.98.1 --version --verbose | grep -q '^release: 1\.6[89]\.'; then[0m
+2026-09-16T11:05:18.6808040Z [36;1m    touch "/Users/runner/work/_temp"/.implicit_cargo_registries_crates_io_protocol || true[0m
+2026-09-16T11:05:18.6808510Z [36;1m    echo CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse >> $GITHUB_ENV[0m
+2026-09-16T11:05:18.6809040Z [36;1m  elif rustc +1.98.1 --version --verbose | grep -q '^release: 1\.6[67]\.'; then[0m
+2026-09-16T11:05:18.6809580Z [36;1m    touch "/Users/runner/work/_temp"/.implicit_cargo_registries_crates_io_protocol || true[0m
+2026-09-16T11:05:18.6810010Z [36;1m    echo CARGO_REGISTRIES_CRATES_IO_PROTOCOL=git >> $GITHUB_ENV[0m
+2026-09-16T11:05:18.6810370Z [36;1m  fi[0m
+2026-09-16T11:05:18.6835340Z [36;1mfi[0m
+2026-09-16T11:05:18.6879360Z shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+2026-09-16T11:05:18.6879660Z env:
+2026-09-16T11:05:18.6879820Z   CARGO_HOME: /Users/runner/.cargo
+2026-09-16T11:05:18.6880010Z   CARGO_INCREMENTAL: 0
+2026-09-16T11:05:18.6880310Z   CARGO_TERM_COLOR: always
+2026-09-16T11:05:18.6880500Z ##[endgroup]
+2026-09-16T11:05:18.8102610Z ##[end-action id=__dtolnay_rust-toolchain.__run_8;outcome=success;conclusion=success;duration_ms=132]
+2026-09-16T11:05:18.8106260Z ##[start-action display=Work around spurious network errors in curl 8.0;id=__dtolnay_rust-toolchain.__run_9]
+2026-09-16T11:05:18.8129150Z ##[group]Run # https://rust-lang.zulipchat.com/#narrow/stream/246057-t-cargo/topic/timeout.20investigation
+2026-09-16T11:05:18.8129790Z [36;1m# https://rust-lang.zulipchat.com/#narrow/stream/246057-t-cargo/topic/timeout.20investigation[0m
+2026-09-16T11:05:18.8131030Z [36;1mif rustc +1.98.1 --version --verbose | grep -q '^release: 1\.7[01]\.'; then[0m
+2026-09-16T11:05:18.8131470Z [36;1m  echo CARGO_HTTP_MULTIPLEXING=false >> $GITHUB_ENV[0m
+2026-09-16T11:05:18.8131810Z [36;1mfi[0m
+2026-09-16T11:05:18.8197680Z shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+2026-09-16T11:05:18.8198010Z env:
+2026-09-16T11:05:18.8198230Z   CARGO_HOME: /Users/runner/.cargo
+2026-09-16T11:05:18.8198460Z   CARGO_INCREMENTAL: 0
+2026-09-16T11:05:18.8198630Z   CARGO_TERM_COLOR: always
+2026-09-16T11:05:18.8198820Z ##[endgroup]
+2026-09-16T11:05:18.8943300Z ##[end-action id=__dtolnay_rust-toolchain.__run_9;outcome=success;conclusion=success;duration_ms=83]
+2026-09-16T11:05:18.8949230Z ##[start-action display=rustc +1.98.1 --version --verbose;id=__dtolnay_rust-toolchain.__run_10]
+2026-09-16T11:05:18.8967480Z ##[group]Run rustc +1.98.1 --version --verbose
+2026-09-16T11:05:18.8967820Z [36;1mrustc +1.98.1 --version --verbose[0m
+2026-09-16T11:05:18.9015050Z shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+2026-09-16T11:05:18.9015330Z env:
+2026-09-16T11:05:18.9015530Z   CARGO_HOME: /Users/runner/.cargo
+2026-09-16T11:05:18.9015800Z   CARGO_INCREMENTAL: 0
+2026-09-16T11:05:18.9016340Z   CARGO_TERM_COLOR: always
+2026-09-16T11:05:18.9016550Z ##[endgroup]
+2026-09-16T11:05:18.9765780Z rustc 1.98.1 (48a229cea 2026-09-01)
+2026-09-16T11:05:18.9766290Z binary: rustc
+2026-09-16T11:05:18.9766560Z commit-hash: 48a229ceaefd4985c50990b14116b6d856af0985
+2026-09-16T11:05:18.9766870Z commit-date: 2026-09-01
+2026-09-16T11:05:18.9767060Z host: aarch64-apple-darwin
+2026-09-16T11:05:18.9767260Z release: 1.98.1
+2026-09-16T11:05:18.9768060Z LLVM version: 22.1.8
+2026-09-16T11:05:18.9786520Z ##[end-action id=__dtolnay_rust-toolchain.__run_10;outcome=success;conclusion=success;duration_ms=83]
+2026-09-16T11:05:18.9906990Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-09-16T11:05:18.9908420Z ##[group]Run actions/setup-python@v5
+2026-09-16T11:05:18.9908670Z with:
+2026-09-16T11:05:18.9908840Z   python-version: 3.12
+2026-09-16T11:05:18.9909020Z   check-latest: false
+2026-09-16T11:05:18.9910920Z   token: ***
+2026-09-16T11:05:18.9911100Z   update-environment: true
+2026-09-16T11:05:18.9911280Z   allow-prereleases: false
+2026-09-16T11:05:18.9911460Z   freethreaded: false
+2026-09-16T11:05:18.9911600Z env:
+2026-09-16T11:05:18.9911740Z   CARGO_HOME: /Users/runner/.cargo
+2026-09-16T11:05:18.9911930Z   CARGO_INCREMENTAL: 0
+2026-09-16T11:05:18.9912090Z   CARGO_TERM_COLOR: always
+2026-09-16T11:05:18.9912250Z ##[endgroup]
+2026-09-16T11:05:19.1681370Z ##[group]Installed versions
+2026-09-16T11:05:19.1803390Z (node:2938) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-09-16T11:05:19.1805870Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-09-16T11:05:19.1806420Z Successfully set up CPython (3.12.10)
+2026-09-16T11:05:19.1816320Z ##[endgroup]
+2026-09-16T11:05:19.1899210Z ##[group]Run python .github/workflows/check_portability.py
+2026-09-16T11:05:19.1899630Z [36;1mpython .github/workflows/check_portability.py[0m
+2026-09-16T11:05:19.1955820Z shell: /bin/bash -e {0}
+2026-09-16T11:05:19.1956050Z env:
+2026-09-16T11:05:19.1956230Z   CARGO_HOME: /Users/runner/.cargo
+2026-09-16T11:05:19.1956450Z   CARGO_INCREMENTAL: 0
+2026-09-16T11:05:19.1956650Z   CARGO_TERM_COLOR: always
+2026-09-16T11:05:19.1956930Z   pythonLocation: /Users/runner/hostedtoolcache/Python/3.12.10/arm64
+2026-09-16T11:05:19.1957550Z   PKG_CONFIG_PATH: /Users/runner/hostedtoolcache/Python/3.12.10/arm64/lib/pkgconfig
+2026-09-16T11:05:19.1957950Z   Python_ROOT_DIR: /Users/runner/hostedtoolcache/Python/3.12.10/arm64
+2026-09-16T11:05:19.1958320Z   Python2_ROOT_DIR: /Users/runner/hostedtoolcache/Python/3.12.10/arm64
+2026-09-16T11:05:19.1958680Z   Python3_ROOT_DIR: /Users/runner/hostedtoolcache/Python/3.12.10/arm64
+2026-09-16T11:05:19.1959360Z ##[endgroup]
+2026-09-16T11:05:19.7924330Z Neutral architecture guard passed (including negative fixtures).
+2026-09-16T11:05:19.8012360Z ##[group]Run python .github/workflows/check_toolchain_contract.py
+2026-09-16T11:05:19.8012820Z [36;1mpython .github/workflows/check_toolchain_contract.py[0m
+2026-09-16T11:05:19.8069170Z shell: /bin/bash -e {0}
+2026-09-16T11:05:19.8069410Z env:
+2026-09-16T11:05:19.8069580Z   CARGO_HOME: /Users/runner/.cargo
+2026-09-16T11:05:19.8069830Z   CARGO_INCREMENTAL: 0
+2026-09-16T11:05:19.8070020Z   CARGO_TERM_COLOR: always
+2026-09-16T11:05:19.8070370Z   pythonLocation: /Users/runner/hostedtoolcache/Python/3.12.10/arm64
+2026-09-16T11:05:19.8071380Z   PKG_CONFIG_PATH: /Users/runner/hostedtoolcache/Python/3.12.10/arm64/lib/pkgconfig
+2026-09-16T11:05:19.8071790Z   Python_ROOT_DIR: /Users/runner/hostedtoolcache/Python/3.12.10/arm64
+2026-09-16T11:05:19.8073080Z   Python2_ROOT_DIR: /Users/runner/hostedtoolcache/Python/3.12.10/arm64
+2026-09-16T11:05:19.8074080Z   Python3_ROOT_DIR: /Users/runner/hostedtoolcache/Python/3.12.10/arm64
+2026-09-16T11:05:19.8075770Z ##[endgroup]
+2026-09-16T11:05:19.9083980Z Toolchain contract passed: 31 members inherit Rust 1.98.1 and edition 2024; negative fixtures passed.
+2026-09-16T11:05:19.9181410Z ##[group]Run cargo check --workspace --all-targets --locked
+2026-09-16T11:05:19.9182530Z [36;1mcargo check --workspace --all-targets --locked[0m
+2026-09-16T11:05:19.9230420Z shell: /bin/bash -e {0}
+2026-09-16T11:05:19.9230650Z env:
+2026-09-16T11:05:19.9230860Z   CARGO_HOME: /Users/runner/.cargo
+2026-09-16T11:05:19.9231070Z   CARGO_INCREMENTAL: 0
+2026-09-16T11:05:19.9231260Z   CARGO_TERM_COLOR: always
+2026-09-16T11:05:19.9231590Z   pythonLocation: /Users/runner/hostedtoolcache/Python/3.12.10/arm64
+2026-09-16T11:05:19.9232060Z   PKG_CONFIG_PATH: /Users/runner/hostedtoolcache/Python/3.12.10/arm64/lib/pkgconfig
+2026-09-16T11:05:19.9232470Z   Python_ROOT_DIR: /Users/runner/hostedtoolcache/Python/3.12.10/arm64
+2026-09-16T11:05:19.9232820Z   Python2_ROOT_DIR: /Users/runner/hostedtoolcache/Python/3.12.10/arm64
+2026-09-16T11:05:19.9234010Z   Python3_ROOT_DIR: /Users/runner/hostedtoolcache/Python/3.12.10/arm64
+2026-09-16T11:05:19.9234290Z ##[endgroup]
+2026-09-16T11:05:20.0116190Z info: syncing channel updates for 1.98.1-aarch64-apple-darwin
+2026-09-16T11:05:20.1098130Z info: latest update on 2026-09-03 for version 1.98.1 (48a229cea 2026-09-01)
+2026-09-16T11:05:20.1236520Z info: component clippy is up to date
+2026-09-16T11:05:20.1236820Z info: downloading component rustfmt
+2026-09-16T11:05:20.6376650Z [1m[92m    Updating[0m crates.io index
+2026-09-16T11:05:21.3479080Z [1m[92m Downloading[0m crates ...
+2026-09-16T11:05:21.3923570Z [1m[92m  Downloaded[0m cfg_aliases v0.2.2
+2026-09-16T11:05:21.4026490Z [1m[92m  Downloaded[0m block2 v0.5.1
+2026-09-16T11:05:21.4137540Z [1m[92m  Downloaded[0m cobs v0.3.0
+2026-09-16T11:05:21.4249620Z [1m[92m  Downloaded[0m adler2 v2.0.1
+2026-09-16T11:05:21.4356670Z [1m[92m  Downloaded[0m base64ct v1.8.3
+2026-09-16T11:05:21.4457970Z [1m[92m  Downloaded[0m bitflags v1.3.2
+2026-09-16T11:05:21.4730750Z [1m[92m  Downloaded[0m block-buffer v0.10.4
+2026-09-16T11:05:21.4731220Z [1m[92m  Downloaded[0m byteorder v1.5.0
+2026-09-16T11:05:21.4731640Z [1m[92m  Downloaded[0m cap-fs-ext v4.0.3
+2026-09-16T11:05:21.4945360Z [1m[92m  Downloaded[0m cfg-if v1.0.4
+2026-09-16T11:05:21.4945740Z [1m[92m  Downloaded[0m chacha20 v0.10.2
+2026-09-16T11:05:21.5054410Z [1m[92m  Downloaded[0m addr2line v0.26.1
+2026-09-16T11:05:21.5181450Z [1m[92m  Downloaded[0m ambient-authority v0.0.2
+2026-09-16T11:05:21.5282650Z [1m[92m  Downloaded[0m anyhow v1.0.104
+2026-09-16T11:05:21.5387430Z [1m[92m  Downloaded[0m async-trait v0.1.92
+2026-09-16T11:05:21.5491880Z [1m[92m  Downloaded[0m blake2 v0.10.6
+2026-09-16T11:05:21.5593830Z [1m[92m  Downloaded[0m cap-std v4.0.3
+2026-09-16T11:05:21.5695250Z [1m[92m  Downloaded[0m cranelift-bitset v0.135.1
+2026-09-16T11:05:21.5796520Z [1m[92m  Downloaded[0m cranelift-control v0.135.1
+2026-09-16T11:05:21.5903560Z [1m[92m  Downloaded[0m cranelift-native v0.135.1
+2026-09-16T11:05:21.6007270Z [1m[92m  Downloaded[0m crypto-common v0.1.7
+2026-09-16T11:05:21.6082080Z [1m[92m  Downloaded[0m wasmtime-internal-jit-icache-coherence v48.0.1
+2026-09-16T11:05:21.6183500Z [1m[92m  Downloaded[0m wat v1.258.0
+2026-09-16T11:05:21.6206240Z [1m[92m  Downloaded[0m yoke-derive v0.8.2
+2026-09-16T11:05:21.6211270Z [1m[92m  Downloaded[0m io-lifetimes v3.0.1
+2026-09-16T11:05:21.6313390Z [1m[92m  Downloaded[0m objc2-metal v0.2.2
+2026-09-16T11:05:21.6415200Z [1m[92m  Downloaded[0m allocator-api2 v0.2.21
+2026-09-16T11:05:21.6516840Z [1m[92m  Downloaded[0m arbitrary v1.4.2
+2026-09-16T11:05:21.6517200Z [1m[92m  Downloaded[0m base64 v0.22.1
+2026-09-16T11:05:21.6619820Z [1m[92m  Downloaded[0m bitflags v2.13.1
+2026-09-16T11:05:21.6721400Z [1m[92m  Downloaded[0m bumpalo v3.20.3
+2026-09-16T11:05:21.6787200Z [1m[92m  Downloaded[0m bytes v1.12.1
+2026-09-16T11:05:21.6896210Z [1m[92m  Downloaded[0m cap-primitives v4.0.3
+2026-09-16T11:05:21.6973280Z [1m[92m  Downloaded[0m const-oid v0.9.6
+2026-09-16T11:05:21.7107490Z [1m[92m  Downloaded[0m core-foundation v0.9.4
+2026-09-16T11:05:21.7130010Z [1m[92m  Downloaded[0m core-graphics-types v0.1.3
+2026-09-16T11:05:21.7140470Z [1m[92m  Downloaded[0m cpp_demangle v0.5.1
+2026-09-16T11:05:21.7181170Z [1m[92m  Downloaded[0m cpufeatures v0.2.17
+2026-09-16T11:05:21.7247490Z [1m[92m  Downloaded[0m cranelift-assembler-x64 v0.135.1
+2026-09-16T11:05:21.7285580Z [1m[92m  Downloaded[0m cranelift-assembler-x64-meta v0.135.1
+2026-09-16T11:05:21.7290330Z [1m[92m  Downloaded[0m cranelift-bforest v0.135.1
+2026-09-16T11:05:21.7325860Z [1m[92m  Downloaded[0m cranelift-codegen-shared v0.135.1
+2026-09-16T11:05:21.7336350Z [1m[92m  Downloaded[0m cranelift-entity v0.135.1
+2026-09-16T11:05:21.7438940Z [1m[92m  Downloaded[0m cranelift-srcgen v0.135.1
+2026-09-16T11:05:21.7543250Z [1m[92m  Downloaded[0m cursor-icon v1.2.0
+2026-09-16T11:05:21.7645990Z [1m[92m  Downloaded[0m derive_arbitrary v1.4.2
+2026-09-16T11:05:21.7773870Z [1m[92m  Downloaded[0m embedded-io v0.6.1
+2026-09-16T11:05:21.7875480Z [1m[92m  Downloaded[0m foreign-types v0.5.0
+2026-09-16T11:05:21.7943820Z [1m[92m  Downloaded[0m form_urlencoded v1.2.2
+2026-09-16T11:05:21.8045510Z [1m[92m  Downloaded[0m fs-set-times v0.20.3
+2026-09-16T11:05:21.8152850Z [1m[92m  Downloaded[0m hash32 v0.2.1
+2026-09-16T11:05:21.8254390Z [1m[92m  Downloaded[0m heck v0.5.0
+2026-09-16T11:05:21.8309680Z [1m[92m  Downloaded[0m io-lifetimes v2.0.4
+2026-09-16T11:05:21.8316150Z [1m[92m  Downloaded[0m wasmtime-internal-jit-debug v48.0.1
+2026-09-16T11:05:21.8418840Z [1m[92m  Downloaded[0m wasmtime-internal-versioned-export-macros v48.0.1
+2026-09-16T11:05:21.8521570Z [1m[92m  Downloaded[0m wasmtime-wasi-io v48.0.1
+2026-09-16T11:05:21.8522020Z [1m[92m  Downloaded[0m writeable v0.6.4
+2026-09-16T11:05:21.8626010Z [1m[92m  Downloaded[0m yoke v0.8.3
+2026-09-16T11:05:21.8728570Z [1m[92m  Downloaded[0m wasmtime-internal-fiber v48.0.1
+2026-09-16T11:05:21.8775290Z [1m[92m  Downloaded[0m wasmtime-internal-unwinder v48.0.1
+2026-09-16T11:05:21.8785610Z [1m[92m  Downloaded[0m wasmtime-internal-wit-bindgen v48.0.1
+2026-09-16T11:05:21.8887870Z [1m[92m  Downloaded[0m percent-encoding v2.3.2
+2026-09-16T11:05:21.8911960Z [1m[92m  Downloaded[0m regalloc2 v0.15.2
+2026-09-16T11:05:21.8998170Z [1m[92m  Downloaded[0m core-graphics v0.23.2
+2026-09-16T11:05:21.9100820Z [1m[92m  Downloaded[0m dispatch v0.2.0
+2026-09-16T11:05:21.9203270Z [1m[92m  Downloaded[0m dpi v0.1.2
+2026-09-16T11:05:21.9305070Z [1m[92m  Downloaded[0m equivalent v1.0.2
+2026-09-16T11:05:21.9343330Z [1m[92m  Downloaded[0m fnv v1.0.7
+2026-09-16T11:05:21.9346170Z [1m[92m  Downloaded[0m foldhash v0.2.0
+2026-09-16T11:05:21.9448140Z [1m[92m  Downloaded[0m foreign-types-macros v0.2.4
+2026-09-16T11:05:21.9550400Z [1m[92m  Downloaded[0m foreign-types-shared v0.3.1
+2026-09-16T11:05:21.9652250Z [1m[92m  Downloaded[0m futures-io v0.3.34
+2026-09-16T11:05:21.9754540Z [1m[92m  Downloaded[0m futures-sink v0.3.34
+2026-09-16T11:05:21.9859890Z [1m[92m  Downloaded[0m futures-task v0.3.34
+2026-09-16T11:05:21.9963310Z [1m[92m  Downloaded[0m generic-array v0.14.7
+2026-09-16T11:05:22.0064730Z [1m[92m  Downloaded[0m id-arena v2.3.0
+2026-09-16T11:05:22.0082270Z [1m[92m  Downloaded[0m itoa v1.0.18
+2026-09-16T11:05:22.0092060Z [1m[92m  Downloaded[0m toml_write v0.1.2
+2026-09-16T11:05:22.0131170Z [1m[92m  Downloaded[0m digest v0.10.7
+2026-09-16T11:05:22.0133490Z [1m[92m  Downloaded[0m either v1.18.0
+2026-09-16T11:05:22.0136200Z [1m[92m  Downloaded[0m embedded-io v0.4.0
+2026-09-16T11:05:22.0137220Z [1m[92m  Downloaded[0m errno v0.3.14
+2026-09-16T11:05:22.0137510Z [1m[92m  Downloaded[0m find-msvc-tools v0.1.12
+2026-09-16T11:05:22.0138020Z [1m[92m  Downloaded[0m idna_adapter v1.2.1
+2026-09-16T11:05:22.0138670Z [1m[92m  Downloaded[0m zerofrom-derive v0.1.7
+2026-09-16T11:05:22.0139110Z [1m[92m  Downloaded[0m pkcs8 v0.10.2
+2026-09-16T11:05:22.0139630Z [1m[92m  Downloaded[0m potential_utf v0.1.6
+2026-09-16T11:05:22.0144010Z [1m[92m  Downloaded[0m rustc_version v0.4.1
+2026-09-16T11:05:22.0144830Z [1m[92m  Downloaded[0m serde_spanned v0.6.9
+2026-09-16T11:05:22.0145240Z [1m[92m  Downloaded[0m sha1 v0.10.6
+2026-09-16T11:05:22.0150950Z [1m[92m  Downloaded[0m stable_deref_trait v1.2.1
+2026-09-16T11:05:22.0151470Z [1m[92m  Downloaded[0m subtle v2.6.1
+2026-09-16T11:05:22.0151900Z [1m[92m  Downloaded[0m wasmtime-internal-component-util v48.0.1
+2026-09-16T11:05:22.0152540Z [1m[92m  Downloaded[0m cc v1.4.5
+2026-09-16T11:05:22.0153170Z [1m[92m  Downloaded[0m core-foundation-sys v0.8.7
+2026-09-16T11:05:22.0153570Z [1m[92m  Downloaded[0m crc32fast v1.5.1
+2026-09-16T11:05:22.0154040Z [1m[92m  Downloaded[0m displaydoc v0.2.7
+2026-09-16T11:05:22.0154550Z [1m[92m  Downloaded[0m ed25519 v2.2.3
+2026-09-16T11:05:22.0156070Z [1m[92m  Downloaded[0m futures-core v0.3.34
+2026-09-16T11:05:22.0156430Z [1m[92m  Downloaded[0m getrandom v0.2.17
+2026-09-16T11:05:22.0161600Z [1m[92m  Downloaded[0m io-extras v0.19.0
+2026-09-16T11:05:22.0197580Z [1m[92m  Downloaded[0m wast v258.0.0
+2026-09-16T11:05:22.0647580Z [1m[92m  Downloaded[0m zerofrom v0.1.8
+2026-09-16T11:05:22.0696210Z [1m[92m  Downloaded[0m ipnet v2.12.2
+2026-09-16T11:05:22.0770900Z [1m[92m  Downloaded[0m leb128fmt v0.1.0
+2026-09-16T11:05:22.0794940Z [1m[92m  Downloaded[0m maybe-owned v0.3.4
+2026-09-16T11:05:22.0862110Z [1m[92m  Downloaded[0m minisign-verify v0.2.4
+2026-09-16T11:05:22.0930000Z [1m[92m  Downloaded[0m objc2-core-data v0.2.2
+2026-09-16T11:05:22.1102020Z [1m[92m  Downloaded[0m objc2-core-image v0.2.2
+2026-09-16T11:05:22.1232500Z [1m[92m  Downloaded[0m objc2-quartz-core v0.2.2
+2026-09-16T11:05:22.1331380Z [1m[92m  Downloaded[0m pulley-macros v48.0.1
+2026-09-16T11:05:22.1361340Z [1m[92m  Downloaded[0m quote v1.0.47
+2026-09-16T11:05:22.1416070Z [1m[92m  Downloaded[0m rand_core v0.6.4
+2026-09-16T11:05:22.1464380Z [1m[92m  Downloaded[0m raw-window-handle v0.6.2
+2026-09-16T11:05:22.1577060Z [1m[92m  Downloaded[0m rustc-demangle v0.1.28
+2026-09-16T11:05:22.1672550Z [1m[92m  Downloaded[0m rustc-hash v2.1.3
+2026-09-16T11:05:22.1677530Z [1m[92m  Downloaded[0m shlex v2.0.1
+2026-09-16T11:05:22.1719700Z [1m[92m  Downloaded[0m signature v2.2.0
+2026-09-16T11:05:22.1775460Z [1m[92m  Downloaded[0m simd-adler32 v0.3.10
+2026-09-16T11:05:22.1880620Z [1m[92m  Downloaded[0m smol_str v0.2.2
+2026-09-16T11:05:22.1966570Z [1m[92m  Downloaded[0m spki v0.7.3
+2026-09-16T11:05:22.1968740Z [1m[92m  Downloaded[0m synstructure v0.13.2
+2026-09-16T11:05:22.1984910Z [1m[92m  Downloaded[0m termcolor v1.4.1
+2026-09-16T11:05:22.2011780Z [1m[92m  Downloaded[0m thiserror v2.0.20
+2026-09-16T11:05:22.2230880Z [1m[92m  Downloaded[0m thiserror-impl v2.0.20
+2026-09-16T11:05:22.2295040Z [1m[92m  Downloaded[0m tinystr v0.8.4
+2026-09-16T11:05:22.2359750Z [1m[92m  Downloaded[0m toml_datetime v0.6.11
+2026-09-16T11:05:22.2395590Z [1m[92m  Downloaded[0m cranelift-isle v0.135.1
+2026-09-16T11:05:22.2541500Z [1m[92m  Downloaded[0m der v0.7.10
+2026-09-16T11:05:22.2844550Z [1m[92m  Downloaded[0m getrandom v0.4.3
+2026-09-16T11:05:22.2945790Z [1m[92m  Downloaded[0m icu_normalizer v2.1.1
+2026-09-16T11:05:22.3048540Z [1m[92m  Downloaded[0m winnow v0.7.15
+2026-09-16T11:05:22.3456730Z [1m[92m  Downloaded[0m wit-parser v0.254.0
+2026-09-16T11:05:22.4631810Z [1m[92m  Downloaded[0m zeroize v1.9.0
+2026-09-16T11:05:22.4742750Z [1m[92m  Downloaded[0m zerovec-derive v0.11.6
+2026-09-16T11:05:22.4775490Z [1m[92m  Downloaded[0m zmij v1.0.23
+2026-09-16T11:05:22.4783920Z [1m[92m  Downloaded[0m lexopt v0.3.1
+2026-09-16T11:05:22.4821670Z [1m[92m  Downloaded[0m litemap v0.8.3
+2026-09-16T11:05:22.4895610Z [1m[92m  Downloaded[0m md-5 v0.10.6
+2026-09-16T11:05:22.4943740Z [1m[92m  Downloaded[0m objc-sys v0.3.5
+2026-09-16T11:05:22.4982430Z [1m[92m  Downloaded[0m objc2-encode v4.1.0
+2026-09-16T11:05:22.5034870Z [1m[92m  Downloaded[0m pin-project-lite v0.2.17
+2026-09-16T11:05:22.5220180Z [1m[92m  Downloaded[0m pkg-config v0.3.34
+2026-09-16T11:05:22.5244890Z [1m[92m  Downloaded[0m proc-macro2 v1.0.107
+2026-09-16T11:05:22.5347800Z [1m[92m  Downloaded[0m rand_core v0.10.1
+2026-09-16T11:05:22.5399340Z [1m[92m  Downloaded[0m semver v1.0.28
+2026-09-16T11:05:22.5505370Z [1m[92m  Downloaded[0m sha2 v0.10.9
+2026-09-16T11:05:22.5608540Z [1m[92m  Downloaded[0m slab v0.4.12
+2026-09-16T11:05:22.5636620Z [1m[92m  Downloaded[0m smallvec v1.16.0
+2026-09-16T11:05:22.5637720Z [1m[92m  Downloaded[0m target-lexicon v0.13.5
+2026-09-16T11:05:22.5656460Z [1m[92m  Downloaded[0m utf8_iter v1.0.4
+2026-09-16T11:05:22.5689460Z [1m[92m  Downloaded[0m cranelift-codegen-meta v0.135.1
+2026-09-16T11:05:22.5823630Z [1m[92m  Downloaded[0m cranelift-frontend v0.135.1
+2026-09-16T11:05:22.5864170Z [1m[92m  Downloaded[0m futures v0.3.34
+2026-09-16T11:05:22.6064400Z [1m[92m  Downloaded[0m futures-channel v0.3.34
+2026-09-16T11:05:22.6104980Z [1m[92m  Downloaded[0m icu_collections v2.1.1
+2026-09-16T11:05:22.6292000Z [1m[92m  Downloaded[0m icu_locale_core v2.1.1
+2026-09-16T11:05:22.6528100Z [1m[92m  Downloaded[0m icu_normalizer_data v2.1.1
+2026-09-16T11:05:22.6629700Z [1m[92m  Downloaded[0m icu_properties v2.1.2
+2026-09-16T11:05:22.6715440Z [1m[92m  Downloaded[0m icu_provider v2.1.1
+2026-09-16T11:05:22.6811250Z [1m[92m  Downloaded[0m jobserver v0.1.35
+2026-09-16T11:05:22.6875390Z [1m[92m  Downloaded[0m log v0.4.34
+2026-09-16T11:05:22.6929370Z [1m[92m  Downloaded[0m mach2 v0.6.0
+2026-09-16T11:05:22.7108820Z [1m[92m  Downloaded[0m once_cell v1.21.4
+2026-09-16T11:05:22.7200110Z [1m[92m  Downloaded[0m postcard v1.1.3
+2026-09-16T11:05:22.7256280Z [1m[92m  Downloaded[0m serde_core v1.0.229
+2026-09-16T11:05:22.7316160Z [1m[92m  Downloaded[0m socket2 v0.6.5
+2026-09-16T11:05:22.7345910Z [1m[92m  Downloaded[0m wasmprinter v0.254.0
+2026-09-16T11:05:22.7381310Z [1m[92m  Downloaded[0m wasmtime-internal-core v48.0.1
+2026-09-16T11:05:22.7447270Z [1m[92m  Downloaded[0m version_check v0.9.5
+2026-09-16T11:05:22.7475860Z [1m[92m  Downloaded[0m wasm-metadata v0.254.0
+2026-09-16T11:05:22.7564060Z [1m[92m  Downloaded[0m ed25519-dalek v2.2.0
+2026-09-16T11:05:22.7638450Z [1m[92m  Downloaded[0m flate2 v1.1.10
+2026-09-16T11:05:22.7848660Z [1m[92m  Downloaded[0m heapless v0.7.17
+2026-09-16T11:05:22.8078970Z [1m[92m  Downloaded[0m zopfli v0.8.3
+2026-09-16T11:05:22.8180230Z [1m[92m  Downloaded[0m miniz_oxide v0.9.1
+2026-09-16T11:05:22.8299300Z [1m[92m  Downloaded[0m serde_derive v1.0.229
+2026-09-16T11:05:22.8398180Z [1m[92m  Downloaded[0m toml_edit v0.22.27
+2026-09-16T11:05:22.8562970Z [1m[92m  Downloaded[0m tracing-attributes v0.1.31
+2026-09-16T11:05:22.8638120Z [1m[92m  Downloaded[0m unicode-ident v1.0.24
+2026-09-16T11:05:22.8728730Z [1m[92m  Downloaded[0m zerotrie v0.2.5
+2026-09-16T11:05:22.8827090Z [1m[92m  Downloaded[0m memchr v2.8.3
+2026-09-16T11:05:22.8964140Z [1m[92m  Downloaded[0m pulley-interpreter v48.0.1
+2026-09-16T11:05:22.9024200Z [1m[92m  Downloaded[0m rand v0.10.2
+2026-09-16T11:05:22.9101200Z [1m[92m  Downloaded[0m tracing-core v0.1.36
+2026-09-16T11:05:22.9182240Z [1m[92m  Downloaded[0m indexmap v2.14.2
+2026-09-16T11:05:22.9369350Z [1m[92m  Downloaded[0m wasmtime-wasi v48.0.1
+2026-09-16T11:05:22.9616450Z [1m[92m  Downloaded[0m zip v2.4.2
+2026-09-16T11:05:22.9738160Z [1m[92m  Downloaded[0m mio v1.2.3
+2026-09-16T11:05:22.9964330Z [1m[92m  Downloaded[0m serde v1.0.229
+2026-09-16T11:05:23.0113580Z [1m[92m  Downloaded[0m url v2.5.8
+2026-09-16T11:05:23.0187380Z [1m[92m  Downloaded[0m wasm-encoder v0.254.0
+2026-09-16T11:05:23.0284320Z [1m[92m  Downloaded[0m wasm-encoder v0.258.0
+2026-09-16T11:05:23.0397820Z [1m[92m  Downloaded[0m hashbrown v0.16.1
+2026-09-16T11:05:23.0537790Z [1m[92m  Downloaded[0m wit-component v0.254.0
+2026-09-16T11:05:23.2587090Z [1m[92m  Downloaded[0m zerovec v0.11.8
+2026-09-16T11:05:23.2809790Z [1m[92m  Downloaded[0m unicode-segmentation v1.13.3
+2026-09-16T11:05:23.2864820Z [1m[92m  Downloaded[0m futures-util v0.3.34
+2026-09-16T11:05:23.3394850Z [1m[92m  Downloaded[0m hashbrown v0.17.1
+2026-09-16T11:05:23.3599030Z [1m[92m  Downloaded[0m icu_properties_data v2.1.2
+2026-09-16T11:05:23.3924460Z [1m[92m  Downloaded[0m idna v1.1.0
+2026-09-16T11:05:23.4005070Z [1m[92m  Downloaded[0m itertools v0.14.0
+2026-09-16T11:05:23.4191030Z [1m[92m  Downloaded[0m typenum v1.20.1
+2026-09-16T11:05:23.4261420Z [1m[92m  Downloaded[0m libm v0.2.16
+2026-09-16T11:05:23.4590890Z [1m[92m  Downloaded[0m serde_json v1.0.150
+2026-09-16T11:05:23.4862370Z [1m[92m  Downloaded[0m objc2 v0.5.2
+2026-09-16T11:05:23.5055970Z [1m[92m  Downloaded[0m quick-xml v0.41.0
+2026-09-16T11:05:23.5188770Z [1m[92m  Downloaded[0m objc2-foundation v0.2.2
+2026-09-16T11:05:23.5615160Z [1m[92m  Downloaded[0m wasmtime-internal-component-macro v48.0.1
+2026-09-16T11:05:23.5991150Z [1m[92m  Downloaded[0m wasmtime-internal-cranelift v48.0.1
+2026-09-16T11:05:23.6137790Z [1m[92m  Downloaded[0m curve25519-dalek v4.1.3
+2026-09-16T11:05:23.6334740Z [1m[92m  Downloaded[0m wasmparser v0.258.0
+2026-09-16T11:05:23.6504110Z [1m[92m  Downloaded[0m unicode-width v0.2.2
+2026-09-16T11:05:23.6580470Z [1m[92m  Downloaded[0m wasmparser v0.254.0
+2026-09-16T11:05:23.6817470Z [1m[92m  Downloaded[0m gimli v0.33.0
+2026-09-16T11:05:23.7000730Z [1m[92m  Downloaded[0m syn v2.0.119
+2026-09-16T11:05:23.7267700Z [1m[92m  Downloaded[0m syn v3.0.5
+2026-09-16T11:05:23.7511880Z [1m[92m  Downloaded[0m wasmtime-environ v48.0.1
+2026-09-16T11:05:23.7737540Z [1m[92m  Downloaded[0m objc2-app-kit v0.2.2
+2026-09-16T11:05:23.8272910Z [1m[92m  Downloaded[0m object v0.39.1
+2026-09-16T11:05:23.8484860Z [1m[92m  Downloaded[0m rustix v1.1.4
+2026-09-16T11:05:23.9137020Z [1m[92m  Downloaded[0m winit v0.30.13
+2026-09-16T11:05:23.9565480Z [1m[92m  Downloaded[0m tracing v0.1.44
+2026-09-16T11:05:23.9858250Z [1m[92m  Downloaded[0m pcre2-sys v0.2.10
+2026-09-16T11:05:24.0080070Z [1m[92m  Downloaded[0m libc v0.2.189
+2026-09-16T11:05:24.0978690Z [1m[92m  Downloaded[0m tokio v1.53.1
+2026-09-16T11:05:24.1976050Z [1m[92m  Downloaded[0m wasmtime v48.0.1
+2026-09-16T11:05:24.2616660Z [1m[92m  Downloaded[0m cranelift-codegen v0.135.1
+2026-09-16T11:05:24.3178730Z [1m[92m  Downloaded[0m encoding_rs v0.8.35
+2026-09-16T11:05:24.5005420Z [1m[92m   Compiling[0m proc-macro2 v1.0.107
+2026-09-16T11:05:24.5014620Z [1m[92m   Compiling[0m quote v1.0.47
+2026-09-16T11:05:24.5016000Z [1m[92m   Compiling[0m unicode-ident v1.0.24
+2026-09-16T11:05:25.0858710Z [1m[92m   Compiling[0m serde_core v1.0.229
+2026-09-16T11:05:29.4641510Z [1m[92m   Compiling[0m libc v0.2.189
+2026-09-16T11:05:29.9133920Z [1m[92m   Compiling[0m serde v1.0.229
+2026-09-16T11:05:30.3912610Z [1m[92m   Compiling[0m syn v3.0.5
+2026-09-16T11:05:31.1436390Z [1m[92m    Checking[0m foldhash v0.2.0
+2026-09-16T11:05:31.3406880Z [1m[92m    Checking[0m cfg-if v1.0.4
+2026-09-16T11:05:31.3970970Z [1m[92m   Compiling[0m version_check v0.9.5
+2026-09-16T11:05:31.7407960Z [1m[92m    Checking[0m hashbrown v0.17.1
+2026-09-16T11:05:31.8291310Z [1m[92m   Compiling[0m generic-array v0.14.7
+2026-09-16T11:05:32.2258680Z [1m[92m    Checking[0m typenum v1.20.1
+2026-09-16T11:05:32.3917060Z [1m[92m    Checking[0m subtle v2.6.1
+2026-09-16T11:05:32.4845860Z [1m[92m    Checking[0m equivalent v1.0.2
+2026-09-16T11:05:32.5294000Z [1m[92m    Checking[0m indexmap v2.14.2
+2026-09-16T11:05:33.1343780Z [1m[92m    Checking[0m cpufeatures v0.2.17
+2026-09-16T11:05:33.1982710Z [1m[92m    Checking[0m memchr v2.8.3
+2026-09-16T11:05:33.2084310Z [1m[92m    Checking[0m block-buffer v0.10.4
+2026-09-16T11:05:33.2789930Z [1m[92m    Checking[0m crypto-common v0.1.7
+2026-09-16T11:05:33.3482050Z [1m[92m    Checking[0m digest v0.10.7
+2026-09-16T11:05:33.5085020Z [1m[92m   Compiling[0m semver v1.0.28
+2026-09-16T11:05:33.6802300Z [1m[92m   Compiling[0m zmij v1.0.23
+2026-09-16T11:05:33.8356070Z [1m[92m    Checking[0m stable_deref_trait v1.2.1
+2026-09-16T11:05:33.8782890Z [1m[92m    Checking[0m sha2 v0.10.9
+2026-09-16T11:05:34.0388990Z [1m[92m   Compiling[0m serde_json v1.0.150
+2026-09-16T11:05:34.1502330Z [1m[92m   Compiling[0m syn v2.0.119
+2026-09-16T11:05:34.2849910Z [1m[92m   Compiling[0m rustc_version v0.4.1
+2026-09-16T11:05:34.5928780Z [1m[92m   Compiling[0m thiserror v2.0.20
+2026-09-16T11:05:34.9295440Z [1m[92m    Checking[0m winnow v0.7.15
+2026-09-16T11:05:36.1608760Z [1m[92m   Compiling[0m serde_derive v1.0.229
+2026-09-16T11:05:36.3139550Z [1m[92m    Checking[0m toml_write v0.1.2
+2026-09-16T11:05:36.4345380Z [1m[92m   Compiling[0m thiserror-impl v2.0.20
+2026-09-16T11:05:37.8291640Z [1m[92m    Checking[0m log v0.4.34
+2026-09-16T11:05:37.9326230Z [1m[92m    Checking[0m itoa v1.0.18
+2026-09-16T11:05:38.0364080Z [1m[92m    Checking[0m allocator-api2 v0.2.21
+2026-09-16T11:05:38.2986620Z [1m[92m    Checking[0m bumpalo v3.20.3
+2026-09-16T11:05:39.0997730Z [1m[92m   Compiling[0m heapless v0.7.17
+2026-09-16T11:05:39.1787750Z [1m[92m    Checking[0m serde_spanned v0.6.9
+2026-09-16T11:05:39.2597860Z [1m[92m    Checking[0m toml_datetime v0.6.11
+2026-09-16T11:05:39.3188290Z [1m[92m    Checking[0m byteorder v1.5.0
+2026-09-16T11:05:39.4042620Z [1m[92m    Checking[0m toml_edit v0.22.27
+2026-09-16T11:05:39.4346720Z [1m[92m   Compiling[0m crc32fast v1.5.1
+2026-09-16T11:05:39.4711910Z [1m[92m    Checking[0m hash32 v0.2.1
+2026-09-16T11:05:39.6310740Z [1m[92m   Compiling[0m displaydoc v0.2.7
+2026-09-16T11:05:40.2110450Z [1m[92m    Checking[0m cobs v0.3.0
+2026-09-16T11:05:40.2884250Z [1m[92m    Checking[0m postcard v1.1.3
+2026-09-16T11:05:40.5190860Z [1m[92m   Compiling[0m shlex v2.0.1
+2026-09-16T11:05:40.6585940Z [1m[92m   Compiling[0m jobserver v0.1.35
+2026-09-16T11:05:40.6736520Z [1m[92m   Compiling[0m find-msvc-tools v0.1.12
+2026-09-16T11:05:40.7232940Z [1m[92m    Checking[0m simd-adler32 v0.3.10
+2026-09-16T11:05:40.8427060Z [1m[92m    Checking[0m adler2 v2.0.1
+2026-09-16T11:05:40.8751040Z [1m[92m   Compiling[0m cc v1.4.5
+2026-09-16T11:05:40.9090570Z [1m[92m    Checking[0m minisign-verify v0.2.4
+2026-09-16T11:05:40.9841090Z [1m[92m    Checking[0m miniz_oxide v0.9.1
+2026-09-16T11:05:41.3466030Z [1m[92m    Checking[0m bareline-platform v0.1.0 (/Users/runner/work/BareLine/BareLine/crates/platform)
+2026-09-16T11:05:41.4371620Z [1m[92m   Compiling[0m zip v2.4.2
+2026-09-16T11:05:41.6252780Z [1m[92m    Checking[0m flate2 v1.1.10
+2026-09-16T11:05:41.7153320Z [1m[92m    Checking[0m zopfli v0.8.3
+2026-09-16T11:05:41.9066350Z [1m[92m   Compiling[0m libm v0.2.16
+2026-09-16T11:05:42.5355580Z [1m[92m    Checking[0m encoding_rs v0.8.35
+2026-09-16T11:05:42.5707280Z [1m[92m    Checking[0m bareline-extensions-protocol v0.1.0 (/Users/runner/work/BareLine/BareLine/crates/extensions-protocol)
+2026-09-16T11:05:42.8288230Z [1m[92m    Checking[0m bitflags v2.13.1
+2026-09-16T11:05:42.9355220Z [1m[92m   Compiling[0m anyhow v1.0.104
+2026-09-16T11:05:43.1621840Z [1m[92m    Checking[0m bareline-commands v0.1.0 (/Users/runner/work/BareLine/BareLine/crates/commands)
+2026-09-16T11:05:43.3698370Z [1m[92m   Compiling[0m synstructure v0.13.2
+2026-09-16T11:05:43.3906370Z [1m[92m   Compiling[0m wasmtime-internal-core v48.0.1
+2026-09-16T11:05:43.6868990Z [1m[92m    Checking[0m smallvec v1.16.0
+2026-09-16T11:05:43.8573790Z [1m[92m    Checking[0m unicode-segmentation v1.13.3
+2026-09-16T11:05:43.9419500Z [1m[92m   Compiling[0m zerofrom-derive v0.1.7
+2026-09-16T11:05:44.2661160Z [1m[92m   Compiling[0m cranelift-srcgen v0.135.1
+2026-09-16T11:05:44.5161860Z [1m[92m   Compiling[0m cranelift-assembler-x64-meta v0.135.1
+2026-09-16T11:05:44.5750230Z [1m[92m   Compiling[0m yoke-derive v0.8.2
+2026-09-16T11:05:45.0198280Z [1m[92m    Checking[0m zerofrom v0.1.8
+2026-09-16T11:05:45.7222840Z [1m[92m   Compiling[0m bareline-unicode-fold v0.1.0 (/Users/runner/work/BareLine/BareLine/crates/unicode-fold)
+2026-09-16T11:05:46.0430730Z [1m[92m    Checking[0m yoke v0.8.3
+2026-09-16T11:05:46.1755100Z [1m[92m    Checking[0m cranelift-bitset v0.135.1
+2026-09-16T11:05:46.3466100Z [1m[92m   Compiling[0m pulley-macros v48.0.1
+2026-09-16T11:05:46.8629790Z [1m[92m   Compiling[0m heck v0.5.0
+2026-09-16T11:05:47.0194160Z [1m[92m    Checking[0m bareline-document v0.1.0 (/Users/runner/work/BareLine/BareLine/crates/document)
+2026-09-16T11:05:47.2772190Z [1m[92m   Compiling[0m zerovec-derive v0.11.6
+2026-09-16T11:05:47.5210950Z [1m[92m   Compiling[0m target-lexicon v0.13.5
+2026-09-16T11:05:47.8742770Z [1m[92m   Compiling[0m cranelift-isle v0.135.1
+2026-09-16T11:05:48.1213000Z [1m[92m    Checking[0m bareline-renderer v0.1.0 (/Users/runner/work/BareLine/BareLine/crates/renderer)
+2026-09-16T11:05:48.1449450Z [1m[92m    Checking[0m zerovec v0.11.8
+2026-09-16T11:05:48.2666320Z [1m[92m   Compiling[0m pulley-interpreter v48.0.1
+2026-09-16T11:05:48.6478610Z [1m[92m    Checking[0m cranelift-entity v0.135.1
+2026-09-16T11:05:48.8062570Z [1m[92m    Checking[0m fnv v1.0.7
+2026-09-16T11:05:48.8670160Z [1m[92m    Checking[0m hashbrown v0.16.1
+2026-09-16T11:05:49.0536740Z [1m[92m    Checking[0m pin-project-lite v0.2.17
+2026-09-16T11:05:49.0986570Z [1m[92m    Checking[0m leb128fmt v0.1.0
+2026-09-16T11:05:49.1936730Z [1m[92m   Compiling[0m cranelift-codegen-shared v0.135.1
+2026-09-16T11:05:49.2505240Z [1m[92m   Compiling[0m pkg-config v0.3.34
+2026-09-16T11:05:49.2970850Z [1m[92m    Checking[0m gimli v0.33.0
+2026-09-16T11:05:49.6337890Z [1m[92m   Compiling[0m pcre2-sys v0.2.10
+2026-09-16T11:05:49.9308240Z [1m[92m   Compiling[0m cranelift-codegen-meta v0.135.1
+2026-09-16T11:05:50.4478450Z [1m[92m    Checking[0m cranelift-bforest v0.135.1
+2026-09-16T11:05:51.9112890Z [1m[92m   Compiling[0m cranelift-assembler-x64 v0.135.1
+2026-09-16T11:05:52.4077110Z [1m[92m   Compiling[0m rustix v1.1.4
+2026-09-16T11:05:52.8537860Z [1m[92m    Checking[0m once_cell v1.21.4
+2026-09-16T11:05:52.8566300Z [1m[92m   Compiling[0m wasmparser v0.254.0
+2026-09-16T11:05:53.4379950Z [1m[92m   Compiling[0m cranelift-codegen v0.135.1
+2026-09-16T11:05:53.7882310Z [1m[92m    Checking[0m bareline-file-io v0.1.0 (/Users/runner/work/BareLine/BareLine/crates/file-io)
+2026-09-16T11:05:56.2895710Z [1m[92m   Compiling[0m wasmtime-internal-versioned-export-macros v48.0.1
+2026-09-16T11:05:56.7610320Z [1m[92m    Checking[0m errno v0.3.14
+2026-09-16T11:05:56.8515160Z [1m[92m    Checking[0m rustc-hash v2.1.3
+2026-09-16T11:05:57.2338120Z [1m[92m   Compiling[0m object v0.39.1
+2026-09-16T11:05:57.4938830Z [1m[92m    Checking[0m arbitrary v1.4.2
+2026-09-16T11:05:58.1281240Z [1m[92m   Compiling[0m bareline-search v0.1.0 (/Users/runner/work/BareLine/BareLine/crates/search)
+2026-09-16T11:05:58.4805500Z [1m[92m    Checking[0m cranelift-control v0.135.1
+2026-09-16T11:05:58.6168520Z [1m[92m    Checking[0m regalloc2 v0.15.2
+2026-09-16T11:06:06.8589180Z [1m[92m    Checking[0m tracing-core v0.1.36
+2026-09-16T11:06:07.1722400Z [1m[92m    Checking[0m tinystr v0.8.4
+2026-09-16T11:06:08.0469320Z [1m[92m   Compiling[0m bareline-lexilla-bridge v0.1.0 (/Users/runner/work/BareLine/BareLine/native/lexilla-bridge)
+2026-09-16T11:06:08.3639530Z [1m[92m   Compiling[0m tracing-attributes v0.1.31
+2026-09-16T11:06:10.4078030Z [1m[92m    Checking[0m termcolor v1.4.1
+2026-09-16T11:06:10.5641010Z [1m[92m    Checking[0m base64 v0.22.1
+2026-09-16T11:06:10.7480060Z [1m[92m    Checking[0m litemap v0.8.3
+2026-09-16T11:06:10.8597550Z [1m[92m    Checking[0m writeable v0.6.4
+2026-09-16T11:06:12.3020190Z [1m[92m    Checking[0m icu_locale_core v2.1.1
+2026-09-16T11:06:13.0838480Z [1m[92m    Checking[0m wasmprinter v0.254.0
+2026-09-16T11:06:13.6035730Z [1m[92m   Compiling[0m wasm-encoder v0.254.0
+2026-09-16T11:06:14.4684160Z [1m[92m    Checking[0m tracing v0.1.44
+2026-09-16T11:06:20.7981960Z [1m[92m    Checking[0m potential_utf v0.1.6
+2026-09-16T11:06:20.8613860Z [1m[92m    Checking[0m bareline-ui v0.1.0 (/Users/runner/work/BareLine/BareLine/crates/ui)
+2026-09-16T11:06:21.1715270Z [1m[92m    Checking[0m zerotrie v0.2.5
+2026-09-16T11:06:21.3819540Z [1m[92m    Checking[0m quick-xml v0.41.0
+2026-09-16T11:06:21.9286710Z [1m[92m   Compiling[0m io-lifetimes v3.0.1
+2026-09-16T11:06:22.1781550Z [1m[92m   Compiling[0m id-arena v2.3.0
+2026-09-16T11:06:22.2654180Z [1m[92m    Checking[0m wasmtime-internal-component-util v48.0.1
+2026-09-16T11:06:22.3192050Z [1m[92m   Compiling[0m io-lifetimes v2.0.4
+2026-09-16T11:06:22.5357720Z [1m[92m   Compiling[0m icu_properties_data v2.1.2
+2026-09-16T11:06:22.6855330Z [1m[92m   Compiling[0m icu_normalizer_data v2.1.1
+2026-09-16T11:06:22.8895520Z [1m[92m    Checking[0m wasmtime-environ v48.0.1
+2026-09-16T11:06:29.0487680Z [1m[92m   Compiling[0m wit-parser v0.254.0
+2026-09-16T11:06:31.6200510Z [1m[92m    Checking[0m icu_provider v2.1.1
+2026-09-16T11:06:31.8608850Z [1m[92m    Checking[0m icu_collections v2.1.1
+2026-09-16T11:06:32.1713190Z [1m[92m   Compiling[0m wasm-metadata v0.254.0
+2026-09-16T11:06:33.1683100Z [1m[92m   Compiling[0m io-extras v0.19.0
+2026-09-16T11:06:33.4259800Z [1m[92m   Compiling[0m wasmtime-internal-unwinder v48.0.1
+2026-09-16T11:06:33.7341670Z [1m[92m   Compiling[0m wit-component v0.254.0
+2026-09-16T11:06:35.3588050Z [1m[92m   Compiling[0m wasmtime-internal-fiber v48.0.1
+2026-09-16T11:06:35.6919050Z [1m[92m    Checking[0m bareline-macros v0.1.0 (/Users/runner/work/BareLine/BareLine/crates/macros)
+2026-09-16T11:06:35.9261700Z [1m[92m   Compiling[0m wasmtime-internal-cranelift v48.0.1
+2026-09-16T11:06:36.1092800Z [1m[92m    Checking[0m either v1.18.0
+2026-09-16T11:06:36.3089220Z [1m[92m    Checking[0m futures-core v0.3.34
+2026-09-16T11:06:36.3840110Z [1m[92m    Checking[0m futures-sink v0.3.34
+2026-09-16T11:06:36.5941350Z [1m[92m   Compiling[0m wasmtime-internal-component-macro v48.0.1
+2026-09-16T11:06:36.8469660Z [1m[92m   Compiling[0m cap-primitives v4.0.3
+2026-09-16T11:06:37.1258620Z [1m[92m    Checking[0m lexopt v0.3.1
+2026-09-16T11:06:37.5294780Z [1m[92m    Checking[0m itertools v0.14.0
+2026-09-16T11:06:38.8609330Z [1m[92m   Compiling[0m wasmtime-internal-wit-bindgen v48.0.1
+2026-09-16T11:06:38.9944260Z [1m[92m    Checking[0m icu_normalizer v2.1.1
+2026-09-16T11:06:39.3045470Z [1m[92m    Checking[0m icu_properties v2.1.2
+2026-09-16T11:06:39.6271230Z [1m[92m    Checking[0m fs-set-times v0.20.3
+2026-09-16T11:06:40.1966940Z [1m[92m    Checking[0m cranelift-frontend v0.135.1
+2026-09-16T11:06:40.4783810Z [1m[92m    Checking[0m cranelift-native v0.135.1
+2026-09-16T11:06:40.5902420Z [1m[92m   Compiling[0m wasmtime v48.0.1
+2026-09-16T11:06:40.6250220Z [1m[92m    Checking[0m bareline-renderer-recording v0.1.0 (/Users/runner/work/BareLine/BareLine/crates/renderer-recording)
+2026-09-16T11:06:40.7076830Z [1m[92m    Checking[0m rand_core v0.10.1
+2026-09-16T11:06:40.7697590Z [1m[92m    Checking[0m ipnet v2.12.2
+2026-09-16T11:06:40.8861810Z [1m[92m   Compiling[0m getrandom v0.4.3
+2026-09-16T11:06:40.9318790Z [1m[92m    Checking[0m maybe-owned v0.3.4
+2026-09-16T11:06:41.0899070Z [1m[92m   Compiling[0m cap-std v4.0.3
+2026-09-16T11:06:41.1804360Z [1m[92m    Checking[0m futures-task v0.3.34
+2026-09-16T11:06:41.2250030Z [1m[92m   Compiling[0m objc-sys v0.3.5
+2026-09-16T11:06:41.2662150Z [1m[92m    Checking[0m ambient-authority v0.0.2
+2026-09-16T11:06:41.6578540Z [1m[92m    Checking[0m futures-util v0.3.34
+2026-09-16T11:06:43.9343570Z [1m[92m    Checking[0m idna_adapter v1.2.1
+2026-09-16T11:06:44.0061950Z [1m[92m    Checking[0m bareline-syntax v0.1.0 (/Users/runner/work/BareLine/BareLine/crates/syntax)
+2026-09-16T11:06:44.6124230Z [1m[92m    Checking[0m bareline-distribution v0.1.0 (/Users/runner/work/BareLine/BareLine/crates/distribution)
+2026-09-16T11:06:44.8599890Z [1m[92m    Checking[0m futures-channel v0.3.34
+2026-09-16T11:06:44.8972060Z [1m[92m    Checking[0m wasmtime-internal-jit-icache-coherence v48.0.1
+2026-09-16T11:06:44.9371690Z [1m[92m   Compiling[0m async-trait v0.1.92
+2026-09-16T11:06:44.9558590Z [1m[92m    Checking[0m mach2 v0.6.0
+2026-09-16T11:06:45.4363300Z [1m[92m    Checking[0m percent-encoding v2.3.2
+2026-09-16T11:06:45.5379530Z [1m[92m    Checking[0m bytes v1.12.1
+2026-09-16T11:06:45.6209740Z [1m[92m    Checking[0m utf8_iter v1.0.4
+2026-09-16T11:06:45.7077260Z [1m[92m   Compiling[0m cap-fs-ext v4.0.3
+2026-09-16T11:06:45.9906870Z [1m[92m    Checking[0m futures-io v0.3.34
+2026-09-16T11:06:46.0222770Z [1m[92m    Checking[0m futures v0.3.34
+2026-09-16T11:06:46.0557500Z [1m[92m    Checking[0m idna v1.1.0
+2026-09-16T11:06:46.2006110Z [1m[92m    Checking[0m form_urlencoded v1.2.2
+2026-09-16T11:06:46.4613410Z [1m[92m    Checking[0m chacha20 v0.10.2
+2026-09-16T11:06:46.4746480Z [1m[92m    Checking[0m socket2 v0.6.5
+2026-09-16T11:06:46.6122010Z [1m[92m    Checking[0m mio v1.2.3
+2026-09-16T11:06:46.6568990Z [1m[92m    Checking[0m objc2-encode v4.1.0
+2026-09-16T11:06:46.8063830Z [1m[92m    Checking[0m objc2 v0.5.2
+2026-09-16T11:06:46.9274510Z [1m[92m    Checking[0m tokio v1.53.1
+2026-09-16T11:06:47.5223210Z [1m[92m    Checking[0m rand v0.10.2
+2026-09-16T11:06:48.0353050Z [1m[92m    Checking[0m url v2.5.8
+2026-09-16T11:06:48.4037710Z [1m[92m    Checking[0m bareline-diff v0.1.0 (/Users/runner/work/BareLine/BareLine/crates/diff)
+2026-09-16T11:06:48.6125610Z [1m[92m    Checking[0m bareline-settings v0.1.0 (/Users/runner/work/BareLine/BareLine/crates/settings)
+2026-09-16T11:06:48.9159620Z [1m[92m    Checking[0m bareline-extension-sdk v0.1.0 (/Users/runner/work/BareLine/BareLine/crates/extension-sdk)
+2026-09-16T11:06:48.9984020Z [1m[92m    Checking[0m core-foundation-sys v0.8.7
+2026-09-16T11:06:49.1666260Z [1m[92m   Compiling[0m bareline-extension-host v0.1.0 (/Users/runner/work/BareLine/BareLine/apps/extension-host)
+2026-09-16T11:06:49.6316220Z [1m[92m    Checking[0m core-foundation v0.9.4
+2026-09-16T11:06:49.8736470Z [1m[92m    Checking[0m block2 v0.5.1
+2026-09-16T11:06:49.9623980Z [1m[92m    Checking[0m wasm-encoder v0.258.0
+2026-09-16T11:06:50.0296900Z [1m[92m   Compiling[0m foreign-types-macros v0.2.4
+2026-09-16T11:06:50.3889640Z [1m[92m    Checking[0m unicode-width v0.2.2
+2026-09-16T11:06:50.5558190Z [1m[92m    Checking[0m foreign-types-shared v0.3.1
+2026-09-16T11:06:50.6069080Z [1m[92m    Checking[0m bitflags v1.3.2
+2026-09-16T11:06:50.6574750Z [1m[92m    Checking[0m dispatch v0.2.0
+2026-09-16T11:06:50.7049320Z [1m[92m   Compiling[0m cfg_aliases v0.2.2
+2026-09-16T11:06:50.7497440Z [1m[92m   Compiling[0m winit v0.30.13
+2026-09-16T11:06:50.7837500Z [1m[92m    Checking[0m objc2-foundation v0.2.2
+2026-09-16T11:06:51.0496460Z [1m[92m    Checking[0m wast v258.0.0
+2026-09-16T11:06:53.0372120Z [1m[92m    Checking[0m wasmtime-wasi-io v48.0.1
+2026-09-16T11:06:53.4020050Z [1m[92m    Checking[0m core-graphics-types v0.1.3
+2026-09-16T11:06:53.4762810Z [1m[92m    Checking[0m foreign-types v0.5.0
+2026-09-16T11:06:53.5207840Z [1m[92m    Checking[0m bareline-first-party-common v0.1.0 (/Users/runner/work/BareLine/BareLine/extensions/common)
+2026-09-16T11:06:53.6218060Z [1m[92m    Checking[0m bareline-editor-surface v0.1.0 (/Users/runner/work/BareLine/BareLine/crates/editor-surface)
+2026-09-16T11:06:53.8403790Z [1m[92m    Checking[0m wasmtime-wasi v48.0.1
+2026-09-16T11:06:55.5256550Z [1m[92m   Compiling[0m curve25519-dalek v4.1.3
+2026-09-16T11:06:55.8184960Z [1m[92m    Checking[0m wat v1.258.0
+2026-09-16T11:06:55.9011310Z [1m[92m    Checking[0m core-graphics v0.23.2
+2026-09-16T11:06:55.9315290Z [1m[92m    Checking[0m objc2-app-kit v0.2.2
+2026-09-16T11:06:56.1730120Z [1m[92m    Checking[0m sha1 v0.10.6
+2026-09-16T11:06:56.2705740Z [1m[92m    Checking[0m md-5 v0.10.6
+2026-09-16T11:06:56.3496630Z [1m[92m    Checking[0m signature v2.2.0
+2026-09-16T11:06:56.4260400Z [1m[92m    Checking[0m raw-window-handle v0.6.2
+2026-09-16T11:06:56.5596350Z [1m[92m    Checking[0m smol_str v0.2.2
+2026-09-16T11:06:56.7393460Z [1m[92m    Checking[0m zeroize v1.9.0
+2026-09-16T11:06:56.8501050Z [1m[92m    Checking[0m dpi v0.1.2
+2026-09-16T11:06:56.9615950Z [1m[92m    Checking[0m cursor-icon v1.2.0
+2026-09-16T11:06:57.4944940Z [1m[92m    Checking[0m ed25519 v2.2.3
+2026-09-16T11:06:57.5781790Z [1m[92m   Compiling[0m bareline v0.1.0 (/Users/runner/work/BareLine/BareLine/apps/bareline)
+2026-09-16T11:06:58.1178970Z [1m[92m    Checking[0m ed25519-dalek v2.2.0
+2026-09-16T11:06:58.2508930Z [1m[92m    Checking[0m bareline-app v0.1.0 (/Users/runner/work/BareLine/BareLine/crates/app)
+2026-09-16T11:07:00.0273510Z [1m[92m    Checking[0m bareline-platform-windows v0.1.0 (/Users/runner/work/BareLine/BareLine/crates/platform-windows)
+2026-09-16T11:07:00.0976360Z [1m[92m    Checking[0m blake2 v0.10.6
+2026-09-16T11:07:00.2914680Z [1m[92m   Compiling[0m bareline-update-helper v0.1.0 (/Users/runner/work/BareLine/BareLine/apps/update-helper)
+2026-09-16T11:07:00.6672830Z [1m[92m    Checking[0m bareline-diagnostics v0.1.0 (/Users/runner/work/BareLine/BareLine/crates/diagnostics)
+2026-09-16T11:07:00.7660720Z [1m[92m    Checking[0m bareline-platform-macos v0.1.0 (/Users/runner/work/BareLine/BareLine/crates/platform-macos)
+2026-09-16T11:07:00.7762030Z [1m[92m    Checking[0m bareline-platform-linux v0.1.0 (/Users/runner/work/BareLine/BareLine/crates/platform-linux)
+2026-09-16T11:07:01.4767160Z [1m[92m    Checking[0m bareline-xml-tools v0.1.0 (/Users/runner/work/BareLine/BareLine/extensions/xml-tools)
+2026-09-16T11:07:01.6174640Z [1m[92m    Checking[0m bareline-hex-view v0.1.0 (/Users/runner/work/BareLine/BareLine/extensions/hex-view)
+2026-09-16T11:07:01.7115900Z [1m[92m    Checking[0m bareline-json-tools v0.1.0 (/Users/runner/work/BareLine/BareLine/extensions/json-tools)
+2026-09-16T11:07:02.1931410Z [1m[92m    Checking[0m xtask v0.1.0 (/Users/runner/work/BareLine/BareLine/xtask)
+2026-09-16T11:07:08.1264310Z [1m[92m    Finished[0m `dev` profile [unoptimized + debuginfo] target(s) in 1m 47s
+2026-09-16T11:07:08.3771150Z ##[group]Run New-Item -ItemType Directory -Force target | Out-Null
+2026-09-16T11:07:08.3771930Z [36;1mNew-Item -ItemType Directory -Force target | Out-Null[0m
+2026-09-16T11:07:08.3772670Z [36;1mcargo clippy --workspace --all-targets --locked --message-format=json 1> target/clippy-census.jsonl 2> target/clippy-census.stderr.log[0m
+2026-09-16T11:07:08.3773500Z [36;1m$clippyExit = $LASTEXITCODE[0m
+2026-09-16T11:07:08.3773880Z [36;1mif ($clippyExit -ne 0) {[0m
+2026-09-16T11:07:08.3774370Z [36;1m  "Clippy census process failed with exit $clippyExit; ratchet not evaluated." | Set-Content target/clippy-ratchet.log[0m
+2026-09-16T11:07:08.3774920Z [36;1m  exit $clippyExit[0m
+2026-09-16T11:07:08.3775180Z [36;1m}[0m
+2026-09-16T11:07:08.3775450Z [36;1m$rustcDetails = rustc -vV[0m
+2026-09-16T11:07:08.3775860Z [36;1m$hostTarget = (($rustcDetails | Where-Object { $_ -like 'host: *' }) -replace '^host: ', '').Trim()[0m
+2026-09-16T11:07:08.3776650Z [36;1m$toolchain = (($rustcDetails | Where-Object { $_ -like 'release: *' }) -replace '^release: ', '').Trim()[0m
+2026-09-16T11:07:08.3777220Z [36;1mif (!$hostTarget -or !$toolchain) { throw 'rustc did not report host target and release' }[0m
+2026-09-16T11:07:08.3778350Z [36;1mpython .github/workflows/check_clippy_ratchet.py check --diagnostics target/clippy-census.jsonl --baseline .github/workflows/clippy-baseline.json --source-root . --platform 'macOS' --target $hostTarget --toolchain $toolchain 2>&1 | Tee-Object -FilePath target/clippy-ratchet.log[0m
+2026-09-16T11:07:08.3779340Z [36;1mexit $LASTEXITCODE[0m
+2026-09-16T11:07:08.3982810Z shell: /usr/local/bin/pwsh -command ". '{0}'"
+2026-09-16T11:07:08.3983160Z env:
+2026-09-16T11:07:08.3983440Z   CARGO_HOME: /Users/runner/.cargo
+2026-09-16T11:07:08.3983830Z   CARGO_INCREMENTAL: 0
+2026-09-16T11:07:08.3984100Z   CARGO_TERM_COLOR: always
+2026-09-16T11:07:08.3984500Z   pythonLocation: /Users/runner/hostedtoolcache/Python/3.12.10/arm64
+2026-09-16T11:07:08.3985040Z   PKG_CONFIG_PATH: /Users/runner/hostedtoolcache/Python/3.12.10/arm64/lib/pkgconfig
+2026-09-16T11:07:08.3985510Z   Python_ROOT_DIR: /Users/runner/hostedtoolcache/Python/3.12.10/arm64
+2026-09-16T11:07:08.3986510Z   Python2_ROOT_DIR: /Users/runner/hostedtoolcache/Python/3.12.10/arm64
+2026-09-16T11:07:08.3986900Z   Python3_ROOT_DIR: /Users/runner/hostedtoolcache/Python/3.12.10/arm64
+2026-09-16T11:07:08.3987320Z ##[endgroup]
+2026-09-16T11:07:49.5661740Z clippy-ratchet: 420 reviewed occurrence(s); no new or stale debt; source=d828cf230a274c3aa4c1f9507e10ee40adc4cae252d733ef7aeb33c3371d1a35
+2026-09-16T11:07:49.6910600Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-09-16T11:07:49.6913980Z ##[group]Run actions/upload-artifact@v4
+2026-09-16T11:07:49.6914920Z with:
+2026-09-16T11:07:49.6915880Z   name: clippy-ratchet-macOS
+2026-09-16T11:07:49.6916960Z   path: target/clippy-census.jsonl
+target/clippy-census.stderr.log
+target/clippy-ratchet.log
+
+2026-09-16T11:07:49.6918660Z   if-no-files-found: warn
+2026-09-16T11:07:49.6919320Z   compression-level: 6
+2026-09-16T11:07:49.6920060Z   overwrite: false
+2026-09-16T11:07:49.6920660Z   include-hidden-files: false
+2026-09-16T11:07:49.6921390Z env:
+2026-09-16T11:07:49.6921950Z   CARGO_HOME: /Users/runner/.cargo
+2026-09-16T11:07:49.6922840Z   CARGO_INCREMENTAL: 0
+2026-09-16T11:07:49.6923670Z   CARGO_TERM_COLOR: always
+2026-09-16T11:07:49.6924650Z   pythonLocation: /Users/runner/hostedtoolcache/Python/3.12.10/arm64
+2026-09-16T11:07:49.6925950Z   PKG_CONFIG_PATH: /Users/runner/hostedtoolcache/Python/3.12.10/arm64/lib/pkgconfig
+2026-09-16T11:07:49.6927210Z   Python_ROOT_DIR: /Users/runner/hostedtoolcache/Python/3.12.10/arm64
+2026-09-16T11:07:49.6928290Z   Python2_ROOT_DIR: /Users/runner/hostedtoolcache/Python/3.12.10/arm64
+2026-09-16T11:07:49.6929600Z   Python3_ROOT_DIR: /Users/runner/hostedtoolcache/Python/3.12.10/arm64
+2026-09-16T11:07:49.6930640Z ##[endgroup]
+2026-09-16T11:07:50.3458780Z (node:9975) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-09-16T11:07:50.3463390Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-09-16T11:07:50.3548020Z Multiple search paths detected. Calculating the least common ancestor of all paths
+2026-09-16T11:07:50.3550970Z The least common ancestor is /Users/runner/work/BareLine/BareLine/target. This will be the root directory of the artifact
+2026-09-16T11:07:50.3551650Z With the provided path, there will be 3 files uploaded
+2026-09-16T11:07:50.3552420Z Artifact name is valid!
+2026-09-16T11:07:50.3552770Z Root directory input is valid!
+2026-09-16T11:07:50.7712120Z Beginning upload of artifact content to blob storage
+2026-09-16T11:07:50.8205220Z (node:9975) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+2026-09-16T11:07:51.2968060Z Uploaded bytes 165509
+2026-09-16T11:07:51.3763400Z Finished uploading artifact content to blob storage!
+2026-09-16T11:07:51.3865640Z SHA256 digest of uploaded artifact zip is a37c0ff4d124c34cdbaad4e11bb0432058b896c24530a2b5f0045953fc33b6d3
+2026-09-16T11:07:51.3968630Z Finalizing artifact upload
+2026-09-16T11:07:51.6721710Z Artifact clippy-ratchet-macOS.zip successfully finalized. Artifact ID 10443530767
+2026-09-16T11:07:51.6766570Z Artifact clippy-ratchet-macOS has been successfully uploaded! Final size is 165509 bytes. Artifact ID is 10443530767
+2026-09-16T11:07:51.6791460Z Artifact download URL: https://github.com/TheWoovee/BareLine/actions/runs/35088391989/artifacts/10443530767
+2026-09-16T11:07:51.6844490Z ##[group]Run cargo check -p bareline-platform-linux -p bareline-platform-macos --examples --locked
+2026-09-16T11:07:51.6845230Z [36;1mcargo check -p bareline-platform-linux -p bareline-platform-macos --examples --locked[0m
+2026-09-16T11:07:51.6910630Z shell: /bin/bash -e {0}
+2026-09-16T11:07:51.6910940Z env:
+2026-09-16T11:07:51.6911190Z   CARGO_HOME: /Users/runner/.cargo
+2026-09-16T11:07:51.6911610Z   CARGO_INCREMENTAL: 0
+2026-09-16T11:07:51.6911890Z   CARGO_TERM_COLOR: always
+2026-09-16T11:07:51.6912250Z   pythonLocation: /Users/runner/hostedtoolcache/Python/3.12.10/arm64
+2026-09-16T11:07:51.6912780Z   PKG_CONFIG_PATH: /Users/runner/hostedtoolcache/Python/3.12.10/arm64/lib/pkgconfig
+2026-09-16T11:07:51.6913330Z   Python_ROOT_DIR: /Users/runner/hostedtoolcache/Python/3.12.10/arm64
+2026-09-16T11:07:51.6913880Z   Python2_ROOT_DIR: /Users/runner/hostedtoolcache/Python/3.12.10/arm64
+2026-09-16T11:07:51.6914840Z   Python3_ROOT_DIR: /Users/runner/hostedtoolcache/Python/3.12.10/arm64
+2026-09-16T11:07:51.6915670Z ##[endgroup]
+2026-09-16T11:07:53.2888870Z [1m[92m   Compiling[0m serde_core v1.0.229
+2026-09-16T11:07:53.3040060Z [1m[92m   Compiling[0m syn v3.0.5
+2026-09-16T11:07:53.3201720Z [1m[92m   Compiling[0m serde v1.0.229
+2026-09-16T11:07:54.6456980Z [1m[92m    Checking[0m tracing-core v0.1.36
+2026-09-16T11:07:55.0424870Z [1m[92m    Checking[0m tracing v0.1.44
+2026-09-16T11:07:57.2927410Z [1m[92m   Compiling[0m serde_derive v1.0.229
+2026-09-16T11:07:57.3036760Z [1m[92m   Compiling[0m foreign-types-macros v0.2.4
+2026-09-16T11:07:57.6969210Z [1m[92m    Checking[0m foreign-types v0.5.0
+2026-09-16T11:07:57.7356320Z [1m[92m    Checking[0m core-graphics v0.23.2
+2026-09-16T11:07:58.0168620Z [1m[92m    Checking[0m winit v0.30.13
+2026-09-16T11:08:00.1348690Z [1m[92m    Checking[0m bareline-platform v0.1.0 (/Users/runner/work/BareLine/BareLine/crates/platform)
+2026-09-16T11:08:00.4425740Z [1m[92m    Checking[0m bareline-platform-linux v0.1.0 (/Users/runner/work/BareLine/BareLine/crates/platform-linux)
+2026-09-16T11:08:00.4430610Z [1m[92m    Checking[0m bareline-platform-macos v0.1.0 (/Users/runner/work/BareLine/BareLine/crates/platform-macos)
+2026-09-16T11:08:00.5583430Z [1m[92m    Finished[0m `dev` profile [unoptimized + debuginfo] target(s) in 8.76s
+2026-09-16T11:08:00.5904730Z ##[group]Run cargo test --workspace --locked
+2026-09-16T11:08:00.5905580Z [36;1mcargo test --workspace --locked[0m
+2026-09-16T11:08:00.5963080Z shell: /bin/bash -e {0}
+2026-09-16T11:08:00.5963740Z env:
+2026-09-16T11:08:00.5964430Z   CARGO_HOME: /Users/runner/.cargo
+2026-09-16T11:08:00.5965180Z   CARGO_INCREMENTAL: 0
+2026-09-16T11:08:00.5965960Z   CARGO_TERM_COLOR: always
+2026-09-16T11:08:00.5966970Z   pythonLocation: /Users/runner/hostedtoolcache/Python/3.12.10/arm64
+2026-09-16T11:08:00.5968310Z   PKG_CONFIG_PATH: /Users/runner/hostedtoolcache/Python/3.12.10/arm64/lib/pkgconfig
+2026-09-16T11:08:00.5969670Z   Python_ROOT_DIR: /Users/runner/hostedtoolcache/Python/3.12.10/arm64
+2026-09-16T11:08:00.5970940Z   Python2_ROOT_DIR: /Users/runner/hostedtoolcache/Python/3.12.10/arm64
+2026-09-16T11:08:00.5972060Z   Python3_ROOT_DIR: /Users/runner/hostedtoolcache/Python/3.12.10/arm64
+2026-09-16T11:08:00.5973040Z ##[endgroup]
+2026-09-16T11:08:01.6074410Z [1m[92m   Compiling[0m serde_core v1.0.229
+2026-09-16T11:08:01.6078860Z [1m[92m   Compiling[0m foldhash v0.2.0
+2026-09-16T11:08:01.6080620Z [1m[92m   Compiling[0m libc v0.2.189
+2026-09-16T11:08:01.7781080Z [1m[92m   Compiling[0m equivalent v1.0.2
+2026-09-16T11:08:01.8515090Z [1m[92m   Compiling[0m cfg-if v1.0.4
+2026-09-16T11:08:01.9022420Z [1m[92m   Compiling[0m typenum v1.20.1
+2026-09-16T11:08:02.2356680Z [1m[92m   Compiling[0m subtle v2.6.1
+2026-09-16T11:08:02.3675840Z [1m[92m   Compiling[0m cpufeatures v0.2.17
+2026-09-16T11:08:02.4856470Z [1m[92m   Compiling[0m memchr v2.8.3
+2026-09-16T11:08:02.5873970Z [1m[92m   Compiling[0m generic-array v0.14.7
+2026-09-16T11:08:03.0091660Z [1m[92m   Compiling[0m zmij v1.0.23
+2026-09-16T11:08:03.1494640Z [1m[92m   Compiling[0m block-buffer v0.10.4
+2026-09-16T11:08:03.2354490Z [1m[92m   Compiling[0m crypto-common v0.1.7
+2026-09-16T11:08:03.3145620Z [1m[92m   Compiling[0m digest v0.10.7
+2026-09-16T11:08:03.3197480Z [1m[92m   Compiling[0m itoa v1.0.18
+2026-09-16T11:08:03.4784790Z [1m[92m   Compiling[0m stable_deref_trait v1.2.1
+2026-09-16T11:08:03.5225870Z [1m[92m   Compiling[0m log v0.4.34
+2026-09-16T11:08:03.5581970Z [1m[92m   Compiling[0m sha2 v0.10.9
+2026-09-16T11:08:03.6935160Z [1m[92m   Compiling[0m winnow v0.7.15
+2026-09-16T11:08:03.8562420Z [1m[92m   Compiling[0m toml_write v0.1.2
+2026-09-16T11:08:04.0411010Z [1m[92m   Compiling[0m allocator-api2 v0.2.21
+2026-09-16T11:08:04.2367950Z [1m[92m   Compiling[0m serde v1.0.229
+2026-09-16T11:08:04.4384210Z [1m[92m   Compiling[0m hashbrown v0.17.1
+2026-09-16T11:08:04.9251370Z [1m[92m   Compiling[0m toml_datetime v0.6.11
+2026-09-16T11:08:05.2039690Z [1m[92m   Compiling[0m indexmap v2.14.2
+2026-09-16T11:08:05.2147790Z [1m[92m   Compiling[0m serde_spanned v0.6.9
+2026-09-16T11:08:05.3163600Z [1m[92m   Compiling[0m serde_json v1.0.150
+2026-09-16T11:08:05.8652050Z [1m[92m   Compiling[0m toml_edit v0.22.27
+2026-09-16T11:08:05.9518310Z [1m[92m   Compiling[0m bumpalo v3.20.3
+2026-09-16T11:08:06.1795010Z [1m[92m   Compiling[0m thiserror v2.0.20
+2026-09-16T11:08:06.2433120Z [1m[92m   Compiling[0m byteorder v1.5.0
+2026-09-16T11:08:06.3839200Z [1m[92m   Compiling[0m hash32 v0.2.1
+2026-09-16T11:08:06.5468100Z [1m[92m   Compiling[0m heapless v0.7.17
+2026-09-16T11:08:06.5572530Z [1m[92m   Compiling[0m crc32fast v1.5.1
+2026-09-16T11:08:06.7839360Z [1m[92m   Compiling[0m cobs v0.3.0
+2026-09-16T11:08:06.9453970Z [1m[92m   Compiling[0m bareline-platform v0.1.0 (/Users/runner/work/BareLine/BareLine/crates/platform)
+2026-09-16T11:08:07.1398340Z [1m[92m   Compiling[0m postcard v1.1.3
+2026-09-16T11:08:07.4605730Z [1m[92m   Compiling[0m simd-adler32 v0.3.10
+2026-09-16T11:08:07.6540180Z [1m[92m   Compiling[0m jobserver v0.1.35
+2026-09-16T11:08:07.9278990Z [1m[92m   Compiling[0m adler2 v2.0.1
+2026-09-16T11:08:07.9427500Z [1m[92m   Compiling[0m cc v1.4.5
+2026-09-16T11:08:08.0228900Z [1m[92m   Compiling[0m miniz_oxide v0.9.1
+2026-09-16T11:08:08.7378220Z [1m[92m   Compiling[0m minisign-verify v0.2.4
+2026-09-16T11:08:09.5050620Z [1m[92m   Compiling[0m flate2 v1.1.10
+2026-09-16T11:08:09.6306660Z [1m[92m   Compiling[0m zopfli v0.8.3
+2026-09-16T11:08:09.8586120Z [1m[92m   Compiling[0m encoding_rs v0.8.35
+2026-09-16T11:08:09.9251730Z [1m[92m   Compiling[0m bareline-commands v0.1.0 (/Users/runner/work/BareLine/BareLine/crates/commands)
+2026-09-16T11:08:10.4062680Z [1m[92m   Compiling[0m zip v2.4.2
+2026-09-16T11:08:11.1952520Z [1m[92m   Compiling[0m bareline-extensions-protocol v0.1.0 (/Users/runner/work/BareLine/BareLine/crates/extensions-protocol)
+2026-09-16T11:08:11.6305770Z [1m[92m   Compiling[0m bitflags v2.13.1
+2026-09-16T11:08:11.6808640Z [1m[92m   Compiling[0m libm v0.2.16
+2026-09-16T11:08:12.3152300Z [1m[92m   Compiling[0m unicode-segmentation v1.13.3
+2026-09-16T11:08:12.7935280Z [1m[92m   Compiling[0m bareline-document v0.1.0 (/Users/runner/work/BareLine/BareLine/crates/document)
+2026-09-16T11:08:13.1282410Z [1m[92m   Compiling[0m bareline-renderer v0.1.0 (/Users/runner/work/BareLine/BareLine/crates/renderer)
+2026-09-16T11:08:13.2959010Z [1m[92m   Compiling[0m anyhow v1.0.104
+2026-09-16T11:08:13.4445800Z [1m[92m   Compiling[0m bareline-unicode-fold v0.1.0 (/Users/runner/work/BareLine/BareLine/crates/unicode-fold)
+2026-09-16T11:08:13.5383310Z [1m[92m   Compiling[0m leb128fmt v0.1.0
+2026-09-16T11:08:13.6196110Z [1m[92m   Compiling[0m wasmtime-internal-core v48.0.1
+2026-09-16T11:08:13.6514190Z [1m[92m   Compiling[0m smallvec v1.16.0
+2026-09-16T11:08:13.8555970Z [1m[92m   Compiling[0m zerofrom v0.1.8
+2026-09-16T11:08:13.9555290Z [1m[92m   Compiling[0m pcre2-sys v0.2.10
+2026-09-16T11:08:14.2540200Z [1m[92m   Compiling[0m cranelift-bitset v0.135.1
+2026-09-16T11:08:14.3003970Z [1m[92m   Compiling[0m yoke v0.8.3
+2026-09-16T11:08:14.4849080Z [1m[92m   Compiling[0m bareline-file-io v0.1.0 (/Users/runner/work/BareLine/BareLine/crates/file-io)
+2026-09-16T11:08:14.9883020Z [1m[92m   Compiling[0m pin-project-lite v0.2.17
+2026-09-16T11:08:15.7862150Z [1m[92m   Compiling[0m once_cell v1.21.4
+2026-09-16T11:08:15.9489370Z [1m[92m   Compiling[0m zerovec v0.11.8
+2026-09-16T11:08:16.8741020Z [1m[92m   Compiling[0m pulley-interpreter v48.0.1
+2026-09-16T11:08:18.6672480Z [1m[92m   Compiling[0m cranelift-entity v0.135.1
+2026-09-16T11:08:19.0612690Z [1m[92m   Compiling[0m bareline-ui v0.1.0 (/Users/runner/work/BareLine/BareLine/crates/ui)
+2026-09-16T11:08:20.2387000Z [1m[92m   Compiling[0m bareline-lexilla-bridge v0.1.0 (/Users/runner/work/BareLine/BareLine/native/lexilla-bridge)
+2026-09-16T11:08:20.4406540Z [1m[92m   Compiling[0m hashbrown v0.16.1
+2026-09-16T11:08:21.0028620Z [1m[92m   Compiling[0m fnv v1.0.7
+2026-09-16T11:08:21.0546190Z [1m[92m   Compiling[0m cranelift-codegen-shared v0.135.1
+2026-09-16T11:08:21.1142060Z [1m[92m   Compiling[0m cranelift-codegen-meta v0.135.1
+2026-09-16T11:08:24.0976070Z [1m[92m   Compiling[0m gimli v0.33.0
+2026-09-16T11:08:24.5929240Z [1m[92m   Compiling[0m cranelift-bforest v0.135.1
+2026-09-16T11:08:24.8787340Z [1m[92m   Compiling[0m target-lexicon v0.13.5
+2026-09-16T11:08:25.2520230Z [1m[92m   Compiling[0m tracing-core v0.1.36
+2026-09-16T11:08:26.5133740Z [1m[92m   Compiling[0m wasmparser v0.254.0
+2026-09-16T11:08:28.7389110Z [1m[92m   Compiling[0m tracing v0.1.44
+2026-09-16T11:08:28.9154570Z [1m[92m   Compiling[0m cranelift-codegen v0.135.1
+2026-09-16T11:08:29.3798910Z [1m[92m   Compiling[0m bareline-search v0.1.0 (/Users/runner/work/BareLine/BareLine/crates/search)
+2026-09-16T11:08:32.0613020Z [1m[92m   Compiling[0m bareline-renderer-recording v0.1.0 (/Users/runner/work/BareLine/BareLine/crates/renderer-recording)
+2026-09-16T11:08:32.5361670Z [1m[92m   Compiling[0m semver v1.0.28
+2026-09-16T11:08:32.8093300Z [1m[92m   Compiling[0m errno v0.3.14
+2026-09-16T11:08:32.8959780Z [1m[92m   Compiling[0m base64 v0.22.1
+2026-09-16T11:08:33.2428610Z [1m[92m   Compiling[0m arbitrary v1.4.2
+2026-09-16T11:08:34.1438490Z [1m[92m   Compiling[0m rustc-hash v2.1.3
+2026-09-16T11:08:34.2246550Z [1m[92m   Compiling[0m regalloc2 v0.15.2
+2026-09-16T11:08:35.9583360Z [1m[92m   Compiling[0m cranelift-control v0.135.1
+2026-09-16T11:08:36.0323150Z [1m[92m   Compiling[0m rustix v1.1.4
+2026-09-16T11:08:44.6293550Z [1m[92m   Compiling[0m cranelift-assembler-x64 v0.135.1
+2026-09-16T11:08:45.0313350Z [1m[92m   Compiling[0m tinystr v0.8.4
+2026-09-16T11:08:50.1734560Z [1m[92m   Compiling[0m litemap v0.8.3
+2026-09-16T11:08:50.3485400Z [1m[92m   Compiling[0m writeable v0.6.4
+2026-09-16T11:08:50.5903990Z [1m[92m   Compiling[0m termcolor v1.4.1
+2026-09-16T11:08:51.0147510Z [1m[92m   Compiling[0m wasmtime-internal-component-util v48.0.1
+2026-09-16T11:08:52.5297040Z [1m[92m   Compiling[0m wasmprinter v0.254.0
+2026-09-16T11:08:54.8415720Z [1m[92m   Compiling[0m icu_locale_core v2.1.1
+2026-09-16T11:08:55.8774380Z [1m[92m   Compiling[0m object v0.39.1
+2026-09-16T11:08:55.9986880Z [1m[92m   Compiling[0m wasm-encoder v0.254.0
+2026-09-16T11:08:58.0946770Z [1m[92m   Compiling[0m potential_utf v0.1.6
+2026-09-16T11:08:58.2135610Z [1m[92m   Compiling[0m zerotrie v0.2.5
+2026-09-16T11:08:59.9145660Z [1m[92m   Compiling[0m bareline-macros v0.1.0 (/Users/runner/work/BareLine/BareLine/crates/macros)
+2026-09-16T11:09:01.0089990Z [1m[92m   Compiling[0m quick-xml v0.41.0
+2026-09-16T11:09:01.5088230Z [1m[92m   Compiling[0m wit-parser v0.254.0
+2026-09-16T11:09:02.2921130Z [1m[92m   Compiling[0m wasmtime-environ v48.0.1
+2026-09-16T11:09:07.9853470Z [1m[92m   Compiling[0m icu_provider v2.1.1
+2026-09-16T11:09:08.3727030Z [1m[92m   Compiling[0m icu_collections v2.1.1
+2026-09-16T11:09:09.0345210Z [1m[92m   Compiling[0m wasm-metadata v0.254.0
+2026-09-16T11:09:09.4011310Z [1m[92m   Compiling[0m wit-component v0.254.0
+2026-09-16T11:09:14.5704920Z [1m[92m   Compiling[0m io-lifetimes v3.0.1
+2026-09-16T11:09:14.6807190Z [1m[92m   Compiling[0m io-lifetimes v2.0.4
+2026-09-16T11:09:14.7613790Z [1m[92m   Compiling[0m icu_normalizer_data v2.1.1
+2026-09-16T11:09:14.8324550Z [1m[92m   Compiling[0m icu_properties_data v2.1.2
+2026-09-16T11:09:15.0036630Z [1m[92m   Compiling[0m bareline-syntax v0.1.0 (/Users/runner/work/BareLine/BareLine/crates/syntax)
+2026-09-16T11:09:17.9629400Z [1m[92m   Compiling[0m wasmtime-internal-fiber v48.0.1
+2026-09-16T11:09:18.3685950Z [1m[92m   Compiling[0m bareline-extension-sdk v0.1.0 (/Users/runner/work/BareLine/BareLine/crates/extension-sdk)
+2026-09-16T11:09:18.7266980Z [1m[92m   Compiling[0m futures-sink v0.3.34
+2026-09-16T11:09:18.7819290Z [1m[92m   Compiling[0m either v1.18.0
+2026-09-16T11:09:18.9716430Z [1m[92m   Compiling[0m futures-core v0.3.34
+2026-09-16T11:09:19.0598260Z [1m[92m   Compiling[0m itertools v0.14.0
+2026-09-16T11:09:19.9605700Z [1m[92m   Compiling[0m cranelift-native v0.135.1
+2026-09-16T11:09:20.1309800Z [1m[92m   Compiling[0m cranelift-frontend v0.135.1
+2026-09-16T11:09:20.7435190Z [1m[92m   Compiling[0m wasmtime-internal-unwinder v48.0.1
+2026-09-16T11:09:21.1194000Z [1m[92m   Compiling[0m icu_properties v2.1.2
+2026-09-16T11:09:21.4235980Z [1m[92m   Compiling[0m icu_normalizer v2.1.1
+2026-09-16T11:09:22.1534900Z [1m[92m   Compiling[0m fs-set-times v0.20.3
+2026-09-16T11:09:22.3335590Z [1m[92m   Compiling[0m io-extras v0.19.0
+2026-09-16T11:09:22.4981850Z [1m[92m   Compiling[0m wasmtime-internal-wit-bindgen v48.0.1
+2026-09-16T11:09:22.8251590Z [1m[92m   Compiling[0m wasmtime v48.0.1
+2026-09-16T11:09:23.0605970Z [1m[92m   Compiling[0m maybe-owned v0.3.4
+2026-09-16T11:09:23.1941660Z [1m[92m   Compiling[0m futures-task v0.3.34
+2026-09-16T11:09:23.2790740Z [1m[92m   Compiling[0m lexopt v0.3.1
+2026-09-16T11:09:23.4952580Z [1m[92m   Compiling[0m ambient-authority v0.0.2
+2026-09-16T11:09:23.5445160Z [1m[92m   Compiling[0m ipnet v2.12.2
+2026-09-16T11:09:23.9390390Z [1m[92m   Compiling[0m rand_core v0.10.1
+2026-09-16T11:09:24.0583020Z [1m[92m   Compiling[0m wasmtime-internal-component-macro v48.0.1
+2026-09-16T11:09:24.0625840Z [1m[92m   Compiling[0m cap-primitives v4.0.3
+2026-09-16T11:09:24.8061060Z [1m[92m   Compiling[0m futures-util v0.3.34
+2026-09-16T11:09:26.9675770Z [1m[92m   Compiling[0m idna_adapter v1.2.1
+2026-09-16T11:09:27.0967730Z [1m[92m   Compiling[0m wasmtime-internal-cranelift v48.0.1
+2026-09-16T11:09:27.4476810Z [1m[92m   Compiling[0m objc-sys v0.3.5
+2026-09-16T11:09:27.5556500Z [1m[92m   Compiling[0m futures-channel v0.3.34
+2026-09-16T11:09:27.6007590Z [1m[92m   Compiling[0m wasmtime-internal-jit-icache-coherence v48.0.1
+2026-09-16T11:09:27.6775000Z [1m[92m   Compiling[0m utf8_iter v1.0.4
+2026-09-16T11:09:27.7800240Z [1m[92m   Compiling[0m futures-io v0.3.34
+2026-09-16T11:09:27.8233870Z [1m[92m   Compiling[0m objc2-encode v4.1.0
+2026-09-16T11:09:28.1387480Z [1m[92m   Compiling[0m bytes v1.12.1
+2026-09-16T11:09:28.7730880Z [1m[92m   Compiling[0m mach2 v0.6.0
+2026-09-16T11:09:29.3933560Z [1m[92m   Compiling[0m percent-encoding v2.3.2
+2026-09-16T11:09:29.5464290Z [1m[92m   Compiling[0m form_urlencoded v1.2.2
+2026-09-16T11:09:29.6931990Z [1m[92m   Compiling[0m objc2 v0.5.2
+2026-09-16T11:09:37.5170820Z [1m[92m   Compiling[0m futures v0.3.34
+2026-09-16T11:09:37.5904780Z [1m[92m   Compiling[0m idna v1.1.0
+2026-09-16T11:09:37.6885580Z [1m[92m   Compiling[0m cap-std v4.0.3
+2026-09-16T11:09:38.0676840Z [1m[92m   Compiling[0m getrandom v0.4.3
+2026-09-16T11:09:38.3020390Z [1m[92m   Compiling[0m chacha20 v0.10.2
+2026-09-16T11:09:38.6596870Z [1m[92m   Compiling[0m bareline-distribution v0.1.0 (/Users/runner/work/BareLine/BareLine/crates/distribution)
+2026-09-16T11:09:38.9391480Z [1m[92m   Compiling[0m bareline-first-party-common v0.1.0 (/Users/runner/work/BareLine/BareLine/extensions/common)
+2026-09-16T11:09:39.3608520Z [1m[92m   Compiling[0m bareline-settings v0.1.0 (/Users/runner/work/BareLine/BareLine/crates/settings)
+2026-09-16T11:09:39.8980600Z [1m[92m   Compiling[0m mio v1.2.3
+2026-09-16T11:09:40.6570620Z [1m[92m   Compiling[0m socket2 v0.6.5
+2026-09-16T11:09:40.9890120Z [1m[92m   Compiling[0m core-foundation-sys v0.8.7
+2026-09-16T11:09:41.1703450Z [1m[92m   Compiling[0m tokio v1.53.1
+2026-09-16T11:09:41.2560360Z [1m[92m   Compiling[0m core-foundation v0.9.4
+2026-09-16T11:09:41.6181710Z [1m[92m   Compiling[0m rand v0.10.2
+2026-09-16T11:09:42.3486810Z [1m[92m   Compiling[0m wasmtime-wasi-io v48.0.1
+2026-09-16T11:09:43.4412890Z [1m[92m   Compiling[0m url v2.5.8
+2026-09-16T11:09:44.3163080Z [1m[92m   Compiling[0m cap-fs-ext v4.0.3
+2026-09-16T11:09:44.4156790Z [1m[92m   Compiling[0m block2 v0.5.1
+2026-09-16T11:09:44.6552170Z [1m[92m   Compiling[0m bareline-diff v0.1.0 (/Users/runner/work/BareLine/BareLine/crates/diff)
+2026-09-16T11:09:45.4312600Z [1m[92m   Compiling[0m bitflags v1.3.2
+2026-09-16T11:09:45.4933110Z [1m[92m   Compiling[0m foreign-types-shared v0.3.1
+2026-09-16T11:09:45.5580910Z [1m[92m   Compiling[0m dispatch v0.2.0
+2026-09-16T11:09:45.7011070Z [1m[92m   Compiling[0m objc2-foundation v0.2.2
+2026-09-16T11:09:47.4249820Z [1m[92m   Compiling[0m foreign-types v0.5.0
+2026-09-16T11:09:47.4910410Z [1m[92m   Compiling[0m core-graphics-types v0.1.3
+2026-09-16T11:09:47.5707530Z [1m[92m   Compiling[0m wasmtime-wasi v48.0.1
+2026-09-16T11:09:51.3404780Z [1m[92m   Compiling[0m bareline-editor-surface v0.1.0 (/Users/runner/work/BareLine/BareLine/crates/editor-surface)
+2026-09-16T11:09:52.8615430Z [1m[92m   Compiling[0m wasm-encoder v0.258.0
+2026-09-16T11:09:54.1977590Z [1m[92m   Compiling[0m unicode-width v0.2.2
+2026-09-16T11:09:54.4396040Z [1m[92m   Compiling[0m wast v258.0.0
+2026-09-16T11:10:00.5727660Z [1m[92m   Compiling[0m objc2-app-kit v0.2.2
+2026-09-16T11:10:04.8271100Z [1m[92m   Compiling[0m core-graphics v0.23.2
+2026-09-16T11:10:05.2975900Z [1m[92m   Compiling[0m smol_str v0.2.2
+2026-09-16T11:10:05.5210270Z [1m[92m   Compiling[0m dpi v0.1.2
+2026-09-16T11:10:05.6790110Z [1m[92m   Compiling[0m raw-window-handle v0.6.2
+2026-09-16T11:10:05.9113200Z [1m[92m   Compiling[0m cursor-icon v1.2.0
+2026-09-16T11:10:06.0097070Z [1m[92m   Compiling[0m winit v0.30.13
+2026-09-16T11:10:06.1869680Z [1m[92m   Compiling[0m wat v1.258.0
+2026-09-16T11:10:06.3637650Z [1m[92m   Compiling[0m bareline-extension-host v0.1.0 (/Users/runner/work/BareLine/BareLine/apps/extension-host)
+2026-09-16T11:10:07.3529770Z [1m[92m   Compiling[0m zeroize v1.9.0
+2026-09-16T11:10:07.4969840Z [1m[92m   Compiling[0m signature v2.2.0
+2026-09-16T11:10:07.6144340Z [1m[92m   Compiling[0m ed25519 v2.2.3
+2026-09-16T11:10:07.7998690Z [1m[92m   Compiling[0m curve25519-dalek v4.1.3
+2026-09-16T11:10:08.9659420Z [1m[92m   Compiling[0m sha1 v0.10.6
+2026-09-16T11:10:09.1229450Z [1m[92m   Compiling[0m md-5 v0.10.6
+2026-09-16T11:10:09.2575840Z [1m[92m   Compiling[0m ed25519-dalek v2.2.0
+2026-09-16T11:10:09.3328110Z [1m[92m   Compiling[0m blake2 v0.10.6
+2026-09-16T11:10:09.5615070Z [1m[92m   Compiling[0m bareline-app v0.1.0 (/Users/runner/work/BareLine/BareLine/crates/app)
+2026-09-16T11:10:10.0788060Z [1m[92m   Compiling[0m bareline-platform-windows v0.1.0 (/Users/runner/work/BareLine/BareLine/crates/platform-windows)
+2026-09-16T11:10:10.1314060Z [1m[92m   Compiling[0m bareline-diagnostics v0.1.0 (/Users/runner/work/BareLine/BareLine/crates/diagnostics)
+2026-09-16T11:10:10.4324940Z [1m[92m   Compiling[0m bareline-platform-linux v0.1.0 (/Users/runner/work/BareLine/BareLine/crates/platform-linux)
+2026-09-16T11:10:10.5189780Z [1m[92m   Compiling[0m bareline-platform-macos v0.1.0 (/Users/runner/work/BareLine/BareLine/crates/platform-macos)
+2026-09-16T11:10:10.6064700Z [1m[92m   Compiling[0m bareline-json-tools v0.1.0 (/Users/runner/work/BareLine/BareLine/extensions/json-tools)
+2026-09-16T11:10:11.2515080Z [1m[92m   Compiling[0m bareline-xml-tools v0.1.0 (/Users/runner/work/BareLine/BareLine/extensions/xml-tools)
+2026-09-16T11:10:12.1832000Z [1m[92m   Compiling[0m bareline-hex-view v0.1.0 (/Users/runner/work/BareLine/BareLine/extensions/hex-view)
+2026-09-16T11:10:12.4848610Z [1m[92m   Compiling[0m bareline-update-helper v0.1.0 (/Users/runner/work/BareLine/BareLine/apps/update-helper)
+2026-09-16T11:10:23.7911190Z [1m[92m   Compiling[0m bareline v0.1.0 (/Users/runner/work/BareLine/BareLine/apps/bareline)
+2026-09-16T11:10:24.8590910Z [1m[92m   Compiling[0m xtask v0.1.0 (/Users/runner/work/BareLine/BareLine/xtask)
+2026-09-16T11:10:51.2298670Z [1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 2m 50s
+2026-09-16T11:10:51.2976240Z [1m[92m     Running[0m unittests src/main.rs (target/debug/deps/bareline-c8383944d70eaa25)
+2026-09-16T11:10:51.3097000Z 
+2026-09-16T11:10:51.3097500Z running 0 tests
+2026-09-16T11:10:51.3097760Z 
+2026-09-16T11:10:51.3098140Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-09-16T11:10:51.3098500Z 
+2026-09-16T11:10:51.3102820Z [1m[92m     Running[0m unittests src/lib.rs (target/debug/deps/bareline_app-05c0cfc8e08dcc25)
+2026-09-16T11:10:51.3175910Z 
+2026-09-16T11:10:51.3177520Z running 150 tests
+2026-09-16T11:10:51.3257640Z test accessibility::tests::find_replace_dynamic_tree_keeps_valid_focus_and_values ... ok
+2026-09-16T11:10:51.3263060Z test accessibility::tests::find_semantics_follow_focus_toggle_and_field_value ... ok
+2026-09-16T11:10:51.3266680Z test accessibility::tests::grapheme_offsets_and_offscreen_selection_are_bounded ... ok
+2026-09-16T11:10:51.3281580Z test accessibility::tests::default_editor_semantic_fields_regression ... ok
+2026-09-16T11:10:51.3294590Z test compare::tests::old_revisions_and_cancelled_are_not_coarse ... ok
+2026-09-16T11:10:51.3304660Z test accessibility::tests::paged_read_terminal_cleanup_rejects_stale_results ... ok
+2026-09-16T11:10:51.3314460Z test compare::tests::session_round_trip_preserves_options_sources ... ok
+2026-09-16T11:10:51.3341910Z test accessibility::tests::app_control_fields_regression ... ok
+2026-09-16T11:10:51.3346670Z test compare::tests::stale_results_never_paint_and_merge_undo ... ok
+2026-09-16T11:10:51.3397780Z test compare::tests::worker_merge_rejects_equal_revision_from_other_document ... ok
+2026-09-16T11:10:51.3402530Z test encoding::tests::character_sets_cover_every_codec_and_are_searchable ... ok
+2026-09-16T11:10:51.3403840Z test encoding::tests::readonly_and_unsupported_bom_cannot_dispatch_but_binary_choice_can ... ok
+2026-09-16T11:10:51.3404620Z test compare::tests::paged_worker_reads_beyond_first_window_and_utf8_page_boundaries ... ok
+2026-09-16T11:10:51.3405970Z test extensions::manager::lifecycle_tests::update_retains_only_approved_subset_and_new_capability_disables ... ok
+2026-09-16T11:10:51.3429740Z test extensions::manager::tests::duplicate_or_forged_index_is_not_loaded ... ok
+2026-09-16T11:10:51.3433090Z test extensions::manager::lifecycle_tests::contributions_are_bounded_before_index_mutation_and_on_reload ... ok
+2026-09-16T11:10:51.3435330Z test extensions::tests::paged_read_authority_is_bounded_and_never_accepts_edits ... ok
+2026-09-16T11:10:51.3439090Z test extensions::tests::byte_chunks_cross_unicode_and_failed_child_discards_edits ... ok
+2026-09-16T11:10:51.3439720Z test find::find_bar_tests::enter_and_f3_cycle_direction ... ok
+2026-09-16T11:10:51.3440420Z test find::find_bar_tests::option_toggles_map_to_query_flags ... ok
+2026-09-16T11:10:51.3456420Z test find::find_bar_tests::document_switch_clears_byte_scope_and_restarts_a_cancelled_query ... ok
+2026-09-16T11:10:51.3459270Z test find::find_bar_tests::short_replace_view_uses_summary_or_hides_without_covering_a_field ... ok
+2026-09-16T11:10:51.3460930Z test find::find_bar_tests::stale_worker_disconnect_cannot_replace_the_current_document_status ... ok
+2026-09-16T11:10:51.3461890Z test find::find_bar_tests::toggle_tooltips_share_names_and_pressed_state_with_semantics ... ok
+2026-09-16T11:10:51.3462720Z test find::find_bar_tests::toggle_tooltip_deadline_wakes_once_and_dismisses_on_leave_or_close ... ok
+2026-09-16T11:10:51.3463310Z test find::find_bar_tests::tooltip_content_wraps_and_clamps_without_covering_the_query ... ok
+2026-09-16T11:10:51.3464380Z test language::tests::reviewed_udl_bytes_enforce_utf8_and_size_before_publication ... ok
+2026-09-16T11:10:51.3471830Z test language::tests::signatures_are_language_scoped_and_hint_uses_verified_context ... ok
+2026-09-16T11:10:51.3587880Z test extensions::manager::lifecycle_tests::durable_disable_and_remove_retain_runtime_and_advance_generation ... ok
+2026-09-16T11:10:51.3689830Z test language::tests::stale_provider_generation_cannot_accept ... ok
+2026-09-16T11:10:51.3704940Z test language::tests::completion_policy_index_reuse_and_accessibility_invoke ... ok
+2026-09-16T11:10:51.3709640Z test macros::manager::tests::close_ignores_cached_command_disablement_and_all_dismiss_inputs_match ... ok
+2026-09-16T11:10:51.3714620Z test macros::tests::output_arrows_only_select_enter_activates_and_scroll_is_bounded ... ok
+2026-09-16T11:10:51.3715950Z test macros::tests::replay_comment_policy_requires_captured_tokens ... ok
+2026-09-16T11:10:51.3716610Z test macros::tests::mixed_receipts_keep_completion_order_through_save_and_replay ... ok
+2026-09-16T11:10:51.3717700Z test macros::tests::saved_slot_survives_rename_and_restart_and_rejects_duplicate_import ... ok
+2026-09-16T11:10:51.3718410Z test macros::tests::staged_replay_waits_for_matching_terminal_and_retries_failed_event ... ok
+2026-09-16T11:10:51.3719050Z test menus::tests::codec_submenus_are_populated_by_declared_paths ... ok
+2026-09-16T11:10:51.3719780Z test palette::tests::composing_escape_cancels_preedit_before_palette ... ok
+2026-09-16T11:10:51.3721910Z test palette::tests::contributed_activation_keeps_owned_identity_and_rejects_revocation ... ok
+2026-09-16T11:10:51.3722990Z test palette::tests::paint_and_pointer_use_current_results_and_expose_semantics ... ok
+2026-09-16T11:10:51.3723580Z test palette::tests::result_focus_is_rejected_without_changing_keyboard_selection ... ok
+2026-09-16T11:10:51.3724450Z test palette::tests::searches_navigates_and_revalidates_before_activation ... ok
+2026-09-16T11:10:51.3725030Z test search_panel::tests::accessibility_tabs_select_modes_and_provider_revisions_do_not_recycle ... ok
+2026-09-16T11:10:51.3759630Z test search_panel::tests::external_dock_bounds_own_search_hit_and_semantic_geometry ... ok
+2026-09-16T11:10:51.3765760Z test search_panel::tests::grouped_panel_draws_only_visible_rows_and_activates_exact_source ... ok
+2026-09-16T11:10:51.3767270Z test search_panel::tests::panel_commands_and_search_request_keep_explicit_scope ... ok
+2026-09-16T11:10:51.3768740Z test session_service::tests::queued_cancellation_prevents_storage_and_failures_are_returned ... ok
+2026-09-16T11:10:51.3770590Z test session_service::tests::trust_resolution_is_batched_and_invalid_paths_never_reach_provider ... ok
+2026-09-16T11:10:51.3772030Z test session_service::tests::worker_delivers_load_error_and_notifies_without_ui_wait ... ok
+2026-09-16T11:10:51.3773570Z test session_ui::tests::capture_preserves_exact_view_and_cloned_document_identity ... ok
+2026-09-16T11:10:51.3775350Z test menus::tests::every_non_internal_command_is_reachable_and_internal_stays_hidden ... ok
+2026-09-16T11:10:51.3776880Z test session_ui::tests::untrusted_or_rejected_path_never_becomes_open_request ... ok
+2026-09-16T11:10:51.3778480Z test settings::picker_tests::closed_kinds_use_named_values_and_lists_fall_back_to_typed_entry ... ok
+2026-09-16T11:10:51.3779940Z test settings::picker_tests::open_ended_rows_offer_a_list_that_ends_with_custom ... ok
+2026-09-16T11:10:51.3781140Z test settings::picker_tests::theme_cards_map_to_theme_mode_values ... ok
+2026-09-16T11:10:51.3782500Z test session_ui::tests::five_hundred_restore_is_first_frame_and_trust_gated_with_two_in_flight ... ok
+2026-09-16T11:10:51.3784050Z test settings::picker_tests::toolbar_chip_editor_add_and_remove_keeps_ids_valid ... ok
+2026-09-16T11:10:51.3785730Z test settings::revert_contract_tests::autosave_then_revert_restores_opening_value_and_fences_late_acknowledgement ... ok
+2026-09-16T11:10:51.3788640Z test settings::revert_contract_tests::external_change_requires_reload_or_keep_and_preserves_opening_revert ... ok
+2026-09-16T11:10:51.3791010Z test settings::revert_contract_tests::newer_workspace_owner_cancels_an_older_deferred_handoff ... ok
+2026-09-16T11:10:51.3797780Z test settings::revert_contract_tests::failed_handoff_keeps_error_and_retries_before_installing_new_owner ... ok
+2026-09-16T11:10:51.3859850Z test settings::revert_contract_tests::real_worker_failure_retry_and_external_edit_keep_truthful_ownership ... ok
+2026-09-16T11:10:51.3883210Z test settings::revert_contract_tests::real_worker_refreshes_queued_authority_for_rapid_edit_and_revert ... ok
+2026-09-16T11:10:51.3901120Z test settings::revert_contract_tests::reset_scope_switch_and_reopen_keep_independent_opening_baselines ... ok
+2026-09-16T11:10:51.3913870Z test settings::revert_contract_tests::workspace_replacement_invalidates_the_old_path_decision ... ok
+2026-09-16T11:10:51.3918170Z test settings::visual_contract_tests::failed_save_exposes_retry_even_without_an_unrelated_controller_error ... ok
+2026-09-16T11:10:51.3925930Z test settings::visual_contract_tests::invalid_value_keeps_draft_and_cancel_restores_row_focus ... ok
+2026-09-16T11:10:51.3931100Z test settings::visual_contract_tests::malformed_persisted_value_reports_its_key_without_resetting_other_values ... ok
+2026-09-16T11:10:51.3945950Z test settings::visual_contract_tests::migration_reconciliation_retains_an_uncommitted_value_draft ... ok
+2026-09-16T11:10:51.4047620Z test settings::revert_contract_tests::same_path_workspace_handoff_waits_for_the_accepted_commit ... ok
+2026-09-16T11:10:51.4172770Z test settings::visual_contract_tests::settings_reference_order_copy_target_and_opaque_popup ... ok
+2026-09-16T11:10:51.4288850Z test styling::tests::pane_caches_do_not_supersede_each_other_and_reject_foreign_views ... ok
+2026-09-16T11:10:51.4390030Z test task::tests::cancel_after_publication_suppresses_buffered_success ... ok
+2026-09-16T11:10:51.4468580Z test task::tests::cancel_before_dequeue_skips_work_and_reports_terminal ... ok
+2026-09-16T11:10:51.4471840Z test task::tests::closed_pool_rejects_new_work ... ok
+2026-09-16T11:10:51.4476710Z test task::tests::disconnected_result_is_a_one_shot_failure ... ok
+2026-09-16T11:10:51.4562410Z test task::tests::dropping_owner_signals_running_work_and_send_failure_is_harmless ... ok
+2026-09-16T11:10:51.4571120Z test task::tests::panicked_notification_does_not_kill_worker_or_lose_result ... ok
+2026-09-16T11:10:51.4574050Z test task::tests::panicked_work_is_sanitized_and_worker_metrics_recover ... ok
+2026-09-16T11:10:51.4588040Z test task::tests::pool_bound_is_respected_when_more_tasks_than_threads_are_queued ... ok
+2026-09-16T11:10:51.4595420Z test task::tests::short_job_uses_idle_worker_while_long_job_remains_blocked ... ok
+2026-09-16T11:10:51.4598290Z test task::tests::task_cancel_prevents_delivery ... ok
+2026-09-16T11:10:51.4599160Z test task::tests::task_completes_and_delivers_its_result ... ok
+2026-09-16T11:10:51.4600670Z test task::tests::wake_variant_routes_to_exactly_one_pump ... ok
+2026-09-16T11:10:51.4602610Z test tests::lazy_tabs_survive_renderer_loss_without_document_io ... ok
+2026-09-16T11:10:51.4604180Z test text_prototype::tests::composition_is_overlay_and_grapheme_edits_are_atomic ... ok
+2026-09-16T11:10:51.4605210Z test toolbar::tests::disabled_focus_and_customization_preserve_ids ... ok
+2026-09-16T11:10:51.4607160Z test toolbar::tests::pointer_press_survives_snapshot_refresh_but_disable_cancels_activation ... ok
+2026-09-16T11:10:51.4617580Z test utilities::command_oracle_tests::base64_decode_contract ... ok
+2026-09-16T11:10:51.4620680Z test utilities::command_oracle_tests::base64_encode_contract ... ok
+2026-09-16T11:10:51.4621910Z test utilities::command_oracle_tests::url_decode_contract ... ok
+2026-09-16T11:10:51.4622900Z test utilities::command_oracle_tests::url_encode_contract ... ok
+2026-09-16T11:10:51.4625090Z test utilities::tests::html_escapes_and_rtf_keeps_unicode ... ok
+2026-09-16T11:10:51.4628610Z test utilities::tests::huge_generated_hash_cancels_after_one_chunk ... ok
+2026-09-16T11:10:51.4629630Z test utilities::tests::invalid_decode_never_creates_edit_and_roundtrip_undo ... ok
+2026-09-16T11:10:51.4632680Z test utilities::tests::print_driver_error_propagates_and_selection_is_exact ... ok
+2026-09-16T11:10:51.4637740Z test utilities::tests::standard_hash_vectors ... ok
+2026-09-16T11:10:51.4640540Z test utilities::tests::stream_export_escapes_source_and_preserves_theme_and_multiline_state ... ok
+2026-09-16T11:10:51.4641980Z test utilities::tests::stream_export_writer_error_and_oversize_line_fail_without_source_mutation ... ok
+2026-09-16T11:10:51.4646750Z test utilities::tests::stream_lines_preserve_split_crlf_unicode_and_final_empty_line ... ok
+2026-09-16T11:10:51.4648430Z test views::tests::alignment_spacers_have_no_line_number_and_sync_tokens_do_not_echo ... ok
+2026-09-16T11:10:51.4652860Z test views::tests::clones_share_document_identity_with_independent_state_and_last_reference_close_guard ... ok
+2026-09-16T11:10:51.4655540Z test views::tests::cross_pane_drag_is_atomic_at_pin_boundary_and_closed_metadata_restores ... ok
+2026-09-16T11:10:51.4656920Z test views::tests::five_hundred_tabs_pin_reorder_and_layout_roundtrip ... ok
+2026-09-16T11:10:51.4657880Z test views::tests::restored_tab_ids_must_fit_the_native_provider_block_contract ... ok
+2026-09-16T11:10:51.4658880Z test workspace::extensions::tests::normal_utf8_original_reader_verifies_disk_generation_not_editor_text ... ok
+2026-09-16T11:10:51.4761240Z test workspace::new_document::tests::new_file_defaults_are_clean_and_changes_affect_only_later_documents ... ok
+2026-09-16T11:10:51.4863060Z test workspace::new_document::tests::new_file_defaults_reject_unknown_system_code_page_without_publishing_a_tab ... ok
+2026-09-16T11:10:51.6108210Z test workspace::new_document::tests::new_file_defaults_save_exact_encoding_bom_and_preserve_literal_mixed_eol ... ok
+2026-09-16T11:10:51.6116370Z test workspace::new_document::tests::new_file_eol_conversion_before_first_enter_overrides_default_and_undo_restores_it ... ok
+2026-09-16T11:10:51.6125250Z test workspace::tests::close_requires_discard_and_preserves_pending_save_target_after_tab_removal ... ok
+2026-09-16T11:10:51.6132040Z test workspace::tests::conflict_selection_cycles_within_active_document_and_invalidates_on_tab_change ... ok
+2026-09-16T11:10:51.6136230Z test workspace::tests::encoding_failure_reveal_rejects_offsets_after_document_changes ... ok
+2026-09-16T11:10:51.6231890Z test workspace::tests::encoding_policy_undo_redo_and_untitled_save ... ok
+2026-09-16T11:10:51.6248510Z test workspace::tests::find_is_worker_backed_and_navigation_preserves_document_revision ... ok
+2026-09-16T11:10:51.6266450Z test workspace::tests::find_results_and_replace_actions_follow_the_bound_document_generation ... ok
+2026-09-16T11:10:51.7610940Z test workspace::tests::late_paged_terminal_does_not_clear_resident_save_banner ... ok
+2026-09-16T11:10:51.8106940Z test styling::tests::bounded_checkpoint_progress_and_revision_invalidation ... ok
+2026-09-16T11:10:51.8621010Z test workspace::tests::paged_eol_counts_whole_file_and_rejects_stale_scan_results ... ok
+2026-09-16T11:10:51.9452460Z test workspace::tests::paged_recovery_failed_retirement_is_retryable ... ok
+2026-09-16T11:10:52.0300520Z test workspace::tests::paged_save_publishes_terminal_before_recovery_retirement_finishes ... ok
+2026-09-16T11:10:52.2229750Z test workspace::tests::paged_recovery_restart_preserves_opaque_undo_and_recovers_stale_pointer ... ok
+2026-09-16T11:10:52.2622200Z test workspace::tests::readonly_paged_reload_replaces_same_tab_and_preserves_policy ... ok
+2026-09-16T11:10:52.2636780Z test workspace::tests::recovery_discovery_is_async_deduplicated_and_worker_owned ... ok
+2026-09-16T11:10:52.2637580Z test workspace::tests::replace_all_is_one_undo_and_cancelled_preparation_cannot_mutate ... ok
+2026-09-16T11:10:52.3521230Z test workspace::tests::paged_workspace_edits_undoes_navigates_and_saves ... ok
+2026-09-16T11:10:52.3651050Z test macros::tests::rename_rejects_library_budget_growth_without_changing_slot ... ok
+2026-09-16T11:10:52.5260070Z test workspace::tests::resident_only_operation_is_reported_unsupported_for_a_paged_editor ... ok
+2026-09-16T11:10:52.5365490Z test workspace::tests::resident_and_untitled_automatic_recovery_restore_current_text ... ok
+2026-09-16T11:10:52.6266310Z test workspace::tests::resident_clean_undo_and_save_retire_obsolete_recovery ... ok
+2026-09-16T11:10:52.6653210Z test workspace::tests::small_recovery_restores_an_editable_untitled_document ... ok
+2026-09-16T11:10:52.7308420Z test workspace::tests::stale_prepared_destination_rejects_content_revision_for_resident_and_paged ... ok
+2026-09-16T11:10:52.8435560Z test workspace::tests::save_copy_and_restore_closed_preserve_document_identity_and_history ... ok
+2026-09-16T11:10:52.9023480Z test workspace::tests::tracked_missing_opens_emit_terminal_receipts_without_accumulating ... ok
+2026-09-16T11:10:52.9024500Z test workspace::tests::tracked_recovery_restore_results_are_selective_and_bounded ... ok
+2026-09-16T11:10:52.9209190Z test workspace::tests::tracked_recovery_restore_worker_failure_publishes_a_consumable_terminal ... ok
+2026-09-16T11:10:52.9401050Z test workspace::tests::verified_save_marks_clean_while_cleanup_retry_remains_owned ... ok
+2026-09-16T11:10:52.9403660Z test workspace_panel::documents::tests::five_thousand_metadata_rows_filter_sort_and_keep_tab_identity ... ok
+2026-09-16T11:10:52.9404590Z test workspace_panel::map::tests::map_cache_is_keyed_by_document_and_revision_and_cleared_on_close ... ok
+2026-09-16T11:10:52.9405340Z test workspace_panel::map::tests::partial_map_navigation_uses_bytes_and_rejects_other_documents ... ok
+2026-09-16T11:10:52.9406010Z test workspace_panel::outline::tests::document_switch_discards_old_batches_and_semantic_actions ... ok
+2026-09-16T11:10:52.9406880Z test workspace_panel::outline::tests::lexical_outline_ignores_comment_functions_and_rejects_other_document ... ok
+2026-09-16T11:10:52.9407650Z test workspace_panel::outline::tests::toml_multiline_state_survives_chunks ... ok
+2026-09-16T11:10:52.9408310Z test workspace_panel::tests::cancelled_discovery_cannot_publish_or_start_concurrent_work ... ok
+2026-09-16T11:10:52.9409330Z test workspace_panel::tests::continuation_visits_excluded_entries_and_retains_position ... ok
+2026-09-16T11:10:52.9410520Z test workspace_panel::tests::discovery_is_shallow_bounded_and_reports_missing_paths ... ok
+2026-09-16T11:10:52.9411210Z test workspace_panel::tests::incremental_refresh_preserves_survivors_and_other_branches ... ok
+2026-09-16T11:10:53.3020650Z test workspace::tests::streaming_prefix_is_read_only_then_same_tab_becomes_complete ... ok
+2026-09-16T11:11:27.4688730Z test workspace::tests::streamed_large_edit_undo_redo_restart_uses_compact_recipe_and_terminal_receipt ... ok
+2026-09-16T11:11:27.4783680Z [1m[92m     Running[0m unittests src/lib.rs (target/debug/deps/bareline_commands-9a2fb7144b7677aa)
+2026-09-16T11:11:27.4784110Z 
+2026-09-16T11:11:27.4790120Z test result: ok. 150 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 36.13s
+2026-09-16T11:11:27.4791800Z 
+2026-09-16T11:11:27.4957160Z 
+2026-09-16T11:11:27.4960860Z running 12 tests
+2026-09-16T11:11:27.5247610Z test contributions::tests::update_is_atomic_and_old_palette_identity_is_revoked ... ok
+2026-09-16T11:11:27.5349910Z [1m[92m     Running[0m unittests src/lib.rs (target/debug/deps/bareline_diagnostics-1becfc849b93823a)
+2026-09-16T11:11:27.5351900Z test discovery::tests::curated_routes_every_non_internal_command_and_hides_internal ... ok
+2026-09-16T11:11:27.5457040Z test discovery::tests::nested_escape_restores_only_one_invoker ... ok
+2026-09-16T11:11:27.5557700Z [1m[92m     Running[0m unittests src/lib.rs (target/debug/deps/bareline_diff-013eb1024ebedbd2)
+2026-09-16T11:11:27.5558410Z test discovery::tests::no_single_item_submenu_survives_from_registry ... ok
+2026-09-16T11:11:27.5679550Z test discovery::tests::projections_and_customizations_validate_targets ... ok
+2026-09-16T11:11:27.5722110Z test discovery::tests::scoring_prefers_prefix_titles_and_orders_save_variants ... ok
+2026-09-16T11:11:27.5827680Z test discovery::tests::disabled_command_discoverable_but_cannot_dispatch ... ok
+2026-09-16T11:11:27.5959540Z test keymap::tests::altgr_ime_and_dead_keys_always_reach_text_input ... ok
+2026-09-16T11:11:27.6086800Z test keymap::tests::display_labels_follow_windows_conventions ... ok
+2026-09-16T11:11:27.6213160Z test keymap::tests::conflicts_fail_atomically_and_prefix_resolution_is_explicit ... ok
+2026-09-16T11:11:27.6346240Z test tests::duplicate_registration_preserves_original_dispatch ... ok
+2026-09-16T11:11:27.6505260Z test keymap::tests::toml_roundtrip_remap_and_bad_import_preserves_previous ... ok
+2026-09-16T11:11:27.6644990Z 
+2026-09-16T11:11:27.6771770Z test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+2026-09-16T11:11:27.6852480Z 
+2026-09-16T11:11:27.6868890Z 
+2026-09-16T11:11:27.6869500Z running 3 tests
+2026-09-16T11:11:27.6870040Z test tests::instance_handoff_does_not_allow_generic_workers_or_network ... ok
+2026-09-16T11:11:27.6872230Z test tests::preframe_reads_rejected_but_postframe_reads_allowed ... ok
+2026-09-16T11:11:27.6874350Z test tests::panic_payload_privacy_subprocess ... ok
+2026-09-16T11:11:27.6875790Z 
+2026-09-16T11:11:27.6876220Z test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+2026-09-16T11:11:27.6876670Z 
+2026-09-16T11:11:27.6876770Z 
+2026-09-16T11:11:27.6876990Z running 24 tests
+2026-09-16T11:11:27.6877960Z test paged::tests::divergent_multi_gb_full_traversal ... ignored, explicit multi-GB throughput evidence; no giant allocation
+2026-09-16T11:11:27.6878760Z test paged::tests::global_fallback_retains_verified_equal_prefix_and_suffix ... ok
+2026-09-16T11:11:27.6880100Z test paged::tests::cancellation_during_multi_gb_traversal_is_acknowledged ... ok
+2026-09-16T11:11:27.6880740Z test paged::tests::owned_batch_backpressure_and_undoable_paged_copy ... ok
+2026-09-16T11:11:27.6926140Z test paged::tests::pending_multi_gb_cancels_without_materialization ... ok
+2026-09-16T11:11:27.6962860Z test paged::tests::unavailable_is_not_coarse ... ok
+2026-09-16T11:11:27.6963570Z test paged::tests::utf8_window_boundary_and_coarse_generated_prefix ... ok
+2026-09-16T11:11:27.7143300Z test tests::cancellation_and_caps_are_distinct ... ok
+2026-09-16T11:11:27.7144530Z test tests::forced_normalized_hash_collisions_retain_real_differences ... ok
+2026-09-16T11:11:27.7144980Z test tests::full_unicode_case_folding_is_locale_independent ... ok
+2026-09-16T11:11:27.7145450Z test tests::generated_short_sequences_apply_exactly ... ok
+2026-09-16T11:11:27.7145800Z test tests::graphemes_batches_stable_anchors ... ok
+2026-09-16T11:11:27.7146250Z test tests::ignore_eol_preserves_line_structure_and_rejects_bad_ranges ... ok
+2026-09-16T11:11:27.7146720Z test tests::ignores_and_original_coordinates ... ok
+2026-09-16T11:11:27.7147140Z test tests::incomplete_prefix_is_neither_exact_nor_applicable ... ok
+2026-09-16T11:11:27.7147650Z test tests::incremental_batches_are_bounded_and_reproduce_input ... ok
+2026-09-16T11:11:27.7148230Z test tests::preserve_full_case_expansions_keeps_original_coordinates ... ok
+2026-09-16T11:11:27.7148660Z test tests::preserve_ignored_text_and_explicit_copy_policy ... ok
+2026-09-16T11:11:27.7149270Z test tests::repeated_context_hunks_have_distinct_navigation_ids ... ok
+2026-09-16T11:11:27.7149690Z test tests::stale_and_wrong_document ... ok
+2026-09-16T11:11:27.7149960Z test tests::unicode_crlf_apply_undo ... ok
+2026-09-16T11:11:27.7150350Z test tests::whitespace_and_eol_options_are_independent ... ok
+2026-09-16T11:11:27.7150730Z test paged::tests::divergent_200_mb_is_one_bounded_block ... ok
+2026-09-16T11:11:27.7689650Z test tests::generated_fold_mapping_round_trips_preserve_normalized_equality ... ok
+2026-09-16T11:11:27.7690290Z 
+2026-09-16T11:11:27.7690710Z test result: ok. 23 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.20s
+2026-09-16T11:11:27.7692520Z [1m[92m     Running[0m unittests src/lib.rs (target/debug/deps/bareline_distribution-73ddf4e451c220ba)
+2026-09-16T11:11:27.7693080Z 
+2026-09-16T11:11:27.7834600Z 
+2026-09-16T11:11:27.7835260Z running 5 tests
+2026-09-16T11:11:27.7854360Z test cli::tests::lossless_paths_and_options ... ok
+2026-09-16T11:11:27.7857090Z test cli::tests::invalid_coordinates_and_options ... ok
+2026-09-16T11:11:27.7864170Z test importer::tests::safe_mapping_and_hostile_input ... ok
+2026-09-16T11:11:27.7865520Z test update::tests::freshness_rollback_identity_and_hash_are_enforced ... ok
+2026-09-16T11:11:27.7910920Z test update::tests::established_minisign_vector_and_tampering ... ok
+2026-09-16T11:11:27.7911930Z 
+2026-09-16T11:11:27.7916250Z test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+2026-09-16T11:11:27.7918500Z [1m[92m     Running[0m tests/root_authority.rs (target/debug/deps/root_authority-8d0c3e5bdd48d805)
+2026-09-16T11:11:27.7919400Z 
+2026-09-16T11:11:27.8057710Z 
+2026-09-16T11:11:27.8059090Z running 2 tests
+2026-09-16T11:11:27.8186900Z test root_rotation_requires_both_signatures_and_advances_authority ... ok
+2026-09-16T11:11:27.8216390Z test signed_root_policy_rejects_revocation_expiry_and_key_id_aliases ... ok
+2026-09-16T11:11:27.8217550Z 
+2026-09-16T11:11:27.8218650Z test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+2026-09-16T11:11:27.8221970Z [1m[92m     Running[0m tests/signed_metadata.rs (target/debug/deps/signed_metadata-2026a7464d0c0698)
+2026-09-16T11:11:27.8223010Z 
+2026-09-16T11:11:27.8355720Z 
+2026-09-16T11:11:27.8357340Z running 1 test
+2026-09-16T11:11:27.8487010Z test signed_metadata_policy_vectors_and_package_tampering ... ok
+2026-09-16T11:11:27.8487400Z 
+2026-09-16T11:11:27.8487710Z test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+2026-09-16T11:11:27.8488110Z 
+2026-09-16T11:11:27.8492640Z [1m[92m     Running[0m unittests src/lib.rs (target/debug/deps/bareline_document-f3745dcb9079d1be)
+2026-09-16T11:11:27.8637850Z 
+2026-09-16T11:11:27.8639050Z running 27 tests
+2026-09-16T11:11:27.8672460Z test budget_limit_tests::lowering_shared_limit_preserves_live_claims_and_reopens_after_release ... ok
+2026-09-16T11:11:27.8680450Z test change::tests::receipts_use_actual_ranges_and_reverse_history_without_text ... ok
+2026-09-16T11:11:27.8784920Z test history::capacity_tests::sequential_admission_has_logarithmic_capacity_growth ... ok
+2026-09-16T11:11:27.8914020Z test history::capacity_tests::trimmed_empty_slots_remain_charged_and_admitted_push_never_grows ... ok
+2026-09-16T11:11:27.9016350Z test paged::lookup_feedback_tests::lookup_feedback_retains_cr_boundary_and_rejects_stale_without_growing ... ok
+2026-09-16T11:11:27.9139630Z test paged::tests::deleted_inverse_survives_eviction_change_and_multiple_undo_redo ... ok
+2026-09-16T11:11:27.9257320Z test paged::tests::materialized_multi_edit_is_atomic_and_rejects_stale_or_split_boundaries ... ok
+2026-09-16T11:11:27.9368300Z test paged::tests::missing_generation_and_invalid_utf8_never_yield_a_complete_window ... ok
+2026-09-16T11:11:27.9471470Z test paged::tests::sparse_index_is_bounded_crlf_aware_cancellable_and_state_scoped ... ok
+2026-09-16T11:11:27.9588870Z test paged::tests::window_keeps_owned_prefix_across_eviction_and_split_scalar ... ok
+2026-09-16T11:11:27.9722950Z test service::tests::grouped_worker_commit_failure_and_linked_undo_are_atomic ... ok
+2026-09-16T11:11:27.9860950Z test service::tests::many_documents_share_workers_and_stale_concurrent_edits_are_rejected ... ok
+2026-09-16T11:11:27.9965020Z test source::tests::eviction_and_generation_changes_never_fabricate_source_bytes ... ok
+2026-09-16T11:11:28.0079130Z test source::tests::resident_seals_only_after_full_verified_fill ... ok
+2026-09-16T11:11:28.0175480Z test source_transaction::lease_tests::inserted_provenance_is_validated_and_retained ... ok
+2026-09-16T11:11:28.0295110Z test service::tests::configured_history_limit_retires_on_worker_without_changing_content ... ok
+2026-09-16T11:11:28.0400540Z test source_transaction::lease_tests::lease_abort_and_quota_failure_leave_revision_and_history_unchanged ... ok
+2026-09-16T11:11:28.0503890Z test source_transaction::lease_tests::publish_and_history_publish_need_no_remaining_budget ... ok
+2026-09-16T11:11:28.0607180Z test source_transaction::lease_tests::source_group_is_all_or_none_and_requires_complete_linked_history ... ok
+2026-09-16T11:11:28.0735340Z test source_transaction::lease_tests::large_validated_splice_undo_retains_ranges_without_payload_materialization ... ok
+2026-09-16T11:11:28.0840320Z test tests::crlf_split_at_chunk_boundary_counts_once_and_undo_owns_deleted_bytes ... ok
+2026-09-16T11:11:28.0942730Z test tests::failed_batch_and_exhausted_shared_budget_do_not_commit ... ok
+2026-09-16T11:11:28.1046520Z test tests::new_file_eol_is_only_a_fallback_and_survives_undo ... ok
+2026-09-16T11:11:28.1149520Z test tests::snapshot_fork_has_independent_identity_and_edits_without_copying_text ... ok
+2026-09-16T11:11:28.1251620Z test tree::charged_tree_tests::shared_nodes_keep_charges_and_failed_paths_release_temporary_allocations ... ok
+2026-09-16T11:11:29.3210190Z test change::tests::ten_thousand_carets_have_complete_edit_and_undo_receipts ... ok
+2026-09-16T11:11:29.3952810Z test tests::random_edit_oracle_covers_newline_boundaries_snapshots_and_undo_redo ... ok
+2026-09-16T11:11:29.3953200Z 
+2026-09-16T11:11:29.3953540Z test result: ok. 27 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.53s
+2026-09-16T11:11:29.3953930Z 
+2026-09-16T11:11:29.3971320Z [1m[92m     Running[0m unittests src/lib.rs (target/debug/deps/bareline_editor_surface-cd03bf9b1a422663)
+2026-09-16T11:11:29.4255750Z 
+2026-09-16T11:11:29.4256130Z running 72 tests
+2026-09-16T11:11:29.4405440Z test completion::tests::auto_dedent_declines_when_line_is_not_blank_or_has_no_opener ... ok
+2026-09-16T11:11:29.4419240Z test completion::tests::closing_bracket_dedents_blank_line_to_opener_indent ... ok
+2026-09-16T11:11:29.4448430Z test completion::tests::enter_after_closing_brace_at_column_zero_does_not_reindent ... ok
+2026-09-16T11:11:29.4470670Z test completion::tests::literal_end_does_not_enable_semantic_keywords ... ok
+2026-09-16T11:11:29.4487900Z test completion::tests::mixed_comments_pairs_and_one_undo ... ok
+2026-09-16T11:11:29.4516840Z test completion::tests::new_file_smart_newline_uses_configured_eol_and_undo_keeps_policy ... ok
+2026-09-16T11:11:29.4619600Z test completion::tests::popup_does_not_accept_without_active_selection_and_loader_bounds ... ok
+2026-09-16T11:11:29.4695560Z test completion::tests::stale_completion_and_failed_index_update_are_safe ... ok
+2026-09-16T11:11:29.4702510Z test columns::tests::column_worker_completion_requests_frame_without_another_input ... ok
+2026-09-16T11:11:29.4703220Z test measured_columns::tests::mixed_clusters_and_tabs_keep_only_legal_byte_stops ... ok
+2026-09-16T11:11:29.4707670Z test paged_power::tests::captured_comment_and_rectangle_arguments_are_explicit ... ok
+2026-09-16T11:11:29.4708590Z test paged_power::tests::view_anchors_follow_actual_delta_and_undo_restores_removed_bookmarks ... ok
+2026-09-16T11:11:29.4710560Z test paged_typing::tests::cancelled_and_foreign_context_never_produce_edits ... ok
+2026-09-16T11:11:29.4717260Z test paged_typing::tests::huge_block_comment_uses_captured_tokens_and_only_edge_reads ... ok
+2026-09-16T11:11:29.4720430Z test paged_typing::tests::huge_wrap_has_two_edge_inserts_without_reading_selection ... ok
+2026-09-16T11:11:29.4721110Z test paged_typing::tests::overtype_moves_global_caret_without_history_edit ... ok
+2026-09-16T11:11:29.4865260Z test grapheme_navigation::tests::giant_cluster_uses_streamed_context_and_cancels ... ok
+2026-09-16T11:11:29.5260900Z test paged_view::paged_spill::tests::pressure_spills_existing_paged_edit_history_and_refreshes_same_identity ... ok
+2026-09-16T11:11:29.5362910Z test columns::tests::streamed_columns_preserve_cross_chunk_clusters_and_checkpoint_counts ... ok
+2026-09-16T11:11:29.6509550Z test paged_view::peer_tests::go_to_end_resolves_to_the_last_line_once_the_index_is_complete ... ok
+2026-09-16T11:11:29.6670760Z test paged_view::peer_tests::global_scroll_crosses_windows_and_keeps_midline_coordinates_exact ... ok
+2026-09-16T11:11:29.6735710Z test paged_view::peer_tests::paged_adapter_reports_terminal_failure_and_wakes_after_unwind ... ok
+2026-09-16T11:11:29.7343090Z test paged_view::peer_tests::paged_save_does_not_strand_another_documents_edit_and_undo ... ok
+2026-09-16T11:11:29.7578420Z test paged_view::peer_tests::peer_owns_full_document_and_survives_other_view_close ... ok
+2026-09-16T11:11:29.7854200Z test paged_view::peer_tests::horizontal_paged_line_crosses_source_windows_with_a_shaped_anchor ... ok
+2026-09-16T11:11:29.8795190Z test paged_view::transfer::tests::committed_group_with_failed_journal_admission_blocks_old_writer ... ok
+2026-09-16T11:11:30.1674020Z test paged_view::peer_tests::large_fold_projection_maps_seams_and_preserves_anchors_through_undo ... ok
+2026-09-16T11:11:30.1678700Z test power::consumer::presentation_tests::spacer_mapping_hits_next_real_line_without_changing_document ... ok
+2026-09-16T11:11:30.1680270Z test power::consumer::tests::hidden_lines_are_independent_of_folds_and_bytes ... ok
+2026-09-16T11:11:30.1685700Z test power::consumer::tests::logical_scroll_round_trips_hidden_rows_and_horizontal_offset ... ok
+2026-09-16T11:11:30.1688940Z test power::consumer::tests::receipts_are_bounded_and_invalid_replay_is_silent ... ok
+2026-09-16T11:11:30.1691470Z test power::consumer::typing_metadata_tests::private_rectangle_metadata_is_versioned_and_bound_to_plain_text ... ok
+2026-09-16T11:11:30.1708110Z test power::consumer::typing_metadata_tests::typing_coalesces_and_paste_keeps_an_explicit_boundary ... ok
+2026-09-16T11:11:30.1718830Z test paged_view::peer_tests::staged_multicaret_input_uses_global_ranges_and_one_history_entry ... ok
+2026-09-16T11:11:30.1719600Z test power::metadata_tests::partial_tab_and_excessive_width ... ok
+2026-09-16T11:11:30.1736670Z test power::streaming::tests::cancellation_and_quota_do_not_publish_partial_actor_edits ... ok
+2026-09-16T11:11:30.1844540Z test power::metadata_tests::clipboard_opt_in_caps_and_forgets ... ok
+2026-09-16T11:11:30.1948360Z test paged_view::transfer::tests::opaque_cross_document_move_restart_and_linked_undo_preserve_raw_bytes ... ok
+2026-09-16T11:11:30.2052340Z test power::streaming::tests::streamed_indent_includes_empty_rows_without_inventing_a_trailing_row ... ok
+2026-09-16T11:11:30.2169370Z test power::streaming::tests::streamed_move_preserves_empty_rows_and_final_eol_policy ... ok
+2026-09-16T11:11:30.2278330Z test power::streaming::tests::streamed_transforms_match_resident_commands_on_mixed_unicode_rows ... ok
+2026-09-16T11:11:30.2391440Z test power::streaming::tests::external_runs_sort_numeric_and_keep_first_eol_policy ... ok
+2026-09-16T11:11:30.2494020Z test power::streaming::tests::external_unique_keeps_first_occurrence_order_across_runs ... ok
+2026-09-16T11:11:30.2596750Z test power::tests::move_preserves_empty_rows ... ok
+2026-09-16T11:11:30.2699580Z test power::tests::numeric_sort_of_sixty_four_mixed_rows_is_total_and_deterministic ... ok
+2026-09-16T11:11:30.2801660Z test power::tests::overlap_incomplete_budget_and_mixed_eol ... ok
+2026-09-16T11:11:30.2903780Z test power::tests::rectangle_unicode_tabs_short_lines_and_all_bases ... ok
+2026-09-16T11:11:30.3005800Z test power::tests::selected_block_duplicate_and_rectangle_round_trip ... ok
+2026-09-16T11:11:30.3680580Z test power::tests::collapsed_caret_on_giant_line_uses_bounded_grapheme_context ... ok
+2026-09-16T11:11:30.3683270Z test search_marks::tests::independent_styles_map_only_unchanged_matches_and_clear_separately ... ok
+2026-09-16T11:11:30.3684290Z test session_language_tests::overrides_are_per_view_and_udl_is_only_a_deferred_identifier ... ok
+2026-09-16T11:11:30.3687360Z test tests::actual_input_pairs_and_backspace_are_one_undo_each ... ok
+2026-09-16T11:11:30.3691040Z test tests::fold_anchors_follow_acknowledged_edit_and_undo ... ok
+2026-09-16T11:11:30.3691780Z test tests::fold_mapping_and_pending_restore_are_view_local ... ok
+2026-09-16T11:11:30.3708860Z test tests::linked_peer_waits_for_history_before_advancing_snapshot ... ok
+2026-09-16T11:11:30.3713150Z test tests::power_carets_typing_bookmarks_and_group_undo_use_committed_snapshots ... ok
+2026-09-16T11:11:30.3724500Z test tests::queued_typing_ime_cancel_and_undo_use_worker_snapshots ... ok
+2026-09-16T11:11:30.3726010Z test tests::scrollbar_hidden_when_content_fits ... ok
+2026-09-16T11:11:30.3726850Z test tests::status_strip_segments_for_a_sample_document ... ok
+2026-09-16T11:11:30.3727760Z test tests::syntax_styles_preserve_layout_geometry_and_reject_foreign_results ... ok
+2026-09-16T11:11:30.3730800Z test tests::visual_navigation_settles_before_following_insert ... ok
+2026-09-16T11:11:30.3731500Z test tracked_edit::tests::dropped_completion_reports_failure ... ok
+2026-09-16T11:11:30.3734230Z test tracked_edit::tests::replay_transform_waits_for_actor_without_recording_itself ... ok
+2026-09-16T11:11:30.3742400Z test tracked_edit::tests::resident_receipt_reports_the_actor_result_not_revision_observation ... ok
+2026-09-16T11:11:30.3743670Z test tracked_edit::tests::terminal_is_shared_nonconsuming_and_first_result_wins ... ok
+2026-09-16T11:11:30.3745040Z test view_geometry::tests::mapped_fold_gap_keeps_adjacent_shaped_rows_and_verified_gutter_labels ... ok
+2026-09-16T11:11:30.3746260Z test view_geometry::tests::overlapping_window_retains_shaped_anchor_and_busy_wheel_delta ... ok
+2026-09-16T11:11:30.3746950Z test view_geometry::tests::paged_gutter_shows_window_start_line_plus_local_index ... ok
+2026-09-16T11:11:30.3747610Z test view_geometry::tests::zoom_survives_settings_reapplication_and_clone_changes_are_independent ... ok
+2026-09-16T11:11:30.3748770Z test virtual_layout::tests::fragment_keeps_complex_script_context_and_backward_seek_discards_stale_result ... ok
+2026-09-16T11:11:41.9992860Z test power::streaming::tests::streaming_numeric_sort_of_mixed_rows_is_total_over_two_megabytes ... ok
+2026-09-16T11:11:56.8100230Z test power::tests::ten_thousand_carets_one_undo_and_grapheme_delete ... ok
+2026-09-16T11:11:56.8101460Z 
+2026-09-16T11:11:56.8102190Z test result: ok. 72 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 27.37s
+2026-09-16T11:11:56.8103150Z 
+2026-09-16T11:11:56.8212100Z [1m[92m     Running[0m unittests src/lib.rs (target/debug/deps/bareline_extension_host-2405fecd64f0115c)
+2026-09-16T11:11:56.8433310Z 
+2026-09-16T11:11:56.8435420Z running 3 tests
+2026-09-16T11:11:56.9439150Z test tests::watchdog_spawn_failure_precedes_component_execution ... ok
+2026-09-16T11:11:57.0298740Z test tests::oversized_memory_rejected_and_malformed_component_isolated ... ok
+2026-09-16T11:11:57.0683020Z test tests::safe_component_runs_and_cpu_loop_terminates ... ok
+2026-09-16T11:11:57.0683630Z 
+2026-09-16T11:11:57.0684190Z test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.23s
+2026-09-16T11:11:57.0684770Z 
+2026-09-16T11:11:57.0688520Z [1m[92m     Running[0m unittests src/main.rs (target/debug/deps/bareline_extension_host-7ecb2821ad1a4f28)
+2026-09-16T11:11:57.0814820Z 
+2026-09-16T11:11:57.0815160Z running 0 tests
+2026-09-16T11:11:57.0815730Z 
+2026-09-16T11:11:57.0816100Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-09-16T11:11:57.0816500Z 
+2026-09-16T11:11:57.0824070Z [1m[92m     Running[0m tests/first_party.rs (target/debug/deps/first_party-dfa452f20679587c)
+2026-09-16T11:11:57.0949730Z 
+2026-09-16T11:11:57.0953300Z running 0 tests
+2026-09-16T11:11:57.0953950Z 
+2026-09-16T11:11:57.0954700Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-09-16T11:11:57.0955470Z 
+2026-09-16T11:11:57.0956570Z [1m[92m     Running[0m tests/isolation.rs (target/debug/deps/isolation-c81d55a017214c22)
+2026-09-16T11:11:57.1086140Z 
+2026-09-16T11:11:57.1087610Z running 0 tests
+2026-09-16T11:11:57.1088380Z 
+2026-09-16T11:11:57.1089310Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-09-16T11:11:57.1089960Z 
+2026-09-16T11:11:57.1092430Z [1m[92m     Running[0m tests/sandbox.rs (target/debug/deps/sandbox-3aec8279b11d201d)
+2026-09-16T11:11:57.1213350Z 
+2026-09-16T11:11:57.1213880Z running 0 tests
+2026-09-16T11:11:57.1214180Z 
+2026-09-16T11:11:57.1214470Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-09-16T11:11:57.1215740Z 
+2026-09-16T11:11:57.1219700Z [1m[92m     Running[0m unittests src/lib.rs (target/debug/deps/bareline_extension_sdk-1f307bdf76fb2901)
+2026-09-16T11:11:57.1330800Z 
+2026-09-16T11:11:57.1331370Z running 1 test
+2026-09-16T11:11:57.1341730Z test tests::manifest_has_no_implicit_grants ... ok
+2026-09-16T11:11:57.1342080Z 
+2026-09-16T11:11:57.1342700Z test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-09-16T11:11:57.1343080Z 
+2026-09-16T11:11:57.1345000Z [1m[92m     Running[0m unittests src/lib.rs (target/debug/deps/bareline_extensions_protocol-01f43e2dc618f8be)
+2026-09-16T11:11:57.1484980Z 
+2026-09-16T11:11:57.1486080Z running 12 tests
+2026-09-16T11:11:57.1529700Z test broker::allocation_tests::compact_edit_count_rejected_before_allocating_elements ... ok
+2026-09-16T11:11:57.1538460Z test broker::tests::stale_and_bad_ranges_and_update_rejected ... ok
+2026-09-16T11:11:57.1540610Z test broker::tests::background_budget_keeps_pending_work_alive_past_the_interactive_deadline ... ok
+2026-09-16T11:11:57.1541520Z test broker::tests::denied_scopes_revocation_and_timeout ... ok
+2026-09-16T11:11:57.1565500Z test package::tests::archive_names_reject_escape_devices_and_ads ... ok
+2026-09-16T11:11:57.1585480Z test package::tests::duplicate_central_directory_names_fail_the_entry_count_assertion ... ok
+2026-09-16T11:11:57.1591360Z test package::tests::online_unavailable_and_unsigned_catalog_rejected ... ok
+2026-09-16T11:11:57.1594610Z test tests::oversized_prefix_never_reads_payload ... ok
+2026-09-16T11:11:57.1595860Z test tests::truncated_and_unknown_version_rejected ... ok
+2026-09-16T11:11:57.1596520Z test tests::version_one_fixture_roundtrip ... ok
+2026-09-16T11:11:57.3025590Z test package::signed_tests::signed_offline_install_tampering_freshness_and_remove ... ok
+2026-09-16T11:11:57.4123370Z test package::signed_tests::authenticated_package_mutations_reach_manifest_and_archive_guards ... ok
+2026-09-16T11:11:57.4125780Z 
+2026-09-16T11:11:57.4126950Z test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.26s
+2026-09-16T11:11:57.4127400Z 
+2026-09-16T11:11:57.4128000Z [1m[92m     Running[0m unittests src/lib.rs (target/debug/deps/bareline_file_io-ca52126501fd47d1)
+2026-09-16T11:11:57.4291510Z 
+2026-09-16T11:11:57.4292010Z running 96 tests
+2026-09-16T11:11:57.4517040Z test codecs::disk::tests::cancelled_paused_job_cleans_private_segments ... ok
+2026-09-16T11:11:57.4577890Z test codecs::disk::tests::quota_pause_resumes_exact_raw_and_paged_text ... ok
+2026-09-16T11:11:57.4645330Z test codecs::resident::tests::failures_use_current_text_offsets_after_prefix_edits ... ok
+2026-09-16T11:11:57.4646070Z test codecs::resident::tests::all_catalog_raw_bytes_survive_unchanged_and_unrelated_edits ... ok
+2026-09-16T11:11:57.4647040Z test codecs::resident::tests::mutable_policy_cannot_relabel_original_provenance ... ok
+2026-09-16T11:11:57.4648220Z test codecs::resident::tests::opaque_conversion_refuses_but_removed_opaque_does_not_poison_document ... ok
+2026-09-16T11:11:57.4649080Z test codecs::state::tests::conversion_only_changes_save_target ... ok
+2026-09-16T11:11:57.4651050Z test codecs::state::tests::eol_conversion_is_one_undoable_transaction_and_quota_refuses ... ok
+2026-09-16T11:11:57.4664290Z test codecs::state::tests::mixed_newlines_span_chunk_boundaries ... ok
+2026-09-16T11:11:57.4669640Z test codecs::tests::decoder_backpressure_retains_token ... ok
+2026-09-16T11:11:57.4670280Z test codecs::tests::detection_is_bounded_and_advisory ... ok
+2026-09-16T11:11:57.4671240Z test codecs::tests::encoder_backpressure_refusal_and_output_errors ... ok
+2026-09-16T11:11:57.4671810Z test codecs::tests::legacy_catalog_and_true_latin1 ... ok
+2026-09-16T11:11:57.4672490Z test codecs::tests::malformed_sequences_retain_raw_ranges_without_unicode_collisions ... ok
+2026-09-16T11:11:57.4673020Z test codecs::tests::unicode_boundaries_bom_and_mixed_eol ... ok
+2026-09-16T11:11:57.4673730Z test codecs::disk::tests::giant_logical_source_publishes_only_bounded_prefix_then_refuses_truncated_input ... ok
+2026-09-16T11:11:57.4674760Z test lifecycle::authorized_read_tests::grant_travels_to_only_its_read_job_and_never_enables_the_service ... ok
+2026-09-16T11:11:57.4677070Z test lifecycle::encoded_tests::destination_preflight_cancels_while_fingerprinting ... ok
+2026-09-16T11:11:57.4791480Z test lifecycle::encoded_tests::destination_consent_carries_the_captured_version_into_commit ... ok
+2026-09-16T11:11:57.4984200Z test codecs::resident::tests::legacy_multiscalar_unit_at_document_piece_boundary_roundtrips ... ok
+2026-09-16T11:11:57.5084120Z test lifecycle::encoded_tests::streaming_quota_and_cancel_after_prefix_never_touch_source ... ok
+2026-09-16T11:11:57.5086330Z test lifecycle::fault_transitions::save_owned_child ... ok
+2026-09-16T11:11:57.5176970Z test lifecycle::encoded_tests::paged_quota_receipt_resumes_and_staged_save_preserves_raw_without_materialization ... ok
+2026-09-16T11:11:57.5746140Z test lifecycle::fault_transitions::save_storage_full_transitions ... ok
+2026-09-16T11:11:57.5835970Z test owned_cache::tests::deletion_visits_and_later_skips_share_one_entry_cap ... ok
+2026-09-16T11:11:57.5856590Z test owned_cache::tests::directory_identity_change_retains_owner_record_and_payload ... ok
+2026-09-16T11:11:57.5864080Z test owned_cache::tests::exact_registry_and_producer_grammar_are_required ... ok
+2026-09-16T11:11:57.5872470Z test owned_cache::tests::invalid_primary_without_valid_fallback_is_retained ... ok
+2026-09-16T11:11:57.5873600Z test owned_cache::tests::producer_root_resolution_requires_exact_registered_authority ... ok
+2026-09-16T11:11:57.5892250Z test owned_cache::tests::recursive_entry_budget_retains_owner_record ... ok
+2026-09-16T11:11:57.5915250Z test owned_cache::tests::retained_cleanup_receipt_remains_valid_retry_authority ... ok
+2026-09-16T11:11:57.6274870Z test owned_cache::tests::sweep_removes_only_proven_unreferenced_definitely_dead_cache ... ok
+2026-09-16T11:11:57.6319440Z test owned_cache::tests::unknown_failure_and_cancellation_retain_record_for_retry ... ok
+2026-09-16T11:11:57.6439770Z test owned_store::registered_producer_tests::resident_and_original_baseline_route_nested_transcodes_to_exact_registered_root ... ok
+2026-09-16T11:11:57.6558310Z test paged_recovery::quota_tests::empty_owned_recipe_still_consumes_quota_and_failed_prepare_cleans_files ... ok
+2026-09-16T11:11:57.6985850Z test paged_recovery::sweep_tests::sweep_removes_abandoned_journals_and_keeps_live_and_referenced_ones ... ok
+2026-09-16T11:11:57.7538570Z test paged_service::lifecycle_contract_tests::committed_save_survives_concurrent_edit_and_retains_cleanup_authority ... ok
+2026-09-16T11:11:57.9704030Z test paged_service::lifecycle_contract_tests::document_release_gate_preserves_predicate_across_notification_orderings ... ok
+2026-09-16T11:11:57.9866870Z test paged_service::lifecycle_contract_tests::encoding_diagnostic_tracks_latest_save_attempt_and_clears_on_success ... ok
+2026-09-16T11:11:57.9978260Z test paged_service::lifecycle_contract_tests::headless_client_gets_exact_copy_and_generation_fenced_terminal_receipt ... ok
+2026-09-16T11:11:58.0114300Z test profile_migration::tests::authority_handles_local_only_and_damaged_journal_without_empty_report_fallback ... ok
+2026-09-16T11:11:58.0128850Z test profile_migration::tests::canonical_tree_hash_distinguishes_equal_size_equal_count_structures ... ok
+2026-09-16T11:11:58.0391800Z test profile_migration::tests::changed_source_is_rechecked_and_retained_before_retirement ... ok
+2026-09-16T11:11:58.0464280Z test profile_migration::tests::divergent_destination_is_a_lossless_conflict ... ok
+2026-09-16T11:11:58.0673170Z test lifecycle::fault_transitions::save_process_death_transitions ... ok
+2026-09-16T11:11:58.0829680Z test lifecycle::encoded_tests::unicode_streaming_prefix_save_and_refused_conversion_preserve_disk ... ok
+2026-09-16T11:11:58.0961530Z test profile_migration::tests::locked_item_retries_after_local_root_and_journal_exist ... ok
+2026-09-16T11:11:58.1192740Z test profile_migration::tests::publication_failure_resumes_from_verified_stage_without_removing_source ... ok
+2026-09-16T11:11:58.1360750Z test profile_migration::tests::published_directory_is_retained_by_policy_without_a_retry_loop ... ok
+2026-09-16T11:11:58.1489790Z test profile_migration::tests::flat_and_deep_trees_stop_with_source_retained ... ok
+2026-09-16T11:11:58.1610520Z test profile_migration::tests::unverified_published_tree_keeps_legacy_authority_until_a_verified_retry ... ok
+2026-09-16T11:11:58.1638580Z test recovery::streaming::tests::staging_utf8_boundary_quota_and_cancel_fail_before_publication ... ok
+2026-09-16T11:11:58.1721840Z test profile_migration::tests::verified_second_pass_retires_source_to_local_provenance ... ok
+2026-09-16T11:11:58.1732880Z test recovery::streaming::tests::zero_payload_admits_metadata_and_frame_bytes_before_creating_segment ... ok
+2026-09-16T11:11:58.1795110Z test recovery::tests::baseline_read_failure_never_publishes_a_partial_seal ... ok
+2026-09-16T11:11:58.1847790Z test recovery::tests::changed_baseline_and_cancellation_leave_honest_edits_only_export ... ok
+2026-09-16T11:11:58.2093500Z test recovery::tests::checkpoint_interruptions_keep_committed_references_and_previous_manifest ... ok
+2026-09-16T11:11:58.2163620Z test recovery::tests::checkpoint_watermark_detects_empty_and_clean_boundary_truncation ... ok
+2026-09-16T11:11:58.2202840Z test recovery::tests::corrupt_baseline_and_inverse_fail_without_leaving_complete_copy ... ok
+2026-09-16T11:11:58.2205590Z test recovery::tests::crc32c_known_vector ... ok
+2026-09-16T11:11:58.2281810Z test recovery::tests::corrupt_tail_replays_valid_prefix_and_missing_segments_are_not_claimed ... ok
+2026-09-16T11:11:58.2309810Z test recovery::tests::discard_is_durable_and_prevents_live_writer_and_recovery ... ok
+2026-09-16T11:11:58.2352560Z test recovery::tests::duplicate_writer_and_invalid_offsets_are_refused ... ok
+2026-09-16T11:11:58.2435090Z test recovery::tests::garbage_collection_requires_tombstone_and_preserves_traced_live_segments ... ok
+2026-09-16T11:11:58.2643750Z test recovery::tests::prepared_baseline_preserves_concurrent_receipts_and_rejects_other_writer ... ok
+2026-09-16T11:11:58.2648740Z test recovery::tests::schedule_uses_first_edit_deadline_and_preserves_newer_edits_on_receipt ... ok
+2026-09-16T11:11:58.2758430Z test recovery::tests::interruptions_never_acknowledge_unflushed_revision_and_prefix_remains_recoverable ... ok
+2026-09-16T11:11:58.2809000Z test recovery::tests::sealed_recovery_is_independent_and_never_overwrites_destination ... ok
+2026-09-16T11:11:58.2809950Z test recovery_retirement::tests::cleanup_warnings_stay_with_the_originating_workspace ... ok
+2026-09-16T11:11:58.2838960Z test recovery::tests::stale_checkpoint_stage_does_not_block_durable_discard ... ok
+2026-09-16T11:11:58.7866930Z test recovery_retirement::tests::delayed_drain_failed_tombstone_and_retained_cleanup_are_truthful ... ok
+2026-09-16T11:11:58.7962060Z test recovery_retirement::tests::final_cleanup_hold_drop_cannot_miss_receipt_registration ... ok
+2026-09-16T11:11:58.8161370Z test resident_recovery::journal_tests::checkpoint_waits_for_retirement_acknowledgment_before_reusing_a_slot ... ok
+2026-09-16T11:11:58.9150420Z test resident_recovery::journal_tests::discard_removes_every_generation_even_mid_rotation ... ok
+2026-09-16T11:11:59.0055670Z test resident_recovery::journal_tests::next_durable_checkpoint_retires_the_previous_one_on_an_untitled_document ... ok
+2026-09-16T11:11:59.0162950Z test session::language_selection_tests::per_view_language_roundtrip_and_legacy_default ... ok
+2026-09-16T11:11:59.0205070Z test session::tests::ambiguous_entry_fields_are_skipped_but_global_corruption_stays_fatal ... ok
+2026-09-16T11:11:59.0213310Z test session::tests::bottom_panel_layout_round_trips_and_rejects_unbounded_state ... ok
+2026-09-16T11:11:59.1534920Z test session::tests::bounded_entry_failure_does_not_consume_following_valid_document ... ok
+2026-09-16T11:11:59.1753190Z test session::tests::failed_publication_preserves_original_and_corruption_recovers_previous ... ok
+2026-09-16T11:11:59.1993930Z test session::tests::five_hundred_tabs_order_without_document_io ... ok
+2026-09-16T11:11:59.2100030Z test session::tests::invalid_layout_falls_back_without_losing_documents ... ok
+2026-09-16T11:11:59.2202890Z test session::tests::malformed_and_oversized_manifests_fail_closed ... ok
+2026-09-16T11:11:59.2341570Z test session::tests::missing_storage_reports_error ... ok
+2026-09-16T11:11:59.2443930Z test session::tests::mixed_corrupt_entries_preserve_ids_order_views_and_safe_references ... ok
+2026-09-16T11:11:59.2546710Z test session::tests::round_trip_and_migration_preserve_views_and_paths ... ok
+2026-09-16T11:11:59.2648280Z test session::tests::window_placement_round_trips_and_absent_window_decodes ... ok
+2026-09-16T11:11:59.2658600Z test source::tests::gigabyte_source_reads_requested_page_only_and_fails_closed_after_truncation ... ok
+2026-09-16T11:11:59.2737900Z test source::tests::resident_seals_and_cancelled_missing_pages_are_unavailable ... ok
+2026-09-16T11:11:59.4275530Z test source::tests::streaming_resident_publishes_prefix_before_eof_and_preserves_utf8_bom ... ok
+2026-09-16T11:11:59.4376920Z test tail::tests::cancellation_and_scroll_pause_are_independent ... ok
+2026-09-16T11:11:59.4478510Z test tail::tests::partial_page_append_verified_and_new_generation_created ... ok
+2026-09-16T11:11:59.4545910Z test tail::tests::rewrite_and_truncate_never_accepted ... ok
+2026-09-16T11:11:59.4575440Z test tail::tests::segmented_follow_completes_split_scalar_and_unlocks_fixed_generation ... ok
+2026-09-16T11:12:01.0608970Z test resident_recovery::journal_tests::fifty_checkpoints_keep_at_most_two_journal_directories ... ok
+2026-09-16T11:12:12.2424830Z test recovery::streaming::tests::large_payload_is_durable_and_replayed_as_bounded_sources ... ok
+2026-09-16T11:12:12.2426130Z 
+2026-09-16T11:12:12.2426410Z test result: ok. 96 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 14.81s
+2026-09-16T11:12:12.2426740Z 
+2026-09-16T11:12:12.2456420Z [1m[92m     Running[0m tests/recovery_process_death.rs (target/debug/deps/recovery_process_death-6c5ef9a6bba7ae9f)
+2026-09-16T11:12:12.2542590Z 
+2026-09-16T11:12:12.2544910Z running 3 tests
+2026-09-16T11:12:12.2546700Z test recovery_owned_child ... ok
+2026-09-16T11:12:12.4474990Z test recovery_storage_full_boundaries_preserve_matching_history ... ok
+2026-09-16T11:12:12.7621300Z test recovery_process_death_boundaries_preserve_matching_history ... ok
+2026-09-16T11:12:12.7622270Z 
+2026-09-16T11:12:12.7622950Z test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.51s
+2026-09-16T11:12:12.7623620Z 
+2026-09-16T11:12:12.7626670Z [1m[92m     Running[0m unittests src/lib.rs (target/debug/deps/bareline_first_party_common-38fe17f679eed196)
+2026-09-16T11:12:12.7702370Z 
+2026-09-16T11:12:12.7703880Z running 1 test
+2026-09-16T11:12:12.7706540Z test staging_tests::abandoned_stage_cancels_but_successful_commit_does_not ... ok
+2026-09-16T11:12:12.7707590Z 
+2026-09-16T11:12:12.7708500Z test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-09-16T11:12:12.7709360Z 
+2026-09-16T11:12:12.7711530Z [1m[92m     Running[0m unittests src/lib.rs (target/debug/deps/bareline_hex_view-e64d9fb2c1c121c6)
+2026-09-16T11:12:12.7760840Z 
+2026-09-16T11:12:12.7762330Z running 2 tests
+2026-09-16T11:12:12.7772460Z [1m[92m     Running[0m unittests src/lib.rs (target/debug/deps/bareline_json_tools-73bd8cee01b84741)
+2026-09-16T11:12:12.7773100Z test tests::five_gb_view_is_bounded_and_goto_constant_work ... ok
+2026-09-16T11:12:12.7774310Z test tests::gaps_and_utf16_are_original_bytes ... ok
+2026-09-16T11:12:12.7774670Z 
+2026-09-16T11:12:12.7774880Z test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-09-16T11:12:12.7775240Z 
+2026-09-16T11:12:12.7824770Z 
+2026-09-16T11:12:12.7937630Z running 9 tests
+2026-09-16T11:12:12.7953810Z test tests::malformed_positions_and_limits ... ok
+2026-09-16T11:12:12.7954380Z test tests::numeric_fidelity ... ok
+2026-09-16T11:12:12.7954800Z test tests::read_failure_is_reported ... ok
+2026-09-16T11:12:12.7956200Z test tests::tree_is_bounded ... ok
+2026-09-16T11:12:12.7956830Z test tree::tests::continuation_inside_large_string_is_explicit ... ok
+2026-09-16T11:12:12.7957320Z test tree::tests::malformed_cursor_rejected ... ok
+2026-09-16T11:12:12.7958120Z test tree::tests::pages_bound_reads_and_expose_real_nodes ... ok
+2026-09-16T11:12:12.8284950Z test tests::ascii_spans_preserve_invalid_byte_offsets_and_lines ... ok
+2026-09-16T11:12:12.8527720Z test tests::ascii_spans_preserve_lexemes_across_special_byte_boundaries ... ok
+2026-09-16T11:12:12.8528150Z 
+2026-09-16T11:12:12.8528410Z test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+2026-09-16T11:12:12.8528770Z 
+2026-09-16T11:12:12.8533290Z [1m[92m     Running[0m unittests src/lib.rs (target/debug/deps/bareline_lexilla_bridge-10370524acf65519)
+2026-09-16T11:12:12.8669570Z 
+2026-09-16T11:12:12.8670470Z running 10 tests
+2026-09-16T11:12:12.8682210Z test cpp_profiles::language_profiles_keep_raw_and_template_contents_in_strings ... ok
+2026-09-16T11:12:12.8685010Z test sessions::cancellation_invalidates_opaque_state ... ok
+2026-09-16T11:12:12.8792870Z test cancellation_progress::interrupts_inside_each_real_lexer ... ok
+2026-09-16T11:12:12.8798610Z test sessions::every_session_binding_styles_and_cancels_through_absolute_accessors ... ok
+2026-09-16T11:12:12.8800810Z test sessions::unretained_comment_lookbehind_is_unavailable ... ok
+2026-09-16T11:12:12.8803680Z test tests::actual_lexers_style_multiline_fixtures ... ok
+2026-09-16T11:12:12.8806150Z test tests::ffi_rejects_bad_names_quotas_and_cancellation ... ok
+2026-09-16T11:12:12.8807780Z test tests::utf8_crlf_empty_and_nul_are_bounded ... ok
+2026-09-16T11:12:12.8896080Z test accessor_fuzz::every_idocument_accessor_handles_generated_and_boundary_inputs ... ok
+2026-09-16T11:12:12.8953620Z test sessions::rolling_absolute_windows_match_one_pass ... ok
+2026-09-16T11:12:12.8958260Z [1m[92m     Running[0m unittests src/lib.rs (target/debug/deps/bareline_macros-4d5f9b69c50ef09f)
+2026-09-16T11:12:12.8962420Z 
+2026-09-16T11:12:12.8962860Z test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+2026-09-16T11:12:12.8964450Z 
+2026-09-16T11:12:12.9102670Z 
+2026-09-16T11:12:12.9103170Z running 11 tests
+2026-09-16T11:12:12.9145040Z test process::tests::grants_and_launch_errors_are_visible_without_starting_a_process ... ok
+2026-09-16T11:12:12.9157750Z test process::tests::direct_placeholders_keep_quotes_metacharacters_and_native_paths_literal ... ok
+2026-09-16T11:12:12.9185880Z test process::tests::shell_mode_refuses_command_metacharacters_in_expanded_placeholders ... ok
+2026-09-16T11:12:12.9188600Z test process::tests::shell_mode_runs_in_the_workspace_root_not_the_document_folder ... ok
+2026-09-16T11:12:12.9189520Z test tests::failed_command_resumes_exact_location_and_cancel_stops ... ok
+2026-09-16T11:12:12.9190310Z test tests::ghost_typing_is_nonblocking_and_iteration_guard_cannot_resume_out_of_bounds ... ok
+2026-09-16T11:12:12.9191140Z test tests::persistence_recording_and_repeat_preserve_normalized_text ... ok
+2026-09-16T11:12:12.9191730Z test tests::serialized_bound_and_name_validation_do_not_discard_recording ... ok
+2026-09-16T11:12:12.9192370Z test tests::until_eof_stops_without_dispatch_at_eof_and_detects_no_progress ... ok
+2026-09-16T11:12:12.9300150Z test process::tests::tiny_reads_and_repeated_placeholders_respect_allocation_budgets ... ok
+2026-09-16T11:12:12.9670300Z test process::tests::gigabyte_output_budget_stays_bounded_without_materializing_fixture ... ok
+2026-09-16T11:12:12.9671080Z 
+2026-09-16T11:12:12.9672210Z test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+2026-09-16T11:12:12.9674500Z [1m[92m     Running[0m unittests src/lib.rs (target/debug/deps/bareline_platform-3ecb1467cf1bc5b1)
+2026-09-16T11:12:12.9675550Z 
+2026-09-16T11:12:12.9738690Z 
+2026-09-16T11:12:12.9740790Z running 15 tests
+2026-09-16T11:12:12.9745400Z test clipboard::tests::external_envelopes_reject_truncation_and_untrusted_lengths ... ok
+2026-09-16T11:12:12.9751410Z test executor::tests::failed_worker_spawn_exposes_reduced_capacity ... ok
+2026-09-16T11:12:12.9752120Z test executor::tests::fifo_order_prevents_bulk_starvation ... ok
+2026-09-16T11:12:12.9752850Z test executor::tests::drop_closes_without_waiting_for_gated_work_then_worker_exits ... ok
+2026-09-16T11:12:12.9753370Z test executor::tests::idle_worker_takes_next_fifo_job ... ok
+2026-09-16T11:12:12.9753850Z test paths::tests::base64_vectors_and_malformed_input ... ok
+2026-09-16T11:12:12.9754330Z test executor::tests::total_queue_cap_and_closed_pool_are_typed ... ok
+2026-09-16T11:12:12.9754930Z test paths::tests::both_identity_encodings_preserve_opaque_values ... ok
+2026-09-16T11:12:12.9755540Z test paths::tests::version_and_platform_are_not_guessed ... ok
+2026-09-16T11:12:12.9756060Z test paths::tests::native_non_unicode_identity_round_trips_without_display ... ok
+2026-09-16T11:12:12.9756720Z test readiness::tests::primary_follows_native_keyboard_conventions ... ok
+2026-09-16T11:12:12.9757420Z test remote_read::tests::expired_and_cancelled_admission_refuses ... ok
+2026-09-16T11:12:12.9784290Z test remote_read::tests::exact_action_once_and_revocation_before_any_io ... ok
+2026-09-16T11:12:12.9784830Z test tests::session_network_origin_never_grants_access ... ok
+2026-09-16T11:12:12.9785600Z [1m[92m     Running[0m unittests src/lib.rs (target/debug/deps/bareline_platform_linux-1d20a9422367867c)
+2026-09-16T11:12:12.9786230Z test paths::tests::validation_rejects_nul_and_oversized_state ... ok
+2026-09-16T11:12:12.9786500Z 
+2026-09-16T11:12:12.9786750Z test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-09-16T11:12:12.9787090Z 
+2026-09-16T11:12:12.9828070Z 
+2026-09-16T11:12:12.9828580Z running 2 tests
+2026-09-16T11:12:12.9831840Z test tests::dialogs_and_menus_are_explicitly_unavailable ... ok
+2026-09-16T11:12:12.9833230Z test tests::recording_remains_usable_when_native_menus_are_unsupported ... ok
+2026-09-16T11:12:12.9834930Z 
+2026-09-16T11:12:12.9835720Z test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-09-16T11:12:12.9836550Z 
+2026-09-16T11:12:12.9837630Z [1m[92m     Running[0m unittests src/lib.rs (target/debug/deps/bareline_platform_macos-80e762f0999f72a1)
+2026-09-16T11:12:12.9890850Z 
+2026-09-16T11:12:12.9892430Z running 2 tests
+2026-09-16T11:12:12.9893540Z test tests::dialogs_and_menus_are_explicitly_unavailable ... ok
+2026-09-16T11:12:12.9894480Z test tests::recording_remains_usable_when_native_menus_are_unsupported ... ok
+2026-09-16T11:12:12.9895360Z 
+2026-09-16T11:12:12.9896130Z test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-09-16T11:12:12.9897300Z 
+2026-09-16T11:12:12.9899320Z [1m[92m     Running[0m unittests src/lib.rs (target/debug/deps/bareline_platform_windows-d4ee16a707ee0d67)
+2026-09-16T11:12:12.9944260Z 
+2026-09-16T11:12:12.9945100Z running 0 tests
+2026-09-16T11:12:12.9945680Z 
+2026-09-16T11:12:12.9946310Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-09-16T11:12:12.9947200Z 
+2026-09-16T11:12:12.9948280Z [1m[92m     Running[0m unittests src/lib.rs (target/debug/deps/bareline_renderer-77657631d97ff8dd)
+2026-09-16T11:12:12.9982940Z 
+2026-09-16T11:12:12.9983170Z running 0 tests
+2026-09-16T11:12:12.9983520Z 
+2026-09-16T11:12:12.9983930Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-09-16T11:12:12.9984760Z 
+2026-09-16T11:12:12.9985200Z [1m[92m     Running[0m unittests src/lib.rs (target/debug/deps/bareline_renderer_recording-e04dee483c50f9e1)
+2026-09-16T11:12:13.0027130Z 
+2026-09-16T11:12:13.0027370Z running 1 test
+2026-09-16T11:12:13.0028800Z test frame_tests::frames_cancel_recover_and_reject_crossed_stacks ... ok
+2026-09-16T11:12:13.0029100Z 
+2026-09-16T11:12:13.0029410Z test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-09-16T11:12:13.0030330Z 
+2026-09-16T11:12:13.0031270Z [1m[92m     Running[0m unittests src/lib.rs (target/debug/deps/bareline_search-bf91f33566339166)
+2026-09-16T11:12:13.0175160Z 
+2026-09-16T11:12:13.0175920Z running 32 tests
+2026-09-16T11:12:13.0286080Z test folders::tests::folder_trust_io_limit_and_cancellation_fail_closed ... ok
+2026-09-16T11:12:13.0307170Z test folders::tests::folder_streams_identity_ranges_and_visible_skips_without_retaining_files ... ok
+2026-09-16T11:12:13.1937470Z test paged::tests::paged_folded_match_crosses_window_with_one_page_cache_and_absolute_selection ... ok
+2026-09-16T11:12:13.1938470Z test regex::tests::capped_batches_emit_retained_tail_and_disable_replacement ... ok
+2026-09-16T11:12:13.2045270Z test regex::tests::captures_expand_before_atomic_transaction_and_obey_budget ... ok
+2026-09-16T11:12:13.2145940Z test regex::tests::context_catalog_and_utf8_empty_progress ... ok
+2026-09-16T11:12:13.2247330Z test regex::tests::engine_callout_stops_cancelled_and_expired_matching ... ok
+2026-09-16T11:12:13.2348680Z test paged::tests::paged_partial_regex_crosses_windows_beyond_former_subject_limit ... ok
+2026-09-16T11:12:13.3024180Z test regex::tests::hard_partial_multiline_crosses_windows_and_preserves_capture_offsets ... ok
+2026-09-16T11:12:13.3928750Z test regex::tests::multiline_regex_crosses_sixteen_mib_with_full_anchor_context ... ok
+2026-09-16T11:12:13.3931700Z test regex::tests::range_expansion_reads_only_referenced_global_capture_and_checks_budget_first ... ok
+2026-09-16T11:12:13.4521840Z test paged::tests::streamed_capture_replacement_beyond_sixty_four_mib_reads_only_bounded_ranges ... ok
+2026-09-16T11:12:13.4628020Z test replace_files::tests::changed_revision_aborts_entire_group_and_cancelled_preview_never_submits ... ok
+2026-09-16T11:12:13.4729420Z test replace_files::tests::excluded_document_and_bounded_capture_preview_are_exact ... ok
+2026-09-16T11:12:13.4830750Z test replace_files::tests::hundred_document_replacement_is_one_bounded_atomic_group_and_undo ... ok
+2026-09-16T11:12:13.4942340Z test replace_files::tests::preview_exclusions_apply_only_reviewed_matches_and_linked_undo_restores_both ... ok
+2026-09-16T11:12:13.5044550Z test replacement_case_tests::uniform_and_initial_case_preserve_unicode_without_changing_mixed_case ... ok
+2026-09-16T11:12:13.5156410Z test service::tests::open_document_ticket_notifies_with_grouped_results ... ok
+2026-09-16T11:12:13.5258320Z test service::tests::rapid_queries_coalesce_and_latest_completion_notifies_without_polling ... ok
+2026-09-16T11:12:13.5360850Z test sources::tests::cancellation_and_partial_prefixes_cannot_be_complete ... ok
+2026-09-16T11:12:13.5462760Z test sources::tests::grouped_identity_and_aggregate_budget_are_preserved ... ok
+2026-09-16T11:12:13.5561730Z test sources::tests::mixed_results_scan_beyond_viewport_with_global_offsets_and_cancellation ... ok
+2026-09-16T11:12:13.5562670Z test tests::bounded_results_cancellation_and_unsupported_queries_cannot_replace ... ok
+2026-09-16T11:12:13.5563530Z test tests::count_can_finish_after_retained_results_fill_without_enabling_replace ... ok
+2026-09-16T11:12:13.5564390Z test tests::extended_mode_finds_multiline_unicode_and_rejects_malformed_escapes ... ok
+2026-09-16T11:12:13.5565210Z test regex::tests::partial_candidate_cap_is_explicit_and_cancellation_is_not_complete ... ok
+2026-09-16T11:12:13.9086840Z test regex::tests::unsupported_subject_limits_and_invalid_patterns_never_replace ... ok
+2026-09-16T11:12:13.9089160Z test tests::replacement_scope_cancellation_and_atomic_undo ... ok
+2026-09-16T11:12:13.9090570Z test tests::selection_nonoverlap_navigation_and_document_identity ... ok
+2026-09-16T11:12:13.9091990Z test tests::whole_word_checks_combining_marks_connectors_and_selection_edges ... ok
+2026-09-16T11:12:14.0992310Z test tests::literal_crosses_sixteen_mib_in_twenty_mib_line_and_replaces_atomically ... ok
+2026-09-16T11:12:15.1611610Z test tests::full_unicode_folding_preserves_text_ranges_and_rejects_partial_expansions ... ok
+2026-09-16T11:12:15.1612010Z 
+2026-09-16T11:12:15.1612340Z test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.14s
+2026-09-16T11:12:15.1613230Z 
+2026-09-16T11:12:15.1640450Z [1m[92m     Running[0m unittests src/lib.rs (target/debug/deps/bareline_settings-c43a0b4dc566de94)
+2026-09-16T11:12:15.1730180Z 
+2026-09-16T11:12:15.1730530Z running 22 tests
+2026-09-16T11:12:15.1759140Z test behavior_tests::built_in_themes_and_high_contrast_meet_functional_ratios ... ok
+2026-09-16T11:12:15.1772550Z test behavior_tests::bounded_storage_and_session_persistence_rejections ... ok
+2026-09-16T11:12:15.1782050Z test behavior_tests::keymap_edits_preserve_comments_and_conflicts_leave_previous_state ... ok
+2026-09-16T11:12:15.1790890Z test behavior_tests::locale_switch_is_data_only_parameterized_and_falls_back_per_message ... ok
+2026-09-16T11:12:15.1796920Z test behavior_tests::migration_and_font_points_remain_stable_at_mixed_dpi ... ok
+2026-09-16T11:12:15.1798310Z test behavior_tests::only_the_settings_page_opener_is_user_facing ... ok
+2026-09-16T11:12:15.1800180Z test behavior_tests::opt_in_workspace_cannot_override_policy_even_when_mislabeled_as_user ... ok
+2026-09-16T11:12:15.1825090Z test behavior_tests::reset_targets_scope_and_keeps_unrelated_values ... ok
+2026-09-16T11:12:15.1826570Z test behavior_tests::resource_quotas_are_bounded_user_preferences_and_preserve_other_values ... ok
+2026-09-16T11:12:15.1828440Z test behavior_tests::session_layer_has_precedence_and_invalid_workspace_falls_back_per_key ... ok
+2026-09-16T11:12:15.1832990Z test behavior_tests::single_bad_values_do_not_reset_other_settings_and_unknown_comments_survive ... ok
+2026-09-16T11:12:15.1833930Z test behavior_tests::failed_atomic_commit_preserves_file_and_allows_retry ... ok
+2026-09-16T11:12:15.1834480Z test behavior_tests::toolbar_order_roundtrips_and_invalid_edits_preserve_document ... ok
+2026-09-16T11:12:15.1835120Z test behavior_tests::theme_override_persistence_and_composited_contrast_rejection ... ok
+2026-09-16T11:12:15.1836140Z test model::input_contract_tests::resource_limits_are_user_owned_and_effective_pages_fit_the_shared_cap ... ok
+2026-09-16T11:12:15.1836820Z test model::input_contract_tests::policy_and_clipboard_inputs_roundtrip_and_invalid_input_preserves_document ... ok
+2026-09-16T11:12:15.1837540Z test behavior_tests::keymap_default_create_and_failed_rebind_preserve_existing_bytes ... ok
+2026-09-16T11:12:15.1838200Z test model::presentation_tests::byte_sizes_round_trip_through_display_units ... ok
+2026-09-16T11:12:15.1838680Z test model::presentation_tests::choice_values_display_title_cased ... ok
+2026-09-16T11:12:15.1839210Z test model::presentation_tests::color_rows_round_trip_hex_through_parse_and_format ... ok
+2026-09-16T11:12:15.1839810Z test model::presentation_tests::every_listed_category_owns_at_least_one_visible_setting ... ok
+2026-09-16T11:12:15.1840530Z [1m[92m     Running[0m unittests src/lib.rs (target/debug/deps/bareline_syntax-019a495e849ed3e8)
+2026-09-16T11:12:15.1841090Z test tests::configuration_accepts_toml_and_rejects_ambiguous_modes ... ok
+2026-09-16T11:12:15.1841380Z 
+2026-09-16T11:12:15.1841630Z test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+2026-09-16T11:12:15.1841900Z 
+2026-09-16T11:12:15.1981620Z 
+2026-09-16T11:12:15.1981920Z running 25 tests
+2026-09-16T11:12:15.2004790Z test folding::tests::fold_all_collapses_every_foldable_region_at_every_level ... ok
+2026-09-16T11:12:15.2008810Z test catalog::tests::fifteen_detect_with_comment_metadata ... ok
+2026-09-16T11:12:15.2012860Z test catalog::association_tests::bounded_globs_and_exact_names_have_deterministic_precedence ... ok
+2026-09-16T11:12:15.2013610Z test folding::tests::unfinished_header_is_not_exposed_until_closed_and_limits_apply ... ok
+2026-09-16T11:12:15.2024740Z test folding::tests::lexilla_indentation_folds_exclude_following_statement ... ok
+2026-09-16T11:12:15.2048570Z test outline::tests::builtin_definitions_extract_rust_fn_and_python_class ... ok
+2026-09-16T11:12:15.2063030Z test outline::tests::cancellation_and_three_language_mapping_shapes_are_deterministic ... ok
+2026-09-16T11:12:15.2087620Z test outline::tests::imports_roundtrip_and_extracts_name_ranges ... ok
+2026-09-16T11:12:15.2088280Z test outline::tests::rejects_malformed_entities_and_reports_invalid_regex ... ok
+2026-09-16T11:12:15.2088990Z test stream::tests::cancellation_poison_and_split_crlf_are_unavailable ... ok
+2026-09-16T11:12:15.2089620Z test stream::tests::projection_compares_actual_bytes_and_rejects_mismatched_view ... ok
+2026-09-16T11:12:15.2128820Z test stream::tests::projection_styles_two_visible_pieces_without_lexing_the_join ... ok
+2026-09-16T11:12:15.2129950Z test stream::tests::streaming_comments_and_fold_headers_keep_absolute_context ... ok
+2026-09-16T11:12:15.2130470Z test tests::all_fifteen_native_definitions_validate_and_native_python_folds ... ok
+2026-09-16T11:12:15.2131040Z test tests::configured_udl_carries_comments_and_custom_folds_and_rejects_replacement_checkpoint ... ok
+2026-09-16T11:12:15.2131550Z test stream::tests::sparse_checkpoints_follow_global_lines_across_windows ... ok
+2026-09-16T11:12:15.2132050Z test tests::rust_utf8_raw_nested_comments_and_lifetimes ... ok
+2026-09-16T11:12:15.2132510Z test tests::udl_multibyte_string_delimiters_do_not_split_a_scalar ... ok
+2026-09-16T11:12:15.2132900Z test tests::udl_tokenizer_survives_random_utf8_inputs ... ok
+2026-09-16T11:12:15.2133330Z test tests::verified_multiline_checkpoint_and_stale_rejection ... ok
+2026-09-16T11:12:15.2133800Z test folding::tests::forward_pass_carries_header_across_windows ... ok
+2026-09-16T11:12:15.2134220Z test udl::import_tests::xml_reports_loss_and_rejects_unsafe_input ... ok
+2026-09-16T11:12:15.2134720Z test udl::tests::malformed_replacement_preserves_definition_and_utf8_lex ... ok
+2026-09-16T11:12:15.2135210Z test tests::worker_delivers_current_request_after_superseding ... ok
+2026-09-16T11:12:15.2210250Z test tests::json_and_resource_boundaries ... ok
+2026-09-16T11:12:15.2210500Z 
+2026-09-16T11:12:15.2210770Z test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+2026-09-16T11:12:15.2211630Z 
+2026-09-16T11:12:15.2213280Z [1m[92m     Running[0m unittests src/lib.rs (target/debug/deps/bareline_ui-79a2b3dda17ddaf9)
+2026-09-16T11:12:15.2260120Z 
+2026-09-16T11:12:15.2262170Z running 15 tests
+2026-09-16T11:12:15.2263250Z test controls::tests::virtual_controls_stay_bounded_and_active_tab_is_visible ... ok
+2026-09-16T11:12:15.2264280Z test controls::tests::fractional_scroll_includes_bottom_row_and_disabled_focus_clears ... ok
+2026-09-16T11:12:15.2265530Z test controls::tests::disabled_activation_and_popup_focus_return ... ok
+2026-09-16T11:12:15.2268270Z test focus::tests::traversal_skips_disabled_and_nested_layers_restore_their_invokers ... ok
+2026-09-16T11:12:15.2268830Z test theme::tests::overlay_palettes_derive_from_ui_theme_in_both_themes ... ok
+2026-09-16T11:12:15.2269350Z test widgets::tests::combo_search_timeout_escape_and_disabled_choices ... ok
+2026-09-16T11:12:15.2270020Z test virtual_tree::refresh_tests::reordered_children_keep_descendants_and_deleted_selection_returns_parent ... ok
+2026-09-16T11:12:15.2270650Z test widgets::tests::dock_layout_never_overlaps_the_tab_strip_for_any_panel_combination ... ok
+2026-09-16T11:12:15.2271210Z test widgets::tests::controls_render_balanced_logical_geometry_at_required_scales ... ok
+2026-09-16T11:12:15.2271840Z test widgets::tests::field_semantics_exclude_preedit_and_disabled_controls_have_no_actions ... ok
+2026-09-16T11:12:15.2272440Z test widgets::tests::million_row_paint_only_reads_visible_rows_and_navigation_reveals_selection ... ok
+2026-09-16T11:12:15.2273090Z test widgets::tests::numeric_controls_reject_nonfinite_input_clamp_and_cancel_drag_on_focus_loss ... ok
+2026-09-16T11:12:15.2273650Z test widgets::tests::splitter_widths_round_trip_through_persistence ... ok
+2026-09-16T11:12:15.2274150Z test text_field::tests::selection_composition_and_horizontal_viewport_preserve_graphemes ... ok
+2026-09-16T11:12:15.2274690Z test widgets::tests::two_left_sections_can_be_open_at_once ... ok
+2026-09-16T11:12:15.2275310Z 
+2026-09-16T11:12:15.2275590Z test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-09-16T11:12:15.2276140Z 
+2026-09-16T11:12:15.2276720Z [1m[92m     Running[0m tests/advanced_controls.rs (target/debug/deps/advanced_controls-9a68a84f8e04b52c)
+2026-09-16T11:12:15.2315550Z 
+2026-09-16T11:12:15.2315820Z running 9 tests
+2026-09-16T11:12:15.2318860Z test deferred_scrollbar_commits_on_release_and_unknown_extent_refines_without_jump ... ok
+2026-09-16T11:12:15.2319520Z test focus_loss_cancels_capture_even_when_popup_handles_and_target_was_disabled ... ok
+2026-09-16T11:12:15.2320200Z test discovered_tree_children_refresh_expansion_and_prune_removed_descendants ... ok
+2026-09-16T11:12:15.2321270Z test indexed_variable_rows_align_hit_testing_and_reveal_without_prefix_scan ... ok
+2026-09-16T11:12:15.2321820Z test lazy_tree_seeks_million_siblings_and_requests_only_expanded_children ... ok
+2026-09-16T11:12:15.2322270Z test routing_capture_focus_hit_ancestors_and_release_are_ordered ... ok
+2026-09-16T11:12:15.2322950Z test password_masks_layout_clipboard_and_semantics_while_decimal_rejects_invalid_commit ... ok
+2026-09-16T11:12:15.2323560Z test sticky_panel_tooltip_deadline_and_banner_dismiss_are_explicit ... ok
+2026-09-16T11:12:15.2324050Z test visible_semantics_preserve_disabled_rows_and_router_reports_consumption ... ok
+2026-09-16T11:12:15.2324320Z 
+2026-09-16T11:12:15.2324550Z test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-09-16T11:12:15.2324880Z 
+2026-09-16T11:12:15.2325310Z [1m[92m     Running[0m tests/themed_goldens.rs (target/debug/deps/themed_goldens-29182e330ca17cf3)
+2026-09-16T11:12:15.2368230Z 
+2026-09-16T11:12:15.2368590Z running 1 test
+2026-09-16T11:12:15.2381220Z test every_control_records_resolved_theme_at_required_scales ... ok
+2026-09-16T11:12:15.2381520Z 
+2026-09-16T11:12:15.2381780Z test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-09-16T11:12:15.2382140Z 
+2026-09-16T11:12:15.2383770Z [1m[92m     Running[0m unittests src/lib.rs (target/debug/deps/bareline_unicode_fold-5bd5502a7b1cfc5e)
+2026-09-16T11:12:15.2419360Z 
+2026-09-16T11:12:15.2419650Z running 1 test
+2026-09-16T11:12:15.2420610Z test tests::expansions_and_sigma ... ok
+2026-09-16T11:12:15.2420900Z 
+2026-09-16T11:12:15.2421160Z test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-09-16T11:12:15.2421530Z 
+2026-09-16T11:12:15.2423090Z [1m[92m     Running[0m unittests src/main.rs (target/debug/deps/bareline_update_helper-967f5a8a6e2db18d)
+2026-09-16T11:12:15.2451630Z 
+2026-09-16T11:12:15.2452030Z running 0 tests
+2026-09-16T11:12:15.2452150Z 
+2026-09-16T11:12:15.2452370Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-09-16T11:12:15.2452660Z 
+2026-09-16T11:12:15.2453830Z [1m[92m     Running[0m unittests src/lib.rs (target/debug/deps/bareline_xml_tools-31249ba83476b3b0)
+2026-09-16T11:12:15.2505370Z 
+2026-09-16T11:12:15.2505640Z running 8 tests
+2026-09-16T11:12:15.2511220Z test argument_tests::mixed_text_nodes_are_not_concatenated_for_xpath ... ok
+2026-09-16T11:12:15.2511820Z test decoded_view_tests::original_encoding_declaration_survives_decoded_text_format ... ok
+2026-09-16T11:12:15.2513870Z test argument_tests::arguments_and_descendant_positions ... ok
+2026-09-16T11:12:15.2514430Z test terminal_selection_tests::descendant_terminal_selection_and_missing_attributes ... ok
+2026-09-16T11:12:15.2514810Z test tests::mixed_content_preserved ... ok
+2026-09-16T11:12:15.2515100Z test tests::inherited_space_and_whitespace_nodes_preserved ... ok
+2026-09-16T11:12:15.2515400Z test tests::xpath_namespace_predicates ... ok
+2026-09-16T11:12:15.2515980Z test tests::security_and_well_formedness ... ok
+2026-09-16T11:12:15.2516170Z 
+2026-09-16T11:12:15.2516390Z test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-09-16T11:12:15.2516670Z 
+2026-09-16T11:12:15.2518520Z [1m[92m     Running[0m unittests src/main.rs (target/debug/deps/xtask-40d12ae5e24ac08e)
+2026-09-16T11:12:15.2549200Z 
+2026-09-16T11:12:15.2549430Z running 0 tests
+2026-09-16T11:12:15.2549630Z 
+2026-09-16T11:12:15.2549830Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-09-16T11:12:15.2550110Z 
+2026-09-16T11:12:15.2551420Z [1m[92m     Running[0m ../tests/security/parser_corpus.rs (target/debug/deps/security_parser_corpus-d9e039e49d751eb1)
+2026-09-16T11:12:15.2661070Z 
+2026-09-16T11:12:15.2661420Z running 4 tests
+2026-09-16T11:12:15.2685510Z test rpc_mutations_revalidate_and_oversized_prefix_never_reads_payload ... ok
+2026-09-16T11:12:15.2732700Z test udl_mutations_reject_entities_and_preserve_registry_on_error ... ok
+2026-09-16T11:12:15.2773540Z test session_mutations_preserve_validation_and_pinned_roundtrip ... ok
+2026-09-16T11:12:15.2966310Z test journal_mutations_preserve_valid_prefix_without_promoting_bad_tail ... ok
+2026-09-16T11:12:15.2966730Z 
+2026-09-16T11:12:15.2967210Z test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+2026-09-16T11:12:15.2967490Z 
+2026-09-16T11:12:15.2969880Z [1m[92m   Doc-tests[0m bareline_app
+2026-09-16T11:12:15.6191760Z 
+2026-09-16T11:12:15.6192350Z running 0 tests
+2026-09-16T11:12:15.6192710Z 
+2026-09-16T11:12:15.6193270Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-09-16T11:12:15.6194040Z 
+2026-09-16T11:12:15.6226700Z [1m[92m   Doc-tests[0m bareline_commands
+2026-09-16T11:12:15.6676840Z 
+2026-09-16T11:12:15.6677270Z running 0 tests
+2026-09-16T11:12:15.6677450Z 
+2026-09-16T11:12:15.6677780Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-09-16T11:12:15.6678070Z 
+2026-09-16T11:12:15.6689430Z [1m[92m   Doc-tests[0m bareline_diagnostics
+2026-09-16T11:12:15.6998260Z 
+2026-09-16T11:12:15.6998610Z running 0 tests
+2026-09-16T11:12:15.6998790Z 
+2026-09-16T11:12:15.6999390Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-09-16T11:12:15.6999700Z 
+2026-09-16T11:12:15.7009460Z [1m[92m   Doc-tests[0m bareline_diff
+2026-09-16T11:12:15.7421180Z 
+2026-09-16T11:12:15.7421530Z running 0 tests
+2026-09-16T11:12:15.7421850Z 
+2026-09-16T11:12:15.7422140Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-09-16T11:12:15.7422460Z 
+2026-09-16T11:12:15.7433280Z [1m[92m   Doc-tests[0m bareline_distribution
+2026-09-16T11:12:15.7918200Z 
+2026-09-16T11:12:15.7918620Z running 0 tests
+2026-09-16T11:12:15.7918770Z 
+2026-09-16T11:12:15.7918990Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-09-16T11:12:15.7919270Z 
+2026-09-16T11:12:15.7929330Z [1m[92m   Doc-tests[0m bareline_document
+2026-09-16T11:12:15.8548680Z 
+2026-09-16T11:12:15.8549000Z running 0 tests
+2026-09-16T11:12:15.8549170Z 
+2026-09-16T11:12:15.8549440Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-09-16T11:12:15.8549730Z 
+2026-09-16T11:12:15.8560970Z [1m[92m   Doc-tests[0m bareline_editor_surface
+2026-09-16T11:12:16.0048500Z 
+2026-09-16T11:12:16.0049270Z running 0 tests
+2026-09-16T11:12:16.0049610Z 
+2026-09-16T11:12:16.0050170Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-09-16T11:12:16.0050950Z 
+2026-09-16T11:12:16.0061480Z [1m[92m   Doc-tests[0m bareline_extension_host
+2026-09-16T11:12:16.1714770Z 
+2026-09-16T11:12:16.1716270Z running 0 tests
+2026-09-16T11:12:16.1716730Z 
+2026-09-16T11:12:16.1717290Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-09-16T11:12:16.1717860Z 
+2026-09-16T11:12:16.1742620Z [1m[92m   Doc-tests[0m bareline_extension_sdk
+2026-09-16T11:12:16.2125550Z 
+2026-09-16T11:12:16.2126190Z running 0 tests
+2026-09-16T11:12:16.2127070Z 
+2026-09-16T11:12:16.2127580Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-09-16T11:12:16.2128420Z 
+2026-09-16T11:12:16.2139710Z [1m[92m   Doc-tests[0m bareline_extensions_protocol
+2026-09-16T11:12:16.2983460Z 
+2026-09-16T11:12:16.2985270Z running 0 tests
+2026-09-16T11:12:16.2987610Z 
+2026-09-16T11:12:16.2988170Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-09-16T11:12:16.2988920Z 
+2026-09-16T11:12:16.2990000Z [1m[92m   Doc-tests[0m bareline_file_io
+2026-09-16T11:12:16.5188380Z 
+2026-09-16T11:12:16.5189110Z running 0 tests
+2026-09-16T11:12:16.5189460Z 
+2026-09-16T11:12:16.5190110Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-09-16T11:12:16.5190900Z 
+2026-09-16T11:12:16.5202820Z [1m[92m   Doc-tests[0m bareline_first_party_common
+2026-09-16T11:12:16.5624910Z 
+2026-09-16T11:12:16.5625850Z running 0 tests
+2026-09-16T11:12:16.5626210Z 
+2026-09-16T11:12:16.5626780Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-09-16T11:12:16.5627600Z 
+2026-09-16T11:12:16.5645980Z [1m[92m   Doc-tests[0m bareline_hex_view
+2026-09-16T11:12:16.6027810Z 
+2026-09-16T11:12:16.6028510Z running 0 tests
+2026-09-16T11:12:16.6028850Z 
+2026-09-16T11:12:16.6029400Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-09-16T11:12:16.6030150Z 
+2026-09-16T11:12:16.6045620Z [1m[92m   Doc-tests[0m bareline_json_tools
+2026-09-16T11:12:16.6479970Z 
+2026-09-16T11:12:16.6480450Z running 0 tests
+2026-09-16T11:12:16.6480860Z 
+2026-09-16T11:12:16.6481400Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-09-16T11:12:16.6482160Z 
+2026-09-16T11:12:16.6647810Z [1m[92m   Doc-tests[0m bareline_lexilla_bridge
+2026-09-16T11:12:16.6936720Z 
+2026-09-16T11:12:16.6937680Z running 0 tests
+2026-09-16T11:12:16.6938210Z 
+2026-09-16T11:12:16.6938770Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-09-16T11:12:16.6939590Z 
+2026-09-16T11:12:16.6949150Z [1m[92m   Doc-tests[0m bareline_macros
+2026-09-16T11:12:16.7417780Z 
+2026-09-16T11:12:16.7418470Z running 0 tests
+2026-09-16T11:12:16.7418660Z 
+2026-09-16T11:12:16.7418930Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-09-16T11:12:16.7419290Z 
+2026-09-16T11:12:16.7444540Z [1m[92m   Doc-tests[0m bareline_platform
+2026-09-16T11:12:16.7995570Z 
+2026-09-16T11:12:16.7996090Z running 0 tests
+2026-09-16T11:12:16.7996420Z 
+2026-09-16T11:12:16.7996970Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-09-16T11:12:16.7997730Z 
+2026-09-16T11:12:16.8007650Z [1m[92m   Doc-tests[0m bareline_platform_linux
+2026-09-16T11:12:16.8311510Z 
+2026-09-16T11:12:16.8312120Z running 0 tests
+2026-09-16T11:12:16.8312450Z 
+2026-09-16T11:12:16.8313010Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-09-16T11:12:16.8313770Z 
+2026-09-16T11:12:16.8323020Z [1m[92m   Doc-tests[0m bareline_platform_macos
+2026-09-16T11:12:16.8637050Z 
+2026-09-16T11:12:16.8637670Z running 0 tests
+2026-09-16T11:12:16.8638010Z 
+2026-09-16T11:12:16.8638550Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-09-16T11:12:16.8639340Z 
+2026-09-16T11:12:16.8650630Z [1m[92m   Doc-tests[0m bareline_platform_windows
+2026-09-16T11:12:16.9016650Z 
+2026-09-16T11:12:16.9017630Z running 0 tests
+2026-09-16T11:12:16.9018400Z 
+2026-09-16T11:12:16.9020040Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-09-16T11:12:16.9021220Z 
+2026-09-16T11:12:16.9024020Z [1m[92m   Doc-tests[0m bareline_renderer
+2026-09-16T11:12:16.9455490Z 
+2026-09-16T11:12:16.9456210Z running 0 tests
+2026-09-16T11:12:16.9456570Z 
+2026-09-16T11:12:16.9457130Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-09-16T11:12:16.9457880Z 
+2026-09-16T11:12:16.9468440Z [1m[92m   Doc-tests[0m bareline_renderer_recording
+2026-09-16T11:12:16.9821680Z 
+2026-09-16T11:12:16.9822500Z running 0 tests
+2026-09-16T11:12:16.9822840Z 
+2026-09-16T11:12:16.9823390Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-09-16T11:12:16.9824180Z 
+2026-09-16T11:12:16.9833300Z [1m[92m   Doc-tests[0m bareline_search
+2026-09-16T11:12:17.0686800Z 
+2026-09-16T11:12:17.0687770Z running 0 tests
+2026-09-16T11:12:17.0687940Z 
+2026-09-16T11:12:17.0688350Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-09-16T11:12:17.0688650Z 
+2026-09-16T11:12:17.0700550Z [1m[92m   Doc-tests[0m bareline_settings
+2026-09-16T11:12:17.1446850Z 
+2026-09-16T11:12:17.1447360Z running 0 tests
+2026-09-16T11:12:17.1447560Z 
+2026-09-16T11:12:17.1447780Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-09-16T11:12:17.1448070Z 
+2026-09-16T11:12:17.1469960Z [1m[92m   Doc-tests[0m bareline_syntax
+2026-09-16T11:12:17.2414590Z 
+2026-09-16T11:12:17.2415160Z running 0 tests
+2026-09-16T11:12:17.2415480Z 
+2026-09-16T11:12:17.2415780Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-09-16T11:12:17.2416090Z 
+2026-09-16T11:12:17.2455280Z [1m[92m   Doc-tests[0m bareline_ui
+2026-09-16T11:12:17.3239490Z 
+2026-09-16T11:12:17.3254260Z running 0 tests
+2026-09-16T11:12:17.3255120Z 
+2026-09-16T11:12:17.3256170Z [1m[92m   Doc-tests[0m bareline_unicode_fold
+2026-09-16T11:12:17.3282450Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-09-16T11:12:17.3283430Z 
+2026-09-16T11:12:17.3693110Z 
+2026-09-16T11:12:17.3693590Z running 0 tests
+2026-09-16T11:12:17.3693960Z 
+2026-09-16T11:12:17.3694310Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-09-16T11:12:17.3694730Z 
+2026-09-16T11:12:17.3706550Z [1m[92m   Doc-tests[0m bareline_xml_tools
+2026-09-16T11:12:17.4279650Z 
+2026-09-16T11:12:17.4280590Z running 0 tests
+2026-09-16T11:12:17.4281000Z 
+2026-09-16T11:12:17.4282240Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-09-16T11:12:17.4283090Z 
+2026-09-16T11:12:17.4659200Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-09-16T11:12:17.4660350Z Post job cleanup.
+2026-09-16T11:12:17.9804070Z (node:19005) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-09-16T11:12:17.9804890Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-09-16T11:12:18.0042030Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-09-16T11:12:18.0043130Z Post job cleanup.
+2026-09-16T11:12:18.1798910Z [command]/opt/homebrew/bin/git version
+2026-09-16T11:12:18.2234540Z git version 2.55.0
+2026-09-16T11:12:18.2286220Z Copying '/Users/runner/.gitconfig' to '/Users/runner/work/_temp/f9b88a69-04a3-4cc5-82a9-815af583e5a7/.gitconfig'
+2026-09-16T11:12:18.2304960Z Temporarily overriding HOME='/Users/runner/work/_temp/f9b88a69-04a3-4cc5-82a9-815af583e5a7' before making global git config changes
+2026-09-16T11:12:18.2307940Z Adding repository directory to the temporary git global config as a safe directory
+2026-09-16T11:12:18.2310410Z [command]/opt/homebrew/bin/git config --global --add safe.directory /Users/runner/work/BareLine/BareLine
+2026-09-16T11:12:18.2517290Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-09-16T11:12:18.2629240Z [command]/opt/homebrew/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-09-16T11:12:18.4520170Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-09-16T11:12:18.4635330Z http.https://github.com/.extraheader
+2026-09-16T11:12:18.4652520Z [command]/opt/homebrew/bin/git config --local --unset-all http.https://github.com/.extraheader
+2026-09-16T11:12:18.4800890Z [command]/opt/homebrew/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-09-16T11:12:18.6287380Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-09-16T11:12:18.6386370Z [command]/opt/homebrew/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-09-16T11:12:18.7567330Z Cleaning up orphan processes
+2026-09-16T11:12:19.8001840Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@v4, actions/setup-python@v5, actions/upload-artifact@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/

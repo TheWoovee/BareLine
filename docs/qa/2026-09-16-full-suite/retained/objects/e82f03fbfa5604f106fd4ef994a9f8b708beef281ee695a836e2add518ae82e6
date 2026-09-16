@@ -1,0 +1,120 @@
+"""Prepare inventories and a byte-retention plan; not acceptance qualification."""
+import hashlib
+import json
+from pathlib import Path
+
+ROOT = Path.cwd()
+EVIDENCE = ROOT / 'target/qualification/full-suite-20260916'
+REPORT = ROOT / 'docs/qa/2026-09-16-full-suite'
+
+def read(path):
+    return json.loads(path.read_text(encoding='utf-8-sig'))
+
+def write(path, data):
+    path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + '\n', encoding='utf-8')
+
+def relative(path):
+    return path.relative_to(ROOT).as_posix()
+
+def digest(path):
+    with path.open('rb') as stream:
+        return hashlib.file_digest(stream, 'sha256').hexdigest()
+
+summary = read(REPORT / 'execution-summary.json')
+notes = {row['receipt']: row['note'] for row in summary['records']}
+records = []
+for path in sorted(EVIDENCE.glob('[0-9][0-9]-*.json')):
+    document = read(path)
+    if 'source_before' not in document:
+        continue
+    row = {'receipt': relative(path), 'sha256': digest(path)}
+    for key in ('command', 'status', 'exit_code', 'elapsed_ms', 'source_before',
+                'source_after', 'source_changed_during_run'):
+        row[key] = document.get(key)
+    row['note'] = notes.get(relative(path))
+    records.append(row)
+summary['records'] = records
+write(REPORT / 'execution-summary.json', summary)
+
+selected = {}
+def add(path, kind='file'):
+    if path.is_file():
+        selected[relative(path)] = kind
+
+for path in EVIDENCE.rglob('*'):
+    # Live watcher outputs are copied into the final hosted report separately.
+    if not path.is_file() or path.name.startswith('hosted-final'):
+        continue
+    kind = 'file'
+    # Imported CI receipts keep their original remote paths as opaque evidence;
+    # only local receipts can resolve dependencies against this source root.
+    if path.suffix == '.json' and path.parent == EVIDENCE:
+        try:
+            document = read(path)
+            if isinstance(document, dict) and 'source_before' in document and 'stdout' in document:
+                kind = 't09_receipt'
+        except (ValueError, OSError):
+            pass
+    add(path, kind)
+
+for run in ('20260916T093643.7415204Z-12748-e8dee3d9',
+            '20260916T095121.4099438Z-14044-68ea5d1e',
+            '20260916T101032.2886881Z-28792-fe5928bc'):
+    for path in (ROOT / 'target/first-party' / run).rglob('*'):
+        kind = 'file'
+        if path.is_file() and path.suffix == '.json':
+            document = read(path)
+            if isinstance(document, dict) and 'source_before' in document and 'stdout' in document:
+                kind = 't09_receipt'
+        add(path, kind)
+
+for run in ('96635971-efdc-430f-aafc-cdbbf632c014', 'f5e2ada5-d304-48b7-8da3-392206fdd061',
+            '564a0881-eac6-4de3-a557-a77f168db0ff', '446b8912-c1a0-41af-ba59-b92c8ae0ed43'):
+    for path in (ROOT / 'tests/e2e/results' / run).rglob('*'):
+        add(path)
+add(ROOT / 'tests/perf/results/launch-1789553425005313700.json')
+
+inventory = []
+fixture = ROOT / 'target/release-fixture/d3761234fee14aaa88021adcf6fca563'
+for path in sorted(fixture.rglob('*')):
+    if not path.is_file():
+        continue
+    retained = path.suffix.lower() not in ('.exe', '.dll', '.pdb', '.wasm', '.blex', '.zip')
+    inventory.append({'path': relative(path), 'bytes': path.stat().st_size,
+                      'sha256': digest(path), 'bytes_retained': retained})
+    if retained:
+        add(path)
+write(REPORT / 'release-fixture-inventory.json', {
+    'schema_version': 1,
+    'scope': 'Fixture reports and metadata retained; listed binary assets remain local, not replay qualification',
+    'files': inventory})
+
+for path in REPORT.iterdir():
+    if path.name not in ('collection-plan.json', 'retention-receipt.json', 'retention-verification.json'):
+        add(path)
+for name in (
+    'docs/IMPLEMENTATION_STATUS.md', 'docs/UNLOCK_CHECKLIST.md',
+    'docs/implementation/production-readiness/FULL-SUITE-20260916.md',
+    'docs/implementation/production-readiness/BACKLOG.json',
+    'docs/implementation/production-readiness/BACKLOG.md',
+    'docs/implementation/production-readiness/KNOWN-LIMITS-20260916.md',
+    '.cargo/config.toml', '.gitattributes', 'Cargo.lock',
+    '.github/workflows/ci.yml', '.github/workflows/supply-chain.yml',
+    '.github/workflows/clippy-baseline.json', '.github/workflows/run_test_evidence.py',
+    'crates/file-io/src/qa_faults.rs', 'crates/file-io/src/recovery_retirement.rs',
+    'crates/app/src/workspace.rs', 'crates/file-io/src/resident_recovery.rs',
+    'crates/app/src/workspace/new_document.rs', 'crates/editor-surface/src/lib.rs',
+    'crates/platform-windows/src/lib.rs', 'apps/bareline/Cargo.toml',
+    'apps/bareline/examples/recovery_inspect.rs', 'apps/bareline/src/qa_faults.rs',
+    'apps/bareline/src/main.rs', 'crates/file-io/src/lib.rs', 'tests/e2e/WINDOWS-LAB.md'):
+    path = ROOT / name
+    if not path.is_file():
+        raise SystemExit(f'Expected source file missing: {name}')
+    add(path, 'source')
+write(REPORT / 'collection-plan.json', {
+    'schema_version': 1, 'kind': 'evidence_collection_plan',
+    'label': 'Full Windows automated suite and unsigned local preview smoke; byte retention only, not release acceptance',
+    'files': [{'path': name, 'kind': kind} for name, kind in sorted(selected.items())]})
+print(json.dumps({'receipts': len(records), 'selected_files': len(selected),
+                  'selected_bytes': sum((ROOT / name).stat().st_size for name in selected),
+                  'fixture_inventory_entries': len(inventory)}))

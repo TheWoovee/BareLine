@@ -1,0 +1,258 @@
+{
+  "schema_version": 1,
+  "scope": "Fixture reports and metadata retained; listed binary assets remain local, not replay qualification",
+  "files": [
+    {
+      "path": "target/release-fixture/d3761234fee14aaa88021adcf6fca563/build-capabilities.json",
+      "bytes": 1130,
+      "sha256": "634c83991b9bd17f01722dab643612e4fff73697a95f49f3d7213660576bf8b9",
+      "bytes_retained": true
+    },
+    {
+      "path": "target/release-fixture/d3761234fee14aaa88021adcf6fca563/component-packages/hex-view.blex",
+      "bytes": 7118506,
+      "sha256": "d44d1fc627fb1bfa540615e8d2dae17cb74f25cd25c2d168ce59a7e3d8bfb513",
+      "bytes_retained": false
+    },
+    {
+      "path": "target/release-fixture/d3761234fee14aaa88021adcf6fca563/component-packages/json-tools.blex",
+      "bytes": 7276488,
+      "sha256": "4cf13037efe3344fa993640e8013a5bb3f57eff6ac6e763d6cb23a928925ace0",
+      "bytes_retained": false
+    },
+    {
+      "path": "target/release-fixture/d3761234fee14aaa88021adcf6fca563/component-packages/xml-tools.blex",
+      "bytes": 8096745,
+      "sha256": "cb43d5b81260420f012bbf61552e83b2be205ae274c4039f8c9726faa02829ca",
+      "bytes_retained": false
+    },
+    {
+      "path": "target/release-fixture/d3761234fee14aaa88021adcf6fca563/connected-delivery/catalog-source/4cf13037efe3344fa993640e8013a5bb3f57eff6ac6e763d6cb23a928925ace0.blex",
+      "bytes": 16,
+      "sha256": "99fc76a1c844dd6783772d4d8435329eb89cf54d10f3730b96ef9c66308b3617",
+      "bytes_retained": false
+    },
+    {
+      "path": "target/release-fixture/d3761234fee14aaa88021adcf6fca563/connected-delivery/catalog-source/cb43d5b81260420f012bbf61552e83b2be205ae274c4039f8c9726faa02829ca.blex",
+      "bytes": 8096745,
+      "sha256": "cb43d5b81260420f012bbf61552e83b2be205ae274c4039f8c9726faa02829ca",
+      "bytes_retained": false
+    },
+    {
+      "path": "target/release-fixture/d3761234fee14aaa88021adcf6fca563/connected-delivery/catalog-source/d44d1fc627fb1bfa540615e8d2dae17cb74f25cd25c2d168ce59a7e3d8bfb513.blex",
+      "bytes": 7118506,
+      "sha256": "d44d1fc627fb1bfa540615e8d2dae17cb74f25cd25c2d168ce59a7e3d8bfb513",
+      "bytes_retained": false
+    },
+    {
+      "path": "target/release-fixture/d3761234fee14aaa88021adcf6fca563/connected-delivery/catalog.json",
+      "bytes": 1075,
+      "sha256": "ae9084ff0109678fa10293e2d48c7ad723b2a437b2560b2a1d608c4a1dd3425c",
+      "bytes_retained": true
+    },
+    {
+      "path": "target/release-fixture/d3761234fee14aaa88021adcf6fca563/connected-delivery/catalog.minisig",
+      "bytes": 276,
+      "sha256": "7d232f0578a2f2eb480df9f00d1f38f14997dec8f1a6cf79bab055bf823d22b3",
+      "bytes_retained": true
+    },
+    {
+      "path": "target/release-fixture/d3761234fee14aaa88021adcf6fca563/connected-delivery/corrupt-runtime.exe",
+      "bytes": 11445254,
+      "sha256": "3b90a8fae4fe3d2a686208e87ebacd2e6355501ee62fbaa34c597900d53b7d69",
+      "bytes_retained": false
+    },
+    {
+      "path": "target/release-fixture/d3761234fee14aaa88021adcf6fca563/connected-delivery/installation/4cf13037efe3344fa993640e8013a5bb3f57eff6ac6e763d6cb23a928925ace0/extension.wasm",
+      "bytes": 7275872,
+      "sha256": "9839adc52ae16a138b168a0a10f5f16059ea79b2e594a475ddd7f12e13055367",
+      "bytes_retained": false
+    },
+    {
+      "path": "target/release-fixture/d3761234fee14aaa88021adcf6fca563/connected-delivery/installation/4cf13037efe3344fa993640e8013a5bb3f57eff6ac6e763d6cb23a928925ace0/manifest.toml",
+      "bytes": 388,
+      "sha256": "0e01744c4b6cb35c4a8afaeb1520f02c77a49b50608948f2058bf957f67ded81",
+      "bytes_retained": true
+    },
+    {
+      "path": "target/release-fixture/d3761234fee14aaa88021adcf6fca563/connected-delivery/installation/4cf13037efe3344fa993640e8013a5bb3f57eff6ac6e763d6cb23a928925ace0.blex",
+      "bytes": 7276488,
+      "sha256": "4cf13037efe3344fa993640e8013a5bb3f57eff6ac6e763d6cb23a928925ace0",
+      "bytes_retained": false
+    },
+    {
+      "path": "target/release-fixture/d3761234fee14aaa88021adcf6fca563/connected-delivery/installation/4cf13037efe3344fa993640e8013a5bb3f57eff6ac6e763d6cb23a928925ace0.receipt.json",
+      "bytes": 1543,
+      "sha256": "7a44efefe4125440893efea2b487fcf92e47a71c5643506f5f3f23451cad81ef",
+      "bytes_retained": true
+    },
+    {
+      "path": "target/release-fixture/d3761234fee14aaa88021adcf6fca563/connected-delivery/installation/cb43d5b81260420f012bbf61552e83b2be205ae274c4039f8c9726faa02829ca/extension.wasm",
+      "bytes": 8096196,
+      "sha256": "96044206339cd03ab09312457e3ea6ee7ff5d61629340c75e3f4e0a116884894",
+      "bytes_retained": false
+    },
+    {
+      "path": "target/release-fixture/d3761234fee14aaa88021adcf6fca563/connected-delivery/installation/cb43d5b81260420f012bbf61552e83b2be205ae274c4039f8c9726faa02829ca/manifest.toml",
+      "bytes": 321,
+      "sha256": "756e916eca2a19670ea451f9c88a02cac97728ac8b34ff7867cb5a7ba0ec0a64",
+      "bytes_retained": true
+    },
+    {
+      "path": "target/release-fixture/d3761234fee14aaa88021adcf6fca563/connected-delivery/installation/cb43d5b81260420f012bbf61552e83b2be205ae274c4039f8c9726faa02829ca.blex",
+      "bytes": 8096745,
+      "sha256": "cb43d5b81260420f012bbf61552e83b2be205ae274c4039f8c9726faa02829ca",
+      "bytes_retained": false
+    },
+    {
+      "path": "target/release-fixture/d3761234fee14aaa88021adcf6fca563/connected-delivery/installation/cb43d5b81260420f012bbf61552e83b2be205ae274c4039f8c9726faa02829ca.receipt.json",
+      "bytes": 1543,
+      "sha256": "7a44efefe4125440893efea2b487fcf92e47a71c5643506f5f3f23451cad81ef",
+      "bytes_retained": true
+    },
+    {
+      "path": "target/release-fixture/d3761234fee14aaa88021adcf6fca563/connected-delivery/installation/d44d1fc627fb1bfa540615e8d2dae17cb74f25cd25c2d168ce59a7e3d8bfb513/extension.wasm",
+      "bytes": 7117998,
+      "sha256": "c5f5097d070e538b14ea5cf331fdb42f1e490970bf125e8c0b4596ba03cbbdfe",
+      "bytes_retained": false
+    },
+    {
+      "path": "target/release-fixture/d3761234fee14aaa88021adcf6fca563/connected-delivery/installation/d44d1fc627fb1bfa540615e8d2dae17cb74f25cd25c2d168ce59a7e3d8bfb513/manifest.toml",
+      "bytes": 280,
+      "sha256": "b048a3d598bfd6a5e83e9b9f953b378f1a0fd54b9c35c9ff13318f3a31c84181",
+      "bytes_retained": true
+    },
+    {
+      "path": "target/release-fixture/d3761234fee14aaa88021adcf6fca563/connected-delivery/installation/d44d1fc627fb1bfa540615e8d2dae17cb74f25cd25c2d168ce59a7e3d8bfb513.blex",
+      "bytes": 7118506,
+      "sha256": "d44d1fc627fb1bfa540615e8d2dae17cb74f25cd25c2d168ce59a7e3d8bfb513",
+      "bytes_retained": false
+    },
+    {
+      "path": "target/release-fixture/d3761234fee14aaa88021adcf6fca563/connected-delivery/installation/d44d1fc627fb1bfa540615e8d2dae17cb74f25cd25c2d168ce59a7e3d8bfb513.receipt.json",
+      "bytes": 1543,
+      "sha256": "7a44efefe4125440893efea2b487fcf92e47a71c5643506f5f3f23451cad81ef",
+      "bytes_retained": true
+    },
+    {
+      "path": "target/release-fixture/d3761234fee14aaa88021adcf6fca563/connected-delivery/installation/manager-v1.json",
+      "bytes": 665,
+      "sha256": "847cf28307a8d99f08d46f11e2379ed805447a63a13802d57237bbb68b0091c4",
+      "bytes_retained": true
+    },
+    {
+      "path": "target/release-fixture/d3761234fee14aaa88021adcf6fca563/connected-delivery/installation/runtimes/1f6d58e4066c1b42e4d3097e1ddca5f0f8f317c3d030ae6cf0fd431023c273bd/accepted-at",
+      "bytes": 11,
+      "sha256": "14b8e679ce41a4c5f0b0b5ae0812b656bc5123a3440919dc39606ac1f3bfd2b2",
+      "bytes_retained": true
+    },
+    {
+      "path": "target/release-fixture/d3761234fee14aaa88021adcf6fca563/connected-delivery/installation/runtimes/1f6d58e4066c1b42e4d3097e1ddca5f0f8f317c3d030ae6cf0fd431023c273bd/bareline-extension-host.exe",
+      "bytes": 11445248,
+      "sha256": "1f6d58e4066c1b42e4d3097e1ddca5f0f8f317c3d030ae6cf0fd431023c273bd",
+      "bytes_retained": false
+    },
+    {
+      "path": "target/release-fixture/d3761234fee14aaa88021adcf6fca563/connected-delivery/installation/runtimes/1f6d58e4066c1b42e4d3097e1ddca5f0f8f317c3d030ae6cf0fd431023c273bd/runtime.json",
+      "bytes": 306,
+      "sha256": "e71144915d1b1fc47d51ef96fdbf5dd988189a67935bf68c7bcf0d86086e056a",
+      "bytes_retained": true
+    },
+    {
+      "path": "target/release-fixture/d3761234fee14aaa88021adcf6fca563/connected-delivery/installation/runtimes/1f6d58e4066c1b42e4d3097e1ddca5f0f8f317c3d030ae6cf0fd431023c273bd/runtime.minisig",
+      "bytes": 276,
+      "sha256": "80ebb32e1b06045baac2805a8df2f601a9841bef549183765977ec6f54393828",
+      "bytes_retained": true
+    },
+    {
+      "path": "target/release-fixture/d3761234fee14aaa88021adcf6fca563/connected-delivery/installed-artifacts.json",
+      "bytes": 1643,
+      "sha256": "4178407ffde3984de1333feb3973b0dcf3e883532b1e4e3d7b9b89cce64bfcff",
+      "bytes_retained": true
+    },
+    {
+      "path": "target/release-fixture/d3761234fee14aaa88021adcf6fca563/delivery-assets/bareline-exthost-x64.exe",
+      "bytes": 11445248,
+      "sha256": "1f6d58e4066c1b42e4d3097e1ddca5f0f8f317c3d030ae6cf0fd431023c273bd",
+      "bytes_retained": false
+    },
+    {
+      "path": "target/release-fixture/d3761234fee14aaa88021adcf6fca563/delivery-assets/catalog-inventory.json",
+      "bytes": 982,
+      "sha256": "38d83bb848226ba7d0bcaa741c6a871843d04f397d6d73f3c636121bff2973a1",
+      "bytes_retained": true
+    },
+    {
+      "path": "target/release-fixture/d3761234fee14aaa88021adcf6fca563/delivery-assets/catalog.json",
+      "bytes": 1075,
+      "sha256": "ae9084ff0109678fa10293e2d48c7ad723b2a437b2560b2a1d608c4a1dd3425c",
+      "bytes_retained": true
+    },
+    {
+      "path": "target/release-fixture/d3761234fee14aaa88021adcf6fca563/delivery-assets/catalog.json.minisig",
+      "bytes": 276,
+      "sha256": "7d232f0578a2f2eb480df9f00d1f38f14997dec8f1a6cf79bab055bf823d22b3",
+      "bytes_retained": true
+    },
+    {
+      "path": "target/release-fixture/d3761234fee14aaa88021adcf6fca563/delivery-assets/components-inventory.json",
+      "bytes": 1169,
+      "sha256": "b081d0117ba3ec9c278b18685e974a70826a36ccb8c8627f5a77d48db583b954",
+      "bytes_retained": true
+    },
+    {
+      "path": "target/release-fixture/d3761234fee14aaa88021adcf6fca563/delivery-assets/hex-view.blex",
+      "bytes": 7118506,
+      "sha256": "d44d1fc627fb1bfa540615e8d2dae17cb74f25cd25c2d168ce59a7e3d8bfb513",
+      "bytes_retained": false
+    },
+    {
+      "path": "target/release-fixture/d3761234fee14aaa88021adcf6fca563/delivery-assets/json-tools.blex",
+      "bytes": 7276488,
+      "sha256": "4cf13037efe3344fa993640e8013a5bb3f57eff6ac6e763d6cb23a928925ace0",
+      "bytes_retained": false
+    },
+    {
+      "path": "target/release-fixture/d3761234fee14aaa88021adcf6fca563/delivery-assets/runtime-inventory.json",
+      "bytes": 814,
+      "sha256": "117ba1bd6db7ab99d39b78084d3546496d0eed871bd36abc11b36aca58ae944b",
+      "bytes_retained": true
+    },
+    {
+      "path": "target/release-fixture/d3761234fee14aaa88021adcf6fca563/delivery-assets/xml-tools.blex",
+      "bytes": 8096745,
+      "sha256": "cb43d5b81260420f012bbf61552e83b2be205ae274c4039f8c9726faa02829ca",
+      "bytes_retained": false
+    },
+    {
+      "path": "target/release-fixture/d3761234fee14aaa88021adcf6fca563/fixture-delivery-report.json",
+      "bytes": 2320,
+      "sha256": "0ba6d272f2a6f8f441559c0066fb0c106b9708f013b804aa3f9be4ace905a82a",
+      "bytes_retained": true
+    },
+    {
+      "path": "target/release-fixture/d3761234fee14aaa88021adcf6fca563/release-config.prepared",
+      "bytes": 2503,
+      "sha256": "efb82785621a5ff6b8ea19349338a3342a9c1415893277919183242c50ee24c2",
+      "bytes_retained": true
+    },
+    {
+      "path": "target/release-fixture/d3761234fee14aaa88021adcf6fca563/unsigned-executables/bareline-extension-host.exe",
+      "bytes": 11445248,
+      "sha256": "1f6d58e4066c1b42e4d3097e1ddca5f0f8f317c3d030ae6cf0fd431023c273bd",
+      "bytes_retained": false
+    },
+    {
+      "path": "target/release-fixture/d3761234fee14aaa88021adcf6fca563/unsigned-executables/bareline-update-helper.exe",
+      "bytes": 367616,
+      "sha256": "6df073c22912d1d09334893b801bfcd546abf56f6d55031b31c46bb517979eb1",
+      "bytes_retained": false
+    },
+    {
+      "path": "target/release-fixture/d3761234fee14aaa88021adcf6fca563/unsigned-executables/bareline.exe",
+      "bytes": 10158080,
+      "sha256": "8001a3585608334cc2f65b139545729396080d2a679c22dc00d5ef578c6e54f5",
+      "bytes_retained": false
+    }
+  ]
+}

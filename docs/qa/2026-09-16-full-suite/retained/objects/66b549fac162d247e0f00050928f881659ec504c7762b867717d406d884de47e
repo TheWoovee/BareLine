@@ -1,0 +1,412 @@
+﻿2026-09-16T09:17:09.5456716Z Current runner version: '2.337.0'
+2026-09-16T09:17:09.5487709Z ##[group]Runner Image Provisioner
+2026-09-16T09:17:09.5489068Z Hosted Compute Agent
+2026-09-16T09:17:09.5490335Z Version: 20260828.587
+2026-09-16T09:17:09.5491823Z Commit: abac92662cab4cc7352de4f9f9d2e2419aad9c29
+2026-09-16T09:17:09.5492730Z Build Date: 2026-08-28T16:44:25Z
+2026-09-16T09:17:09.5493791Z Worker ID: {7455dd49-af79-4f51-9c2e-9cf23a3cee7d}
+2026-09-16T09:17:09.5495105Z Azure Region: eastus2
+2026-09-16T09:17:09.5496213Z ##[endgroup]
+2026-09-16T09:17:09.5498995Z ##[group]Operating System
+2026-09-16T09:17:09.5500158Z Microsoft Windows Server 2025
+2026-09-16T09:17:09.5501228Z 10.0.26100
+2026-09-16T09:17:09.5502113Z Datacenter
+2026-09-16T09:17:09.5503286Z ##[endgroup]
+2026-09-16T09:17:09.5504216Z ##[group]Runner Image
+2026-09-16T09:17:09.5505263Z Image: windows-2025-vs2026
+2026-09-16T09:17:09.5506182Z Version: 20260907.229.1
+2026-09-16T09:17:09.5509360Z Included Software: https://github.com/actions/runner-images/blob/win25-vs2026/20260907.229/images/windows/Windows2025-VS2026-Readme.md
+2026-09-16T09:17:09.5512384Z Image Release: https://github.com/actions/runner-images/releases/tag/win25-vs2026%2F20260907.229
+2026-09-16T09:17:09.5514653Z ##[endgroup]
+2026-09-16T09:17:09.5516505Z ##[group]GITHUB_TOKEN Permissions
+2026-09-16T09:17:09.5519461Z Contents: read
+2026-09-16T09:17:09.5520396Z Metadata: read
+2026-09-16T09:17:09.5521332Z ##[endgroup]
+2026-09-16T09:17:09.5524153Z Secret source: Actions
+2026-09-16T09:17:09.5525711Z Cache mode: write
+2026-09-16T09:17:09.5527212Z Prepare workflow directory
+2026-09-16T09:17:09.5944601Z Prepare all required actions
+2026-09-16T09:17:09.5998568Z Getting action download info
+2026-09-16T09:17:09.7838173Z Download action repository 'actions/checkout@v4' (SHA:11d5960a326750d5838078e36cf38b85af677262)
+2026-09-16T09:17:09.9150448Z Download action repository 'dtolnay/rust-toolchain@master' (SHA:02cb101ec7c40f2c49e1d9714d64511d8e1b74de)
+2026-09-16T09:17:10.0238421Z Download action repository 'actions/setup-python@v5' (SHA:a26af69be951a213d495a4c3e4e4022e16d87065)
+2026-09-16T09:17:10.1678371Z Download action repository 'actions/upload-artifact@v4' (SHA:ea165f8d65b6e75b540449e92b4886f43607fa02)
+2026-09-16T09:17:10.5650303Z Complete job name: native
+2026-09-16T09:17:10.7248664Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-09-16T09:17:10.7259788Z ##[group]Run actions/checkout@v4
+2026-09-16T09:17:10.7260874Z with:
+2026-09-16T09:17:10.7261461Z   repository: TheWoovee/BareLine
+2026-09-16T09:17:10.7265882Z   token: ***
+2026-09-16T09:17:10.7266325Z   ssh-strict: true
+2026-09-16T09:17:10.7266768Z   ssh-user: git
+2026-09-16T09:17:10.7267220Z   persist-credentials: true
+2026-09-16T09:17:10.7267704Z   clean: true
+2026-09-16T09:17:10.7268193Z   sparse-checkout-cone-mode: true
+2026-09-16T09:17:10.7268716Z   fetch-depth: 1
+2026-09-16T09:17:10.7269149Z   fetch-tags: false
+2026-09-16T09:17:10.7269596Z   show-progress: true
+2026-09-16T09:17:10.7270049Z   lfs: false
+2026-09-16T09:17:10.7270520Z   submodules: false
+2026-09-16T09:17:10.7270970Z   set-safe-directory: true
+2026-09-16T09:17:10.7271476Z   allow-unsafe-pr-checkout: false
+2026-09-16T09:17:10.7272291Z ##[endgroup]
+2026-09-16T09:17:10.8763970Z Syncing repository: TheWoovee/BareLine
+2026-09-16T09:17:10.8765907Z ##[group]Getting Git version info
+2026-09-16T09:17:10.8766610Z Working directory is 'D:\a\BareLine\BareLine'
+2026-09-16T09:17:10.9651981Z [command]"C:\Program Files\Git\bin\git.exe" version
+2026-09-16T09:17:11.2781599Z git version 2.55.0.windows.5
+2026-09-16T09:17:11.2839207Z ##[endgroup]
+2026-09-16T09:17:11.2865160Z Temporarily overriding HOME='D:\a\_temp\5f911ba1-5165-4894-ba0a-6d072d01f7c4' before making global git config changes
+2026-09-16T09:17:11.2878943Z Adding repository directory to the temporary git global config as a safe directory
+2026-09-16T09:17:11.2880326Z [command]"C:\Program Files\Git\bin\git.exe" config --global --add safe.directory D:\a\BareLine\BareLine
+2026-09-16T09:17:11.3522644Z Deleting the contents of 'D:\a\BareLine\BareLine'
+2026-09-16T09:17:11.3529472Z ##[group]Initializing the repository
+2026-09-16T09:17:11.3538810Z [command]"C:\Program Files\Git\bin\git.exe" init D:\a\BareLine\BareLine
+2026-09-16T09:17:11.4604145Z Initialized empty Git repository in D:/a/BareLine/BareLine/.git/
+2026-09-16T09:17:11.4655555Z [command]"C:\Program Files\Git\bin\git.exe" remote add origin https://github.com/TheWoovee/BareLine
+2026-09-16T09:17:11.5183984Z ##[endgroup]
+2026-09-16T09:17:11.5185203Z ##[group]Disabling automatic garbage collection
+2026-09-16T09:17:11.5195194Z [command]"C:\Program Files\Git\bin\git.exe" config --local gc.auto 0
+2026-09-16T09:17:11.5585728Z ##[endgroup]
+2026-09-16T09:17:11.5587289Z ##[group]Setting up auth
+2026-09-16T09:17:11.5601949Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp core\.sshCommand
+2026-09-16T09:17:11.6187002Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :\""
+2026-09-16T09:17:12.8929637Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-09-16T09:17:12.9225813Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :\""
+2026-09-16T09:17:13.4523773Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-09-16T09:17:13.4832862Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "git config --local --show-origin --name-only --get-regexp remote.origin.url"
+2026-09-16T09:17:14.1257411Z [command]"C:\Program Files\Git\bin\git.exe" config --local http.https://github.com/.extraheader "AUTHORIZATION: basic ***"
+2026-09-16T09:17:14.1558321Z ##[endgroup]
+2026-09-16T09:17:14.1558998Z ##[group]Fetching the repository
+2026-09-16T09:17:14.1568581Z [command]"C:\Program Files\Git\bin\git.exe" -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +e74780f2eac3727a80d0387b513eb4c1b80d5a23:refs/remotes/origin/master
+2026-09-16T09:17:17.9767837Z From https://github.com/TheWoovee/BareLine
+2026-09-16T09:17:17.9768899Z  * [new ref]         e74780f2eac3727a80d0387b513eb4c1b80d5a23 -> origin/master
+2026-09-16T09:17:17.9810085Z ##[endgroup]
+2026-09-16T09:17:17.9810481Z ##[group]Determining the checkout info
+2026-09-16T09:17:17.9813326Z ##[endgroup]
+2026-09-16T09:17:17.9828034Z [command]"C:\Program Files\Git\bin\git.exe" sparse-checkout disable
+2026-09-16T09:17:18.0166144Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset-all extensions.worktreeConfig
+2026-09-16T09:17:18.0463433Z ##[group]Checking out the ref
+2026-09-16T09:17:18.0472413Z [command]"C:\Program Files\Git\bin\git.exe" checkout --progress --force -B master refs/remotes/origin/master
+2026-09-16T09:17:19.0901064Z Updating files:  60% (2121/3529)
+2026-09-16T09:17:19.1047834Z Updating files:  61% (2153/3529)
+2026-09-16T09:17:19.1141795Z Updating files:  62% (2188/3529)
+2026-09-16T09:17:19.1414837Z Updating files:  63% (2224/3529)
+2026-09-16T09:17:19.1502901Z Updating files:  64% (2259/3529)
+2026-09-16T09:17:19.1603785Z Updating files:  65% (2294/3529)
+2026-09-16T09:17:19.2947538Z Updating files:  66% (2330/3529)
+2026-09-16T09:17:19.3049368Z Updating files:  67% (2365/3529)
+2026-09-16T09:17:19.4382749Z Updating files:  68% (2400/3529)
+2026-09-16T09:17:19.4489382Z Updating files:  69% (2436/3529)
+2026-09-16T09:17:19.4674272Z Updating files:  70% (2471/3529)
+2026-09-16T09:17:19.4770156Z Updating files:  71% (2506/3529)
+2026-09-16T09:17:19.4909948Z Updating files:  72% (2541/3529)
+2026-09-16T09:17:19.5035739Z Updating files:  73% (2577/3529)
+2026-09-16T09:17:19.5158926Z Updating files:  74% (2612/3529)
+2026-09-16T09:17:19.5280396Z Updating files:  75% (2647/3529)
+2026-09-16T09:17:19.5387181Z Updating files:  76% (2683/3529)
+2026-09-16T09:17:19.5646110Z Updating files:  77% (2718/3529)
+2026-09-16T09:17:19.5760667Z Updating files:  78% (2753/3529)
+2026-09-16T09:17:19.5847890Z Updating files:  79% (2788/3529)
+2026-09-16T09:17:19.7174771Z Updating files:  80% (2824/3529)
+2026-09-16T09:17:19.7282389Z Updating files:  81% (2859/3529)
+2026-09-16T09:17:19.8604689Z Updating files:  82% (2894/3529)
+2026-09-16T09:17:19.8713227Z Updating files:  83% (2930/3529)
+2026-09-16T09:17:19.8802039Z Updating files:  84% (2965/3529)
+2026-09-16T09:17:19.8895039Z Updating files:  85% (3000/3529)
+2026-09-16T09:17:19.9049269Z Updating files:  86% (3035/3529)
+2026-09-16T09:17:19.9155008Z Updating files:  87% (3071/3529)
+2026-09-16T09:17:19.9766484Z Updating files:  88% (3106/3529)
+2026-09-16T09:17:19.9881545Z Updating files:  89% (3141/3529)
+2026-09-16T09:17:20.0154516Z Updating files:  90% (3177/3529)
+2026-09-16T09:17:20.0487033Z Updating files:  91% (3212/3529)
+2026-09-16T09:17:20.0685491Z Updating files:  92% (3247/3529)
+2026-09-16T09:17:20.0798533Z Updating files:  93% (3282/3529)
+2026-09-16T09:17:20.0828389Z Updating files:  94% (3318/3529)
+2026-09-16T09:17:20.0907011Z Updating files:  94% (3328/3529)
+2026-09-16T09:17:20.1000897Z Updating files:  95% (3353/3529)
+2026-09-16T09:17:20.1145786Z Updating files:  96% (3388/3529)
+2026-09-16T09:17:20.1237442Z Updating files:  97% (3424/3529)
+2026-09-16T09:17:20.1332239Z Updating files:  98% (3459/3529)
+2026-09-16T09:17:20.1442513Z Updating files:  99% (3494/3529)
+2026-09-16T09:17:20.1445364Z Updating files: 100% (3529/3529)
+2026-09-16T09:17:20.1446029Z Updating files: 100% (3529/3529), done.
+2026-09-16T09:17:20.1618295Z Reset branch 'master'
+2026-09-16T09:17:20.1636613Z branch 'master' set up to track 'origin/master'.
+2026-09-16T09:17:20.1813236Z ##[endgroup]
+2026-09-16T09:17:20.2130928Z [command]"C:\Program Files\Git\bin\git.exe" log -1 --format=%H
+2026-09-16T09:17:20.2389381Z e74780f2eac3727a80d0387b513eb4c1b80d5a23
+2026-09-16T09:17:20.2950367Z ##[group]Run dtolnay/rust-toolchain@master
+2026-09-16T09:17:20.2950718Z with:
+2026-09-16T09:17:20.2950898Z   toolchain: 1.98.1
+2026-09-16T09:17:20.2951100Z   components: rustfmt, clippy
+2026-09-16T09:17:20.2951328Z ##[endgroup]
+2026-09-16T09:17:20.3018075Z ##[start-action display=Parse toolchain version;id=__dtolnay_rust-toolchain.parse]
+2026-09-16T09:17:20.3201704Z ##[group]Run if [[ -z $toolchain ]]; then
+2026-09-16T09:17:20.3202057Z [36;1mif [[ -z $toolchain ]]; then[0m
+2026-09-16T09:17:20.3202574Z [36;1m  # GitHub does not enforce `required: true` inputs itself. https://github.com/actions/runner/issues/1070[0m
+2026-09-16T09:17:20.3203108Z [36;1m  echo "'toolchain' is a required input" >&2[0m
+2026-09-16T09:17:20.3203399Z [36;1m  exit 1[0m
+2026-09-16T09:17:20.3203704Z [36;1melif [[ $toolchain =~ ^stable' '[0-9]+' '(year|month|week|day)s?' 'ago$ ]]; then[0m
+2026-09-16T09:17:20.3204410Z [36;1m  if [[ Windows == macOS ]]; then[0m
+2026-09-16T09:17:20.3204965Z [36;1m    echo "toolchain=1.$((($(date -v-$(sed 's/stable \([0-9]*\) \(.\).*/\1\2/' <<< $toolchain) +%s)/60/60/24-16569)/7/6))" >> $GITHUB_OUTPUT[0m
+2026-09-16T09:17:20.3205462Z [36;1m  else[0m
+2026-09-16T09:17:20.3205839Z [36;1m    echo "toolchain=1.$((($(date --date "${toolchain#stable }" +%s)/60/60/24-16569)/7/6))" >> $GITHUB_OUTPUT[0m
+2026-09-16T09:17:20.3206513Z [36;1m  fi[0m
+2026-09-16T09:17:20.3206882Z [36;1melif [[ $toolchain =~ ^stable' 'minus' '[0-9]+' 'releases?$ ]]; then[0m
+2026-09-16T09:17:20.3208818Z [36;1m  echo "toolchain=1.$((($(date +%s)/60/60/24-16569)/7/6-${toolchain//[^0-9]/}))" >> $GITHUB_OUTPUT[0m
+2026-09-16T09:17:20.3209411Z [36;1melif [[ $toolchain =~ ^1\.[0-9]+$ ]]; then[0m
+2026-09-16T09:17:20.3210326Z [36;1m  echo "toolchain=1.$((i=${toolchain#1.}, c=($(date +%s)/60/60/24-16569)/7/6, i+9*i*(10*i<=c)+90*i*(100*i<=c)))" >> $GITHUB_OUTPUT[0m
+2026-09-16T09:17:20.3210924Z [36;1melse[0m
+2026-09-16T09:17:20.3211213Z [36;1m  echo "toolchain=$toolchain" >> $GITHUB_OUTPUT[0m
+2026-09-16T09:17:20.3211551Z [36;1mfi[0m
+2026-09-16T09:17:20.3242847Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-09-16T09:17:20.3243267Z env:
+2026-09-16T09:17:20.3243453Z   toolchain: 1.98.1
+2026-09-16T09:17:20.3243646Z ##[endgroup]
+2026-09-16T09:17:20.4909795Z ##[end-action id=__dtolnay_rust-toolchain.parse;outcome=success;conclusion=success;duration_ms=189]
+2026-09-16T09:17:20.4924091Z ##[start-action display=Construct rustup command line;id=__dtolnay_rust-toolchain.flags]
+2026-09-16T09:17:20.5069639Z ##[group]Run echo "targets=$(for t in ${targets//,/ }; do echo -n ' --target' $t; done)" >> $GITHUB_OUTPUT
+2026-09-16T09:17:20.5070267Z [36;1mecho "targets=$(for t in ${targets//,/ }; do echo -n ' --target' $t; done)" >> $GITHUB_OUTPUT[0m
+2026-09-16T09:17:20.5070904Z [36;1mecho "components=$(for c in ${components//,/ }; do echo -n ' --component' $c; done)" >> $GITHUB_OUTPUT[0m
+2026-09-16T09:17:20.5071384Z [36;1mecho "downgrade=" >> $GITHUB_OUTPUT[0m
+2026-09-16T09:17:20.5087953Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-09-16T09:17:20.5088330Z env:
+2026-09-16T09:17:20.5088486Z   targets: 
+2026-09-16T09:17:20.5088663Z   components: rustfmt, clippy
+2026-09-16T09:17:20.5088877Z ##[endgroup]
+2026-09-16T09:17:20.5709472Z ##[end-action id=__dtolnay_rust-toolchain.flags;outcome=success;conclusion=success;duration_ms=78]
+2026-09-16T09:17:20.5711956Z ##[start-action display=Set $CARGO_HOME;id=__dtolnay_rust-toolchain.__run]
+2026-09-16T09:17:20.5843184Z ##[group]Run echo CARGO_HOME=${CARGO_HOME:-"$USERPROFILE\.cargo"} >> $GITHUB_ENV
+2026-09-16T09:17:20.5843669Z [36;1mecho CARGO_HOME=${CARGO_HOME:-"$USERPROFILE\.cargo"} >> $GITHUB_ENV[0m
+2026-09-16T09:17:20.5860014Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-09-16T09:17:20.5860409Z ##[endgroup]
+2026-09-16T09:17:20.6261382Z ##[end-action id=__dtolnay_rust-toolchain.__run;outcome=success;conclusion=success;duration_ms=54]
+2026-09-16T09:17:20.6264152Z ##[start-action display=Install rustup if needed;id=__dtolnay_rust-toolchain.__run_2]
+2026-09-16T09:17:20.6275684Z ##[end-action id=__dtolnay_rust-toolchain.__run_2;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-09-16T09:17:20.6277864Z ##[start-action display=Install rustup if needed on windows;id=__dtolnay_rust-toolchain.__run_3]
+2026-09-16T09:17:20.6441256Z ##[group]Run if ! command -v rustup &>/dev/null; then
+2026-09-16T09:17:20.6441608Z [36;1mif ! command -v rustup &>/dev/null; then[0m
+2026-09-16T09:17:20.6442369Z [36;1m  curl --proto '=https' --tlsv1.2 --retry 10 --retry-connrefused --location --silent --show-error --fail https://win.rustup.rs/x86_64 --output 'D:\a\_temp\rustup-init.exe'[0m
+2026-09-16T09:17:20.6443234Z [36;1m  'D:\a\_temp\rustup-init.exe' --default-toolchain none --no-modify-path -y[0m
+2026-09-16T09:17:20.6443658Z [36;1m  echo "$CARGO_HOME\bin" >> $GITHUB_PATH[0m
+2026-09-16T09:17:20.6443909Z [36;1mfi[0m
+2026-09-16T09:17:20.6459904Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-09-16T09:17:20.6460289Z env:
+2026-09-16T09:17:20.6460484Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-09-16T09:17:20.6460735Z ##[endgroup]
+2026-09-16T09:17:20.6978942Z ##[end-action id=__dtolnay_rust-toolchain.__run_3;outcome=success;conclusion=success;duration_ms=70]
+2026-09-16T09:17:20.6992235Z ##[start-action display=rustup toolchain install 1.98.1;id=__dtolnay_rust-toolchain.__run_4]
+2026-09-16T09:17:20.7126087Z ##[group]Run rustup toolchain install 1.98.1 --component rustfmt --component clippy --profile minimal --no-self-update --force-non-host
+2026-09-16T09:17:20.7126966Z [36;1mrustup toolchain install 1.98.1 --component rustfmt --component clippy --profile minimal --no-self-update --force-non-host[0m
+2026-09-16T09:17:20.7143462Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-09-16T09:17:20.7144031Z env:
+2026-09-16T09:17:20.7144242Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-09-16T09:17:20.7144514Z   RUSTUP_PERMIT_COPY_RENAME: 1
+2026-09-16T09:17:20.7144731Z ##[endgroup]
+2026-09-16T09:17:21.3302704Z info: syncing channel updates for 1.98.1-x86_64-pc-windows-msvc
+2026-09-16T09:17:21.8242067Z info: latest update on 2026-09-03 for version 1.98.1 (48a229cea 2026-09-01)
+2026-09-16T09:17:21.8349314Z info: downloading 5 components
+2026-09-16T09:17:30.8437143Z 
+2026-09-16T09:17:30.8752429Z   1.98.1-x86_64-pc-windows-msvc installed - rustc 1.98.1 (48a229cea 2026-09-01)
+2026-09-16T09:17:30.8752796Z 
+2026-09-16T09:17:30.8861910Z ##[end-action id=__dtolnay_rust-toolchain.__run_4;outcome=success;conclusion=success;duration_ms=10186]
+2026-09-16T09:17:30.8868135Z ##[start-action display=rustup default 1.98.1;id=__dtolnay_rust-toolchain.__run_5]
+2026-09-16T09:17:30.9001895Z ##[group]Run rustup default 1.98.1 --force-non-host
+2026-09-16T09:17:30.9002224Z [36;1mrustup default 1.98.1 --force-non-host[0m
+2026-09-16T09:17:30.9017242Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-09-16T09:17:30.9017629Z env:
+2026-09-16T09:17:30.9017817Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-09-16T09:17:30.9018065Z ##[endgroup]
+2026-09-16T09:17:30.9695248Z info: using existing install for 1.98.1-x86_64-pc-windows-msvc
+2026-09-16T09:17:30.9737853Z info: default toolchain set to 1.98.1-x86_64-pc-windows-msvc
+2026-09-16T09:17:30.9739984Z 
+2026-09-16T09:17:30.9932622Z   1.98.1-x86_64-pc-windows-msvc unchanged - rustc 1.98.1 (48a229cea 2026-09-01)
+2026-09-16T09:17:30.9932962Z 
+2026-09-16T09:17:30.9938300Z info: note that the toolchain '1.98.1-x86_64-pc-windows-msvc' is currently in use (overridden by 'D:\a\BareLine\BareLine\rust-toolchain.toml')
+2026-09-16T09:17:31.0016321Z ##[end-action id=__dtolnay_rust-toolchain.__run_5;outcome=success;conclusion=success;duration_ms=114]
+2026-09-16T09:17:31.0018662Z ##[start-action display=Create cachekey;id=__dtolnay_rust-toolchain.rustc-version]
+2026-09-16T09:17:31.0148681Z ##[group]Run DATE=$(rustc +1.98.1 --version --verbose | sed -ne 's/^commit-date: \(20[0-9][0-9]\)-\([01][0-9]\)-\([0-3][0-9]\)$/\1\2\3/p')
+2026-09-16T09:17:31.0149516Z [36;1mDATE=$(rustc +1.98.1 --version --verbose | sed -ne 's/^commit-date: \(20[0-9][0-9]\)-\([01][0-9]\)-\([0-3][0-9]\)$/\1\2\3/p')[0m
+2026-09-16T09:17:31.0150130Z [36;1mHASH=$(rustc +1.98.1 --version --verbose | sed -ne 's/^commit-hash: //p')[0m
+2026-09-16T09:17:31.0150604Z [36;1mecho "cachekey=$(echo $DATE$HASH | head -c12)" >> $GITHUB_OUTPUT[0m
+2026-09-16T09:17:31.0165850Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-09-16T09:17:31.0166231Z env:
+2026-09-16T09:17:31.0166417Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-09-16T09:17:31.0166684Z ##[endgroup]
+2026-09-16T09:17:31.7754628Z ##[end-action id=__dtolnay_rust-toolchain.rustc-version;outcome=success;conclusion=success;duration_ms=773]
+2026-09-16T09:17:31.7757172Z ##[start-action display=Disable incremental compilation;id=__dtolnay_rust-toolchain.__run_6]
+2026-09-16T09:17:31.7887198Z ##[group]Run if [ -z "${CARGO_INCREMENTAL+set}" ]; then
+2026-09-16T09:17:31.7887548Z [36;1mif [ -z "${CARGO_INCREMENTAL+set}" ]; then[0m
+2026-09-16T09:17:31.7887843Z [36;1m  echo CARGO_INCREMENTAL=0 >> $GITHUB_ENV[0m
+2026-09-16T09:17:31.7888093Z [36;1mfi[0m
+2026-09-16T09:17:31.7903017Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-09-16T09:17:31.7903386Z env:
+2026-09-16T09:17:31.7903571Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-09-16T09:17:31.7903819Z ##[endgroup]
+2026-09-16T09:17:31.8299266Z ##[end-action id=__dtolnay_rust-toolchain.__run_6;outcome=success;conclusion=success;duration_ms=54]
+2026-09-16T09:17:31.8302188Z ##[start-action display=Enable colors in Cargo output;id=__dtolnay_rust-toolchain.__run_7]
+2026-09-16T09:17:31.8425556Z ##[group]Run if [ -z "${CARGO_TERM_COLOR+set}" ]; then
+2026-09-16T09:17:31.8425893Z [36;1mif [ -z "${CARGO_TERM_COLOR+set}" ]; then[0m
+2026-09-16T09:17:31.8426211Z [36;1m  echo CARGO_TERM_COLOR=always >> $GITHUB_ENV[0m
+2026-09-16T09:17:31.8426474Z [36;1mfi[0m
+2026-09-16T09:17:31.8441147Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-09-16T09:17:31.8441523Z env:
+2026-09-16T09:17:31.8441705Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-09-16T09:17:31.8441952Z   CARGO_INCREMENTAL: 0
+2026-09-16T09:17:31.8442135Z ##[endgroup]
+2026-09-16T09:17:31.8833431Z ##[end-action id=__dtolnay_rust-toolchain.__run_7;outcome=success;conclusion=success;duration_ms=52]
+2026-09-16T09:17:31.8836067Z ##[start-action display=Enable Cargo sparse registry;id=__dtolnay_rust-toolchain.__run_8]
+2026-09-16T09:17:31.8974772Z ##[group]Run # implemented in 1.66, stabilized in 1.68, made default in 1.70
+2026-09-16T09:17:31.8975326Z [36;1m# implemented in 1.66, stabilized in 1.68, made default in 1.70[0m
+2026-09-16T09:17:31.8975965Z [36;1mif [ -z "${CARGO_REGISTRIES_CRATES_IO_PROTOCOL+set}" -o -f "D:\a\_temp"/.implicit_cargo_registries_crates_io_protocol ]; then[0m
+2026-09-16T09:17:31.8976605Z [36;1m  if rustc +1.98.1 --version --verbose | grep -q '^release: 1\.6[89]\.'; then[0m
+2026-09-16T09:17:31.8977079Z [36;1m    touch "D:\a\_temp"/.implicit_cargo_registries_crates_io_protocol || true[0m
+2026-09-16T09:17:31.8977540Z [36;1m    echo CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse >> $GITHUB_ENV[0m
+2026-09-16T09:17:31.8977998Z [36;1m  elif rustc +1.98.1 --version --verbose | grep -q '^release: 1\.6[67]\.'; then[0m
+2026-09-16T09:17:31.8978507Z [36;1m    touch "D:\a\_temp"/.implicit_cargo_registries_crates_io_protocol || true[0m
+2026-09-16T09:17:31.8978959Z [36;1m    echo CARGO_REGISTRIES_CRATES_IO_PROTOCOL=git >> $GITHUB_ENV[0m
+2026-09-16T09:17:31.8979289Z [36;1m  fi[0m
+2026-09-16T09:17:31.8979447Z [36;1mfi[0m
+2026-09-16T09:17:31.8994360Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-09-16T09:17:31.8994739Z env:
+2026-09-16T09:17:31.8994924Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-09-16T09:17:31.8995322Z   CARGO_INCREMENTAL: 0
+2026-09-16T09:17:31.8995531Z   CARGO_TERM_COLOR: always
+2026-09-16T09:17:31.8995726Z ##[endgroup]
+2026-09-16T09:17:32.0917278Z ##[end-action id=__dtolnay_rust-toolchain.__run_8;outcome=success;conclusion=success;duration_ms=208]
+2026-09-16T09:17:32.0920357Z ##[start-action display=Work around spurious network errors in curl 8.0;id=__dtolnay_rust-toolchain.__run_9]
+2026-09-16T09:17:32.1073467Z ##[group]Run # https://rust-lang.zulipchat.com/#narrow/stream/246057-t-cargo/topic/timeout.20investigation
+2026-09-16T09:17:32.1074225Z [36;1m# https://rust-lang.zulipchat.com/#narrow/stream/246057-t-cargo/topic/timeout.20investigation[0m
+2026-09-16T09:17:32.1074816Z [36;1mif rustc +1.98.1 --version --verbose | grep -q '^release: 1\.7[01]\.'; then[0m
+2026-09-16T09:17:32.1075262Z [36;1m  echo CARGO_HTTP_MULTIPLEXING=false >> $GITHUB_ENV[0m
+2026-09-16T09:17:32.1075554Z [36;1mfi[0m
+2026-09-16T09:17:32.1090438Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-09-16T09:17:32.1090823Z env:
+2026-09-16T09:17:32.1091010Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-09-16T09:17:32.1091266Z   CARGO_INCREMENTAL: 0
+2026-09-16T09:17:32.1091462Z   CARGO_TERM_COLOR: always
+2026-09-16T09:17:32.1091666Z ##[endgroup]
+2026-09-16T09:17:32.2343329Z ##[end-action id=__dtolnay_rust-toolchain.__run_9;outcome=success;conclusion=success;duration_ms=142]
+2026-09-16T09:17:32.2346831Z ##[start-action display=rustc +1.98.1 --version --verbose;id=__dtolnay_rust-toolchain.__run_10]
+2026-09-16T09:17:32.2478635Z ##[group]Run rustc +1.98.1 --version --verbose
+2026-09-16T09:17:32.2478946Z [36;1mrustc +1.98.1 --version --verbose[0m
+2026-09-16T09:17:32.2493691Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-09-16T09:17:32.2494348Z env:
+2026-09-16T09:17:32.2494687Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-09-16T09:17:32.2494962Z   CARGO_INCREMENTAL: 0
+2026-09-16T09:17:32.2495164Z   CARGO_TERM_COLOR: always
+2026-09-16T09:17:32.2495381Z ##[endgroup]
+2026-09-16T09:17:32.3322363Z rustc 1.98.1 (48a229cea 2026-09-01)
+2026-09-16T09:17:32.3322853Z binary: rustc
+2026-09-16T09:17:32.3323163Z commit-hash: 48a229ceaefd4985c50990b14116b6d856af0985
+2026-09-16T09:17:32.3323532Z commit-date: 2026-09-01
+2026-09-16T09:17:32.3323789Z host: x86_64-pc-windows-msvc
+2026-09-16T09:17:32.3324049Z release: 1.98.1
+2026-09-16T09:17:32.3325262Z LLVM version: 22.1.8
+2026-09-16T09:17:32.3446159Z ##[end-action id=__dtolnay_rust-toolchain.__run_10;outcome=success;conclusion=success;duration_ms=109]
+2026-09-16T09:17:32.3665739Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-09-16T09:17:32.3667489Z ##[group]Run actions/setup-python@v5
+2026-09-16T09:17:32.3667742Z with:
+2026-09-16T09:17:32.3667923Z   python-version: 3.12
+2026-09-16T09:17:32.3668124Z   check-latest: false
+2026-09-16T09:17:32.3670999Z   token: ***
+2026-09-16T09:17:32.3671205Z   update-environment: true
+2026-09-16T09:17:32.3671423Z   allow-prereleases: false
+2026-09-16T09:17:32.3671623Z   freethreaded: false
+2026-09-16T09:17:32.3671804Z env:
+2026-09-16T09:17:32.3671976Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-09-16T09:17:32.3672225Z   CARGO_INCREMENTAL: 0
+2026-09-16T09:17:32.3672412Z   CARGO_TERM_COLOR: always
+2026-09-16T09:17:32.3672634Z ##[endgroup]
+2026-09-16T09:17:32.5361235Z ##[group]Installed versions
+2026-09-16T09:17:32.5608141Z (node:9640) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-09-16T09:17:32.5608911Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-09-16T09:17:32.5610247Z Successfully set up CPython (3.12.10)
+2026-09-16T09:17:32.5610848Z ##[endgroup]
+2026-09-16T09:17:32.5892015Z ##[group]Run python .github/workflows/check_portability.py
+2026-09-16T09:17:32.5892491Z [36;1mpython .github/workflows/check_portability.py[0m
+2026-09-16T09:17:32.6521759Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+2026-09-16T09:17:32.6522190Z env:
+2026-09-16T09:17:32.6522422Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-09-16T09:17:32.6522734Z   CARGO_INCREMENTAL: 0
+2026-09-16T09:17:32.6522974Z   CARGO_TERM_COLOR: always
+2026-09-16T09:17:32.6523338Z   pythonLocation: C:\hostedtoolcache\windows\Python\3.12.10\x64
+2026-09-16T09:17:32.6523921Z   PKG_CONFIG_PATH: C:\hostedtoolcache\windows\Python\3.12.10\x64/lib/pkgconfig
+2026-09-16T09:17:32.6524468Z   Python_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.12.10\x64
+2026-09-16T09:17:32.6524979Z   Python2_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.12.10\x64
+2026-09-16T09:17:32.6525465Z   Python3_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.12.10\x64
+2026-09-16T09:17:32.6525839Z ##[endgroup]
+2026-09-16T09:17:34.1678590Z D:\a\BareLine\BareLine\crates\file-io\examples\recovery_inspect.rs:15: Windows import/type in neutral crate
+2026-09-16T09:17:34.1679847Z D:\a\BareLine\BareLine\crates\file-io\examples\recovery_inspect.rs:15: Windows std API outside lossless path codec
+2026-09-16T09:17:34.1680952Z D:\a\BareLine\BareLine\crates\file-io\src\qa_faults.rs:28: Windows import/type in neutral crate
+2026-09-16T09:17:34.1682039Z D:\a\BareLine\BareLine\crates\file-io\src\qa_faults.rs:28: Windows std API outside lossless path codec
+2026-09-16T09:17:34.3285124Z ##[error]Process completed with exit code 1.
+2026-09-16T09:17:34.3485888Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-09-16T09:17:34.3487533Z ##[group]Run actions/upload-artifact@v4
+2026-09-16T09:17:34.3487783Z with:
+2026-09-16T09:17:34.3487963Z   name: clippy-ratchet-Windows
+2026-09-16T09:17:34.3488435Z   path: target/clippy-census.jsonl
+target/clippy-census.stderr.log
+target/clippy-ratchet.log
+
+2026-09-16T09:17:34.3488891Z   if-no-files-found: warn
+2026-09-16T09:17:34.3489105Z   compression-level: 6
+2026-09-16T09:17:34.3489299Z   overwrite: false
+2026-09-16T09:17:34.3489489Z   include-hidden-files: false
+2026-09-16T09:17:34.3489696Z env:
+2026-09-16T09:17:34.3489873Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-09-16T09:17:34.3490128Z   CARGO_INCREMENTAL: 0
+2026-09-16T09:17:34.3490351Z   CARGO_TERM_COLOR: always
+2026-09-16T09:17:34.3490632Z   pythonLocation: C:\hostedtoolcache\windows\Python\3.12.10\x64
+2026-09-16T09:17:34.3491087Z   PKG_CONFIG_PATH: C:\hostedtoolcache\windows\Python\3.12.10\x64/lib/pkgconfig
+2026-09-16T09:17:34.3491522Z   Python_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.12.10\x64
+2026-09-16T09:17:34.3491908Z   Python2_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.12.10\x64
+2026-09-16T09:17:34.3492309Z   Python3_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.12.10\x64
+2026-09-16T09:17:34.3492622Z ##[endgroup]
+2026-09-16T09:17:34.5511661Z (node:10140) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-09-16T09:17:34.5512779Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-09-16T09:17:34.5568743Z Multiple search paths detected. Calculating the least common ancestor of all paths
+2026-09-16T09:17:34.5572347Z The least common ancestor is D:\a\BareLine\BareLine\target. This will be the root directory of the artifact
+2026-09-16T09:17:34.5587566Z ##[warning]No files were found with the provided path: target/clippy-census.jsonl
+target/clippy-census.stderr.log
+target/clippy-ratchet.log. No artifacts will be uploaded.
+2026-09-16T09:17:34.5880732Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-09-16T09:17:34.5882136Z ##[group]Run actions/upload-artifact@v4
+2026-09-16T09:17:34.5882668Z with:
+2026-09-16T09:17:34.5882881Z   name: first-party-runtime-qualification
+2026-09-16T09:17:34.5883160Z   path: target/first-party/
+2026-09-16T09:17:34.5883381Z   if-no-files-found: error
+2026-09-16T09:17:34.5883590Z   compression-level: 6
+2026-09-16T09:17:34.5883779Z   overwrite: false
+2026-09-16T09:17:34.5883970Z   include-hidden-files: false
+2026-09-16T09:17:34.5884178Z env:
+2026-09-16T09:17:34.5884353Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-09-16T09:17:34.5884607Z   CARGO_INCREMENTAL: 0
+2026-09-16T09:17:34.5884801Z   CARGO_TERM_COLOR: always
+2026-09-16T09:17:34.5885106Z   pythonLocation: C:\hostedtoolcache\windows\Python\3.12.10\x64
+2026-09-16T09:17:34.5885558Z   PKG_CONFIG_PATH: C:\hostedtoolcache\windows\Python\3.12.10\x64/lib/pkgconfig
+2026-09-16T09:17:34.5886006Z   Python_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.12.10\x64
+2026-09-16T09:17:34.5886399Z   Python2_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.12.10\x64
+2026-09-16T09:17:34.5886812Z   Python3_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.12.10\x64
+2026-09-16T09:17:34.5887117Z ##[endgroup]
+2026-09-16T09:17:34.7878673Z (node:9856) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-09-16T09:17:34.7879885Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-09-16T09:17:34.7927734Z ##[error]No files were found with the provided path: target/first-party/. No artifacts will be uploaded.
+2026-09-16T09:17:34.8266236Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-09-16T09:17:34.8267573Z Post job cleanup.
+2026-09-16T09:17:35.0165717Z [command]"C:\Program Files\Git\bin\git.exe" version
+2026-09-16T09:17:35.0465080Z git version 2.55.0.windows.5
+2026-09-16T09:17:35.0541604Z Temporarily overriding HOME='D:\a\_temp\00c3552f-2333-45d3-9afa-c604f30141aa' before making global git config changes
+2026-09-16T09:17:35.0542922Z Adding repository directory to the temporary git global config as a safe directory
+2026-09-16T09:17:35.0552934Z [command]"C:\Program Files\Git\bin\git.exe" config --global --add safe.directory D:\a\BareLine\BareLine
+2026-09-16T09:17:35.0940476Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp core\.sshCommand
+2026-09-16T09:17:35.1287916Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :\""
+2026-09-16T09:17:35.6763841Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-09-16T09:17:35.7014189Z http.https://github.com/.extraheader
+2026-09-16T09:17:35.7066209Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset-all http.https://github.com/.extraheader
+2026-09-16T09:17:35.7357578Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :\""
+2026-09-16T09:17:36.2890846Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-09-16T09:17:36.3271906Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "git config --local --show-origin --name-only --get-regexp remote.origin.url"
+2026-09-16T09:17:36.8892232Z Cleaning up orphan processes
+2026-09-16T09:17:36.8941306Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@v4, actions/setup-python@v5, actions/upload-artifact@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/

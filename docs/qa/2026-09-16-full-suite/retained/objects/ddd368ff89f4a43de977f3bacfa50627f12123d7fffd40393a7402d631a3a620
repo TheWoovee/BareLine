@@ -1,0 +1,34 @@
+{
+  "version": "0.1.0",
+  "mode": "unsigned-preview",
+  "lock_sha256": "3da39ee7a78d7fd1738d06342fdbc0042804381b6ead22c61124e21ca74c3111",
+  "payload": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\package-20260916-full-suite\\payload",
+  "output": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\dist\\windows\\0.1.0-full-suite-20260916",
+  "files": [
+    {
+      "name": "bareline.exe",
+      "length": 10099200,
+      "sha256": "64bb428b5bc61dd2f6042a15ba03314af0e4f21290b0d210091ee9bc4d80adb4"
+    },
+    {
+      "name": "bareline-update-helper.exe",
+      "length": 118784,
+      "sha256": "7d644603b9871ceffd0f62f4dc8992028f6db82bcd1e6926adb8a57baa7f06f5"
+    },
+    {
+      "name": "LICENSE",
+      "length": 16726,
+      "sha256": "3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04"
+    },
+    {
+      "name": "THIRD-PARTY-NOTICES.md",
+      "length": 1051082,
+      "sha256": "eae5e931265d66e3dc4c2eb6136524b4dfd3459e1e90414bfc56bac019811f8a"
+    },
+    {
+      "name": "SBOM.json",
+      "length": 165455,
+      "sha256": "543ee648ae5cc2eea12edd8149d095fcd02fb22e23eedd0a80c799733e961dd0"
+    }
+  ]
+}

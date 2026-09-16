@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "command": [
+    "cargo",
+    "test",
+    "-p",
+    "bareline-app",
+    "--lib",
+    "--locked"
+  ],
+  "cwd": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor",
+  "source_before": {
+    "available": true,
+    "head": "75bf384e436bd0514a03c9860f3f3cd6bd101abd",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "89ae8cb88aee873de13c7727e763f556ecc7bd691c825178117f105c24156a43"
+  },
+  "source_after": {
+    "available": true,
+    "head": "75bf384e436bd0514a03c9860f3f3cd6bd101abd",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "89ae8cb88aee873de13c7727e763f556ecc7bd691c825178117f105c24156a43"
+  },
+  "source_changed_during_run": false,
+  "status": "completed",
+  "exit_code": 0,
+  "elapsed_ms": 24128,
+  "top_level_total": 1,
+  "top_level_passed": 1,
+  "top_level_failed": 0,
+  "observed_nested_or_parent_summaries": [
+    "test result: ok. 150 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 16.64s"
+  ],
+  "summary_lines_are_not_aggregate_counts": true,
+  "stdout": {
+    "path": "target\\qualification\\full-suite-20260916\\56-eol-admission-test.json.stdout.log",
+    "sha256": "7404fad413e341cf069f5ea367325ead041d319e7c1bf02ea675f703890aa923"
+  },
+  "stderr": {
+    "path": "target\\qualification\\full-suite-20260916\\56-eol-admission-test.json.stderr.log",
+    "sha256": "e2a13b1d76c09905a561e51d9365a20991ccbd076cc5ef89a35e3ba45b27488e"
+  }
+}

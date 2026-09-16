@@ -1,0 +1,13 @@
+{
+  "source": "6badda3bba8038cec1f7c470555bae4c811af3ca",
+  "comparison": {
+    "SHA-256SUMS": {
+      "replicas_equal": true,
+      "matches_product_source_6585c4a": true
+    },
+    "package-SHA-256SUMS": {
+      "replicas_equal": true,
+      "matches_product_source_6585c4a": true
+    }
+  }
+}

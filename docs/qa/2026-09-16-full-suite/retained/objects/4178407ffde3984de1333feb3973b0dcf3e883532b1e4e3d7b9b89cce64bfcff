@@ -1,0 +1,26 @@
+{
+  "artifacts": {
+    "hex": {
+      "bytes": 7117998,
+      "path": "\\\\?\\D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\release-fixture\\d3761234fee14aaa88021adcf6fca563\\connected-delivery\\installation\\d44d1fc627fb1bfa540615e8d2dae17cb74f25cd25c2d168ce59a7e3d8bfb513\\extension.wasm",
+      "sha256": "c5f5097d070e538b14ea5cf331fdb42f1e490970bf125e8c0b4596ba03cbbdfe"
+    },
+    "host": {
+      "bytes": 11445248,
+      "path": "\\\\?\\D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\release-fixture\\d3761234fee14aaa88021adcf6fca563\\connected-delivery\\installation\\runtimes\\1f6d58e4066c1b42e4d3097e1ddca5f0f8f317c3d030ae6cf0fd431023c273bd\\bareline-extension-host.exe",
+      "sha256": "1f6d58e4066c1b42e4d3097e1ddca5f0f8f317c3d030ae6cf0fd431023c273bd"
+    },
+    "json": {
+      "bytes": 7275872,
+      "path": "\\\\?\\D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\release-fixture\\d3761234fee14aaa88021adcf6fca563\\connected-delivery\\installation\\4cf13037efe3344fa993640e8013a5bb3f57eff6ac6e763d6cb23a928925ace0\\extension.wasm",
+      "sha256": "9839adc52ae16a138b168a0a10f5f16059ea79b2e594a475ddd7f12e13055367"
+    },
+    "xml": {
+      "bytes": 8096196,
+      "path": "\\\\?\\D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\release-fixture\\d3761234fee14aaa88021adcf6fca563\\connected-delivery\\installation\\cb43d5b81260420f012bbf61552e83b2be205ae274c4039f8c9726faa02829ca\\extension.wasm",
+      "sha256": "96044206339cd03ab09312457e3ea6ee7ff5d61629340c75e3f4e0a116884894"
+    }
+  },
+  "nonshipping": true,
+  "schema_version": 1
+}

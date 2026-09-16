@@ -1,0 +1,951 @@
+﻿2026-09-16T09:36:51.2809546Z Current runner version: '2.337.0'
+2026-09-16T09:36:51.2833672Z ##[group]Runner Image Provisioner
+2026-09-16T09:36:51.2834432Z Hosted Compute Agent
+2026-09-16T09:36:51.2834968Z Version: 20260828.587
+2026-09-16T09:36:51.2835553Z Commit: abac92662cab4cc7352de4f9f9d2e2419aad9c29
+2026-09-16T09:36:51.2836246Z Build Date: 2026-08-28T16:44:25Z
+2026-09-16T09:36:51.2836876Z Worker ID: {2ca26f6e-a4c3-45b9-8964-24e5c8c04289}
+2026-09-16T09:36:51.2837520Z Azure Region: westus
+2026-09-16T09:36:51.2838010Z ##[endgroup]
+2026-09-16T09:36:51.2839318Z ##[group]Operating System
+2026-09-16T09:36:51.2839909Z Microsoft Windows Server 2022
+2026-09-16T09:36:51.2840464Z 10.0.20348
+2026-09-16T09:36:51.2840928Z Datacenter
+2026-09-16T09:36:51.2841377Z ##[endgroup]
+2026-09-16T09:36:51.2841862Z ##[group]Runner Image
+2026-09-16T09:36:51.2842426Z Image: windows-2022
+2026-09-16T09:36:51.2842956Z Version: 20260907.297.1
+2026-09-16T09:36:51.2844264Z Included Software: https://github.com/actions/runner-images/blob/win22/20260907.297/images/windows/Windows2022-Readme.md
+2026-09-16T09:36:51.2845719Z Image Release: https://github.com/actions/runner-images/releases/tag/win22%2F20260907.297
+2026-09-16T09:36:51.2846583Z ##[endgroup]
+2026-09-16T09:36:51.2847560Z ##[group]GITHUB_TOKEN Permissions
+2026-09-16T09:36:51.2849302Z Contents: read
+2026-09-16T09:36:51.2849821Z Metadata: read
+2026-09-16T09:36:51.2850352Z ##[endgroup]
+2026-09-16T09:36:51.2852258Z Secret source: Actions
+2026-09-16T09:36:51.2853120Z Cache mode: write
+2026-09-16T09:36:51.2853729Z Prepare workflow directory
+2026-09-16T09:36:51.3230528Z Prepare all required actions
+2026-09-16T09:36:51.3277843Z Getting action download info
+2026-09-16T09:36:51.7320615Z Download action repository 'actions/checkout@11d5960a326750d5838078e36cf38b85af677262' (SHA:11d5960a326750d5838078e36cf38b85af677262)
+2026-09-16T09:36:51.8431903Z Download action repository 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02' (SHA:ea165f8d65b6e75b540449e92b4886f43607fa02)
+2026-09-16T09:36:52.1592991Z Complete job name: clean-build (b)
+2026-09-16T09:36:52.3089404Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-09-16T09:36:52.3099332Z ##[group]Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+2026-09-16T09:36:52.3100339Z with:
+2026-09-16T09:36:52.3100754Z   persist-credentials: false
+2026-09-16T09:36:52.3101255Z   repository: TheWoovee/BareLine
+2026-09-16T09:36:52.3104907Z   token: ***
+2026-09-16T09:36:52.3105317Z   ssh-strict: true
+2026-09-16T09:36:52.3105723Z   ssh-user: git
+2026-09-16T09:36:52.3106111Z   clean: true
+2026-09-16T09:36:52.3106525Z   sparse-checkout-cone-mode: true
+2026-09-16T09:36:52.3107020Z   fetch-depth: 1
+2026-09-16T09:36:52.3107428Z   fetch-tags: false
+2026-09-16T09:36:52.3107889Z   show-progress: true
+2026-09-16T09:36:52.3108340Z   lfs: false
+2026-09-16T09:36:52.3108727Z   submodules: false
+2026-09-16T09:36:52.3109152Z   set-safe-directory: true
+2026-09-16T09:36:52.3109629Z   allow-unsafe-pr-checkout: false
+2026-09-16T09:36:52.3110335Z ##[endgroup]
+2026-09-16T09:36:52.4656970Z Syncing repository: TheWoovee/BareLine
+2026-09-16T09:36:52.4658643Z ##[group]Getting Git version info
+2026-09-16T09:36:52.4659253Z Working directory is 'D:\a\BareLine\BareLine'
+2026-09-16T09:36:52.5627612Z [command]"C:\Program Files\Git\bin\git.exe" version
+2026-09-16T09:36:52.9543723Z git version 2.55.0.windows.5
+2026-09-16T09:36:52.9582889Z ##[endgroup]
+2026-09-16T09:36:52.9600247Z Temporarily overriding HOME='D:\a\_temp\6b7ff6cf-c8d5-49b9-a015-93e15fe9c8c9' before making global git config changes
+2026-09-16T09:36:52.9601713Z Adding repository directory to the temporary git global config as a safe directory
+2026-09-16T09:36:52.9610946Z [command]"C:\Program Files\Git\bin\git.exe" config --global --add safe.directory D:\a\BareLine\BareLine
+2026-09-16T09:36:53.0117949Z Deleting the contents of 'D:\a\BareLine\BareLine'
+2026-09-16T09:36:53.0123093Z ##[group]Initializing the repository
+2026-09-16T09:36:53.0131778Z [command]"C:\Program Files\Git\bin\git.exe" init D:\a\BareLine\BareLine
+2026-09-16T09:36:53.0888536Z Initialized empty Git repository in D:/a/BareLine/BareLine/.git/
+2026-09-16T09:36:53.0921974Z [command]"C:\Program Files\Git\bin\git.exe" remote add origin https://github.com/TheWoovee/BareLine
+2026-09-16T09:36:53.1375615Z ##[endgroup]
+2026-09-16T09:36:53.1376494Z ##[group]Disabling automatic garbage collection
+2026-09-16T09:36:53.1384657Z [command]"C:\Program Files\Git\bin\git.exe" config --local gc.auto 0
+2026-09-16T09:36:53.1596336Z ##[endgroup]
+2026-09-16T09:36:53.1597209Z ##[group]Setting up auth
+2026-09-16T09:36:53.1607919Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp core\.sshCommand
+2026-09-16T09:36:53.1823054Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :\""
+2026-09-16T09:36:54.4918954Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-09-16T09:36:54.5148323Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :\""
+2026-09-16T09:36:54.9255392Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-09-16T09:36:54.9484264Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "git config --local --show-origin --name-only --get-regexp remote.origin.url"
+2026-09-16T09:36:55.3781817Z [command]"C:\Program Files\Git\bin\git.exe" config --local http.https://github.com/.extraheader "AUTHORIZATION: basic ***"
+2026-09-16T09:36:55.4023342Z ##[endgroup]
+2026-09-16T09:36:55.4023937Z ##[group]Fetching the repository
+2026-09-16T09:36:55.4043364Z [command]"C:\Program Files\Git\bin\git.exe" -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +b64ecd57257a9b57389213c329f4ee2d25e0e008:refs/remotes/origin/master
+2026-09-16T09:36:58.3931118Z From https://github.com/TheWoovee/BareLine
+2026-09-16T09:36:58.3932296Z  * [new ref]         b64ecd57257a9b57389213c329f4ee2d25e0e008 -> origin/master
+2026-09-16T09:36:58.3959448Z ##[endgroup]
+2026-09-16T09:36:58.3960142Z ##[group]Determining the checkout info
+2026-09-16T09:36:58.3962573Z ##[endgroup]
+2026-09-16T09:36:58.3972242Z [command]"C:\Program Files\Git\bin\git.exe" sparse-checkout disable
+2026-09-16T09:36:58.4384357Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset-all extensions.worktreeConfig
+2026-09-16T09:36:58.4612217Z ##[group]Checking out the ref
+2026-09-16T09:36:58.4625260Z [command]"C:\Program Files\Git\bin\git.exe" checkout --progress --force -B master refs/remotes/origin/master
+2026-09-16T09:36:59.5750773Z Updating files:  66% (2340/3531)
+2026-09-16T09:36:59.5819629Z Updating files:  67% (2366/3531)
+2026-09-16T09:36:59.7088763Z Updating files:  68% (2402/3531)
+2026-09-16T09:36:59.7169890Z Updating files:  69% (2437/3531)
+2026-09-16T09:36:59.7240007Z Updating files:  70% (2472/3531)
+2026-09-16T09:36:59.7318617Z Updating files:  71% (2508/3531)
+2026-09-16T09:36:59.7411281Z Updating files:  72% (2543/3531)
+2026-09-16T09:36:59.7512195Z Updating files:  73% (2578/3531)
+2026-09-16T09:36:59.7613001Z Updating files:  74% (2613/3531)
+2026-09-16T09:36:59.7709503Z Updating files:  75% (2649/3531)
+2026-09-16T09:36:59.7795391Z Updating files:  76% (2684/3531)
+2026-09-16T09:36:59.8010629Z Updating files:  77% (2719/3531)
+2026-09-16T09:36:59.8101166Z Updating files:  78% (2755/3531)
+2026-09-16T09:36:59.8158784Z Updating files:  79% (2790/3531)
+2026-09-16T09:36:59.9382180Z Updating files:  80% (2825/3531)
+2026-09-16T09:36:59.9454566Z Updating files:  81% (2861/3531)
+2026-09-16T09:37:00.0750392Z Updating files:  82% (2896/3531)
+2026-09-16T09:37:00.0832759Z Updating files:  83% (2931/3531)
+2026-09-16T09:37:00.0897681Z Updating files:  84% (2967/3531)
+2026-09-16T09:37:00.0969397Z Updating files:  85% (3002/3531)
+2026-09-16T09:37:00.1095723Z Updating files:  86% (3037/3531)
+2026-09-16T09:37:00.1167320Z Updating files:  87% (3072/3531)
+2026-09-16T09:37:00.1732407Z Updating files:  88% (3108/3531)
+2026-09-16T09:37:00.1820825Z Updating files:  89% (3143/3531)
+2026-09-16T09:37:00.2063417Z Updating files:  90% (3178/3531)
+2026-09-16T09:37:00.2363732Z Updating files:  91% (3214/3531)
+2026-09-16T09:37:00.2567549Z Updating files:  92% (3249/3531)
+2026-09-16T09:37:00.2658144Z Updating files:  93% (3284/3531)
+2026-09-16T09:37:00.2737539Z Updating files:  94% (3320/3531)
+2026-09-16T09:37:00.2803531Z Updating files:  95% (3355/3531)
+2026-09-16T09:37:00.2924097Z Updating files:  96% (3390/3531)
+2026-09-16T09:37:00.2996335Z Updating files:  97% (3426/3531)
+2026-09-16T09:37:00.3071194Z Updating files:  98% (3461/3531)
+2026-09-16T09:37:00.3157026Z Updating files:  99% (3496/3531)
+2026-09-16T09:37:00.3157775Z Updating files: 100% (3531/3531)
+2026-09-16T09:37:00.3158293Z Updating files: 100% (3531/3531), done.
+2026-09-16T09:37:00.3311325Z Reset branch 'master'
+2026-09-16T09:37:00.3332393Z branch 'master' set up to track 'origin/master'.
+2026-09-16T09:37:00.3460797Z ##[endgroup]
+2026-09-16T09:37:00.3776869Z [command]"C:\Program Files\Git\bin\git.exe" log -1 --format=%H
+2026-09-16T09:37:00.3969952Z b64ecd57257a9b57389213c329f4ee2d25e0e008
+2026-09-16T09:37:00.3997284Z ##[group]Removing auth
+2026-09-16T09:37:00.4004429Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp core\.sshCommand
+2026-09-16T09:37:00.4220980Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :\""
+2026-09-16T09:37:00.8485634Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-09-16T09:37:00.8670512Z http.https://github.com/.extraheader
+2026-09-16T09:37:00.8698507Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset-all http.https://github.com/.extraheader
+2026-09-16T09:37:00.8916212Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :\""
+2026-09-16T09:37:01.3180408Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-09-16T09:37:01.3391501Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "git config --local --show-origin --name-only --get-regexp remote.origin.url"
+2026-09-16T09:37:01.7700941Z ##[endgroup]
+2026-09-16T09:37:01.8001341Z ##[group]Run if (Test-Path -LiteralPath target) { throw 'Expected clean build directory' }
+2026-09-16T09:37:01.8002113Z [36;1mif (Test-Path -LiteralPath target) { throw 'Expected clean build directory' }[0m
+2026-09-16T09:37:01.8002876Z [36;1mcargo build --release --locked -p bareline -p bareline-update-helper -p bareline-extension-host --no-default-features[0m
+2026-09-16T09:37:01.8003532Z [36;1mif ($LASTEXITCODE -ne 0) { throw 'Release build failed' }[0m
+2026-09-16T09:37:01.8003953Z [36;1mNew-Item -ItemType Directory -Path evidence | Out-Null[0m
+2026-09-16T09:37:01.8004539Z [36;1m$hashes = foreach ($name in @('bareline.exe', 'bareline-update-helper.exe', 'bareline-extension-host.exe')) {[0m
+2026-09-16T09:37:01.8005346Z [36;1m  '{0}  {1}' -f (Get-FileHash -LiteralPath (Join-Path target/release $name) -Algorithm SHA256).Hash.ToLowerInvariant(), $name[0m
+2026-09-16T09:37:01.8006067Z [36;1m}[0m
+2026-09-16T09:37:01.8006393Z [36;1m$hashes | Set-Content -LiteralPath evidence/SHA-256SUMS -Encoding utf8[0m
+2026-09-16T09:37:01.8006852Z [36;1mNew-Item -ItemType Directory -Path payload | Out-Null[0m
+2026-09-16T09:37:01.8007511Z [36;1mCopy-Item -LiteralPath target/release/bareline.exe,target/release/bareline-update-helper.exe,LICENSE -Destination payload[0m
+2026-09-16T09:37:01.8008234Z [36;1m# Offline workspace metadata also resolves dev-only dependencies that[0m
+2026-09-16T09:37:01.8008715Z [36;1m# the release executable build does not download on a clean runner.[0m
+2026-09-16T09:37:01.8009151Z [36;1mcargo fetch --locked --target x86_64-pc-windows-msvc[0m
+2026-09-16T09:37:01.8009627Z [36;1mif ($LASTEXITCODE -ne 0) { throw 'Locked Windows metadata dependencies unavailable' }[0m
+2026-09-16T09:37:01.8010227Z [36;1m./packaging/windows/generate-notices.ps1 -OutputFile payload/THIRD-PARTY-NOTICES.md[0m
+2026-09-16T09:37:01.8010753Z [36;1mcargo install --locked cargo-cyclonedx --version 0.5.9[0m
+2026-09-16T09:37:01.8011185Z [36;1mif ($LASTEXITCODE -ne 0) { throw 'SBOM tool installation failed' }[0m
+2026-09-16T09:37:01.8011654Z [36;1mcargo cyclonedx --format json --all --target x86_64-pc-windows-msvc[0m
+2026-09-16T09:37:01.8012094Z [36;1mif ($LASTEXITCODE -ne 0) { throw 'SBOM generation failed' }[0m
+2026-09-16T09:37:01.8012547Z [36;1m# Workspace generation must produce both packaged executable graphs.[0m
+2026-09-16T09:37:01.8013070Z [36;1mforeach ($sbom in @('apps/bareline/bom.json', 'apps/update-helper/bom.json')) {[0m
+2026-09-16T09:37:01.8013767Z [36;1m  if (-not (Test-Path -LiteralPath $sbom -PathType Leaf)) { throw "Missing packaged executable SBOM: $sbom" }[0m
+2026-09-16T09:37:01.8014245Z [36;1m}[0m
+2026-09-16T09:37:01.8014443Z [36;1mgit diff --exit-code -- Cargo.lock[0m
+2026-09-16T09:37:01.8014816Z [36;1mif ($LASTEXITCODE -ne 0) { throw 'SBOM generation changed Cargo.lock' }[0m
+2026-09-16T09:37:01.8015597Z [36;1m./packaging/windows/generate-sbom.ps1 -CargoSbom apps/bareline/bom.json -HelperCargoSbom apps/update-helper/bom.json -OutputFile payload/SBOM.json[0m
+2026-09-16T09:37:01.8016441Z [36;1m$metadata = cargo metadata --locked --offline --format-version 1 | ConvertFrom-Json[0m
+2026-09-16T09:37:01.8016960Z [36;1mif ($LASTEXITCODE -ne 0) { throw 'Package metadata failed' }[0m
+2026-09-16T09:37:01.8017429Z [36;1m$version = ($metadata.packages | Where-Object name -eq bareline).version[0m
+2026-09-16T09:37:01.8018034Z [36;1m./packaging/windows/build.ps1 -PayloadDir payload -Version $version -OutputDir unsigned-package[0m
+2026-09-16T09:37:01.8018733Z [36;1mCopy-Item -LiteralPath unsigned-package/SHA-256SUMS -Destination evidence/package-SHA-256SUMS[0m
+2026-09-16T09:37:01.8019380Z [36;1mgit rev-parse HEAD | Set-Content -LiteralPath evidence/commit.txt[0m
+2026-09-16T09:37:01.8019846Z [36;1mrustc -vV | Set-Content -LiteralPath evidence/toolchain.txt[0m
+2026-09-16T09:37:01.8022201Z [36;1mGet-ComputerInfo -Property WindowsProductName,WindowsVersion,OsBuildNumber | Out-String | Set-Content -LiteralPath evidence/os.txt[0m
+2026-09-16T09:37:01.8098868Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+2026-09-16T09:37:01.8099223Z env:
+2026-09-16T09:37:01.8099398Z   CARGO_INCREMENTAL: 0
+2026-09-16T09:37:01.8099635Z   RUSTFLAGS: -C link-arg=/Brepro
+2026-09-16T09:37:01.8099924Z ##[endgroup]
+2026-09-16T09:37:02.9097385Z info: syncing channel updates for 1.98.1-x86_64-pc-windows-msvc
+2026-09-16T09:37:03.3124964Z info: latest update on 2026-09-03 for version 1.98.1 (48a229cea 2026-09-01)
+2026-09-16T09:37:03.3127724Z info: downloading 5 components
+2026-09-16T09:37:10.8346699Z warn: the missing active toolchain `1.98.1-x86_64-pc-windows-msvc` has been auto-installed
+2026-09-16T09:37:10.8347533Z warn: this might cause rustup commands to take longer time to finish than expected
+2026-09-16T09:37:10.8348260Z info: you may opt out with `RUSTUP_AUTO_INSTALL=0` or `rustup set auto-install disable`
+2026-09-16T09:37:12.3480967Z     Updating crates.io index
+2026-09-16T09:37:13.5865977Z  Downloading crates ...
+2026-09-16T09:37:13.8094699Z   Downloaded futures-sink v0.3.34
+2026-09-16T09:37:13.8274926Z   Downloaded hash32 v0.2.1
+2026-09-16T09:37:13.8635568Z   Downloaded io-lifetimes v2.0.4
+2026-09-16T09:37:13.8956170Z   Downloaded postcard v1.1.3
+2026-09-16T09:37:13.9237070Z   Downloaded uuid v1.26.0
+2026-09-16T09:37:13.9605261Z   Downloaded tracing-attributes v0.1.31
+2026-09-16T09:37:13.9897419Z   Downloaded object v0.39.1
+2026-09-16T09:37:14.1073367Z   Downloaded thiserror-impl v2.0.20
+2026-09-16T09:37:14.1312388Z   Downloaded accesskit v0.25.0
+2026-09-16T09:37:14.1400631Z   Downloaded cursor-icon v1.2.0
+2026-09-16T09:37:14.1527422Z   Downloaded termcolor v1.4.1
+2026-09-16T09:37:14.1629153Z   Downloaded thiserror v2.0.20
+2026-09-16T09:37:14.4237029Z   Downloaded windows-collections v0.3.2
+2026-09-16T09:37:14.4335346Z   Downloaded wit-parser v0.254.0
+2026-09-16T09:37:15.4937825Z   Downloaded cpp_demangle v0.5.1
+2026-09-16T09:37:15.5127922Z   Downloaded toml_edit v0.22.27
+2026-09-16T09:37:15.5676468Z   Downloaded toml_write v0.1.2
+2026-09-16T09:37:15.5797034Z   Downloaded find-msvc-tools v0.1.12
+2026-09-16T09:37:15.7838481Z   Downloaded serde_spanned v0.6.9
+2026-09-16T09:37:15.7965565Z   Downloaded dpi v0.1.2
+2026-09-16T09:37:15.8074492Z   Downloaded synstructure v0.13.2
+2026-09-16T09:37:15.8159076Z   Downloaded wasm-encoder v0.254.0
+2026-09-16T09:37:15.8562428Z   Downloaded form_urlencoded v1.2.2
+2026-09-16T09:37:15.8635906Z   Downloaded futures-task v0.3.34
+2026-09-16T09:37:15.8802302Z   Downloaded wasmtime-internal-jit-icache-coherence v48.0.1
+2026-09-16T09:37:15.8873955Z   Downloaded errno v0.3.14
+2026-09-16T09:37:15.9004556Z   Downloaded displaydoc v0.2.7
+2026-09-16T09:37:15.9253348Z   Downloaded futures v0.3.34
+2026-09-16T09:37:15.9963542Z   Downloaded futures-io v0.3.34
+2026-09-16T09:37:16.0265298Z   Downloaded wasm-metadata v0.254.0
+2026-09-16T09:37:16.0647685Z   Downloaded toml_datetime v0.6.11
+2026-09-16T09:37:16.0780100Z   Downloaded wasmprinter v0.254.0
+2026-09-16T09:37:16.1460686Z   Downloaded wasmtime-internal-versioned-export-macros v48.0.1
+2026-09-16T09:37:16.1741027Z   Downloaded equivalent v1.0.2
+2026-09-16T09:37:16.2247979Z   Downloaded foldhash v0.2.0
+2026-09-16T09:37:16.2677978Z   Downloaded idna_adapter v1.2.1
+2026-09-16T09:37:16.2826050Z   Downloaded windows-targets v0.52.6
+2026-09-16T09:37:16.2966356Z   Downloaded digest v0.10.7
+2026-09-16T09:37:16.3201594Z   Downloaded embedded-io v0.6.1
+2026-09-16T09:37:16.3508366Z   Downloaded futures-channel v0.3.34
+2026-09-16T09:37:16.4049593Z   Downloaded ipnet v2.12.2
+2026-09-16T09:37:16.4503761Z   Downloaded typenum v1.20.1
+2026-09-16T09:37:16.4958683Z   Downloaded windows-core v0.62.2
+2026-09-16T09:37:16.5387081Z   Downloaded windows-strings v0.5.1
+2026-09-16T09:37:16.5555153Z   Downloaded either v1.18.0
+2026-09-16T09:37:16.5769458Z   Downloaded embedded-io v0.4.0
+2026-09-16T09:37:16.5926577Z   Downloaded fnv v1.0.7
+2026-09-16T09:37:16.6052327Z   Downloaded fs-set-times v0.20.3
+2026-09-16T09:37:16.6193381Z   Downloaded getrandom v0.4.3
+2026-09-16T09:37:16.6646861Z   Downloaded icu_provider v2.1.1
+2026-09-16T09:37:16.6912526Z   Downloaded wasmparser v0.254.0
+2026-09-16T09:37:16.7714655Z   Downloaded wasmtime-internal-jit-debug v48.0.1
+2026-09-16T09:37:16.7800669Z   Downloaded flate2 v1.1.10
+2026-09-16T09:37:16.8418030Z   Downloaded icu_properties v2.1.2
+2026-09-16T09:37:16.8586028Z   Downloaded tinystr v0.8.4
+2026-09-16T09:37:16.8819569Z   Downloaded tracing v0.1.44
+2026-09-16T09:37:17.1847550Z   Downloaded tracing-core v0.1.36
+2026-09-16T09:37:17.2292103Z   Downloaded windows-future v0.3.2
+2026-09-16T09:37:17.2512571Z   Downloaded windows-numerics v0.3.1
+2026-09-16T09:37:17.2733997Z   Downloaded hashbrown v0.17.1
+2026-09-16T09:37:17.3364898Z   Downloaded winapi-util v0.1.11
+2026-09-16T09:37:17.3542683Z   Downloaded windows-interface v0.59.3
+2026-09-16T09:37:17.3678568Z   Downloaded windows-result v0.4.1
+2026-09-16T09:37:17.4163202Z   Downloaded io-lifetimes v3.0.1
+2026-09-16T09:37:17.4769337Z   Downloaded litemap v0.8.3
+2026-09-16T09:37:17.5430195Z   Downloaded once_cell v1.21.4
+2026-09-16T09:37:17.5681864Z   Downloaded target-lexicon v0.13.5
+2026-09-16T09:37:17.5899370Z   Downloaded futures-core v0.3.34
+2026-09-16T09:37:17.6323130Z   Downloaded gimli v0.33.0
+2026-09-16T09:37:17.7364572Z   Downloaded icu_collections v2.1.1
+2026-09-16T09:37:17.8424938Z   Downloaded icu_properties_data v2.1.2
+2026-09-16T09:37:18.1300730Z   Downloaded minisign-verify v0.2.4
+2026-09-16T09:37:18.1933032Z   Downloaded rustc-hash v2.1.3
+2026-09-16T09:37:18.2051272Z   Downloaded rustc_version v0.4.1
+2026-09-16T09:37:18.2269817Z   Downloaded unicode-segmentation v1.13.3
+2026-09-16T09:37:18.2852844Z   Downloaded windows-link v0.2.1
+2026-09-16T09:37:18.3172607Z   Downloaded heck v0.5.0
+2026-09-16T09:37:18.5135546Z   Downloaded icu_normalizer v2.1.1
+2026-09-16T09:37:18.6108324Z   Downloaded version_check v0.9.5
+2026-09-16T09:37:18.6455931Z   Downloaded heapless v0.7.17
+2026-09-16T09:37:18.6861833Z   Downloaded wasmtime-internal-fiber v48.0.1
+2026-09-16T09:37:18.7423193Z   Downloaded wasmtime-internal-wit-bindgen v48.0.1
+2026-09-16T09:37:18.7796183Z   Downloaded generic-array v0.14.7
+2026-09-16T09:37:18.8307277Z   Downloaded wasmtime-environ v48.0.1
+2026-09-16T09:37:18.9830676Z   Downloaded md-5 v0.10.6
+2026-09-16T09:37:19.0292943Z   Downloaded unicode-ident v1.0.24
+2026-09-16T09:37:19.1043143Z   Downloaded url v2.5.8
+2026-09-16T09:37:19.1701503Z   Downloaded wasmtime-internal-component-util v48.0.1
+2026-09-16T09:37:19.1987931Z   Downloaded writeable v0.6.4
+2026-09-16T09:37:19.2651198Z   Downloaded cpufeatures v0.3.1
+2026-09-16T09:37:19.3126868Z   Downloaded raw-window-handle v0.6.2
+2026-09-16T09:37:19.3383154Z   Downloaded quote v1.0.47
+2026-09-16T09:37:19.4294285Z   Downloaded zerofrom v0.1.8
+2026-09-16T09:37:19.4441498Z   Downloaded ambient-authority v0.0.2
+2026-09-16T09:37:19.4561740Z   Downloaded block-buffer v0.10.4
+2026-09-16T09:37:19.4664324Z   Downloaded cranelift-codegen-shared v0.135.1
+2026-09-16T09:37:19.4837358Z   Downloaded maybe-owned v0.3.4
+2026-09-16T09:37:19.5272773Z   Downloaded windows-implement v0.60.2
+2026-09-16T09:37:19.5443081Z   Downloaded id-arena v2.3.0
+2026-09-16T09:37:19.5780180Z   Downloaded pin-project-lite v0.2.17
+2026-09-16T09:37:19.6725510Z   Downloaded cranelift-native v0.135.1
+2026-09-16T09:37:19.8048283Z   Downloaded allocator-api2 v0.2.21
+2026-09-16T09:37:19.8309381Z   Downloaded sha1 v0.10.6
+2026-09-16T09:37:19.8458008Z   Downloaded leb128fmt v0.1.0
+2026-09-16T09:37:19.8559434Z   Downloaded potential_utf v0.1.6
+2026-09-16T09:37:19.8785098Z   Downloaded pulley-macros v48.0.1
+2026-09-16T09:37:19.8846650Z   Downloaded scopeguard v1.2.0
+2026-09-16T09:37:19.8953076Z   Downloaded itoa v1.0.18
+2026-09-16T09:37:19.9078882Z   Downloaded lexopt v0.3.1
+2026-09-16T09:37:19.9277309Z   Downloaded pkg-config v0.3.34
+2026-09-16T09:37:19.9409797Z   Downloaded shlex v2.0.1
+2026-09-16T09:37:19.9518374Z   Downloaded smol_str v0.2.2
+2026-09-16T09:37:19.9706344Z   Downloaded jobserver v0.1.35
+2026-09-16T09:37:19.9887370Z   Downloaded tokio v1.53.1
+2026-09-16T09:37:22.2948307Z   Downloaded async-trait v0.1.92
+2026-09-16T09:37:22.3458012Z   Downloaded cobs v0.3.0
+2026-09-16T09:37:22.3583181Z   Downloaded cranelift-srcgen v0.135.1
+2026-09-16T09:37:22.3649215Z   Downloaded crypto-common v0.1.7
+2026-09-16T09:37:22.3733302Z   Downloaded lock_api v0.4.14
+2026-09-16T09:37:22.3862146Z   Downloaded percent-encoding v2.3.2
+2026-09-16T09:37:22.3939751Z   Downloaded rand_core v0.10.1
+2026-09-16T09:37:22.5192858Z   Downloaded rustc-demangle v0.1.28
+2026-09-16T09:37:22.5322123Z   Downloaded sha2 v0.10.9
+2026-09-16T09:37:22.5661928Z   Downloaded simd-adler32 v0.3.10
+2026-09-16T09:37:22.5947794Z   Downloaded slab v0.4.12
+2026-09-16T09:37:22.6050886Z   Downloaded smallvec v1.16.0
+2026-09-16T09:37:22.6161612Z   Downloaded io-extras v0.19.0
+2026-09-16T09:37:22.6395346Z   Downloaded log v0.4.34
+2026-09-16T09:37:22.6590720Z   Downloaded semver v1.0.28
+2026-09-16T09:37:22.6895519Z   Downloaded spin v0.9.9
+2026-09-16T09:37:22.7089816Z   Downloaded windows-threading v0.2.1
+2026-09-16T09:37:22.7178845Z   Downloaded miniz_oxide v0.9.1
+2026-09-16T09:37:22.7398685Z   Downloaded proc-macro2 v1.0.107
+2026-09-16T09:37:22.7691553Z   Downloaded pulley-interpreter v48.0.1
+2026-09-16T09:37:22.7954711Z   Downloaded serde v1.0.229
+2026-09-16T09:37:22.8300393Z   Downloaded serde_core v1.0.229
+2026-09-16T09:37:22.8580500Z   Downloaded serde_derive v1.0.229
+2026-09-16T09:37:22.8904876Z   Downloaded subtle v2.6.1
+2026-09-16T09:37:22.9007020Z   Downloaded adler2 v2.0.1
+2026-09-16T09:37:22.9113283Z   Downloaded icu_locale_core v2.1.1
+2026-09-16T09:37:23.0008176Z   Downloaded icu_normalizer_data v2.1.1
+2026-09-16T09:37:23.0180798Z   Downloaded indexmap v2.14.2
+2026-09-16T09:37:23.0552690Z   Downloaded mio v1.2.3
+2026-09-16T09:37:23.1152241Z   Downloaded memchr v2.8.3
+2026-09-16T09:37:23.1679300Z   Downloaded rand v0.10.2
+2026-09-16T09:37:23.2048661Z   Downloaded hashbrown v0.16.1
+2026-09-16T09:37:23.2528766Z   Downloaded libm v0.2.16
+2026-09-16T09:37:23.3652708Z   Downloaded idna v1.1.0
+2026-09-16T09:37:23.3903442Z   Downloaded utf8_iter v1.0.4
+2026-09-16T09:37:23.3997484Z   Downloaded yoke-derive v0.8.2
+2026-09-16T09:37:23.4088280Z   Downloaded itertools v0.14.0
+2026-09-16T09:37:23.4797156Z   Downloaded regalloc2 v0.15.2
+2026-09-16T09:37:23.5206739Z   Downloaded futures-util v0.3.34
+2026-09-16T09:37:23.6828228Z   Downloaded quick-xml v0.41.0
+2026-09-16T09:37:23.7254308Z   Downloaded syn v2.0.119
+2026-09-16T09:37:23.9018587Z   Downloaded wasmtime-internal-unwinder v48.0.1
+2026-09-16T09:37:23.9210927Z   Downloaded wasmtime-wasi-io v48.0.1
+2026-09-16T09:37:23.9309946Z   Downloaded winx v0.36.4
+2026-09-16T09:37:23.9452611Z   Downloaded cranelift-assembler-x64-meta v0.135.1
+2026-09-16T09:37:23.9830835Z   Downloaded syn v3.0.5
+2026-09-16T09:37:24.0766931Z   Downloaded rustix v1.1.4
+2026-09-16T09:37:24.3564840Z   Downloaded zerofrom-derive v0.1.7
+2026-09-16T09:37:24.3696352Z   Downloaded cfg_aliases v0.2.2
+2026-09-16T09:37:24.3819417Z   Downloaded derive_arbitrary v1.4.2
+2026-09-16T09:37:24.3933598Z   Downloaded pcre2-sys v0.2.10
+2026-09-16T09:37:24.4809603Z   Downloaded zerovec-derive v0.11.6
+2026-09-16T09:37:24.5006668Z   Downloaded cap-fs-ext v4.0.3
+2026-09-16T09:37:24.5161103Z   Downloaded cranelift-control v0.135.1
+2026-09-16T09:37:24.5288152Z   Downloaded encoding_rs v0.8.35
+2026-09-16T09:37:24.6207942Z   Downloaded libc v0.2.189
+2026-09-16T09:37:25.0166492Z   Downloaded cranelift-assembler-x64 v0.135.1
+2026-09-16T09:37:25.0390310Z   Downloaded crc32fast v1.5.1
+2026-09-16T09:37:25.0597426Z   Downloaded cfg-if v1.0.4
+2026-09-16T09:37:25.0736972Z   Downloaded cranelift-bitset v0.135.1
+2026-09-16T09:37:25.0818184Z   Downloaded arbitrary v1.4.2
+2026-09-16T09:37:25.2325276Z   Downloaded byteorder v1.5.0
+2026-09-16T09:37:25.2482975Z   Downloaded chacha20 v0.10.2
+2026-09-16T09:37:25.2716078Z   Downloaded cranelift-entity v0.135.1
+2026-09-16T09:37:25.2928259Z   Downloaded cpufeatures v0.2.17
+2026-09-16T09:37:25.3057068Z   Downloaded zopfli v0.8.3
+2026-09-16T09:37:25.3300997Z   Downloaded stable_deref_trait v1.2.1
+2026-09-16T09:37:25.3431899Z   Downloaded zmij v1.0.23
+2026-09-16T09:37:25.3605391Z   Downloaded yoke v0.8.3
+2026-09-16T09:37:25.3783655Z   Downloaded static_assertions v1.1.0
+2026-09-16T09:37:25.3988902Z   Downloaded bitflags v2.13.1
+2026-09-16T09:37:25.4517603Z   Downloaded cap-std v4.0.3
+2026-09-16T09:37:25.4866623Z   Downloaded cc v1.4.5
+2026-09-16T09:37:25.5123088Z   Downloaded anyhow v1.0.104
+2026-09-16T09:37:25.5567022Z   Downloaded cranelift-bforest v0.135.1
+2026-09-16T09:37:25.5669488Z   Downloaded cranelift-frontend v0.135.1
+2026-09-16T09:37:25.5830425Z   Downloaded wasmtime-internal-core v48.0.1
+2026-09-16T09:37:25.6148598Z   Downloaded accesskit_consumer v0.39.0
+2026-09-16T09:37:25.6344274Z   Downloaded addr2line v0.26.1
+2026-09-16T09:37:25.9609373Z   Downloaded cranelift-isle v0.135.1
+2026-09-16T09:37:26.0218432Z   Downloaded socket2 v0.6.5
+2026-09-16T09:37:26.0327535Z   Downloaded zerotrie v0.2.5
+2026-09-16T09:37:26.0736452Z   Downloaded zerovec v0.11.8
+2026-09-16T09:37:26.1333557Z   Downloaded bytes v1.12.1
+2026-09-16T09:37:26.1690034Z   Downloaded wasmtime-internal-cranelift v48.0.1
+2026-09-16T09:37:26.2202923Z   Downloaded base64 v0.22.1
+2026-09-16T09:37:26.2549723Z   Downloaded bumpalo v3.20.3
+2026-09-16T09:37:26.2741130Z   Downloaded cap-primitives v4.0.3
+2026-09-16T09:37:26.4209930Z   Downloaded cranelift-codegen-meta v0.135.1
+2026-09-16T09:37:26.4543246Z   Downloaded zip v2.4.2
+2026-09-16T09:37:26.5702750Z   Downloaded serde_json v1.0.150
+2026-09-16T09:37:26.6421968Z   Downloaded wasmtime-internal-component-macro v48.0.1
+2026-09-16T09:37:26.7939474Z   Downloaded wasmtime-wasi v48.0.1
+2026-09-16T09:37:26.8779316Z   Downloaded winnow v0.7.15
+2026-09-16T09:37:26.9695083Z   Downloaded wit-component v0.254.0
+2026-09-16T09:37:27.7940368Z   Downloaded windows-sys v0.52.0
+2026-09-16T09:37:28.5401187Z   Downloaded winit v0.30.13
+2026-09-16T09:37:28.7372736Z   Downloaded windows_x86_64_msvc v0.52.6
+2026-09-16T09:37:28.7573465Z   Downloaded wasmtime v48.0.1
+2026-09-16T09:37:28.9851995Z   Downloaded cranelift-codegen v0.135.1
+2026-09-16T09:37:29.2040350Z   Downloaded windows-sys v0.59.0
+2026-09-16T09:37:31.5657428Z   Downloaded windows-sys v0.61.2
+2026-09-16T09:37:31.9287665Z   Downloaded windows v0.62.2
+2026-09-16T09:37:34.1897214Z    Compiling proc-macro2 v1.0.107
+2026-09-16T09:37:34.1897871Z    Compiling unicode-ident v1.0.24
+2026-09-16T09:37:34.1898477Z    Compiling quote v1.0.47
+2026-09-16T09:37:34.1899527Z    Compiling serde_core v1.0.229
+2026-09-16T09:37:34.3079059Z    Compiling serde v1.0.229
+2026-09-16T09:37:37.8116825Z    Compiling foldhash v0.2.0
+2026-09-16T09:37:37.8210902Z    Compiling cfg-if v1.0.4
+2026-09-16T09:37:37.9017196Z    Compiling windows-link v0.2.1
+2026-09-16T09:37:37.9557068Z    Compiling stable_deref_trait v1.2.1
+2026-09-16T09:37:38.0054284Z    Compiling version_check v0.9.5
+2026-09-16T09:37:38.0708386Z    Compiling semver v1.0.28
+2026-09-16T09:37:38.3896198Z    Compiling generic-array v0.14.7
+2026-09-16T09:37:38.4645080Z    Compiling typenum v1.20.1
+2026-09-16T09:37:39.0026340Z    Compiling syn v3.0.5
+2026-09-16T09:37:39.0275819Z    Compiling syn v2.0.119
+2026-09-16T09:37:40.7205747Z    Compiling libm v0.2.16
+2026-09-16T09:37:41.0663039Z    Compiling equivalent v1.0.2
+2026-09-16T09:37:41.1232194Z    Compiling block-buffer v0.10.4
+2026-09-16T09:37:41.2592310Z    Compiling crypto-common v0.1.7
+2026-09-16T09:37:41.3622055Z    Compiling digest v0.10.7
+2026-09-16T09:37:41.6025946Z    Compiling hashbrown v0.17.1
+2026-09-16T09:37:41.7578840Z    Compiling zmij v1.0.23
+2026-09-16T09:37:42.2028981Z    Compiling getrandom v0.4.3
+2026-09-16T09:37:42.7278122Z    Compiling indexmap v2.14.2
+2026-09-16T09:37:43.3631266Z    Compiling cpufeatures v0.2.17
+2026-09-16T09:37:43.5651587Z    Compiling serde_json v1.0.150
+2026-09-16T09:37:43.7752145Z    Compiling memchr v2.8.3
+2026-09-16T09:37:44.0611246Z    Compiling jobserver v0.1.35
+2026-09-16T09:37:44.4845964Z    Compiling sha2 v0.10.9
+2026-09-16T09:37:45.3946086Z    Compiling find-msvc-tools v0.1.12
+2026-09-16T09:37:46.3616647Z    Compiling thiserror v2.0.20
+2026-09-16T09:37:46.6584700Z    Compiling shlex v2.0.1
+2026-09-16T09:37:46.8184790Z    Compiling cc v1.4.5
+2026-09-16T09:37:46.8646014Z    Compiling rustc_version v0.4.1
+2026-09-16T09:37:46.9298168Z    Compiling serde_derive v1.0.229
+2026-09-16T09:37:47.2225974Z    Compiling thiserror-impl v2.0.20
+2026-09-16T09:37:47.5934769Z    Compiling windows-sys v0.61.2
+2026-09-16T09:37:49.1403680Z    Compiling log v0.4.34
+2026-09-16T09:37:49.3763395Z    Compiling anyhow v1.0.104
+2026-09-16T09:37:49.4104844Z    Compiling scopeguard v1.2.0
+2026-09-16T09:37:49.4840408Z    Compiling lock_api v0.4.14
+2026-09-16T09:37:49.8098754Z    Compiling heapless v0.7.17
+2026-09-16T09:37:49.8811516Z    Compiling byteorder v1.5.0
+2026-09-16T09:37:50.0701011Z    Compiling crc32fast v1.5.1
+2026-09-16T09:37:50.1164109Z    Compiling hash32 v0.2.1
+2026-09-16T09:37:50.3797150Z    Compiling spin v0.9.9
+2026-09-16T09:37:50.6249854Z    Compiling displaydoc v0.2.7
+2026-09-16T09:37:51.1512304Z    Compiling synstructure v0.13.2
+2026-09-16T09:37:51.6414442Z    Compiling wasmtime-internal-core v48.0.1
+2026-09-16T09:37:51.8274326Z    Compiling allocator-api2 v0.2.21
+2026-09-16T09:37:52.4007430Z    Compiling bumpalo v3.20.3
+2026-09-16T09:37:53.0191819Z    Compiling cobs v0.3.0
+2026-09-16T09:37:53.1253666Z    Compiling bitflags v2.13.1
+2026-09-16T09:37:53.4660616Z    Compiling smallvec v1.16.0
+2026-09-16T09:37:53.7806027Z    Compiling zerofrom-derive v0.1.7
+2026-09-16T09:37:53.8784653Z    Compiling postcard v1.1.3
+2026-09-16T09:37:54.4111206Z    Compiling cranelift-srcgen v0.135.1
+2026-09-16T09:37:54.6386508Z    Compiling cranelift-assembler-x64-meta v0.135.1
+2026-09-16T09:37:54.8553165Z    Compiling yoke-derive v0.8.2
+2026-09-16T09:37:55.8238382Z    Compiling zerofrom v0.1.8
+2026-09-16T09:37:55.9899541Z    Compiling windows_x86_64_msvc v0.52.6
+2026-09-16T09:37:56.5450287Z    Compiling yoke v0.8.3
+2026-09-16T09:37:56.7884748Z    Compiling cranelift-bitset v0.135.1
+2026-09-16T09:37:57.0663680Z    Compiling pulley-macros v48.0.1
+2026-09-16T09:37:57.0844781Z    Compiling heck v0.5.0
+2026-09-16T09:37:57.5048096Z    Compiling zerovec-derive v0.11.6
+2026-09-16T09:37:57.5749827Z    Compiling cranelift-isle v0.135.1
+2026-09-16T09:37:57.8647759Z    Compiling target-lexicon v0.13.5
+2026-09-16T09:37:58.6318539Z    Compiling pulley-interpreter v48.0.1
+2026-09-16T09:37:58.9739782Z    Compiling windows-targets v0.52.6
+2026-09-16T09:37:59.0155288Z    Compiling cranelift-entity v0.135.1
+2026-09-16T09:37:59.1846826Z    Compiling zerovec v0.11.8
+2026-09-16T09:37:59.6138607Z    Compiling toml_datetime v0.6.11
+2026-09-16T09:38:00.0874129Z    Compiling serde_spanned v0.6.9
+2026-09-16T09:38:00.1393897Z    Compiling cranelift-codegen-shared v0.135.1
+2026-09-16T09:38:00.2056715Z    Compiling winnow v0.7.15
+2026-09-16T09:38:00.2118849Z    Compiling libc v0.2.189
+2026-09-16T09:38:00.2672857Z    Compiling itoa v1.0.18
+2026-09-16T09:38:00.5370431Z    Compiling fnv v1.0.7
+2026-09-16T09:38:00.6506210Z    Compiling toml_write v0.1.2
+2026-09-16T09:38:00.6656276Z    Compiling hashbrown v0.16.1
+2026-09-16T09:38:01.7254909Z    Compiling gimli v0.33.0
+2026-09-16T09:38:01.8406257Z    Compiling cranelift-codegen-meta v0.135.1
+2026-09-16T09:38:03.5335763Z    Compiling toml_edit v0.22.27
+2026-09-16T09:38:05.5614122Z    Compiling cranelift-bforest v0.135.1
+2026-09-16T09:38:06.0293432Z    Compiling cranelift-assembler-x64 v0.135.1
+2026-09-16T09:38:08.1796695Z    Compiling bareline-unicode-fold v0.1.0 (D:\a\BareLine\BareLine\crates\unicode-fold)
+2026-09-16T09:38:09.0246734Z    Compiling wasmparser v0.254.0
+2026-09-16T09:38:10.8157891Z    Compiling cranelift-codegen v0.135.1
+2026-09-16T09:38:11.5241315Z    Compiling bareline-platform v0.1.0 (D:\a\BareLine\BareLine\crates\platform)
+2026-09-16T09:38:11.5587341Z    Compiling winapi-util v0.1.11
+2026-09-16T09:38:11.8714998Z    Compiling windows-interface v0.59.3
+2026-09-16T09:38:12.9387953Z    Compiling wasmtime-internal-versioned-export-macros v48.0.1
+2026-09-16T09:38:13.3655478Z    Compiling windows-implement v0.60.2
+2026-09-16T09:38:14.3245552Z    Compiling windows-result v0.4.1
+2026-09-16T09:38:14.6781600Z    Compiling windows-strings v0.5.1
+2026-09-16T09:38:14.7494296Z    Compiling encoding_rs v0.8.35
+2026-09-16T09:38:15.3839738Z    Compiling simd-adler32 v0.3.10
+2026-09-16T09:38:16.3249846Z    Compiling object v0.39.1
+2026-09-16T09:38:16.6144235Z    Compiling rustc-hash v2.1.3
+2026-09-16T09:38:16.7164728Z    Compiling arbitrary v1.4.2
+2026-09-16T09:38:18.3698307Z    Compiling cranelift-control v0.135.1
+2026-09-16T09:38:18.4360916Z    Compiling regalloc2 v0.15.2
+2026-09-16T09:38:18.9792831Z    Compiling windows-core v0.62.2
+2026-09-16T09:38:21.6466071Z    Compiling termcolor v1.4.1
+2026-09-16T09:38:24.8754867Z    Compiling tinystr v0.8.4
+2026-09-16T09:38:31.7568305Z    Compiling writeable v0.6.4
+2026-09-16T09:38:32.1008432Z    Compiling adler2 v2.0.1
+2026-09-16T09:38:32.2368156Z    Compiling pin-project-lite v0.2.17
+2026-09-16T09:38:32.3725448Z    Compiling unicode-segmentation v1.13.3
+2026-09-16T09:38:33.1984799Z    Compiling leb128fmt v0.1.0
+2026-09-16T09:38:33.3668133Z    Compiling litemap v0.8.3
+2026-09-16T09:38:36.6195508Z    Compiling wasm-encoder v0.254.0
+2026-09-16T09:38:40.1138025Z    Compiling icu_locale_core v2.1.1
+2026-09-16T09:38:45.9266767Z    Compiling miniz_oxide v0.9.1
+2026-09-16T09:38:46.0573682Z    Compiling wasmprinter v0.254.0
+2026-09-16T09:38:59.6383811Z    Compiling bareline-commands v0.1.0 (D:\a\BareLine\BareLine\crates\commands)
+2026-09-16T09:39:00.3393863Z    Compiling potential_utf v0.1.6
+2026-09-16T09:39:00.4965039Z    Compiling windows-sys v0.59.0
+2026-09-16T09:39:03.6290285Z    Compiling zerotrie v0.2.5
+2026-09-16T09:39:03.7364925Z    Compiling id-arena v2.3.0
+2026-09-16T09:39:03.8638313Z    Compiling io-lifetimes v2.0.4
+2026-09-16T09:39:04.1504979Z    Compiling wasmtime-internal-component-util v48.0.1
+2026-09-16T09:39:04.1676613Z    Compiling zip v2.4.2
+2026-09-16T09:39:04.2290727Z    Compiling io-lifetimes v3.0.1
+2026-09-16T09:39:04.3624187Z    Compiling icu_normalizer_data v2.1.1
+2026-09-16T09:39:04.3996535Z    Compiling icu_properties_data v2.1.2
+2026-09-16T09:39:04.5424952Z    Compiling once_cell v1.21.4
+2026-09-16T09:39:04.5861566Z    Compiling wasmtime-environ v48.0.1
+2026-09-16T09:39:04.6043063Z    Compiling icu_provider v2.1.1
+2026-09-16T09:39:04.8091129Z    Compiling wit-parser v0.254.0
+2026-09-16T09:39:05.0938534Z    Compiling icu_collections v2.1.1
+2026-09-16T09:39:06.0422744Z    Compiling flate2 v1.1.10
+2026-09-16T09:39:06.7584799Z    Compiling wasm-metadata v0.254.0
+2026-09-16T09:39:07.2533533Z    Compiling zopfli v0.8.3
+2026-09-16T09:39:09.2861874Z    Compiling windows-threading v0.2.1
+2026-09-16T09:39:09.4053262Z    Compiling pkg-config v0.3.34
+2026-09-16T09:39:10.1588240Z    Compiling bareline-renderer v0.1.0 (D:\a\BareLine\BareLine\crates\renderer)
+2026-09-16T09:39:10.4780588Z    Compiling uuid v1.26.0
+2026-09-16T09:39:11.0584337Z    Compiling minisign-verify v0.2.4
+2026-09-16T09:39:13.8186686Z    Compiling io-extras v0.19.0
+2026-09-16T09:39:14.0476171Z    Compiling wasmtime-internal-unwinder v48.0.1
+2026-09-16T09:39:14.1963002Z    Compiling accesskit v0.25.0
+2026-09-16T09:39:14.2726319Z    Compiling pcre2-sys v0.2.10
+2026-09-16T09:39:14.6197543Z    Compiling windows-future v0.3.2
+2026-09-16T09:39:15.4894772Z    Compiling wit-component v0.254.0
+2026-09-16T09:39:19.0312499Z    Compiling tracing-core v0.1.36
+2026-09-16T09:39:20.6448195Z    Compiling windows-collections v0.3.2
+2026-09-16T09:39:21.3822603Z    Compiling windows-numerics v0.3.1
+2026-09-16T09:39:21.6025834Z    Compiling wasmtime-internal-fiber v48.0.1
+2026-09-16T09:39:21.8907710Z    Compiling tracing-attributes v0.1.31
+2026-09-16T09:39:23.3139296Z    Compiling base64 v0.22.1
+2026-09-16T09:39:23.8909481Z    Compiling cap-primitives v4.0.3
+2026-09-16T09:39:23.9435232Z    Compiling wasmtime-internal-cranelift v48.0.1
+2026-09-16T09:39:24.1556159Z    Compiling bareline-document v0.1.0 (D:\a\BareLine\BareLine\crates\document)
+2026-09-16T09:39:24.1829237Z    Compiling wasmtime-internal-component-macro v48.0.1
+2026-09-16T09:39:24.3930994Z    Compiling futures-core v0.3.34
+2026-09-16T09:39:24.5123388Z    Compiling futures-sink v0.3.34
+2026-09-16T09:39:24.5826357Z    Compiling either v1.18.0
+2026-09-16T09:39:24.8822436Z    Compiling itertools v0.14.0
+2026-09-16T09:39:27.7693666Z    Compiling tracing v0.1.44
+2026-09-16T09:39:31.2916001Z    Compiling windows v0.62.2
+2026-09-16T09:39:32.3135543Z    Compiling icu_normalizer v2.1.1
+2026-09-16T09:39:34.2224088Z    Compiling icu_properties v2.1.2
+2026-09-16T09:39:36.4212646Z    Compiling fs-set-times v0.20.3
+2026-09-16T09:39:36.6240760Z    Compiling wasmtime-internal-wit-bindgen v48.0.1
+2026-09-16T09:39:39.4528552Z    Compiling cranelift-frontend v0.135.1
+2026-09-16T09:39:43.7347484Z    Compiling cranelift-native v0.135.1
+2026-09-16T09:39:43.9066285Z    Compiling bareline-extensions-protocol v0.1.0 (D:\a\BareLine\BareLine\crates\extensions-protocol)
+2026-09-16T09:39:47.7635564Z    Compiling accesskit_consumer v0.39.0
+2026-09-16T09:39:53.8617041Z    Compiling winx v0.36.4
+2026-09-16T09:39:54.8913253Z    Compiling bareline-macros v0.1.0 (D:\a\BareLine\BareLine\crates\macros)
+2026-09-16T09:39:58.1180221Z    Compiling wasmtime v48.0.1
+2026-09-16T09:39:58.4494173Z    Compiling bareline-lexilla-bridge v0.1.0 (D:\a\BareLine\BareLine\native\lexilla-bridge)
+2026-09-16T09:39:58.7437456Z    Compiling quick-xml v0.41.0
+2026-09-16T09:40:01.6162484Z    Compiling bareline-search v0.1.0 (D:\a\BareLine\BareLine\crates\search)
+2026-09-16T09:40:01.9856859Z    Compiling ipnet v2.12.2
+2026-09-16T09:40:03.4316005Z    Compiling ambient-authority v0.0.2
+2026-09-16T09:40:03.4870105Z    Compiling cap-std v4.0.3
+2026-09-16T09:40:03.8009307Z    Compiling maybe-owned v0.3.4
+2026-09-16T09:40:04.0193218Z    Compiling static_assertions v1.1.0
+2026-09-16T09:40:04.0734955Z    Compiling rand_core v0.10.1
+2026-09-16T09:40:04.2481244Z    Compiling lexopt v0.3.1
+2026-09-16T09:40:04.8715311Z    Compiling futures-task v0.3.34
+2026-09-16T09:40:08.8166438Z    Compiling futures-util v0.3.34
+2026-09-16T09:40:11.2725515Z    Compiling bareline-distribution v0.1.0 (D:\a\BareLine\BareLine\crates\distribution)
+2026-09-16T09:40:49.3996072Z    Compiling accesskit_windows v0.35.0 (D:\a\BareLine\BareLine\vendor\accesskit_windows-0.35.0)
+2026-09-16T09:40:55.3493976Z    Compiling idna_adapter v1.2.1
+2026-09-16T09:40:55.7296432Z    Compiling bareline-file-io v0.1.0 (D:\a\BareLine\BareLine\crates\file-io)
+2026-09-16T09:41:00.6699170Z    Compiling futures-channel v0.3.34
+2026-09-16T09:41:00.7162456Z    Compiling wasmtime-internal-jit-icache-coherence v48.0.1
+2026-09-16T09:41:00.8271110Z    Compiling async-trait v0.1.92
+2026-09-16T09:41:02.4193462Z    Compiling percent-encoding v2.3.2
+2026-09-16T09:41:02.7026993Z    Compiling cap-fs-ext v4.0.3
+2026-09-16T09:41:03.0253528Z    Compiling utf8_iter v1.0.4
+2026-09-16T09:41:03.1781163Z    Compiling cpufeatures v0.3.1
+2026-09-16T09:41:03.2288196Z    Compiling rustix v1.1.4
+2026-09-16T09:41:03.6530752Z    Compiling bytes v1.12.1
+2026-09-16T09:41:04.8676144Z    Compiling futures-io v0.3.34
+2026-09-16T09:41:04.9165823Z    Compiling futures v0.3.34
+2026-09-16T09:41:05.1220680Z    Compiling chacha20 v0.10.2
+2026-09-16T09:41:05.5081639Z    Compiling idna v1.1.0
+2026-09-16T09:41:08.2894236Z    Compiling form_urlencoded v1.2.2
+2026-09-16T09:41:23.9284513Z    Compiling bareline-platform-windows v0.1.0 (D:\a\BareLine\BareLine\crates\platform-windows)
+2026-09-16T09:41:42.5390190Z    Compiling errno v0.3.14
+2026-09-16T09:41:42.8057988Z    Compiling mio v1.2.3
+2026-09-16T09:41:44.5145909Z    Compiling socket2 v0.6.5
+2026-09-16T09:41:44.7770178Z    Compiling cfg_aliases v0.2.2
+2026-09-16T09:41:44.8314622Z    Compiling winit v0.30.13
+2026-09-16T09:41:45.3128176Z    Compiling tokio v1.53.1
+2026-09-16T09:41:46.9047697Z    Compiling rand v0.10.2
+2026-09-16T09:41:48.2449858Z    Compiling wasmtime-wasi-io v48.0.1
+2026-09-16T09:41:50.1657647Z    Compiling bareline-syntax v0.1.0 (D:\a\BareLine\BareLine\crates\syntax)
+2026-09-16T09:41:58.3774359Z    Compiling url v2.5.8
+2026-09-16T09:42:01.5243765Z    Compiling bareline-ui v0.1.0 (D:\a\BareLine\BareLine\crates\ui)
+2026-09-16T09:42:01.8121418Z    Compiling bareline-extension-host v0.1.0 (D:\a\BareLine\BareLine\apps\extension-host)
+2026-09-16T09:42:02.3717384Z    Compiling bareline-editor-surface v0.1.0 (D:\a\BareLine\BareLine\crates\editor-surface)
+2026-09-16T09:42:04.6900101Z    Compiling wasmtime-wasi v48.0.1
+2026-09-16T09:42:37.1431050Z    Compiling bareline-diff v0.1.0 (D:\a\BareLine\BareLine\crates\diff)
+2026-09-16T09:42:39.4226302Z    Compiling bareline-settings v0.1.0 (D:\a\BareLine\BareLine\crates\settings)
+2026-09-16T09:42:39.8781055Z    Compiling windows-sys v0.52.0
+2026-09-16T09:42:39.9807263Z    Compiling sha1 v0.10.6
+2026-09-16T09:42:40.4553966Z    Compiling md-5 v0.10.6
+2026-09-16T09:42:40.5953190Z    Compiling cursor-icon v1.2.0
+2026-09-16T09:42:40.7122615Z    Compiling raw-window-handle v0.6.2
+2026-09-16T09:42:41.0273166Z    Compiling smol_str v0.2.2
+2026-09-16T09:42:41.3613095Z    Compiling bareline v0.1.0 (D:\a\BareLine\BareLine\apps\bareline)
+2026-09-16T09:42:42.1014402Z    Compiling dpi v0.1.2
+2026-09-16T09:42:42.3376540Z    Compiling bareline-update-helper v0.1.0 (D:\a\BareLine\BareLine\apps\update-helper)
+2026-09-16T09:42:43.2237622Z    Compiling bareline-app v0.1.0 (D:\a\BareLine\BareLine\crates\app)
+2026-09-16T09:42:49.4276677Z    Compiling bareline-diagnostics v0.1.0 (D:\a\BareLine\BareLine\crates\diagnostics)
+2026-09-16T09:47:50.1754737Z     Finished `release` profile [optimized + debuginfo] target(s) in 10m 39s
+2026-09-16T09:47:50.7213013Z  Downloading crates ...
+2026-09-16T09:47:51.7769690Z   Downloaded ed25519-dalek v2.2.0
+2026-09-16T09:47:51.8011265Z   Downloaded signature v2.2.0
+2026-09-16T09:47:51.8232737Z   Downloaded pkcs8 v0.10.2
+2026-09-16T09:47:51.8607852Z   Downloaded zeroize v1.9.0
+2026-09-16T09:47:51.8780204Z   Downloaded curve25519-dalek-derive v0.1.1
+2026-09-16T09:47:51.8871219Z   Downloaded rand_core v0.6.4
+2026-09-16T09:47:51.9001943Z   Downloaded ed25519 v2.2.3
+2026-09-16T09:47:51.9188864Z   Downloaded base64ct v1.8.3
+2026-09-16T09:47:51.9438122Z   Downloaded getrandom v0.2.17
+2026-09-16T09:47:51.9766645Z   Downloaded wasmparser v0.258.0
+2026-09-16T09:47:52.0435665Z   Downloaded wat v1.258.0
+2026-09-16T09:47:52.0556118Z   Downloaded spki v0.7.3
+2026-09-16T09:47:52.0889572Z   Downloaded const-oid v0.9.6
+2026-09-16T09:47:52.1043986Z   Downloaded der v0.7.10
+2026-09-16T09:47:52.1625720Z   Downloaded blake2 v0.10.6
+2026-09-16T09:47:52.1824884Z   Downloaded wasm-encoder v0.258.0
+2026-09-16T09:47:52.2219956Z   Downloaded wast v258.0.0
+2026-09-16T09:47:52.3554917Z   Downloaded unicode-width v0.2.2
+2026-09-16T09:47:52.3747553Z   Downloaded curve25519-dalek v4.1.3
+2026-09-16T09:47:54.7074165Z Generated notices: payload/THIRD-PARTY-NOTICES.md
+2026-09-16T09:47:54.7309816Z Generated SDK license aggregation: D:\a\BareLine\BareLine\payload\SDK-LICENSES.md
+2026-09-16T09:47:54.7974907Z     Updating crates.io index
+2026-09-16T09:47:54.8329325Z  Downloading crates ...
+2026-09-16T09:47:54.8481149Z   Downloaded cargo-cyclonedx v0.5.9
+2026-09-16T09:47:54.9553959Z   Installing cargo-cyclonedx v0.5.9
+2026-09-16T09:47:54.9555107Z warning: default toolchain implicitly overridden with `1.98.1-x86_64-pc-windows-msvc` by rustup toolchain file
+2026-09-16T09:47:54.9556341Z   |
+2026-09-16T09:47:54.9556943Z   = help: use `cargo +stable install` if you meant to use the stable toolchain
+2026-09-16T09:47:54.9559018Z   = note: rustup selects the toolchain based on the parent environment and not the environment of the package being installed
+2026-09-16T09:47:54.9597092Z     Updating crates.io index
+2026-09-16T09:47:55.1917355Z warning: package `xml-rs v0.8.19` in Cargo.lock is yanked in registry `crates-io`
+2026-09-16T09:47:55.1919306Z   |
+2026-09-16T09:47:55.1919689Z   = help: consider running without --locked
+2026-09-16T09:47:56.2296560Z     Updating crates.io index
+2026-09-16T09:47:56.2758721Z  Downloading crates ...
+2026-09-16T09:47:56.2874632Z   Downloaded aho-corasick v1.1.2
+2026-09-16T09:47:56.3466475Z   Downloaded colorchoice v1.0.0
+2026-09-16T09:47:56.3547721Z   Downloaded form_urlencoded v1.2.1
+2026-09-16T09:47:56.3629550Z   Downloaded heck v0.4.1
+2026-09-16T09:47:56.3801155Z   Downloaded cyclonedx-bom-macros v0.1.0
+2026-09-16T09:47:56.3924187Z   Downloaded borrow-or-share v0.2.4
+2026-09-16T09:47:56.4016808Z   Downloaded cargo_metadata v0.18.1
+2026-09-16T09:47:56.4246754Z   Downloaded cfg-if v1.0.0
+2026-09-16T09:47:56.4351067Z   Downloaded is-terminal v0.4.9
+2026-09-16T09:47:56.4429336Z   Downloaded num-conv v0.1.0
+2026-09-16T09:47:56.4500938Z   Downloaded once_cell_polyfill v1.70.1
+2026-09-16T09:47:56.4646193Z   Downloaded equivalent v1.0.1
+2026-09-16T09:47:56.4726985Z   Downloaded getrandom v0.2.11
+2026-09-16T09:47:56.5058781Z   Downloaded clap_derive v4.4.7
+2026-09-16T09:47:56.5252169Z   Downloaded displaydoc v0.2.5
+2026-09-16T09:47:56.5629788Z   Downloaded env_logger v0.10.1
+2026-09-16T09:47:56.5885558Z   Downloaded hex v0.4.3
+2026-09-16T09:47:56.6058602Z   Downloaded humantime v2.1.0
+2026-09-16T09:47:56.6180843Z   Downloaded camino v1.1.6
+2026-09-16T09:47:56.6304699Z   Downloaded cargo-lock v10.0.1
+2026-09-16T09:47:56.6594561Z   Downloaded clap_lex v0.6.0
+2026-09-16T09:47:56.6683475Z   Downloaded fluent-uri v0.4.1
+2026-09-16T09:47:56.6997697Z   Downloaded cyclonedx-bom v0.8.1
+2026-09-16T09:47:56.8775567Z   Downloaded cargo-platform v0.1.4
+2026-09-16T09:47:56.8926143Z   Downloaded clap_builder v4.4.11
+2026-09-16T09:47:56.9507828Z   Downloaded icu_provider_macros v1.5.0
+2026-09-16T09:47:57.4136871Z   Downloaded percent-encoding v2.3.1
+2026-09-16T09:47:57.4216691Z   Downloaded winapi-util v0.1.6
+2026-09-16T09:47:57.4337577Z   Downloaded zerofrom-derive v0.1.5
+2026-09-16T09:47:57.4453813Z   Downloaded hashbrown v0.14.3
+2026-09-16T09:47:57.4763480Z   Downloaded clap v4.4.11
+2026-09-16T09:47:57.5895693Z   Downloaded deranged v0.3.9
+2026-09-16T09:47:57.5981923Z   Downloaded idna_adapter v1.2.0
+2026-09-16T09:47:57.6058785Z   Downloaded is_terminal_polyfill v1.70.1
+2026-09-16T09:47:57.6129520Z   Downloaded itoa v1.0.9
+2026-09-16T09:47:57.6280533Z   Downloaded litemap v0.7.4
+2026-09-16T09:47:57.6502033Z   Downloaded pathdiff v0.2.1
+2026-09-16T09:47:57.6745773Z   Downloaded ordered-float v5.1.0
+2026-09-16T09:47:57.6926515Z   Downloaded phf_generator v0.11.2
+2026-09-16T09:47:57.7037583Z   Downloaded phf_macros v0.11.2
+2026-09-16T09:47:57.7100484Z   Downloaded powerfmt v0.2.0
+2026-09-16T09:47:57.7205321Z   Downloaded validator v0.19.0
+2026-09-16T09:47:57.7416039Z   Downloaded anstyle-query v1.0.0
+2026-09-16T09:47:57.7528154Z   Downloaded autocfg v1.1.0
+2026-09-16T09:47:57.7660162Z   Downloaded icu_locid_transform v1.5.0
+2026-09-16T09:47:57.7940784Z   Downloaded quote v1.0.35
+2026-09-16T09:47:57.8236845Z   Downloaded thiserror v1.0.69
+2026-09-16T09:47:57.9011368Z   Downloaded unicase v2.7.0
+2026-09-16T09:47:57.9123979Z   Downloaded yoke v0.7.5
+2026-09-16T09:47:57.9376439Z   Downloaded icu_locid v1.5.0
+2026-09-16T09:47:57.9979397Z   Downloaded icu_locid_transform_data v1.5.0
+2026-09-16T09:47:58.0116245Z   Downloaded icu_properties v1.5.1
+2026-09-16T09:47:58.0311043Z   Downloaded icu_provider v1.5.0
+2026-09-16T09:47:58.0513744Z   Downloaded once_cell v1.18.0
+2026-09-16T09:47:58.0863578Z   Downloaded phf v0.11.2
+2026-09-16T09:47:58.0968045Z   Downloaded serde v1.0.210
+2026-09-16T09:47:58.1255772Z   Downloaded time-macros v0.2.18
+2026-09-16T09:47:58.1444043Z   Downloaded toml v0.8.19
+2026-09-16T09:47:58.1770403Z   Downloaded anstream v0.6.20
+2026-09-16T09:47:58.1966864Z   Downloaded icu_collections v1.5.0
+2026-09-16T09:47:58.2629666Z   Downloaded icu_normalizer v1.5.0
+2026-09-16T09:47:58.2906716Z   Downloaded icu_normalizer_data v1.5.0
+2026-09-16T09:47:58.3087357Z   Downloaded idna v1.0.3
+2026-09-16T09:47:58.3278607Z   Downloaded indexmap v2.2.3
+2026-09-16T09:47:58.3636218Z   Downloaded log v0.4.20
+2026-09-16T09:47:58.3794328Z   Downloaded memchr v2.6.4
+2026-09-16T09:47:58.4321086Z   Downloaded num-traits v0.2.19
+2026-09-16T09:47:58.4595650Z   Downloaded phf_shared v0.11.2
+2026-09-16T09:47:58.4677108Z   Downloaded ref-cast-impl v1.0.25
+2026-09-16T09:47:58.4748574Z   Downloaded serde_json v1.0.143
+2026-09-16T09:47:58.5501167Z   Downloaded serde_spanned v0.6.8
+2026-09-16T09:47:58.5582297Z   Downloaded syn v2.0.111
+2026-09-16T09:47:58.6454778Z   Downloaded utf8parse v0.2.1
+2026-09-16T09:47:58.6538503Z   Downloaded icu_properties_data v1.5.0
+2026-09-16T09:47:58.7589877Z   Downloaded regex-syntax v0.8.2
+2026-09-16T09:47:58.7982454Z   Downloaded url v2.5.4
+2026-09-16T09:47:58.8158819Z   Downloaded toml_datetime v0.6.8
+2026-09-16T09:47:58.8267681Z   Downloaded stable_deref_trait v1.2.0
+2026-09-16T09:47:58.8342066Z   Downloaded termcolor v1.3.0
+2026-09-16T09:47:58.8447958Z   Downloaded utf16_iter v1.0.5
+2026-09-16T09:47:58.8534658Z   Downloaded unicode-ident v1.0.12
+2026-09-16T09:47:58.8849634Z   Downloaded version_check v0.9.4
+2026-09-16T09:47:58.8957797Z   Downloaded windows-targets v0.53.3
+2026-09-16T09:47:58.9040489Z   Downloaded zerofrom v0.1.5
+2026-09-16T09:47:58.9149560Z   Downloaded ref-cast v1.0.25
+2026-09-16T09:47:58.9463881Z   Downloaded regex-automata v0.4.3
+2026-09-16T09:47:59.0566148Z   Downloaded time-core v0.1.2
+2026-09-16T09:47:59.0644139Z   Downloaded write16 v1.0.0
+2026-09-16T09:47:59.0726656Z   Downloaded semver v1.0.23
+2026-09-16T09:47:59.1017877Z   Downloaded anstyle-parse v0.2.2
+2026-09-16T09:47:59.1151075Z   Downloaded uuid v1.6.1
+2026-09-16T09:47:59.1565220Z   Downloaded writeable v0.5.5
+2026-09-16T09:47:59.1731975Z   Downloaded strum v0.28.0
+2026-09-16T09:47:59.1853487Z   Downloaded thiserror v2.0.18
+2026-09-16T09:47:59.2720524Z   Downloaded toml_edit v0.22.20
+2026-09-16T09:47:59.6141547Z   Downloaded tinystr v0.7.6
+2026-09-16T09:47:59.6343003Z   Downloaded siphasher v0.3.11
+2026-09-16T09:47:59.6446651Z   Downloaded yoke-derive v0.7.5
+2026-09-16T09:47:59.6562431Z   Downloaded anstyle-wincon v3.0.10
+2026-09-16T09:47:59.6675883Z   Downloaded strsim v0.10.0
+2026-09-16T09:47:59.6797427Z   Downloaded zerovec-derive v0.10.3
+2026-09-16T09:47:59.6940018Z   Downloaded anstyle v1.0.4
+2026-09-16T09:47:59.7088184Z   Downloaded strum_macros v0.28.0
+2026-09-16T09:47:59.7344124Z   Downloaded synstructure v0.13.1
+2026-09-16T09:47:59.7489009Z   Downloaded thiserror-impl v1.0.69
+2026-09-16T09:47:59.7618877Z   Downloaded thiserror-impl v2.0.18
+2026-09-16T09:47:59.7758520Z   Downloaded windows-targets v0.48.5
+2026-09-16T09:47:59.7845494Z   Downloaded xml-rs v0.8.19
+2026-09-16T09:47:59.8174935Z   Downloaded ryu v1.0.15
+2026-09-16T09:47:59.8541034Z   Downloaded proc-macro2 v1.0.103
+2026-09-16T09:47:59.8815158Z   Downloaded purl v0.1.3
+2026-09-16T09:47:59.8976640Z   Downloaded serde_derive v1.0.210
+2026-09-16T09:47:59.9186443Z   Downloaded smallvec v1.15.1
+2026-09-16T09:47:59.9401294Z   Downloaded winnow v0.6.20
+2026-09-16T09:48:00.0272294Z   Downloaded rand v0.8.5
+2026-09-16T09:48:00.0625576Z   Downloaded time v0.3.36
+2026-09-16T09:48:00.1374337Z   Downloaded zerovec v0.10.4
+2026-09-16T09:48:00.1988808Z   Downloaded regex v1.10.2
+2026-09-16T09:48:00.3442018Z   Downloaded anyhow v1.0.80
+2026-09-16T09:48:00.3876764Z   Downloaded windows_x86_64_msvc v0.48.5
+2026-09-16T09:48:00.4079967Z   Downloaded windows_x86_64_msvc v0.53.0
+2026-09-16T09:48:00.4275306Z   Downloaded winapi v0.3.9
+2026-09-16T09:48:00.9332301Z   Downloaded windows-sys v0.60.2
+2026-09-16T09:48:01.2700725Z   Downloaded windows-sys v0.48.0
+2026-09-16T09:48:01.6760435Z   Downloaded spdx v0.13.2
+2026-09-16T09:48:02.8422213Z    Compiling proc-macro2 v1.0.103
+2026-09-16T09:48:02.8422842Z    Compiling unicode-ident v1.0.12
+2026-09-16T09:48:02.8423402Z    Compiling serde v1.0.210
+2026-09-16T09:48:02.8423984Z    Compiling stable_deref_trait v1.2.0
+2026-09-16T09:48:02.9117960Z    Compiling version_check v0.9.4
+2026-09-16T09:48:02.9556243Z    Compiling litemap v0.7.4
+2026-09-16T09:48:03.2287768Z    Compiling writeable v0.5.5
+2026-09-16T09:48:03.2500946Z    Compiling windows_x86_64_msvc v0.48.5
+2026-09-16T09:48:03.4520851Z    Compiling unicase v2.7.0
+2026-09-16T09:48:03.9194600Z    Compiling memchr v2.6.4
+2026-09-16T09:48:03.9635142Z    Compiling icu_locid_transform_data v1.5.0
+2026-09-16T09:48:04.0278683Z    Compiling smallvec v1.15.1
+2026-09-16T09:48:04.0875420Z    Compiling windows_x86_64_msvc v0.53.0
+2026-09-16T09:48:04.3469210Z    Compiling windows-targets v0.48.5
+2026-09-16T09:48:04.4032158Z    Compiling quote v1.0.35
+2026-09-16T09:48:04.4628731Z    Compiling icu_properties_data v1.5.0
+2026-09-16T09:48:04.6430097Z    Compiling syn v2.0.111
+2026-09-16T09:48:05.0982864Z    Compiling windows-sys v0.48.0
+2026-09-16T09:48:05.1628218Z    Compiling icu_normalizer_data v1.5.0
+2026-09-16T09:48:05.2261074Z    Compiling write16 v1.0.0
+2026-09-16T09:48:05.3101612Z    Compiling rand_core v0.6.4
+2026-09-16T09:48:05.4851974Z    Compiling utf8_iter v1.0.4
+2026-09-16T09:48:05.4971683Z    Compiling siphasher v0.3.11
+2026-09-16T09:48:05.6434404Z    Compiling percent-encoding v2.3.1
+2026-09-16T09:48:05.7351902Z    Compiling utf16_iter v1.0.5
+2026-09-16T09:48:05.8652574Z    Compiling phf_shared v0.11.2
+2026-09-16T09:48:05.9164925Z    Compiling rand v0.8.5
+2026-09-16T09:48:06.0746779Z    Compiling windows-targets v0.53.3
+2026-09-16T09:48:06.1324167Z    Compiling aho-corasick v1.1.2
+2026-09-16T09:48:06.4130491Z    Compiling winapi v0.3.9
+2026-09-16T09:48:06.6662217Z    Compiling thiserror v1.0.69
+2026-09-16T09:48:06.9734684Z    Compiling serde_json v1.0.143
+2026-09-16T09:48:06.9882803Z    Compiling regex-syntax v0.8.2
+2026-09-16T09:48:07.2064361Z    Compiling equivalent v1.0.1
+2026-09-16T09:48:07.2751169Z    Compiling hashbrown v0.14.3
+2026-09-16T09:48:08.3374917Z    Compiling itoa v1.0.9
+2026-09-16T09:48:08.4898769Z    Compiling autocfg v1.1.0
+2026-09-16T09:48:09.0606188Z    Compiling num-traits v0.2.19
+2026-09-16T09:48:09.2984885Z    Compiling indexmap v2.2.3
+2026-09-16T09:48:10.4315502Z    Compiling synstructure v0.13.1
+2026-09-16T09:48:11.3956685Z    Compiling regex-automata v0.4.3
+2026-09-16T09:48:12.1990046Z    Compiling phf_generator v0.11.2
+2026-09-16T09:48:12.5923971Z    Compiling windows-sys v0.60.2
+2026-09-16T09:48:13.3482160Z    Compiling zerofrom-derive v0.1.5
+2026-09-16T09:48:13.9647142Z    Compiling yoke-derive v0.7.5
+2026-09-16T09:48:14.8734465Z    Compiling serde_derive v1.0.210
+2026-09-16T09:48:15.4806771Z    Compiling zerofrom v0.1.5
+2026-09-16T09:48:15.6225169Z    Compiling yoke v0.7.5
+2026-09-16T09:48:15.6306410Z    Compiling zerovec-derive v0.10.3
+2026-09-16T09:48:15.8897660Z    Compiling displaydoc v0.2.5
+2026-09-16T09:48:16.8305932Z    Compiling icu_provider_macros v1.5.0
+2026-09-16T09:48:17.2714096Z    Compiling zerovec v0.10.4
+2026-09-16T09:48:17.4236198Z    Compiling thiserror-impl v1.0.69
+2026-09-16T09:48:19.2966343Z    Compiling tinystr v0.7.6
+2026-09-16T09:48:19.3156523Z    Compiling icu_collections v1.5.0
+2026-09-16T09:48:19.5372336Z    Compiling icu_locid v1.5.0
+2026-09-16T09:48:20.6425431Z    Compiling icu_provider v1.5.0
+2026-09-16T09:48:22.0151467Z    Compiling icu_locid_transform v1.5.0
+2026-09-16T09:48:23.1569875Z    Compiling icu_properties v1.5.1
+2026-09-16T09:48:23.5696527Z    Compiling ryu v1.0.15
+2026-09-16T09:48:24.1821603Z    Compiling utf8parse v0.2.1
+2026-09-16T09:48:24.2803317Z    Compiling semver v1.0.23
+2026-09-16T09:48:24.5860129Z    Compiling once_cell_polyfill v1.70.1
+2026-09-16T09:48:24.6830297Z    Compiling anstyle v1.0.4
+2026-09-16T09:48:24.8956367Z    Compiling camino v1.1.6
+2026-09-16T09:48:24.9929040Z    Compiling ref-cast v1.0.25
+2026-09-16T09:48:25.0296532Z    Compiling anstyle-wincon v3.0.10
+2026-09-16T09:48:25.3196943Z    Compiling toml_datetime v0.6.8
+2026-09-16T09:48:25.4725977Z    Compiling serde_spanned v0.6.8
+2026-09-16T09:48:25.6519826Z    Compiling anstyle-parse v0.2.2
+2026-09-16T09:48:25.9648324Z    Compiling regex v1.10.2
+2026-09-16T09:48:25.9841186Z    Compiling ref-cast-impl v1.0.25
+2026-09-16T09:48:26.6619545Z    Compiling icu_normalizer v1.5.0
+2026-09-16T09:48:27.5437589Z    Compiling idna_adapter v1.2.0
+2026-09-16T09:48:27.5574223Z    Compiling phf_macros v0.11.2
+2026-09-16T09:48:27.6890787Z    Compiling idna v1.0.3
+2026-09-16T09:48:28.8229474Z    Compiling anstyle-query v1.0.0
+2026-09-16T09:48:28.9517484Z    Compiling form_urlencoded v1.2.1
+2026-09-16T09:48:29.0985544Z    Compiling cfg-if v1.0.0
+2026-09-16T09:48:29.1537850Z    Compiling colorchoice v1.0.0
+2026-09-16T09:48:29.2069915Z    Compiling powerfmt v0.2.0
+2026-09-16T09:48:29.2638804Z    Compiling thiserror v2.0.18
+2026-09-16T09:48:29.4964230Z    Compiling heck v0.5.0
+2026-09-16T09:48:29.6694430Z    Compiling is_terminal_polyfill v1.70.1
+2026-09-16T09:48:29.7502289Z    Compiling winnow v0.6.20
+2026-09-16T09:48:29.7790093Z    Compiling strum_macros v0.28.0
+2026-09-16T09:48:30.1180446Z    Compiling anstream v0.6.20
+2026-09-16T09:48:31.0248830Z    Compiling winapi-util v0.1.6
+2026-09-16T09:48:31.0473935Z    Compiling deranged v0.3.9
+2026-09-16T09:48:31.3281967Z    Compiling getrandom v0.2.11
+2026-09-16T09:48:31.5348911Z    Compiling url v2.5.4
+2026-09-16T09:48:32.9662455Z    Compiling toml_edit v0.22.20
+2026-09-16T09:48:33.1454051Z    Compiling phf v0.11.2
+2026-09-16T09:48:34.1420012Z    Compiling thiserror-impl v2.0.18
+2026-09-16T09:48:34.2694500Z    Compiling anyhow v1.0.80
+2026-09-16T09:48:34.4749473Z    Compiling once_cell v1.18.0
+2026-09-16T09:48:34.6047521Z    Compiling time-core v0.1.2
+2026-09-16T09:48:34.7113124Z    Compiling borrow-or-share v0.2.4
+2026-09-16T09:48:34.7546371Z    Compiling num-conv v0.1.0
+2026-09-16T09:48:34.7983840Z    Compiling strsim v0.10.0
+2026-09-16T09:48:34.9143139Z    Compiling hex v0.4.3
+2026-09-16T09:48:35.3261273Z    Compiling clap_lex v0.6.0
+2026-09-16T09:48:35.7516680Z    Compiling heck v0.4.1
+2026-09-16T09:48:35.7718181Z    Compiling clap_builder v4.4.11
+2026-09-16T09:48:36.0142273Z    Compiling clap_derive v4.4.7
+2026-09-16T09:48:36.3234048Z    Compiling toml v0.8.19
+2026-09-16T09:48:39.0586371Z    Compiling purl v0.1.3
+2026-09-16T09:48:39.1436529Z    Compiling time v0.3.36
+2026-09-16T09:48:41.1505579Z    Compiling fluent-uri v0.4.1
+2026-09-16T09:48:43.0081442Z    Compiling ordered-float v5.1.0
+2026-09-16T09:48:43.4502573Z    Compiling strum v0.28.0
+2026-09-16T09:48:43.5551278Z    Compiling uuid v1.6.1
+2026-09-16T09:48:44.1100051Z    Compiling termcolor v1.3.0
+2026-09-16T09:48:44.8820210Z    Compiling cargo-platform v0.1.4
+2026-09-16T09:48:45.2305709Z    Compiling cyclonedx-bom-macros v0.1.0
+2026-09-16T09:48:45.2913683Z    Compiling is-terminal v0.4.9
+2026-09-16T09:48:45.3978240Z    Compiling spdx v0.13.2
+2026-09-16T09:48:45.6616852Z    Compiling log v0.4.20
+2026-09-16T09:48:46.0502012Z    Compiling base64 v0.22.1
+2026-09-16T09:48:46.6764892Z    Compiling xml-rs v0.8.19
+2026-09-16T09:48:46.7041377Z    Compiling humantime v2.1.0
+2026-09-16T09:48:46.7522446Z    Compiling cargo_metadata v0.18.1
+2026-09-16T09:48:47.1067267Z    Compiling env_logger v0.10.1
+2026-09-16T09:48:47.8342985Z    Compiling cyclonedx-bom v0.8.1
+2026-09-16T09:48:49.5381098Z    Compiling clap v4.4.11
+2026-09-16T09:48:49.6199845Z    Compiling cargo-lock v10.0.1
+2026-09-16T09:48:49.9294181Z    Compiling validator v0.19.0
+2026-09-16T09:48:51.6439725Z    Compiling pathdiff v0.2.1
+2026-09-16T09:49:00.2122127Z    Compiling cargo-cyclonedx v0.5.9
+2026-09-16T09:49:57.4542187Z     Finished `release` profile [optimized] target(s) in 2m 02s
+2026-09-16T09:49:57.4646944Z   Installing C:\Users\runneradmin\.cargo\bin\cargo-cyclonedx.exe
+2026-09-16T09:49:57.4653313Z    Installed package `cargo-cyclonedx v0.5.9` (executable `cargo-cyclonedx.exe`)
+2026-09-16T09:49:58.4356474Z [31;1mException: [0mD:\a\_temp\cdae42c4-0828-4bb5-9630-75bc22c23805.ps1:23[0m
+2026-09-16T09:49:58.4357154Z [31;1m[0m[36;1mLine |[0m
+2026-09-16T09:49:58.4360330Z [31;1m[0m[36;1m[36;1m  23 | [0m …  -PathType Leaf)) { [36;1mthrow "Missing packaged executable SBOM: $sbom"[0m }[0m
+2026-09-16T09:49:58.4361874Z [31;1m[0m[36;1m[36;1m[0m[36;1m[0m[36;1m     | [31;1m                       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~[0m
+2026-09-16T09:49:58.4363502Z [31;1m[0m[36;1m[36;1m[0m[36;1m[0m[36;1m[31;1m[31;1m[36;1m     | [31;1mMissing packaged executable SBOM: apps/bareline/bom.json[0m
+2026-09-16T09:49:58.4609092Z ##[error]Process completed with exit code 1.
+2026-09-16T09:49:58.4972887Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-09-16T09:49:58.4975522Z Post job cleanup.
+2026-09-16T09:49:58.6863142Z [command]"C:\Program Files\Git\bin\git.exe" version
+2026-09-16T09:49:58.7072975Z git version 2.55.0.windows.5
+2026-09-16T09:49:58.7126125Z Temporarily overriding HOME='D:\a\_temp\3451aea6-7671-479f-8034-b3ae91b88f55' before making global git config changes
+2026-09-16T09:49:58.7127959Z Adding repository directory to the temporary git global config as a safe directory
+2026-09-16T09:49:58.7137407Z [command]"C:\Program Files\Git\bin\git.exe" config --global --add safe.directory D:\a\BareLine\BareLine
+2026-09-16T09:49:58.7362893Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp core\.sshCommand
+2026-09-16T09:49:58.7593745Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :\""
+2026-09-16T09:49:59.1966480Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-09-16T09:49:59.2196945Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :\""
+2026-09-16T09:49:59.7045880Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-09-16T09:49:59.7290001Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "git config --local --show-origin --name-only --get-regexp remote.origin.url"
+2026-09-16T09:50:00.1999194Z Cleaning up orphan processes
+2026-09-16T09:50:00.2145937Z Terminate orphan process: pid (7800) (vctip)
+2026-09-16T09:50:00.2264647Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@11d5960a326750d5838078e36cf38b85af677262. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/

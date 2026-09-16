@@ -1,0 +1,73 @@
+[1m[92m   Compiling[0m proc-macro2 v1.0.107
+[1m[92m   Compiling[0m quote v1.0.47
+[1m[92m   Compiling[0m serde_core v1.0.229
+[1m[92m   Compiling[0m unicode-ident v1.0.24
+[1m[92m   Compiling[0m semver v1.0.28
+[1m[92m   Compiling[0m zmij v1.0.23
+[1m[92m   Compiling[0m foldhash v0.2.0
+[1m[92m   Compiling[0m serde_json v1.0.150
+[1m[92m   Compiling[0m hashbrown v0.17.1
+[1m[92m   Compiling[0m equivalent v1.0.2
+[1m[92m   Compiling[0m anyhow v1.0.104
+[1m[92m   Compiling[0m bitflags v2.13.1
+[1m[92m   Compiling[0m syn v3.0.5
+[1m[92m   Compiling[0m serde v1.0.229
+[1m[92m   Compiling[0m version_check v0.9.5
+[1m[92m   Compiling[0m generic-array v0.14.7
+[1m[92m   Compiling[0m indexmap v2.14.2
+[1m[92m   Compiling[0m wasmparser v0.258.0
+[1m[92m   Compiling[0m memchr v2.8.3
+[1m[92m   Compiling[0m itoa v1.0.18
+[1m[92m   Compiling[0m prettyplease v0.2.37
+[1m[92m   Compiling[0m serde_derive v1.0.229
+[1m[92m   Compiling[0m leb128fmt v0.1.0
+[1m[92m   Compiling[0m crc32fast v1.5.1
+[1m[92m   Compiling[0m log v0.4.34
+[1m[92m   Compiling[0m typenum v1.20.1
+[1m[92m   Compiling[0m thiserror v2.0.20
+[1m[92m   Compiling[0m cfg-if v1.0.4
+[1m[92m   Compiling[0m id-arena v2.3.0
+[1m[92m   Compiling[0m thiserror-impl v2.0.20
+[1m[92m   Compiling[0m rustc_version v0.4.1
+[1m[92m   Compiling[0m simd-adler32 v0.3.10
+[1m[92m   Compiling[0m heapless v0.7.17
+[1m[92m   Compiling[0m syn v2.0.119
+[1m[92m   Compiling[0m wit-bindgen-rust v0.61.1
+[1m[92m   Compiling[0m heck v0.5.0
+[1m[92m   Compiling[0m adler2 v2.0.1
+[1m[92m   Compiling[0m byteorder v1.5.0
+[1m[92m   Compiling[0m hash32 v0.2.1
+[1m[92m   Compiling[0m wasm-encoder v0.258.0
+[1m[92m   Compiling[0m wit-parser v0.258.0
+[1m[92m   Compiling[0m wasm-metadata v0.258.0
+[1m[92m   Compiling[0m wit-component v0.258.0
+[1m[92m   Compiling[0m wit-bindgen-core v0.61.1
+[1m[92m   Compiling[0m miniz_oxide v0.9.1
+[1m[92m   Compiling[0m block-buffer v0.10.4
+[1m[92m   Compiling[0m crypto-common v0.1.7
+[1m[92m   Compiling[0m stable_deref_trait v1.2.1
+[1m[92m   Compiling[0m wit-bindgen-rust-macro v0.61.1
+[1m[92m   Compiling[0m bumpalo v3.20.3
+[1m[92m   Compiling[0m zip v2.4.2
+[1m[92m   Compiling[0m zopfli v0.8.3
+[1m[92m   Compiling[0m digest v0.10.7
+[1m[92m   Compiling[0m flate2 v1.1.10
+[1m[92m   Compiling[0m toml_datetime v0.6.11
+[1m[92m   Compiling[0m serde_spanned v0.6.9
+[1m[92m   Compiling[0m cobs v0.3.0
+[1m[92m   Compiling[0m displaydoc v0.2.7
+[1m[92m   Compiling[0m wit-bindgen v0.61.1
+[1m[92m   Compiling[0m toml_write v0.1.2
+[1m[92m   Compiling[0m winnow v0.7.15
+[1m[92m   Compiling[0m toml_edit v0.22.27
+[1m[92m   Compiling[0m postcard v1.1.3
+[1m[92m   Compiling[0m sha2 v0.10.9
+[1m[92m   Compiling[0m minisign-verify v0.2.4
+[1m[92m   Compiling[0m quick-xml v0.41.0
+[1m[92m   Compiling[0m bareline-extensions-protocol v0.1.0 (D:\a\BareLine\BareLine\crates\extensions-protocol)
+[1m[92m   Compiling[0m bareline-extension-sdk v0.1.0 (D:\a\BareLine\BareLine\crates\extension-sdk)
+[1m[92m   Compiling[0m bareline-first-party-common v0.1.0 (D:\a\BareLine\BareLine\extensions\common)
+[1m[92m   Compiling[0m bareline-json-tools v0.1.0 (D:\a\BareLine\BareLine\extensions\json-tools)
+[1m[92m   Compiling[0m bareline-hex-view v0.1.0 (D:\a\BareLine\BareLine\extensions\hex-view)
+[1m[92m   Compiling[0m bareline-xml-tools v0.1.0 (D:\a\BareLine\BareLine\extensions\xml-tools)
+[1m[92m    Finished[0m `release` profile [optimized + debuginfo] target(s) in 44.49s

@@ -1,0 +1,6 @@
+   Compiling pcre2-sys v0.2.10
+   Compiling bareline-platform-windows v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\crates\platform-windows)
+   Compiling bareline-search v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\crates\search)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.03s
+     Running unittests src\lib.rs (target\debug\deps\bareline_search-8d9f36071c732324.exe)
+   Doc-tests bareline_search

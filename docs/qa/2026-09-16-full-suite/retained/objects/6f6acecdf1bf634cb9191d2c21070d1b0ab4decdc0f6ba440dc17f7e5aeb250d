@@ -1,0 +1,670 @@
+{
+    "binary_sha256":  "64bb428b5bc61dd2f6042a15ba03314af0e4f21290b0d210091ee9bc4d80adb4",
+    "records":  [
+                    {
+                        "stage":  "owned launch 1",
+                        "elapsed_ms":  2648,
+                        "details":  {
+                                        "binary_sha256":  "64bb428b5bc61dd2f6042a15ba03314af0e4f21290b0d210091ee9bc4d80adb4",
+                                        "initial_keyboard_layout":  67699721,
+                                        "pid":  28756,
+                                        "arguments":  [
+                                                          "--software",
+                                                          "--no-session",
+                                                          "--no-extensions",
+                                                          "--new-instance"
+                                                      ],
+                                        "fixture_keyboard_layout":  67699721,
+                                        "dpi":  96,
+                                        "executable":  "C:\\Users\\Woovee\\AppData\\Local\\Programs\\Bareline\\bareline.exe"
+                                    }
+                    },
+                    {
+                        "stage":  "environment",
+                        "elapsed_ms":  2658,
+                        "details":  {
+                                        "settings_sha256":  "5057beca797e91383c795d0ecdaafc0e3ef41c60ae0d614d5085f668f834e7b4",
+                                        "input":  "SendInput keyboard / UIA focus and TextPattern observations",
+                                        "desktop":  "Default",
+                                        "requested_dpi":  "100",
+                                        "dpi":  96,
+                                        "theme":  "dark",
+                                        "pid":  28756,
+                                        "hwnd":  3608990,
+                                        "renderer":  "software"
+                                    }
+                    },
+                    {
+                        "stage":  "native file dialog",
+                        "elapsed_ms":  3788,
+                        "details":  {
+                                        "field":  {
+                                                      "name":  "",
+                                                      "automation_id":  "1148",
+                                                      "runtime_id":  [
+                                                                         42,
+                                                                         1639186
+                                                                     ],
+                                                      "control_type":  "ControlType.Pane",
+                                                      "focus":  true,
+                                                      "enabled":  true,
+                                                      "process_id":  28756
+                                                  },
+                                        "dialog":  2167022,
+                                        "native_field":  1639186,
+                                        "native_focus":  1639186
+                                    }
+                    },
+                    {
+                        "stage":  "native file path input",
+                        "elapsed_ms":  6206,
+                        "details":  {
+                                        "native_focus":  1639186,
+                                        "native_field":  1639186,
+                                        "text":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\446b8912-c1a0-41af-ba59-b92c8ae0ed43\\scratch\\fixture\\input.txt",
+                                        "process_id":  28756
+                                    }
+                    },
+                    {
+                        "stage":  "regex opened exact text",
+                        "elapsed_ms":  6668,
+                        "details":  {
+                                        "name":  "Editor",
+                                        "automation_id":  "",
+                                        "runtime_id":  [
+                                                           42,
+                                                           3608990,
+                                                           4,
+                                                           0,
+                                                           2,
+                                                           0,
+                                                           0
+                                                       ],
+                                        "control_type":  "ControlType.Edit",
+                                        "focus":  true,
+                                        "enabled":  true,
+                                        "process_id":  28756,
+                                        "text_available":  true,
+                                        "text":  "keep café 🎉\nitem=alpha\nqty=12\nbetween unchanged\nitem=beta\nqty=07\nkeep 文\n",
+                                        "selections":  [
+                                                           {
+                                                               "text":  "",
+                                                               "start_utf16":  0
+                                                           }
+                                                       ],
+                                        "caret_utf16":  0,
+                                        "selected_text":  ""
+                                    }
+                    },
+                    {
+                        "stage":  "regex opened clean",
+                        "elapsed_ms":  6744,
+                        "details":  {
+                                        "tabs":  [
+                                                     {
+                                                         "selected":  false,
+                                                         "name":  "Untitled 1, pane 1"
+                                                     },
+                                                     {
+                                                         "selected":  true,
+                                                         "name":  "input.txt, pane 1"
+                                                     }
+                                                 ],
+                                        "dirty":  false
+                                    }
+                    },
+                    {
+                        "stage":  "regex native command",
+                        "elapsed_ms":  6778,
+                        "details":  {
+                                        "label":  "Regular Expression Search Mode",
+                                        "id":  117,
+                                        "state":  768
+                                    }
+                    },
+                    {
+                        "stage":  "regex native command",
+                        "elapsed_ms":  6858,
+                        "details":  {
+                                        "label":  "Replace",
+                                        "id":  109,
+                                        "state":  256
+                                    }
+                    },
+                    {
+                        "stage":  "regex query input",
+                        "elapsed_ms":  8010,
+                        "details":  {
+                                        "name":  "Find",
+                                        "automation_id":  "",
+                                        "runtime_id":  [
+                                                           42,
+                                                           3608990,
+                                                           4,
+                                                           0,
+                                                           6000,
+                                                           0,
+                                                           0
+                                                       ],
+                                        "control_type":  "ControlType.Edit",
+                                        "focus":  true,
+                                        "enabled":  true,
+                                        "process_id":  28756,
+                                        "text":  "(?m)^item=(?\u003cname\u003e[a-z]+)\\nqty=(\\d+)$"
+                                    }
+                    },
+                    {
+                        "stage":  "regex mode",
+                        "elapsed_ms":  8014,
+                        "details":  {
+                                        "label":  "Regular Expression Search Mode",
+                                        "id":  117,
+                                        "checked":  true,
+                                        "state":  776
+                                    }
+                    },
+                    {
+                        "stage":  "regex match count",
+                        "elapsed_ms":  8101,
+                        "details":  {
+                                        "name":  "Find results: 2 matches",
+                                        "automation_id":  "",
+                                        "runtime_id":  [
+                                                           42,
+                                                           3608990,
+                                                           4,
+                                                           0,
+                                                           9001,
+                                                           0,
+                                                           0
+                                                       ],
+                                        "control_type":  "ControlType.StatusBar",
+                                        "focus":  false,
+                                        "enabled":  true,
+                                        "process_id":  28756
+                                    }
+                    },
+                    {
+                        "stage":  "regex setup preserved text",
+                        "elapsed_ms":  8312,
+                        "details":  {
+                                        "name":  "Editor",
+                                        "automation_id":  "",
+                                        "runtime_id":  [
+                                                           42,
+                                                           3608990,
+                                                           4,
+                                                           0,
+                                                           2,
+                                                           0,
+                                                           0
+                                                       ],
+                                        "control_type":  "ControlType.Edit",
+                                        "focus":  true,
+                                        "enabled":  true,
+                                        "process_id":  28756,
+                                        "text_available":  true,
+                                        "text":  "keep café 🎉\nitem=alpha\nqty=12\nbetween unchanged\nitem=beta\nqty=07\nkeep 文\n",
+                                        "selections":  [
+                                                           {
+                                                               "text":  "",
+                                                               "start_utf16":  0
+                                                           }
+                                                       ],
+                                        "caret_utf16":  0,
+                                        "selected_text":  ""
+                                    }
+                    },
+                    {
+                        "stage":  "regex setup preserved bytes",
+                        "elapsed_ms":  8326,
+                        "details":  {
+                                        "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\446b8912-c1a0-41af-ba59-b92c8ae0ed43\\scratch\\fixture\\input.txt",
+                                        "sha256":  "b8a1417ec9129d09993a018aca83a9513c7323b48116b1a20d563932f4d3adba",
+                                        "bytes":  79,
+                                        "base64":  "a2VlcCBjYWZlzIEg8J+OiQppdGVtPWFscGhhCnF0eT0xMgpiZXR3ZWVuIHVuY2hhbmdlZAppdGVtPWJldGEKcXR5PTA3CmtlZXAg5paHCg=="
+                                    }
+                    },
+                    {
+                        "stage":  "regex replacement input",
+                        "elapsed_ms":  8951,
+                        "details":  {
+                                        "name":  "Replace with",
+                                        "automation_id":  "",
+                                        "runtime_id":  [
+                                                           42,
+                                                           3608990,
+                                                           4,
+                                                           0,
+                                                           6001,
+                                                           0,
+                                                           0
+                                                       ],
+                                        "control_type":  "ControlType.Edit",
+                                        "focus":  true,
+                                        "enabled":  true,
+                                        "process_id":  28756,
+                                        "text":  "${name}:$2"
+                                    }
+                    },
+                    {
+                        "stage":  "regex native command",
+                        "elapsed_ms":  8955,
+                        "details":  {
+                                        "label":  "Replace in Files",
+                                        "id":  135,
+                                        "state":  256
+                                    }
+                    },
+                    {
+                        "stage":  "native file dialog",
+                        "elapsed_ms":  9464,
+                        "details":  {
+                                        "field":  {
+                                                      "name":  "",
+                                                      "automation_id":  "1152",
+                                                      "runtime_id":  [
+                                                                         42,
+                                                                         5181140
+                                                                     ],
+                                                      "control_type":  "ControlType.Pane",
+                                                      "focus":  true,
+                                                      "enabled":  true,
+                                                      "process_id":  28756
+                                                  },
+                                        "dialog":  1773984,
+                                        "native_field":  5181140,
+                                        "native_focus":  5181140
+                                    }
+                    },
+                    {
+                        "stage":  "native file path input",
+                        "elapsed_ms":  11734,
+                        "details":  {
+                                        "native_focus":  5181140,
+                                        "native_field":  5181140,
+                                        "text":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\446b8912-c1a0-41af-ba59-b92c8ae0ed43\\scratch\\fixture",
+                                        "process_id":  28756
+                                    }
+                    },
+                    {
+                        "stage":  "native folder selection",
+                        "elapsed_ms":  11852,
+                        "details":  {
+                                        "name":  "Select Folder",
+                                        "automation_id":  "1",
+                                        "runtime_id":  [
+                                                           42,
+                                                           4722892
+                                                       ],
+                                        "control_type":  "ControlType.Pane",
+                                        "focus":  false,
+                                        "enabled":  true,
+                                        "process_id":  28756
+                                    }
+                    },
+                    {
+                        "stage":  "regex preview ready",
+                        "elapsed_ms":  12189,
+                        "details":  {
+                                        "name":  "Replacement preview status: 2 selected matches; 0 skipped.  Review before applying.",
+                                        "automation_id":  "",
+                                        "runtime_id":  [
+                                                           42,
+                                                           3608990,
+                                                           4,
+                                                           0,
+                                                           78000,
+                                                           0,
+                                                           0
+                                                       ],
+                                        "control_type":  "ControlType.StatusBar",
+                                        "focus":  false,
+                                        "enabled":  true,
+                                        "process_id":  28756
+                                    }
+                    },
+                    {
+                        "stage":  "regex capture preview",
+                        "elapsed_ms":  12526,
+                        "details":  {
+                                        "status":  {
+                                                       "name":  "Replacement preview status: 2 selected matches; 0 skipped.  Review before applying.",
+                                                       "automation_id":  "",
+                                                       "runtime_id":  [
+                                                                          42,
+                                                                          3608990,
+                                                                          4,
+                                                                          0,
+                                                                          78000,
+                                                                          0,
+                                                                          0
+                                                                      ],
+                                                       "control_type":  "ControlType.StatusBar",
+                                                       "focus":  false,
+                                                       "enabled":  true,
+                                                       "process_id":  28756
+                                                   },
+                                        "rows":  [
+                                                     {
+                                                         "name":  "[✓] Open document: D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\446b8912-c1a0-41af-ba59-b92c8ae0ed43\\scratch\\fixture\\input.txt",
+                                                         "automation_id":  "",
+                                                         "runtime_id":  [
+                                                                            42,
+                                                                            3608990,
+                                                                            4,
+                                                                            0,
+                                                                            78001,
+                                                                            0,
+                                                                            0
+                                                                        ],
+                                                         "control_type":  "ControlType.ListItem",
+                                                         "focus":  false,
+                                                         "enabled":  true,
+                                                         "process_id":  28756
+                                                     },
+                                                     {
+                                                         "name":  "[✓] 17: item=alpha qty=12 → alpha:12",
+                                                         "automation_id":  "",
+                                                         "runtime_id":  [
+                                                                            42,
+                                                                            3608990,
+                                                                            4,
+                                                                            0,
+                                                                            78002,
+                                                                            0,
+                                                                            0
+                                                                        ],
+                                                         "control_type":  "ControlType.ListItem",
+                                                         "focus":  false,
+                                                         "enabled":  true,
+                                                         "process_id":  28756
+                                                     },
+                                                     {
+                                                         "name":  "[✓] 53: item=beta qty=07 → beta:07",
+                                                         "automation_id":  "",
+                                                         "runtime_id":  [
+                                                                            42,
+                                                                            3608990,
+                                                                            4,
+                                                                            0,
+                                                                            78003,
+                                                                            0,
+                                                                            0
+                                                                        ],
+                                                         "control_type":  "ControlType.ListItem",
+                                                         "focus":  false,
+                                                         "enabled":  true,
+                                                         "process_id":  28756
+                                                     }
+                                                 ]
+                                    }
+                    },
+                    {
+                        "stage":  "regex preview preserved text",
+                        "elapsed_ms":  12636,
+                        "details":  {
+                                        "name":  "Editor",
+                                        "automation_id":  "",
+                                        "runtime_id":  [
+                                                           42,
+                                                           3608990,
+                                                           4,
+                                                           0,
+                                                           2,
+                                                           0,
+                                                           0
+                                                       ],
+                                        "control_type":  "ControlType.Edit",
+                                        "focus":  true,
+                                        "enabled":  true,
+                                        "process_id":  28756,
+                                        "text_available":  true,
+                                        "text":  "keep café 🎉\nitem=alpha\nqty=12\nbetween unchanged\nitem=beta\nqty=07\nkeep 文\n",
+                                        "selections":  [
+                                                           {
+                                                               "text":  "",
+                                                               "start_utf16":  0
+                                                           }
+                                                       ],
+                                        "caret_utf16":  0,
+                                        "selected_text":  ""
+                                    }
+                    },
+                    {
+                        "stage":  "regex preview preserved bytes",
+                        "elapsed_ms":  12638,
+                        "details":  {
+                                        "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\446b8912-c1a0-41af-ba59-b92c8ae0ed43\\scratch\\fixture\\input.txt",
+                                        "sha256":  "b8a1417ec9129d09993a018aca83a9513c7323b48116b1a20d563932f4d3adba",
+                                        "bytes":  79,
+                                        "base64":  "a2VlcCBjYWZlzIEg8J+OiQppdGVtPWFscGhhCnF0eT0xMgpiZXR3ZWVuIHVuY2hhbmdlZAppdGVtPWJldGEKcXR5PTA3CmtlZXAg5paHCg=="
+                                    }
+                    },
+                    {
+                        "stage":  "regex native command",
+                        "elapsed_ms":  12645,
+                        "details":  {
+                                        "label":  "Apply Reviewed Replacements",
+                                        "id":  138,
+                                        "state":  256
+                                    }
+                    },
+                    {
+                        "stage":  "regex replacement count",
+                        "elapsed_ms":  13472,
+                        "details":  {
+                                        "name":  "Replacement preview status: Changed 1 open and 0 disk files; replaced 2 matches; skipped 0; failed 0. Receipt: \\\\?\\D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\446b8912-c1a0-41a",
+                                        "automation_id":  "",
+                                        "runtime_id":  [
+                                                           42,
+                                                           3608990,
+                                                           4,
+                                                           0,
+                                                           78000,
+                                                           0,
+                                                           0
+                                                       ],
+                                        "control_type":  "ControlType.StatusBar",
+                                        "focus":  false,
+                                        "enabled":  true,
+                                        "process_id":  28756
+                                    }
+                    },
+                    {
+                        "stage":  "regex native command",
+                        "elapsed_ms":  13475,
+                        "details":  {
+                                        "label":  "Close Replacement Preview",
+                                        "id":  145,
+                                        "state":  256
+                                    }
+                    },
+                    {
+                        "stage":  "regex replaced exact text",
+                        "elapsed_ms":  13885,
+                        "details":  {
+                                        "name":  "Editor",
+                                        "automation_id":  "",
+                                        "runtime_id":  [
+                                                           42,
+                                                           3608990,
+                                                           4,
+                                                           0,
+                                                           2,
+                                                           0,
+                                                           0
+                                                       ],
+                                        "control_type":  "ControlType.Edit",
+                                        "focus":  true,
+                                        "enabled":  true,
+                                        "process_id":  28756,
+                                        "text_available":  true,
+                                        "text":  "keep café 🎉\nalpha:12\nbetween unchanged\nbeta:07\nkeep 文\n",
+                                        "selections":  [
+                                                           {
+                                                               "text":  "",
+                                                               "start_utf16":  22
+                                                           }
+                                                       ],
+                                        "caret_utf16":  22,
+                                        "selected_text":  ""
+                                    }
+                    },
+                    {
+                        "stage":  "regex replaced dirty",
+                        "elapsed_ms":  13958,
+                        "details":  {
+                                        "tabs":  [
+                                                     {
+                                                         "selected":  false,
+                                                         "name":  "Untitled 1, pane 1"
+                                                     },
+                                                     {
+                                                         "selected":  true,
+                                                         "name":  "input.txt •, pane 1, modified"
+                                                     }
+                                                 ],
+                                        "dirty":  true
+                                    }
+                    },
+                    {
+                        "stage":  "regex unsaved replacement preserved disk",
+                        "elapsed_ms":  13960,
+                        "details":  {
+                                        "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\446b8912-c1a0-41af-ba59-b92c8ae0ed43\\scratch\\fixture\\input.txt",
+                                        "sha256":  "b8a1417ec9129d09993a018aca83a9513c7323b48116b1a20d563932f4d3adba",
+                                        "bytes":  79,
+                                        "base64":  "a2VlcCBjYWZlzIEg8J+OiQppdGVtPWFscGhhCnF0eT0xMgpiZXR3ZWVuIHVuY2hhbmdlZAppdGVtPWJldGEKcXR5PTA3CmtlZXAg5paHCg=="
+                                    }
+                    },
+                    {
+                        "stage":  "regex saved replacement bytes",
+                        "elapsed_ms":  14599,
+                        "details":  {
+                                        "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\446b8912-c1a0-41af-ba59-b92c8ae0ed43\\scratch\\fixture\\input.txt",
+                                        "sha256":  "4760b3aaee5d3cf2299266fcbd2d643072f8974d1d329f3c4225af40c5ab8426",
+                                        "bytes":  61,
+                                        "base64":  "a2VlcCBjYWZlzIEg8J+OiQphbHBoYToxMgpiZXR3ZWVuIHVuY2hhbmdlZApiZXRhOjA3CmtlZXAg5paHCg=="
+                                    }
+                    },
+                    {
+                        "stage":  "regex replaced saved clean",
+                        "elapsed_ms":  14928,
+                        "details":  {
+                                        "tabs":  [
+                                                     {
+                                                         "selected":  false,
+                                                         "name":  "Untitled 1, pane 1"
+                                                     },
+                                                     {
+                                                         "selected":  true,
+                                                         "name":  "input.txt, pane 1"
+                                                     }
+                                                 ],
+                                        "dirty":  false
+                                    }
+                    },
+                    {
+                        "stage":  "regex single Undo",
+                        "elapsed_ms":  15408,
+                        "details":  {
+                                        "name":  "Editor",
+                                        "automation_id":  "",
+                                        "runtime_id":  [
+                                                           42,
+                                                           3608990,
+                                                           4,
+                                                           0,
+                                                           2,
+                                                           0,
+                                                           0
+                                                       ],
+                                        "control_type":  "ControlType.Edit",
+                                        "focus":  true,
+                                        "enabled":  true,
+                                        "process_id":  28756,
+                                        "text_available":  true,
+                                        "text":  "keep café 🎉\nitem=alpha\nqty=12\nbetween unchanged\nitem=beta\nqty=07\nkeep 文\n",
+                                        "selections":  [
+                                                           {
+                                                               "text":  "",
+                                                               "start_utf16":  0
+                                                           }
+                                                       ],
+                                        "caret_utf16":  0,
+                                        "selected_text":  ""
+                                    }
+                    },
+                    {
+                        "stage":  "regex Undo dirty",
+                        "elapsed_ms":  15488,
+                        "details":  {
+                                        "tabs":  [
+                                                     {
+                                                         "selected":  false,
+                                                         "name":  "Untitled 1, pane 1"
+                                                     },
+                                                     {
+                                                         "selected":  true,
+                                                         "name":  "input.txt •, pane 1, modified"
+                                                     }
+                                                 ],
+                                        "dirty":  true
+                                    }
+                    },
+                    {
+                        "stage":  "regex Undo before save preserved disk",
+                        "elapsed_ms":  15493,
+                        "details":  {
+                                        "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\446b8912-c1a0-41af-ba59-b92c8ae0ed43\\scratch\\fixture\\input.txt",
+                                        "sha256":  "4760b3aaee5d3cf2299266fcbd2d643072f8974d1d329f3c4225af40c5ab8426",
+                                        "bytes":  61,
+                                        "base64":  "a2VlcCBjYWZlzIEg8J+OiQphbHBoYToxMgpiZXR3ZWVuIHVuY2hhbmdlZApiZXRhOjA3CmtlZXAg5paHCg=="
+                                    }
+                    },
+                    {
+                        "stage":  "regex restored original bytes",
+                        "elapsed_ms":  16248,
+                        "details":  {
+                                        "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\446b8912-c1a0-41af-ba59-b92c8ae0ed43\\scratch\\fixture\\input.txt",
+                                        "sha256":  "b8a1417ec9129d09993a018aca83a9513c7323b48116b1a20d563932f4d3adba",
+                                        "bytes":  79,
+                                        "base64":  "a2VlcCBjYWZlzIEg8J+OiQppdGVtPWFscGhhCnF0eT0xMgpiZXR3ZWVuIHVuY2hhbmdlZAppdGVtPWJldGEKcXR5PTA3CmtlZXAg5paHCg=="
+                                    }
+                    },
+                    {
+                        "stage":  "regex restored clean",
+                        "elapsed_ms":  16593,
+                        "details":  {
+                                        "tabs":  [
+                                                     {
+                                                         "selected":  false,
+                                                         "name":  "Untitled 1, pane 1"
+                                                     },
+                                                     {
+                                                         "selected":  true,
+                                                         "name":  "input.txt, pane 1"
+                                                     }
+                                                 ],
+                                        "dirty":  false
+                                    }
+                    },
+                    {
+                        "stage":  "owned exit 1",
+                        "elapsed_ms":  16730,
+                        "details":  {
+                                        "exit_code":  0,
+                                        "pid":  28756
+                                    }
+                    },
+                    {
+                        "stage":  "terminal cleanup",
+                        "elapsed_ms":  16738,
+                        "details":  {
+                                        "editor_exited":  true,
+                                        "editor_exit_code":  0
+                                    }
+                    }
+                ]
+}

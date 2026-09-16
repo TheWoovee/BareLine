@@ -1,0 +1,10 @@
+schema_version = 1
+id = "org.bareline.hex-view"
+version = "0.1.0"
+publisher = "Bareline"
+minimum_protocol = 1
+maximum_protocol = 1
+entry_component = "extension.wasm"
+commands = ["ext.hex.open", "ext.hex.goto"]
+panels = ["ext.hex.view"]
+capabilities = ["DocumentRead", "UiPanel"]

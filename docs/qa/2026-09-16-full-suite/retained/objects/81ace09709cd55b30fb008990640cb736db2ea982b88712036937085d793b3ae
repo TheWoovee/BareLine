@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "command": [
+    "cargo",
+    "clippy",
+    "--workspace",
+    "--all-targets",
+    "--locked",
+    "--message-format=json"
+  ],
+  "cwd": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor",
+  "source_before": {
+    "available": true,
+    "head": "dc1bf2389e7bd2551a8fa36a960c6c12173939d7",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "eb44806a143d618ec031a58bc20ec17797c9603a5a2a6362ac412d340a1693e1"
+  },
+  "source_after": {
+    "available": true,
+    "head": "dc1bf2389e7bd2551a8fa36a960c6c12173939d7",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "eb44806a143d618ec031a58bc20ec17797c9603a5a2a6362ac412d340a1693e1"
+  },
+  "source_changed_during_run": false,
+  "status": "completed",
+  "exit_code": 0,
+  "elapsed_ms": 1392,
+  "top_level_total": 1,
+  "top_level_passed": 1,
+  "top_level_failed": 0,
+  "observed_nested_or_parent_summaries": [],
+  "summary_lines_are_not_aggregate_counts": true,
+  "stdout": {
+    "path": "target\\qualification\\full-suite-20260916\\52-test-clippy-retry.json.stdout.log",
+    "sha256": "4c9df40a6f5e0f9581adde002028bf5715c345dc10ee947afc49608e2671875a"
+  },
+  "stderr": {
+    "path": "target\\qualification\\full-suite-20260916\\52-test-clippy-retry.json.stderr.log",
+    "sha256": "45d8f7d972875790a6cec7ca48e9acc17c5af68372da1940633becec3b4cd60a"
+  }
+}

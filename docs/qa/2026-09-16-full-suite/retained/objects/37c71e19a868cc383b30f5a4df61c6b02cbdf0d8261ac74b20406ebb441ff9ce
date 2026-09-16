@@ -1,0 +1,2359 @@
+{
+    "binary_sha256":  "64bb428b5bc61dd2f6042a15ba03314af0e4f21290b0d210091ee9bc4d80adb4",
+    "records":  [
+                    {
+                        "stage":  "owned launch 1",
+                        "elapsed_ms":  2900,
+                        "details":  {
+                                        "binary_sha256":  "64bb428b5bc61dd2f6042a15ba03314af0e4f21290b0d210091ee9bc4d80adb4",
+                                        "initial_keyboard_layout":  67699721,
+                                        "pid":  12080,
+                                        "arguments":  [
+                                                          "--software",
+                                                          "--no-session",
+                                                          "--no-extensions",
+                                                          "--new-instance"
+                                                      ],
+                                        "fixture_keyboard_layout":  67699721,
+                                        "dpi":  96,
+                                        "executable":  "C:\\Users\\Woovee\\AppData\\Local\\Programs\\Bareline\\bareline.exe"
+                                    }
+                    },
+                    {
+                        "stage":  "environment",
+                        "elapsed_ms":  2910,
+                        "details":  {
+                                        "settings_sha256":  "5057beca797e91383c795d0ecdaafc0e3ef41c60ae0d614d5085f668f834e7b4",
+                                        "input":  "SendInput keyboard / UIA focus and TextPattern observations",
+                                        "desktop":  "Default",
+                                        "requested_dpi":  "100",
+                                        "dpi":  96,
+                                        "theme":  "dark",
+                                        "pid":  12080,
+                                        "hwnd":  14877706,
+                                        "renderer":  "software"
+                                    }
+                    },
+                    {
+                        "stage":  "native file dialog",
+                        "elapsed_ms":  3999,
+                        "details":  {
+                                        "field":  {
+                                                      "name":  "",
+                                                      "automation_id":  "1148",
+                                                      "runtime_id":  [
+                                                                         42,
+                                                                         2884654
+                                                                     ],
+                                                      "control_type":  "ControlType.Pane",
+                                                      "focus":  true,
+                                                      "enabled":  true,
+                                                      "process_id":  12080
+                                                  },
+                                        "dialog":  6819274,
+                                        "native_field":  2884654,
+                                        "native_focus":  2884654
+                                    }
+                    },
+                    {
+                        "stage":  "native file path input",
+                        "elapsed_ms":  6363,
+                        "details":  {
+                                        "native_focus":  2884654,
+                                        "native_field":  2884654,
+                                        "text":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\564a0881-eac6-4de3-a557-a77f168db0ff\\scratch\\code-config.rs",
+                                        "process_id":  12080
+                                    }
+                    },
+                    {
+                        "stage":  "code opened exact text",
+                        "elapsed_ms":  6809,
+                        "details":  {
+                                        "name":  "Editor",
+                                        "automation_id":  "",
+                                        "runtime_id":  [
+                                                           42,
+                                                           14877706,
+                                                           4,
+                                                           0,
+                                                           2,
+                                                           0,
+                                                           0
+                                                       ],
+                                        "control_type":  "ControlType.Edit",
+                                        "focus":  true,
+                                        "enabled":  true,
+                                        "process_id":  12080,
+                                        "text_available":  true,
+                                        "text":  "// Unicode café 🎉 stays.\nfn main() {\n    let answer_value = 42;\n    let message = \"hello\";\n}",
+                                        "selections":  [
+                                                           {
+                                                               "text":  "",
+                                                               "start_utf16":  0
+                                                           }
+                                                       ],
+                                        "caret_utf16":  0,
+                                        "selected_text":  ""
+                                    }
+                    },
+                    {
+                        "stage":  "code opened clean",
+                        "elapsed_ms":  6886,
+                        "details":  {
+                                        "tabs":  [
+                                                     {
+                                                         "selected":  false,
+                                                         "name":  "Untitled 1, pane 1"
+                                                     },
+                                                     {
+                                                         "selected":  true,
+                                                         "name":  "code-config.rs, pane 1"
+                                                     }
+                                                 ],
+                                        "dirty":  false
+                                    }
+                    },
+                    {
+                        "stage":  "code language",
+                        "elapsed_ms":  6971,
+                        "details":  {
+                                        "name":  "Language: Rust",
+                                        "automation_id":  "",
+                                        "runtime_id":  [
+                                                           42,
+                                                           14877706,
+                                                           4,
+                                                           0,
+                                                           90001000,
+                                                           0,
+                                                           0
+                                                       ],
+                                        "control_type":  "ControlType.StatusBar",
+                                        "focus":  false,
+                                        "enabled":  true,
+                                        "process_id":  12080
+                                    }
+                    },
+                    {
+                        "stage":  "code unfold command",
+                        "elapsed_ms":  7004,
+                        "details":  {
+                                        "id":  155,
+                                        "state":  256
+                                    }
+                    },
+                    {
+                        "stage":  "code highlighting",
+                        "elapsed_ms":  7262,
+                        "details":  {
+                                        "client":  {
+                                                       "left":  34,
+                                                       "width":  1200,
+                                                       "top":  77,
+                                                       "height":  740
+                                                   },
+                                        "probes":  [
+                                                       {
+                                                           "matched_pixels":  22,
+                                                           "bounds":  [
+                                                                          [
+                                                                              98,
+                                                                              130,
+                                                                              9,
+                                                                              18
+                                                                          ],
+                                                                          [
+                                                                              107,
+                                                                              130,
+                                                                              9,
+                                                                              18
+                                                                          ]
+                                                                      ],
+                                                           "text":  "fn",
+                                                           "normal_pixels":  0,
+                                                           "kind":  "keyword",
+                                                           "histogram":  [
+                                                                             {
+                                                                                 "rgb":  2040616,
+                                                                                 "count":  193
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2040687,
+                                                                                 "count":  7
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2048189,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2053592,
+                                                                                 "count":  13
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2172202,
+                                                                                 "count":  18
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2368296,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2381787,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2958120,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  3228311,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  3623866,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  5120808,
+                                                                                 "count":  7
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  5138156,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  5320232,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  6648055,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  7559319,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  7559333,
+                                                                                 "count":  3
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  7559355,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  7560647,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  8081519,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  8534568,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  8607909,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  8929320,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  8934834,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  8947711,
+                                                                                 "count":  7
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  9659045,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  9983843,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  10245416,
+                                                                                 "count":  11
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  10322935,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  10391039,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  10446512,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  10652923,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  10850044,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  11231839,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  11442431,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  12357352,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  12753919,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  12875940,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  12881639,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  12883178,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  13076417,
+                                                                                 "count":  7
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  13077978,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  13081575,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  13081580,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  13081596,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  13081599,
+                                                                                 "count":  20
+                                                                             }
+                                                                         ]
+                                                       },
+                                                       {
+                                                           "matched_pixels":  37,
+                                                           "bounds":  [
+                                                                          [
+                                                                              276,
+                                                                              168,
+                                                                              9,
+                                                                              18
+                                                                          ],
+                                                                          [
+                                                                              285,
+                                                                              168,
+                                                                              9,
+                                                                              18
+                                                                          ],
+                                                                          [
+                                                                              294,
+                                                                              168,
+                                                                              9,
+                                                                              18
+                                                                          ],
+                                                                          [
+                                                                              304,
+                                                                              168,
+                                                                              9,
+                                                                              18
+                                                                          ],
+                                                                          [
+                                                                              313,
+                                                                              168,
+                                                                              9,
+                                                                              18
+                                                                          ]
+                                                                      ],
+                                                           "text":  "hello",
+                                                           "normal_pixels":  0,
+                                                           "kind":  "string",
+                                                           "histogram":  [
+                                                                             {
+                                                                                 "rgb":  2040616,
+                                                                                 "count":  538
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2040619,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2040627,
+                                                                                 "count":  4
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2040631,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2040636,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2040639,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2040646,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2040661,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2040669,
+                                                                                 "count":  7
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2042171,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2042177,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2043467,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2045538,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2047063,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2049129,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2050128,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2055795,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2059641,
+                                                                                 "count":  3
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2062464,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2302760,
+                                                                                 "count":  4
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2499368,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2827048,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2851462,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  3089192,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  3416872,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  3424307,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  3425340,
+                                                                                 "count":  4
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  3443594,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  4137768,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  4166801,
+                                                                                 "count":  24
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  4289120,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  4295557,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  4298387,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  5082496,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  5253416,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  5547932,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  5679772,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  5875086,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  5930592,
+                                                                                 "count":  3
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  5930597,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  5930602,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  5930614,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  5934451,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  5934460,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  6008740,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  6051112,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  6329459,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  6335118,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  6534823,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  6651488,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  6666919,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  6728601,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  6864036,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  6968616,
+                                                                                 "count":  24
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  6973239,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  6981216,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  6987886,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  6991253,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  6995623,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  7044205,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  7301436,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  7565608,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  7569478,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  7585183,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  7695656,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  7720615,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  7761963,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  7830593,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  7834976,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  7848098,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  8091703,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  8095563,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  8115879,
+                                                                                 "count":  7
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  8442535,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  8487479,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  8690277,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  8836775,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  8900260,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  8953962,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  8967847,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  9095327,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  9344070,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  9344584,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  9425063,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  9545578,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  9688743,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  9752743,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  9805912,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  9877884,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  9880211,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  10145959,
+                                                                                 "count":  3
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  10278564,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  10278567,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  10340487,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  10536325,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  10537870,
+                                                                                 "count":  3
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  10662243,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  10666622,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  10671780,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  10671783,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  10857053,
+                                                                                 "count":  9
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  10858851,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  10860137,
+                                                                                 "count":  3
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  10862191,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  10866299,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  10866845,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  10867353,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  10868352,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  10868369,
+                                                                                 "count":  25
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  10868371,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  10868377,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  10868380,
+                                                                                 "count":  3
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  10868383,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  10868388,
+                                                                                 "count":  4
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  10868391,
+                                                                                 "count":  17
+                                                                             }
+                                                                         ]
+                                                       },
+                                                       {
+                                                           "matched_pixels":  23,
+                                                           "bounds":  [
+                                                                          [
+                                                                              313,
+                                                                              149,
+                                                                              9,
+                                                                              18
+                                                                          ],
+                                                                          [
+                                                                              323,
+                                                                              149,
+                                                                              9,
+                                                                              18
+                                                                          ]
+                                                                      ],
+                                                           "text":  "42",
+                                                           "normal_pixels":  0,
+                                                           "kind":  "number",
+                                                           "histogram":  [
+                                                                             {
+                                                                                 "rgb":  2040616,
+                                                                                 "count":  195
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2040617,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2040621,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2040627,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2040629,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2040632,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2042929,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2043196,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2044469,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2045494,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2046788,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2050120,
+                                                                                 "count":  9
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2056527,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2564904,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2575176,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2582098,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  4150858,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  4154184,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  4154962,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  4858664,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  5580840,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  5797723,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  6300456,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  6628136,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  6650717,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  7683880,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  7812648,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  8332072,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  8808256,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  9274205,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  9342059,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  9670251,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  9725760,
+                                                                                 "count":  5
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  9729362,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  10053440,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  10170920,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  10195819,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  10446659,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  10453847,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  10767145,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  11378027,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  11571038,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  11575403,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  12167019,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  12606248,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  12888939,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  13066536,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  13198120,
+                                                                                 "count":  10
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  13333824,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  13592877,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  14071659,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  14254656,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  14256456,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  14332523,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  14387264,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  14529643,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  14580021,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  14595947,
+                                                                                 "count":  9
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  14921577,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  15175489,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  15185771,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  15369018,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  15578985,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  15775593,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  15899974,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  15899978,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  15904610,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  15906665,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  15906667,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  16092736,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  16095300,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  16096332,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  16097864,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  16100941,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  16102498,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  16103252,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  16103265,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  16103269,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  16103275,
+                                                                                 "count":  15
+                                                                             }
+                                                                         ]
+                                                       },
+                                                       {
+                                                           "matched_pixels":  54,
+                                                           "bounds":  [
+                                                                          [
+                                                                              126,
+                                                                              111,
+                                                                              9,
+                                                                              21
+                                                                          ],
+                                                                          [
+                                                                              135,
+                                                                              111,
+                                                                              9,
+                                                                              21
+                                                                          ],
+                                                                          [
+                                                                              144,
+                                                                              111,
+                                                                              9,
+                                                                              21
+                                                                          ],
+                                                                          [
+                                                                              154,
+                                                                              111,
+                                                                              9,
+                                                                              21
+                                                                          ],
+                                                                          [
+                                                                              163,
+                                                                              111,
+                                                                              9,
+                                                                              21
+                                                                          ],
+                                                                          [
+                                                                              173,
+                                                                              111,
+                                                                              9,
+                                                                              21
+                                                                          ],
+                                                                          [
+                                                                              182,
+                                                                              111,
+                                                                              9,
+                                                                              21
+                                                                          ]
+                                                                      ],
+                                                           "text":  "Unicode",
+                                                           "normal_pixels":  0,
+                                                           "kind":  "comment",
+                                                           "histogram":  [
+                                                                             {
+                                                                                 "rgb":  2040616,
+                                                                                 "count":  63
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2172202,
+                                                                                 "count":  63
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2501425,
+                                                                                 "count":  788
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2501430,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2501439,
+                                                                                 "count":  3
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2501443,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2501449,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2501451,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2501452,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2501460,
+                                                                                 "count":  5
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2501483,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2502478,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2502486,
+                                                                                 "count":  3
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2502502,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2503506,
+                                                                                 "count":  3
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2504808,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2504816,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2505568,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2507126,
+                                                                                 "count":  4
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2508922,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2509692,
+                                                                                 "count":  23
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2510462,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2513543,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2763569,
+                                                                                 "count":  6
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2769000,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2775687,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  2776200,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  3287857,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  3296615,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  3303056,
+                                                                                 "count":  3
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  3484465,
+                                                                                 "count":  4
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  3492437,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  3615537,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  3813169,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  3828886,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  3881785,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  3883593,
+                                                                                 "count":  4
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  4154249,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  4467505,
+                                                                                 "count":  15
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  4485787,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  4679813,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  5077153,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  5137518,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  5192497,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  5206683,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  5386033,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  5388337,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  5405863,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  5734565,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  5734571,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  5843761,
+                                                                                 "count":  12
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  5865901,
+                                                                                 "count":  14
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  5981750,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  5996184,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  6055022,
+                                                                                 "count":  6
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  6055027,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  6055032,
+                                                                                 "count":  4
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  6055033,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  6057609,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  6109233,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  6126229,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  6127256,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  6129067,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  6260651,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  6308425,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  6320773,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  6390189,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  6443569,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  6456988,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  6504753,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  6523821,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  6572081,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  6644846,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  6649467,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  6650520,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  6655405,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  6710382,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  6834225,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  6908270,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  6915743,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  6918059,
+                                                                                 "count":  3
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  6918573,
+                                                                                 "count":  4
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  7167559,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  7178392,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  7179167,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  7296054,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  7311527,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  7442085,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  7499360,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  7625782,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  7642285,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  7693134,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  7705257,
+                                                                                 "count":  3
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  7823153,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  7838637,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  7889219,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  7891043,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  7906221,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  7959155,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  8020803,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  8021829,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  8034221,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  8167597,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  8218687,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  8218691,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  8221280,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  8547401,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  8561581,
+                                                                                 "count":  4
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  8616568,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  8747640,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  8749688,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  8756137,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  8819111,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  8823725,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  8878694,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  8942164,
+                                                                                 "count":  21
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  8942678,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  8954797,
+                                                                                 "count":  23
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  9010808,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  9012853,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  9012864,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  9018281,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  9019309,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  9085869,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  9141867,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  9142392,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  9210757,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  9213869,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  9336925,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  9473673,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  9477547,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  9542556,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  9543597,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  9544621,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  9665894,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  9666923,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  9675691,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  9675693,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  9737365,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  9740461,
+                                                                                 "count":  3
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  9867916,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  9870232,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  9930610,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  9930867,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  9936276,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  9937831,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  9937835,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  9937837,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  10125675,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  10128246,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  10129788,
+                                                                                 "count":  14
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  10131341,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  10132359,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  10133404,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  10133408,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  10133413,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  10133648,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  10133666,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  10133671,
+                                                                                 "count":  3
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  10134412,
+                                                                                 "count":  14
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  10134415,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  10134422,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  10134426,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  10134431,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  10134437,
+                                                                                 "count":  2
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  10134439,
+                                                                                 "count":  1
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  10134441,
+                                                                                 "count":  4
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  10134443,
+                                                                                 "count":  3
+                                                                             },
+                                                                             {
+                                                                                 "rgb":  10134445,
+                                                                                 "count":  23
+                                                                             }
+                                                                         ]
+                                                       }
+                                                   ]
+                                    }
+                    },
+                    {
+                        "stage":  "code source initially unchanged",
+                        "elapsed_ms":  7279,
+                        "details":  {
+                                        "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\564a0881-eac6-4de3-a557-a77f168db0ff\\scratch\\code-config.rs",
+                                        "sha256":  "4afc53faaaf2da751b5b722d4fa2198a426b039b3ed8c8f461ccc7033b50dded",
+                                        "bytes":  97,
+                                        "base64":  "Ly8gVW5pY29kZSBjYWZlzIEg8J+OiSBzdGF5cy4KZm4gbWFpbigpIHsKICAgIGxldCBhbnN3ZXJfdmFsdWUgPSA0MjsKICAgIGxldCBtZXNzYWdlID0gImhlbGxvIjsKfQ=="
+                                    }
+                    },
+                    {
+                        "stage":  "code smart indentation",
+                        "elapsed_ms":  8309,
+                        "details":  {
+                                        "name":  "Editor",
+                                        "automation_id":  "",
+                                        "runtime_id":  [
+                                                           42,
+                                                           14877706,
+                                                           4,
+                                                           0,
+                                                           2,
+                                                           0,
+                                                           0
+                                                       ],
+                                        "control_type":  "ControlType.Edit",
+                                        "focus":  true,
+                                        "enabled":  true,
+                                        "process_id":  12080,
+                                        "text_available":  true,
+                                        "text":  "// Unicode café 🎉 stays.\nfn main() {\n    let answer_value = 42;\n    let message = \"hello\";\n    \n}",
+                                        "selections":  [
+                                                           {
+                                                               "text":  "",
+                                                               "start_utf16":  97
+                                                           }
+                                                       ],
+                                        "caret_utf16":  97,
+                                        "selected_text":  ""
+                                    }
+                    },
+                    {
+                        "stage":  "code completion prefix",
+                        "elapsed_ms":  8394,
+                        "details":  {
+                                        "name":  "Editor",
+                                        "automation_id":  "",
+                                        "runtime_id":  [
+                                                           42,
+                                                           14877706,
+                                                           4,
+                                                           0,
+                                                           2,
+                                                           0,
+                                                           0
+                                                       ],
+                                        "control_type":  "ControlType.Edit",
+                                        "focus":  true,
+                                        "enabled":  true,
+                                        "process_id":  12080,
+                                        "text_available":  true,
+                                        "text":  "// Unicode café 🎉 stays.\nfn main() {\n    let answer_value = 42;\n    let message = \"hello\";\n    ans\n}",
+                                        "selections":  [
+                                                           {
+                                                               "text":  "",
+                                                               "start_utf16":  100
+                                                           }
+                                                       ],
+                                        "caret_utf16":  100,
+                                        "selected_text":  ""
+                                    }
+                    },
+                    {
+                        "stage":  "code completion offered",
+                        "elapsed_ms":  8716,
+                        "details":  {
+                                        "selected":  false,
+                                        "control_type":  "ControlType.ListItem",
+                                        "name":  "answer_value",
+                                        "runtime_id":  [
+                                                           42,
+                                                           14877706,
+                                                           4,
+                                                           0,
+                                                           70001,
+                                                           0,
+                                                           0
+                                                       ],
+                                        "process_id":  12080
+                                    }
+                    },
+                    {
+                        "stage":  "code completion selected",
+                        "elapsed_ms":  8985,
+                        "details":  {
+                                        "selected":  true,
+                                        "control_type":  "ControlType.ListItem",
+                                        "name":  "answer_value",
+                                        "runtime_id":  [
+                                                           42,
+                                                           14877706,
+                                                           4,
+                                                           0,
+                                                           70001,
+                                                           0,
+                                                           0
+                                                       ],
+                                        "process_id":  12080
+                                    }
+                    },
+                    {
+                        "stage":  "code completion accepted",
+                        "elapsed_ms":  9250,
+                        "details":  {
+                                        "name":  "Editor",
+                                        "automation_id":  "",
+                                        "runtime_id":  [
+                                                           42,
+                                                           14877706,
+                                                           4,
+                                                           0,
+                                                           2,
+                                                           0,
+                                                           0
+                                                       ],
+                                        "control_type":  "ControlType.Edit",
+                                        "focus":  true,
+                                        "enabled":  true,
+                                        "process_id":  12080,
+                                        "text_available":  true,
+                                        "text":  "// Unicode café 🎉 stays.\nfn main() {\n    let answer_value = 42;\n    let message = \"hello\";\n    answer_value\n}",
+                                        "selections":  [
+                                                           {
+                                                               "text":  "",
+                                                               "start_utf16":  109
+                                                           }
+                                                       ],
+                                        "caret_utf16":  109,
+                                        "selected_text":  ""
+                                    }
+                    },
+                    {
+                        "stage":  "code completion Undo",
+                        "elapsed_ms":  9546,
+                        "details":  {
+                                        "name":  "Editor",
+                                        "automation_id":  "",
+                                        "runtime_id":  [
+                                                           42,
+                                                           14877706,
+                                                           4,
+                                                           0,
+                                                           2,
+                                                           0,
+                                                           0
+                                                       ],
+                                        "control_type":  "ControlType.Edit",
+                                        "focus":  true,
+                                        "enabled":  true,
+                                        "process_id":  12080,
+                                        "text_available":  true,
+                                        "text":  "// Unicode café 🎉 stays.\nfn main() {\n    let answer_value = 42;\n    let message = \"hello\";\n    ans\n}",
+                                        "selections":  [
+                                                           {
+                                                               "text":  "",
+                                                               "start_utf16":  100
+                                                           }
+                                                       ],
+                                        "caret_utf16":  100,
+                                        "selected_text":  ""
+                                    }
+                    },
+                    {
+                        "stage":  "code completion Redo",
+                        "elapsed_ms":  9867,
+                        "details":  {
+                                        "name":  "Editor",
+                                        "automation_id":  "",
+                                        "runtime_id":  [
+                                                           42,
+                                                           14877706,
+                                                           4,
+                                                           0,
+                                                           2,
+                                                           0,
+                                                           0
+                                                       ],
+                                        "control_type":  "ControlType.Edit",
+                                        "focus":  true,
+                                        "enabled":  true,
+                                        "process_id":  12080,
+                                        "text_available":  true,
+                                        "text":  "// Unicode café 🎉 stays.\nfn main() {\n    let answer_value = 42;\n    let message = \"hello\";\n    answer_value\n}",
+                                        "selections":  [
+                                                           {
+                                                               "text":  "",
+                                                               "start_utf16":  109
+                                                           }
+                                                       ],
+                                        "caret_utf16":  109,
+                                        "selected_text":  ""
+                                    }
+                    },
+                    {
+                        "stage":  "code final edit",
+                        "elapsed_ms":  9957,
+                        "details":  {
+                                        "name":  "Editor",
+                                        "automation_id":  "",
+                                        "runtime_id":  [
+                                                           42,
+                                                           14877706,
+                                                           4,
+                                                           0,
+                                                           2,
+                                                           0,
+                                                           0
+                                                       ],
+                                        "control_type":  "ControlType.Edit",
+                                        "focus":  true,
+                                        "enabled":  true,
+                                        "process_id":  12080,
+                                        "text_available":  true,
+                                        "text":  "// Unicode café 🎉 stays.\nfn main() {\n    let answer_value = 42;\n    let message = \"hello\";\n    answer_value;\n}",
+                                        "selections":  [
+                                                           {
+                                                               "text":  "",
+                                                               "start_utf16":  110
+                                                           }
+                                                       ],
+                                        "caret_utf16":  110,
+                                        "selected_text":  ""
+                                    }
+                    },
+                    {
+                        "stage":  "code edited dirty",
+                        "elapsed_ms":  10045,
+                        "details":  {
+                                        "tabs":  [
+                                                     {
+                                                         "selected":  false,
+                                                         "name":  "Untitled 1, pane 1"
+                                                     },
+                                                     {
+                                                         "selected":  true,
+                                                         "name":  "code-config.rs •, pane 1, modified"
+                                                     }
+                                                 ],
+                                        "dirty":  true
+                                    }
+                    },
+                    {
+                        "stage":  "code unsaved edits preserve disk",
+                        "elapsed_ms":  10050,
+                        "details":  {
+                                        "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\564a0881-eac6-4de3-a557-a77f168db0ff\\scratch\\code-config.rs",
+                                        "sha256":  "4afc53faaaf2da751b5b722d4fa2198a426b039b3ed8c8f461ccc7033b50dded",
+                                        "bytes":  97,
+                                        "base64":  "Ly8gVW5pY29kZSBjYWZlzIEg8J+OiSBzdGF5cy4KZm4gbWFpbigpIHsKICAgIGxldCBhbnN3ZXJfdmFsdWUgPSA0MjsKICAgIGxldCBtZXNzYWdlID0gImhlbGxvIjsKfQ=="
+                                    }
+                    },
+                    {
+                        "stage":  "code saved exact bytes",
+                        "elapsed_ms":  10799,
+                        "details":  {
+                                        "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\564a0881-eac6-4de3-a557-a77f168db0ff\\scratch\\code-config.rs",
+                                        "sha256":  "16b407f607760e2201bb3e3bfbaf5ebaa74281bce78de4c2a4f6b159024472d3",
+                                        "bytes":  115,
+                                        "base64":  "Ly8gVW5pY29kZSBjYWZlzIEg8J+OiSBzdGF5cy4KZm4gbWFpbigpIHsKICAgIGxldCBhbnN3ZXJfdmFsdWUgPSA0MjsKICAgIGxldCBtZXNzYWdlID0gImhlbGxvIjsKICAgIGFuc3dlcl92YWx1ZTsKfQ=="
+                                    }
+                    },
+                    {
+                        "stage":  "code saved clean",
+                        "elapsed_ms":  11240,
+                        "details":  {
+                                        "tabs":  [
+                                                     {
+                                                         "selected":  false,
+                                                         "name":  "Untitled 1, pane 1"
+                                                     },
+                                                     {
+                                                         "selected":  true,
+                                                         "name":  "code-config.rs, pane 1"
+                                                     }
+                                                 ],
+                                        "dirty":  false
+                                    }
+                    },
+                    {
+                        "stage":  "code document closed",
+                        "elapsed_ms":  11538,
+                        "details":  {
+                                        "name":  "Editor",
+                                        "automation_id":  "",
+                                        "runtime_id":  [
+                                                           42,
+                                                           14877706,
+                                                           4,
+                                                           0,
+                                                           2,
+                                                           0,
+                                                           0
+                                                       ],
+                                        "control_type":  "ControlType.Edit",
+                                        "focus":  true,
+                                        "enabled":  true,
+                                        "process_id":  12080,
+                                        "text_available":  true,
+                                        "text":  "",
+                                        "selections":  [
+                                                           {
+                                                               "text":  "",
+                                                               "start_utf16":  0
+                                                           }
+                                                       ],
+                                        "caret_utf16":  0,
+                                        "selected_text":  ""
+                                    }
+                    },
+                    {
+                        "stage":  "code closed tab absent",
+                        "elapsed_ms":  11627,
+                        "details":  {
+                                        "matching_tabs":  0
+                                    }
+                    },
+                    {
+                        "stage":  "native file dialog",
+                        "elapsed_ms":  12331,
+                        "details":  {
+                                        "field":  {
+                                                      "name":  "",
+                                                      "automation_id":  "1148",
+                                                      "runtime_id":  [
+                                                                         42,
+                                                                         4001222
+                                                                     ],
+                                                      "control_type":  "ControlType.Pane",
+                                                      "focus":  true,
+                                                      "enabled":  true,
+                                                      "process_id":  12080
+                                                  },
+                                        "dialog":  5836954,
+                                        "native_field":  4001222,
+                                        "native_focus":  4001222
+                                    }
+                    },
+                    {
+                        "stage":  "native file path input",
+                        "elapsed_ms":  14706,
+                        "details":  {
+                                        "native_focus":  4001222,
+                                        "native_field":  4001222,
+                                        "text":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\564a0881-eac6-4de3-a557-a77f168db0ff\\scratch\\code-config.rs",
+                                        "process_id":  12080
+                                    }
+                    },
+                    {
+                        "stage":  "code reopened exact text",
+                        "elapsed_ms":  15097,
+                        "details":  {
+                                        "name":  "Editor",
+                                        "automation_id":  "",
+                                        "runtime_id":  [
+                                                           42,
+                                                           14877706,
+                                                           4,
+                                                           0,
+                                                           2,
+                                                           0,
+                                                           0
+                                                       ],
+                                        "control_type":  "ControlType.Edit",
+                                        "focus":  true,
+                                        "enabled":  true,
+                                        "process_id":  12080,
+                                        "text_available":  true,
+                                        "text":  "// Unicode café 🎉 stays.\nfn main() {\n    let answer_value = 42;\n    let message = \"hello\";\n    answer_value;\n}",
+                                        "selections":  [
+                                                           {
+                                                               "text":  "",
+                                                               "start_utf16":  0
+                                                           }
+                                                       ],
+                                        "caret_utf16":  0,
+                                        "selected_text":  ""
+                                    }
+                    },
+                    {
+                        "stage":  "code reopened clean",
+                        "elapsed_ms":  15164,
+                        "details":  {
+                                        "tabs":  [
+                                                     {
+                                                         "selected":  false,
+                                                         "name":  "Untitled 1, pane 1"
+                                                     },
+                                                     {
+                                                         "selected":  true,
+                                                         "name":  "code-config.rs, pane 1"
+                                                     }
+                                                 ],
+                                        "dirty":  false
+                                    }
+                    },
+                    {
+                        "stage":  "code reopened bytes unchanged",
+                        "elapsed_ms":  15167,
+                        "details":  {
+                                        "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\564a0881-eac6-4de3-a557-a77f168db0ff\\scratch\\code-config.rs",
+                                        "sha256":  "16b407f607760e2201bb3e3bfbaf5ebaa74281bce78de4c2a4f6b159024472d3",
+                                        "bytes":  115,
+                                        "base64":  "Ly8gVW5pY29kZSBjYWZlzIEg8J+OiSBzdGF5cy4KZm4gbWFpbigpIHsKICAgIGxldCBhbnN3ZXJfdmFsdWUgPSA0MjsKICAgIGxldCBtZXNzYWdlID0gImhlbGxvIjsKICAgIGFuc3dlcl92YWx1ZTsKfQ=="
+                                    }
+                    },
+                    {
+                        "stage":  "owned exit 1",
+                        "elapsed_ms":  15241,
+                        "details":  {
+                                        "exit_code":  0,
+                                        "pid":  12080
+                                    }
+                    },
+                    {
+                        "stage":  "terminal cleanup",
+                        "elapsed_ms":  15250,
+                        "details":  {
+                                        "editor_exited":  true,
+                                        "editor_exit_code":  0
+                                    }
+                    }
+                ]
+}

@@ -1,0 +1,1426 @@
+﻿2026-09-16T10:37:19.6670965Z Current runner version: '2.337.0'
+2026-09-16T10:37:19.6847636Z ##[group]Runner Image Provisioner
+2026-09-16T10:37:19.6848556Z Hosted Compute Agent
+2026-09-16T10:37:19.6849171Z Version: 20260828.587
+2026-09-16T10:37:19.6849794Z Commit: abac92662cab4cc7352de4f9f9d2e2419aad9c29
+2026-09-16T10:37:19.6850476Z Build Date: 2026-08-28T16:44:25Z
+2026-09-16T10:37:19.6851147Z Worker ID: {6fb45185-b2af-425f-b0f4-b521f8abdf91}
+2026-09-16T10:37:19.6851843Z Azure Region: centralus
+2026-09-16T10:37:19.6852366Z ##[endgroup]
+2026-09-16T10:37:19.6853932Z ##[group]Operating System
+2026-09-16T10:37:19.6855037Z Microsoft Windows Server 2025
+2026-09-16T10:37:19.6855741Z 10.0.26100
+2026-09-16T10:37:19.6856295Z Datacenter
+2026-09-16T10:37:19.6856783Z ##[endgroup]
+2026-09-16T10:37:19.6857299Z ##[group]Runner Image
+2026-09-16T10:37:19.6857846Z Image: windows-2025-vs2026
+2026-09-16T10:37:19.6858410Z Version: 20260907.229.1
+2026-09-16T10:37:19.6859836Z Included Software: https://github.com/actions/runner-images/blob/win25-vs2026/20260907.229/images/windows/Windows2025-VS2026-Readme.md
+2026-09-16T10:37:19.6861423Z Image Release: https://github.com/actions/runner-images/releases/tag/win25-vs2026%2F20260907.229
+2026-09-16T10:37:19.6862355Z ##[endgroup]
+2026-09-16T10:37:19.6863418Z ##[group]GITHUB_TOKEN Permissions
+2026-09-16T10:37:19.6865361Z Contents: read
+2026-09-16T10:37:19.6865964Z Metadata: read
+2026-09-16T10:37:19.6866466Z ##[endgroup]
+2026-09-16T10:37:19.6868688Z Secret source: Actions
+2026-09-16T10:37:19.6869604Z Cache mode: write
+2026-09-16T10:37:19.6870240Z Prepare workflow directory
+2026-09-16T10:37:19.8629118Z Prepare all required actions
+2026-09-16T10:37:19.8680900Z Getting action download info
+2026-09-16T10:37:20.1162130Z Download action repository 'actions/checkout@v4' (SHA:11d5960a326750d5838078e36cf38b85af677262)
+2026-09-16T10:37:20.2879352Z Download action repository 'dtolnay/rust-toolchain@master' (SHA:02cb101ec7c40f2c49e1d9714d64511d8e1b74de)
+2026-09-16T10:37:20.4982184Z Download action repository 'actions/setup-python@v5' (SHA:a26af69be951a213d495a4c3e4e4022e16d87065)
+2026-09-16T10:37:20.7000021Z Download action repository 'actions/upload-artifact@v4' (SHA:ea165f8d65b6e75b540449e92b4886f43607fa02)
+2026-09-16T10:37:22.7881977Z Complete job name: native
+2026-09-16T10:37:23.8977443Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-09-16T10:37:23.8994314Z ##[group]Run actions/checkout@v4
+2026-09-16T10:37:23.8996090Z with:
+2026-09-16T10:37:23.8997326Z   repository: TheWoovee/BareLine
+2026-09-16T10:37:23.9010479Z   token: ***
+2026-09-16T10:37:23.9011702Z   ssh-strict: true
+2026-09-16T10:37:23.9012936Z   ssh-user: git
+2026-09-16T10:37:23.9014193Z   persist-credentials: true
+2026-09-16T10:37:23.9015597Z   clean: true
+2026-09-16T10:37:23.9016916Z   sparse-checkout-cone-mode: true
+2026-09-16T10:37:23.9018433Z   fetch-depth: 1
+2026-09-16T10:37:23.9019653Z   fetch-tags: false
+2026-09-16T10:37:23.9020912Z   show-progress: true
+2026-09-16T10:37:23.9022471Z   lfs: false
+2026-09-16T10:37:23.9023707Z   submodules: false
+2026-09-16T10:37:23.9024995Z   set-safe-directory: true
+2026-09-16T10:37:23.9026460Z   allow-unsafe-pr-checkout: false
+2026-09-16T10:37:23.9028314Z ##[endgroup]
+2026-09-16T10:37:24.1402283Z Syncing repository: TheWoovee/BareLine
+2026-09-16T10:37:24.1406871Z ##[group]Getting Git version info
+2026-09-16T10:37:24.1408640Z Working directory is 'D:\a\BareLine\BareLine'
+2026-09-16T10:37:24.2946250Z [command]"C:\Program Files\Git\bin\git.exe" version
+2026-09-16T10:37:24.6812851Z git version 2.55.0.windows.5
+2026-09-16T10:37:24.6883808Z ##[endgroup]
+2026-09-16T10:37:24.6922516Z Temporarily overriding HOME='D:\a\_temp\a83dcb6e-e1b1-46bd-afa9-12044d297e43' before making global git config changes
+2026-09-16T10:37:24.6992061Z Adding repository directory to the temporary git global config as a safe directory
+2026-09-16T10:37:24.6995948Z [command]"C:\Program Files\Git\bin\git.exe" config --global --add safe.directory D:\a\BareLine\BareLine
+2026-09-16T10:37:24.8484273Z Deleting the contents of 'D:\a\BareLine\BareLine'
+2026-09-16T10:37:24.8493122Z ##[group]Initializing the repository
+2026-09-16T10:37:24.8505939Z [command]"C:\Program Files\Git\bin\git.exe" init D:\a\BareLine\BareLine
+2026-09-16T10:37:24.9924400Z Initialized empty Git repository in D:/a/BareLine/BareLine/.git/
+2026-09-16T10:37:25.0169252Z [command]"C:\Program Files\Git\bin\git.exe" remote add origin https://github.com/TheWoovee/BareLine
+2026-09-16T10:37:25.1019440Z ##[endgroup]
+2026-09-16T10:37:25.1022926Z ##[group]Disabling automatic garbage collection
+2026-09-16T10:37:25.1042158Z [command]"C:\Program Files\Git\bin\git.exe" config --local gc.auto 0
+2026-09-16T10:37:25.1525654Z ##[endgroup]
+2026-09-16T10:37:25.1549903Z ##[group]Setting up auth
+2026-09-16T10:37:25.1557918Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp core\.sshCommand
+2026-09-16T10:37:25.3144490Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :\""
+2026-09-16T10:37:27.8043969Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-09-16T10:37:27.8455642Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :\""
+2026-09-16T10:37:28.9716595Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-09-16T10:37:29.0576191Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "git config --local --show-origin --name-only --get-regexp remote.origin.url"
+2026-09-16T10:37:30.3407559Z [command]"C:\Program Files\Git\bin\git.exe" config --local http.https://github.com/.extraheader "AUTHORIZATION: basic ***"
+2026-09-16T10:37:30.4852999Z ##[endgroup]
+2026-09-16T10:37:30.4887812Z ##[group]Fetching the repository
+2026-09-16T10:37:30.4890486Z [command]"C:\Program Files\Git\bin\git.exe" -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +82f517e20bfd94210c4adeb3adc870c0c70a399e:refs/remotes/origin/master
+2026-09-16T10:37:35.0019365Z From https://github.com/TheWoovee/BareLine
+2026-09-16T10:37:35.0022201Z  * [new ref]         82f517e20bfd94210c4adeb3adc870c0c70a399e -> origin/master
+2026-09-16T10:37:35.0118599Z ##[endgroup]
+2026-09-16T10:37:35.0119281Z ##[group]Determining the checkout info
+2026-09-16T10:37:35.0122061Z ##[endgroup]
+2026-09-16T10:37:35.0133564Z [command]"C:\Program Files\Git\bin\git.exe" sparse-checkout disable
+2026-09-16T10:37:35.1673892Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset-all extensions.worktreeConfig
+2026-09-16T10:37:35.3531146Z ##[group]Checking out the ref
+2026-09-16T10:37:35.3543614Z [command]"C:\Program Files\Git\bin\git.exe" checkout --progress --force -B master refs/remotes/origin/master
+2026-09-16T10:37:36.5451015Z Updating files:  49% (1762/3531)
+2026-09-16T10:37:36.5559840Z Updating files:  50% (1766/3531)
+2026-09-16T10:37:36.5683579Z Updating files:  51% (1801/3531)
+2026-09-16T10:37:36.5800590Z Updating files:  52% (1837/3531)
+2026-09-16T10:37:36.5946220Z Updating files:  53% (1872/3531)
+2026-09-16T10:37:36.6158734Z Updating files:  54% (1907/3531)
+2026-09-16T10:37:36.6282808Z Updating files:  55% (1943/3531)
+2026-09-16T10:37:36.6437300Z Updating files:  56% (1978/3531)
+2026-09-16T10:37:36.6544477Z Updating files:  57% (2013/3531)
+2026-09-16T10:37:36.6685277Z Updating files:  58% (2048/3531)
+2026-09-16T10:37:36.6822689Z Updating files:  59% (2084/3531)
+2026-09-16T10:37:36.6909705Z Updating files:  60% (2119/3531)
+2026-09-16T10:37:36.7067848Z Updating files:  61% (2154/3531)
+2026-09-16T10:37:36.7155856Z Updating files:  62% (2190/3531)
+2026-09-16T10:37:36.8244912Z Updating files:  63% (2225/3531)
+2026-09-16T10:37:36.8351636Z Updating files:  64% (2260/3531)
+2026-09-16T10:37:36.8452745Z Updating files:  65% (2296/3531)
+2026-09-16T10:37:36.9816687Z Updating files:  66% (2331/3531)
+2026-09-16T10:37:36.9914985Z Updating files:  67% (2366/3531)
+2026-09-16T10:37:37.1312368Z Updating files:  68% (2402/3531)
+2026-09-16T10:37:37.1423673Z Updating files:  69% (2437/3531)
+2026-09-16T10:37:37.1523058Z Updating files:  70% (2472/3531)
+2026-09-16T10:37:37.1629693Z Updating files:  71% (2508/3531)
+2026-09-16T10:37:37.1768341Z Updating files:  72% (2543/3531)
+2026-09-16T10:37:37.1915491Z Updating files:  73% (2578/3531)
+2026-09-16T10:37:37.2083610Z Updating files:  74% (2613/3531)
+2026-09-16T10:37:37.2213549Z Updating files:  75% (2649/3531)
+2026-09-16T10:37:37.2328055Z Updating files:  76% (2684/3531)
+2026-09-16T10:37:37.2597116Z Updating files:  77% (2719/3531)
+2026-09-16T10:37:37.2712153Z Updating files:  78% (2755/3531)
+2026-09-16T10:37:37.2821596Z Updating files:  79% (2790/3531)
+2026-09-16T10:37:37.4350277Z Updating files:  80% (2825/3531)
+2026-09-16T10:37:37.4441756Z Updating files:  81% (2861/3531)
+2026-09-16T10:37:37.5889875Z Updating files:  82% (2896/3531)
+2026-09-16T10:37:37.5922280Z Updating files:  82% (2918/3531)
+2026-09-16T10:37:37.6041926Z Updating files:  83% (2931/3531)
+2026-09-16T10:37:37.6125358Z Updating files:  84% (2967/3531)
+2026-09-16T10:37:37.6224215Z Updating files:  85% (3002/3531)
+2026-09-16T10:37:37.6378323Z Updating files:  86% (3037/3531)
+2026-09-16T10:37:37.6482521Z Updating files:  87% (3072/3531)
+2026-09-16T10:37:37.7094434Z Updating files:  88% (3108/3531)
+2026-09-16T10:37:37.7211244Z Updating files:  89% (3143/3531)
+2026-09-16T10:37:37.7489501Z Updating files:  90% (3178/3531)
+2026-09-16T10:37:37.7825389Z Updating files:  91% (3214/3531)
+2026-09-16T10:37:37.8030358Z Updating files:  92% (3249/3531)
+2026-09-16T10:37:37.8148514Z Updating files:  93% (3284/3531)
+2026-09-16T10:37:37.8265313Z Updating files:  94% (3320/3531)
+2026-09-16T10:37:37.8370543Z Updating files:  95% (3355/3531)
+2026-09-16T10:37:37.8567074Z Updating files:  96% (3390/3531)
+2026-09-16T10:37:37.8680906Z Updating files:  97% (3426/3531)
+2026-09-16T10:37:37.8980281Z Updating files:  98% (3461/3531)
+2026-09-16T10:37:37.9089095Z Updating files:  99% (3496/3531)
+2026-09-16T10:37:37.9089814Z Updating files: 100% (3531/3531)
+2026-09-16T10:37:37.9090097Z Updating files: 100% (3531/3531), done.
+2026-09-16T10:37:37.9288737Z Reset branch 'master'
+2026-09-16T10:37:37.9368743Z branch 'master' set up to track 'origin/master'.
+2026-09-16T10:37:37.9557423Z ##[endgroup]
+2026-09-16T10:37:37.9964143Z [command]"C:\Program Files\Git\bin\git.exe" log -1 --format=%H
+2026-09-16T10:37:38.0256078Z 82f517e20bfd94210c4adeb3adc870c0c70a399e
+2026-09-16T10:37:38.1339302Z ##[group]Run dtolnay/rust-toolchain@master
+2026-09-16T10:37:38.1339672Z with:
+2026-09-16T10:37:38.1339872Z   toolchain: 1.98.1
+2026-09-16T10:37:38.1340086Z   components: rustfmt, clippy
+2026-09-16T10:37:38.1340333Z ##[endgroup]
+2026-09-16T10:37:38.1502747Z ##[start-action display=Parse toolchain version;id=__dtolnay_rust-toolchain.parse]
+2026-09-16T10:37:38.1811066Z ##[group]Run if [[ -z $toolchain ]]; then
+2026-09-16T10:37:38.1811461Z [36;1mif [[ -z $toolchain ]]; then[0m
+2026-09-16T10:37:38.1812004Z [36;1m  # GitHub does not enforce `required: true` inputs itself. https://github.com/actions/runner/issues/1070[0m
+2026-09-16T10:37:38.1812550Z [36;1m  echo "'toolchain' is a required input" >&2[0m
+2026-09-16T10:37:38.1812837Z [36;1m  exit 1[0m
+2026-09-16T10:37:38.1813159Z [36;1melif [[ $toolchain =~ ^stable' '[0-9]+' '(year|month|week|day)s?' 'ago$ ]]; then[0m
+2026-09-16T10:37:38.1813569Z [36;1m  if [[ Windows == macOS ]]; then[0m
+2026-09-16T10:37:38.1814156Z [36;1m    echo "toolchain=1.$((($(date -v-$(sed 's/stable \([0-9]*\) \(.\).*/\1\2/' <<< $toolchain) +%s)/60/60/24-16569)/7/6))" >> $GITHUB_OUTPUT[0m
+2026-09-16T10:37:38.1814962Z [36;1m  else[0m
+2026-09-16T10:37:38.1815870Z [36;1m    echo "toolchain=1.$((($(date --date "${toolchain#stable }" +%s)/60/60/24-16569)/7/6))" >> $GITHUB_OUTPUT[0m
+2026-09-16T10:37:38.1816340Z [36;1m  fi[0m
+2026-09-16T10:37:38.1816631Z [36;1melif [[ $toolchain =~ ^stable' 'minus' '[0-9]+' 'releases?$ ]]; then[0m
+2026-09-16T10:37:38.1817149Z [36;1m  echo "toolchain=1.$((($(date +%s)/60/60/24-16569)/7/6-${toolchain//[^0-9]/}))" >> $GITHUB_OUTPUT[0m
+2026-09-16T10:37:38.1817599Z [36;1melif [[ $toolchain =~ ^1\.[0-9]+$ ]]; then[0m
+2026-09-16T10:37:38.1818107Z [36;1m  echo "toolchain=1.$((i=${toolchain#1.}, c=($(date +%s)/60/60/24-16569)/7/6, i+9*i*(10*i<=c)+90*i*(100*i<=c)))" >> $GITHUB_OUTPUT[0m
+2026-09-16T10:37:38.1818584Z [36;1melse[0m
+2026-09-16T10:37:38.1818824Z [36;1m  echo "toolchain=$toolchain" >> $GITHUB_OUTPUT[0m
+2026-09-16T10:37:38.1819112Z [36;1mfi[0m
+2026-09-16T10:37:38.1840848Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-09-16T10:37:38.1841257Z env:
+2026-09-16T10:37:38.1841432Z   toolchain: 1.98.1
+2026-09-16T10:37:38.1841628Z ##[endgroup]
+2026-09-16T10:37:38.3841764Z ##[end-action id=__dtolnay_rust-toolchain.parse;outcome=success;conclusion=success;duration_ms=233]
+2026-09-16T10:37:38.3949169Z ##[start-action display=Construct rustup command line;id=__dtolnay_rust-toolchain.flags]
+2026-09-16T10:37:38.4217857Z ##[group]Run echo "targets=$(for t in ${targets//,/ }; do echo -n ' --target' $t; done)" >> $GITHUB_OUTPUT
+2026-09-16T10:37:38.4218519Z [36;1mecho "targets=$(for t in ${targets//,/ }; do echo -n ' --target' $t; done)" >> $GITHUB_OUTPUT[0m
+2026-09-16T10:37:38.4219140Z [36;1mecho "components=$(for c in ${components//,/ }; do echo -n ' --component' $c; done)" >> $GITHUB_OUTPUT[0m
+2026-09-16T10:37:38.4219627Z [36;1mecho "downgrade=" >> $GITHUB_OUTPUT[0m
+2026-09-16T10:37:38.4237422Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-09-16T10:37:38.4237827Z env:
+2026-09-16T10:37:38.4237995Z   targets: 
+2026-09-16T10:37:38.4238186Z   components: rustfmt, clippy
+2026-09-16T10:37:38.4238411Z ##[endgroup]
+2026-09-16T10:37:38.5133296Z ##[end-action id=__dtolnay_rust-toolchain.flags;outcome=success;conclusion=success;duration_ms=118]
+2026-09-16T10:37:38.5223435Z ##[start-action display=Set $CARGO_HOME;id=__dtolnay_rust-toolchain.__run]
+2026-09-16T10:37:38.5457349Z ##[group]Run echo CARGO_HOME=${CARGO_HOME:-"$USERPROFILE\.cargo"} >> $GITHUB_ENV
+2026-09-16T10:37:38.5457885Z [36;1mecho CARGO_HOME=${CARGO_HOME:-"$USERPROFILE\.cargo"} >> $GITHUB_ENV[0m
+2026-09-16T10:37:38.5475066Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-09-16T10:37:38.5475467Z ##[endgroup]
+2026-09-16T10:37:38.5902671Z ##[end-action id=__dtolnay_rust-toolchain.__run;outcome=success;conclusion=success;duration_ms=67]
+2026-09-16T10:37:38.5992269Z ##[start-action display=Install rustup if needed;id=__dtolnay_rust-toolchain.__run_2]
+2026-09-16T10:37:38.6056170Z ##[end-action id=__dtolnay_rust-toolchain.__run_2;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-09-16T10:37:38.6172782Z ##[start-action display=Install rustup if needed on windows;id=__dtolnay_rust-toolchain.__run_3]
+2026-09-16T10:37:38.6413820Z ##[group]Run if ! command -v rustup &>/dev/null; then
+2026-09-16T10:37:38.6414234Z [36;1mif ! command -v rustup &>/dev/null; then[0m
+2026-09-16T10:37:38.6415027Z [36;1m  curl --proto '=https' --tlsv1.2 --retry 10 --retry-connrefused --location --silent --show-error --fail https://win.rustup.rs/x86_64 --output 'D:\a\_temp\rustup-init.exe'[0m
+2026-09-16T10:37:38.6415879Z [36;1m  'D:\a\_temp\rustup-init.exe' --default-toolchain none --no-modify-path -y[0m
+2026-09-16T10:37:38.6416300Z [36;1m  echo "$CARGO_HOME\bin" >> $GITHUB_PATH[0m
+2026-09-16T10:37:38.6416567Z [36;1mfi[0m
+2026-09-16T10:37:38.6433840Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-09-16T10:37:38.6434421Z env:
+2026-09-16T10:37:38.6434620Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-09-16T10:37:38.6434878Z ##[endgroup]
+2026-09-16T10:37:38.6995656Z ##[end-action id=__dtolnay_rust-toolchain.__run_3;outcome=success;conclusion=success;duration_ms=82]
+2026-09-16T10:37:38.7098454Z ##[start-action display=rustup toolchain install 1.98.1;id=__dtolnay_rust-toolchain.__run_4]
+2026-09-16T10:37:38.7333007Z ##[group]Run rustup toolchain install 1.98.1 --component rustfmt --component clippy --profile minimal --no-self-update --force-non-host
+2026-09-16T10:37:38.7334459Z [36;1mrustup toolchain install 1.98.1 --component rustfmt --component clippy --profile minimal --no-self-update --force-non-host[0m
+2026-09-16T10:37:38.7350694Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-09-16T10:37:38.7351104Z env:
+2026-09-16T10:37:38.7351323Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-09-16T10:37:38.7351615Z   RUSTUP_PERMIT_COPY_RENAME: 1
+2026-09-16T10:37:38.7351845Z ##[endgroup]
+2026-09-16T10:37:39.4167195Z info: syncing channel updates for 1.98.1-x86_64-pc-windows-msvc
+2026-09-16T10:37:40.0282279Z info: latest update on 2026-09-03 for version 1.98.1 (48a229cea 2026-09-01)
+2026-09-16T10:37:40.0437830Z info: downloading 5 components
+2026-09-16T10:37:48.7591994Z 
+2026-09-16T10:37:48.8111352Z   1.98.1-x86_64-pc-windows-msvc installed - rustc 1.98.1 (48a229cea 2026-09-01)
+2026-09-16T10:37:48.8111759Z 
+2026-09-16T10:37:48.8219106Z ##[end-action id=__dtolnay_rust-toolchain.__run_4;outcome=success;conclusion=success;duration_ms=10111]
+2026-09-16T10:37:48.8275308Z ##[start-action display=rustup default 1.98.1;id=__dtolnay_rust-toolchain.__run_5]
+2026-09-16T10:37:48.8485444Z ##[group]Run rustup default 1.98.1 --force-non-host
+2026-09-16T10:37:48.8485807Z [36;1mrustup default 1.98.1 --force-non-host[0m
+2026-09-16T10:37:48.8506071Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-09-16T10:37:48.8507023Z env:
+2026-09-16T10:37:48.8507241Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-09-16T10:37:48.8507521Z ##[endgroup]
+2026-09-16T10:37:48.9281534Z info: using existing install for 1.98.1-x86_64-pc-windows-msvc
+2026-09-16T10:37:48.9339385Z info: default toolchain set to 1.98.1-x86_64-pc-windows-msvc
+2026-09-16T10:37:48.9339864Z 
+2026-09-16T10:37:48.9583048Z   1.98.1-x86_64-pc-windows-msvc unchanged - rustc 1.98.1 (48a229cea 2026-09-01)
+2026-09-16T10:37:48.9583654Z 
+2026-09-16T10:37:48.9588821Z info: note that the toolchain '1.98.1-x86_64-pc-windows-msvc' is currently in use (overridden by 'D:\a\BareLine\BareLine\rust-toolchain.toml')
+2026-09-16T10:37:48.9679866Z ##[end-action id=__dtolnay_rust-toolchain.__run_5;outcome=success;conclusion=success;duration_ms=139]
+2026-09-16T10:37:48.9725582Z ##[start-action display=Create cachekey;id=__dtolnay_rust-toolchain.rustc-version]
+2026-09-16T10:37:48.9931053Z ##[group]Run DATE=$(rustc +1.98.1 --version --verbose | sed -ne 's/^commit-date: \(20[0-9][0-9]\)-\([01][0-9]\)-\([0-3][0-9]\)$/\1\2\3/p')
+2026-09-16T10:37:48.9932343Z [36;1mDATE=$(rustc +1.98.1 --version --verbose | sed -ne 's/^commit-date: \(20[0-9][0-9]\)-\([01][0-9]\)-\([0-3][0-9]\)$/\1\2\3/p')[0m
+2026-09-16T10:37:48.9933041Z [36;1mHASH=$(rustc +1.98.1 --version --verbose | sed -ne 's/^commit-hash: //p')[0m
+2026-09-16T10:37:48.9933525Z [36;1mecho "cachekey=$(echo $DATE$HASH | head -c12)" >> $GITHUB_OUTPUT[0m
+2026-09-16T10:37:48.9950874Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-09-16T10:37:48.9951268Z env:
+2026-09-16T10:37:48.9951468Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-09-16T10:37:48.9951735Z ##[endgroup]
+2026-09-16T10:37:49.7461579Z ##[end-action id=__dtolnay_rust-toolchain.rustc-version;outcome=success;conclusion=success;duration_ms=773]
+2026-09-16T10:37:49.7493361Z ##[start-action display=Disable incremental compilation;id=__dtolnay_rust-toolchain.__run_6]
+2026-09-16T10:37:49.7677410Z ##[group]Run if [ -z "${CARGO_INCREMENTAL+set}" ]; then
+2026-09-16T10:37:49.7677812Z [36;1mif [ -z "${CARGO_INCREMENTAL+set}" ]; then[0m
+2026-09-16T10:37:49.7678125Z [36;1m  echo CARGO_INCREMENTAL=0 >> $GITHUB_ENV[0m
+2026-09-16T10:37:49.7678391Z [36;1mfi[0m
+2026-09-16T10:37:49.7694671Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-09-16T10:37:49.7695070Z env:
+2026-09-16T10:37:49.7695263Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-09-16T10:37:49.7695520Z ##[endgroup]
+2026-09-16T10:37:49.8113631Z ##[end-action id=__dtolnay_rust-toolchain.__run_6;outcome=success;conclusion=success;duration_ms=61]
+2026-09-16T10:37:49.8144236Z ##[start-action display=Enable colors in Cargo output;id=__dtolnay_rust-toolchain.__run_7]
+2026-09-16T10:37:49.8312366Z ##[group]Run if [ -z "${CARGO_TERM_COLOR+set}" ]; then
+2026-09-16T10:37:49.8312749Z [36;1mif [ -z "${CARGO_TERM_COLOR+set}" ]; then[0m
+2026-09-16T10:37:49.8313087Z [36;1m  echo CARGO_TERM_COLOR=always >> $GITHUB_ENV[0m
+2026-09-16T10:37:49.8313383Z [36;1mfi[0m
+2026-09-16T10:37:49.8329214Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-09-16T10:37:49.8329599Z env:
+2026-09-16T10:37:49.8329800Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-09-16T10:37:49.8330064Z   CARGO_INCREMENTAL: 0
+2026-09-16T10:37:49.8330264Z ##[endgroup]
+2026-09-16T10:37:49.8738744Z ##[end-action id=__dtolnay_rust-toolchain.__run_7;outcome=success;conclusion=success;duration_ms=59]
+2026-09-16T10:37:49.8770149Z ##[start-action display=Enable Cargo sparse registry;id=__dtolnay_rust-toolchain.__run_8]
+2026-09-16T10:37:49.8950752Z ##[group]Run # implemented in 1.66, stabilized in 1.68, made default in 1.70
+2026-09-16T10:37:49.8951281Z [36;1m# implemented in 1.66, stabilized in 1.68, made default in 1.70[0m
+2026-09-16T10:37:49.8951942Z [36;1mif [ -z "${CARGO_REGISTRIES_CRATES_IO_PROTOCOL+set}" -o -f "D:\a\_temp"/.implicit_cargo_registries_crates_io_protocol ]; then[0m
+2026-09-16T10:37:49.8952633Z [36;1m  if rustc +1.98.1 --version --verbose | grep -q '^release: 1\.6[89]\.'; then[0m
+2026-09-16T10:37:49.8953141Z [36;1m    touch "D:\a\_temp"/.implicit_cargo_registries_crates_io_protocol || true[0m
+2026-09-16T10:37:49.8953638Z [36;1m    echo CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse >> $GITHUB_ENV[0m
+2026-09-16T10:37:49.8954125Z [36;1m  elif rustc +1.98.1 --version --verbose | grep -q '^release: 1\.6[67]\.'; then[0m
+2026-09-16T10:37:49.8954626Z [36;1m    touch "D:\a\_temp"/.implicit_cargo_registries_crates_io_protocol || true[0m
+2026-09-16T10:37:49.8955087Z [36;1m    echo CARGO_REGISTRIES_CRATES_IO_PROTOCOL=git >> $GITHUB_ENV[0m
+2026-09-16T10:37:49.8955424Z [36;1m  fi[0m
+2026-09-16T10:37:49.8955600Z [36;1mfi[0m
+2026-09-16T10:37:49.8971748Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-09-16T10:37:49.8972138Z env:
+2026-09-16T10:37:49.8972336Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-09-16T10:37:49.8972784Z   CARGO_INCREMENTAL: 0
+2026-09-16T10:37:49.8973028Z   CARGO_TERM_COLOR: always
+2026-09-16T10:37:49.8973243Z ##[endgroup]
+2026-09-16T10:37:50.0789281Z ##[end-action id=__dtolnay_rust-toolchain.__run_8;outcome=success;conclusion=success;duration_ms=201]
+2026-09-16T10:37:50.0820192Z ##[start-action display=Work around spurious network errors in curl 8.0;id=__dtolnay_rust-toolchain.__run_9]
+2026-09-16T10:37:50.0990615Z ##[group]Run # https://rust-lang.zulipchat.com/#narrow/stream/246057-t-cargo/topic/timeout.20investigation
+2026-09-16T10:37:50.0991814Z [36;1m# https://rust-lang.zulipchat.com/#narrow/stream/246057-t-cargo/topic/timeout.20investigation[0m
+2026-09-16T10:37:50.0992429Z [36;1mif rustc +1.98.1 --version --verbose | grep -q '^release: 1\.7[01]\.'; then[0m
+2026-09-16T10:37:50.0992871Z [36;1m  echo CARGO_HTTP_MULTIPLEXING=false >> $GITHUB_ENV[0m
+2026-09-16T10:37:50.0993173Z [36;1mfi[0m
+2026-09-16T10:37:50.1008171Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-09-16T10:37:50.1008743Z env:
+2026-09-16T10:37:50.1008938Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-09-16T10:37:50.1009205Z   CARGO_INCREMENTAL: 0
+2026-09-16T10:37:50.1009416Z   CARGO_TERM_COLOR: always
+2026-09-16T10:37:50.1009633Z ##[endgroup]
+2026-09-16T10:37:50.2059677Z ##[end-action id=__dtolnay_rust-toolchain.__run_9;outcome=success;conclusion=success;duration_ms=123]
+2026-09-16T10:37:50.2094572Z ##[start-action display=rustc +1.98.1 --version --verbose;id=__dtolnay_rust-toolchain.__run_10]
+2026-09-16T10:37:50.2304993Z ##[group]Run rustc +1.98.1 --version --verbose
+2026-09-16T10:37:50.2305582Z [36;1mrustc +1.98.1 --version --verbose[0m
+2026-09-16T10:37:50.2327250Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-09-16T10:37:50.2327910Z env:
+2026-09-16T10:37:50.2328226Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-09-16T10:37:50.2328670Z   CARGO_INCREMENTAL: 0
+2026-09-16T10:37:50.2329019Z   CARGO_TERM_COLOR: always
+2026-09-16T10:37:50.2329395Z ##[endgroup]
+2026-09-16T10:37:50.3255202Z rustc 1.98.1 (48a229cea 2026-09-01)
+2026-09-16T10:37:50.3255996Z binary: rustc
+2026-09-16T10:37:50.3256727Z commit-hash: 48a229ceaefd4985c50990b14116b6d856af0985
+2026-09-16T10:37:50.3257266Z commit-date: 2026-09-01
+2026-09-16T10:37:50.3257630Z host: x86_64-pc-windows-msvc
+2026-09-16T10:37:50.3257989Z release: 1.98.1
+2026-09-16T10:37:50.3259426Z LLVM version: 22.1.8
+2026-09-16T10:37:50.3398472Z ##[end-action id=__dtolnay_rust-toolchain.__run_10;outcome=success;conclusion=success;duration_ms=130]
+2026-09-16T10:37:50.3915644Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-09-16T10:37:50.3917502Z ##[group]Run actions/setup-python@v5
+2026-09-16T10:37:50.3917764Z with:
+2026-09-16T10:37:50.3917948Z   python-version: 3.12
+2026-09-16T10:37:50.3918183Z   check-latest: false
+2026-09-16T10:37:50.3920575Z   token: ***
+2026-09-16T10:37:50.3920780Z   update-environment: true
+2026-09-16T10:37:50.3921018Z   allow-prereleases: false
+2026-09-16T10:37:50.3921243Z   freethreaded: false
+2026-09-16T10:37:50.3921433Z env:
+2026-09-16T10:37:50.3921618Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-09-16T10:37:50.3921878Z   CARGO_INCREMENTAL: 0
+2026-09-16T10:37:50.3922079Z   CARGO_TERM_COLOR: always
+2026-09-16T10:37:50.3922324Z ##[endgroup]
+2026-09-16T10:37:50.5530848Z ##[group]Installed versions
+2026-09-16T10:37:50.5863522Z (node:9524) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-09-16T10:37:50.5864814Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-09-16T10:37:50.5865629Z Successfully set up CPython (3.12.10)
+2026-09-16T10:37:50.5866455Z ##[endgroup]
+2026-09-16T10:37:50.6205517Z ##[group]Run python .github/workflows/check_portability.py
+2026-09-16T10:37:50.6206124Z [36;1mpython .github/workflows/check_portability.py[0m
+2026-09-16T10:37:50.7028371Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+2026-09-16T10:37:50.7028782Z env:
+2026-09-16T10:37:50.7029011Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-09-16T10:37:50.7029308Z   CARGO_INCREMENTAL: 0
+2026-09-16T10:37:50.7029550Z   CARGO_TERM_COLOR: always
+2026-09-16T10:37:50.7029892Z   pythonLocation: C:\hostedtoolcache\windows\Python\3.12.10\x64
+2026-09-16T10:37:50.7030452Z   PKG_CONFIG_PATH: C:\hostedtoolcache\windows\Python\3.12.10\x64/lib/pkgconfig
+2026-09-16T10:37:50.7030978Z   Python_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.12.10\x64
+2026-09-16T10:37:50.7031443Z   Python2_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.12.10\x64
+2026-09-16T10:37:50.7031913Z   Python3_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.12.10\x64
+2026-09-16T10:37:50.7032273Z ##[endgroup]
+2026-09-16T10:37:52.3482865Z Neutral architecture guard passed (including negative fixtures).
+2026-09-16T10:37:52.5187277Z ##[group]Run cargo metadata --locked --format-version 1 > cargo-metadata.json
+2026-09-16T10:37:52.5187937Z [36;1mcargo metadata --locked --format-version 1 > cargo-metadata.json[0m
+2026-09-16T10:37:52.5259990Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+2026-09-16T10:37:52.5260344Z env:
+2026-09-16T10:37:52.5260550Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-09-16T10:37:52.5260823Z   CARGO_INCREMENTAL: 0
+2026-09-16T10:37:52.5261033Z   CARGO_TERM_COLOR: always
+2026-09-16T10:37:52.5261331Z   pythonLocation: C:\hostedtoolcache\windows\Python\3.12.10\x64
+2026-09-16T10:37:52.5261792Z   PKG_CONFIG_PATH: C:\hostedtoolcache\windows\Python\3.12.10\x64/lib/pkgconfig
+2026-09-16T10:37:52.5262242Z   Python_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.12.10\x64
+2026-09-16T10:37:52.5262645Z   Python2_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.12.10\x64
+2026-09-16T10:37:52.5263080Z   Python3_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.12.10\x64
+2026-09-16T10:37:52.5263481Z ##[endgroup]
+2026-09-16T10:37:53.4433519Z [1m[92m    Updating[0m crates.io index
+2026-09-16T10:37:54.7749564Z [1m[92m Downloading[0m crates ...
+2026-09-16T10:37:54.9571437Z [1m[92m  Downloaded[0m ndk-context v0.1.1
+2026-09-16T10:37:55.0011343Z [1m[92m  Downloaded[0m xkbcommon-dl v0.4.2
+2026-09-16T10:37:55.0195621Z [1m[92m  Downloaded[0m yoke-derive v0.8.2
+2026-09-16T10:37:55.0415726Z [1m[92m  Downloaded[0m owned_ttf_parser v0.25.1
+2026-09-16T10:37:55.0648314Z [1m[92m  Downloaded[0m objc2-uniform-type-identifiers v0.2.2
+2026-09-16T10:37:55.0806431Z [1m[92m  Downloaded[0m potential_utf v0.1.6
+2026-09-16T10:37:55.0924702Z [1m[92m  Downloaded[0m objc2-link-presentation v0.2.2
+2026-09-16T10:37:55.1067552Z [1m[92m  Downloaded[0m zerofrom-derive v0.1.7
+2026-09-16T10:37:55.1214151Z [1m[92m  Downloaded[0m adler2 v2.0.1
+2026-09-16T10:37:55.1355102Z [1m[92m  Downloaded[0m objc2-symbols v0.2.2
+2026-09-16T10:37:55.1449870Z [1m[92m  Downloaded[0m percent-encoding v2.3.2
+2026-09-16T10:37:55.1531254Z [1m[92m  Downloaded[0m objc2-core-location v0.2.2
+2026-09-16T10:37:55.1844616Z [1m[92m  Downloaded[0m cpufeatures v0.2.17
+2026-09-16T10:37:55.1981617Z [1m[92m  Downloaded[0m objc2-user-notifications v0.2.2
+2026-09-16T10:37:55.2196874Z [1m[92m  Downloaded[0m plain v0.2.3
+2026-09-16T10:37:55.2302538Z [1m[92m  Downloaded[0m proc-macro-crate v3.5.0
+2026-09-16T10:37:55.2445225Z [1m[92m  Downloaded[0m pulley-macros v48.0.1
+2026-09-16T10:37:55.2512148Z [1m[92m  Downloaded[0m atomic-waker v1.1.2
+2026-09-16T10:37:55.2663473Z [1m[92m  Downloaded[0m cfg_aliases v0.2.2
+2026-09-16T10:37:55.2754886Z [1m[92m  Downloaded[0m signature v2.2.0
+2026-09-16T10:37:55.2895650Z [1m[92m  Downloaded[0m subtle v2.6.1
+2026-09-16T10:37:55.2997959Z [1m[92m  Downloaded[0m same-file v1.0.6
+2026-09-16T10:37:55.3157775Z [1m[92m  Downloaded[0m num_enum v0.7.6
+2026-09-16T10:37:55.3911953Z [1m[92m  Downloaded[0m num_enum_derive v0.7.6
+2026-09-16T10:37:55.4070079Z [1m[92m  Downloaded[0m objc2-cloud-kit v0.2.2
+2026-09-16T10:37:55.4591136Z [1m[92m  Downloaded[0m strict-num v0.1.1
+2026-09-16T10:37:55.4677354Z [1m[92m  Downloaded[0m ab_glyph v0.2.32
+2026-09-16T10:37:55.4835935Z [1m[92m  Downloaded[0m derive_arbitrary v1.4.2
+2026-09-16T10:37:55.4940922Z [1m[92m  Downloaded[0m arrayref v0.3.9
+2026-09-16T10:37:55.5111646Z [1m[92m  Downloaded[0m cfg-if v1.0.4
+2026-09-16T10:37:55.5252114Z [1m[92m  Downloaded[0m cobs v0.3.0
+2026-09-16T10:37:55.5389983Z [1m[92m  Downloaded[0m ab_glyph_rasterizer v0.1.10
+2026-09-16T10:37:55.5536018Z [1m[92m  Downloaded[0m ambient-authority v0.0.2
+2026-09-16T10:37:55.5659207Z [1m[92m  Downloaded[0m android-properties v0.2.2
+2026-09-16T10:37:55.5833554Z [1m[92m  Downloaded[0m atomic-polyfill v1.0.3
+2026-09-16T10:37:55.6017391Z [1m[92m  Downloaded[0m cranelift-srcgen v0.135.1
+2026-09-16T10:37:55.6085991Z [1m[92m  Downloaded[0m zerofrom v0.1.8
+2026-09-16T10:37:55.6174912Z [1m[92m  Downloaded[0m block-buffer v0.10.4
+2026-09-16T10:37:55.6270616Z [1m[92m  Downloaded[0m cap-fs-ext v4.0.3
+2026-09-16T10:37:55.6499965Z [1m[92m  Downloaded[0m stable_deref_trait v1.2.1
+2026-09-16T10:37:55.6584526Z [1m[92m  Downloaded[0m smol_str v0.2.2
+2026-09-16T10:37:55.6714644Z [1m[92m  Downloaded[0m scopeguard v1.2.0
+2026-09-16T10:37:55.6873932Z [1m[92m  Downloaded[0m rustc_version v0.4.1
+2026-09-16T10:37:55.6991393Z [1m[92m  Downloaded[0m yoke v0.8.3
+2026-09-16T10:37:55.7187702Z [1m[92m  Downloaded[0m calloop-wayland-source v0.3.0
+2026-09-16T10:37:55.7317512Z [1m[92m  Downloaded[0m core-graphics-types v0.1.3
+2026-09-16T10:37:55.7448073Z [1m[92m  Downloaded[0m cranelift-control v0.135.1
+2026-09-16T10:37:55.7536031Z [1m[92m  Downloaded[0m embedded-io v0.4.0
+2026-09-16T10:37:55.7705079Z [1m[92m  Downloaded[0m equivalent v1.0.2
+2026-09-16T10:37:55.7844240Z [1m[92m  Downloaded[0m rustc-hash v2.1.3
+2026-09-16T10:37:55.7965551Z [1m[92m  Downloaded[0m scoped-tls v1.0.1
+2026-09-16T10:37:55.8064826Z [1m[92m  Downloaded[0m as-raw-xcb-connection v1.0.1
+2026-09-16T10:37:55.8137042Z [1m[92m  Downloaded[0m byteorder v1.5.0
+2026-09-16T10:37:55.8308540Z [1m[92m  Downloaded[0m cpufeatures v0.3.1
+2026-09-16T10:37:55.8435557Z [1m[92m  Downloaded[0m cranelift-codegen-shared v0.135.1
+2026-09-16T10:37:55.8511796Z [1m[92m  Downloaded[0m cranelift-native v0.135.1
+2026-09-16T10:37:55.8604326Z [1m[92m  Downloaded[0m crypto-common v0.1.7
+2026-09-16T10:37:55.8703931Z [1m[92m  Downloaded[0m cursor-icon v1.2.0
+2026-09-16T10:37:55.8854768Z [1m[92m  Downloaded[0m curve25519-dalek-derive v0.1.1
+2026-09-16T10:37:55.8950711Z [1m[92m  Downloaded[0m dispatch v0.2.0
+2026-09-16T10:37:55.9060424Z [1m[92m  Downloaded[0m dlib v0.5.3
+2026-09-16T10:37:55.9178118Z [1m[92m  Downloaded[0m downcast-rs v1.2.1
+2026-09-16T10:37:55.9292120Z [1m[92m  Downloaded[0m embedded-io v0.6.1
+2026-09-16T10:37:55.9427311Z [1m[92m  Downloaded[0m objc-sys v0.3.5
+2026-09-16T10:37:55.9656871Z [1m[92m  Downloaded[0m objc2-contacts v0.2.2
+2026-09-16T10:37:55.9944408Z [1m[92m  Downloaded[0m objc2-core-data v0.2.2
+2026-09-16T10:37:56.0454088Z [1m[92m  Downloaded[0m objc2-core-image v0.2.2
+2026-09-16T10:37:56.0744295Z [1m[92m  Downloaded[0m objc2-encode v4.1.0
+2026-09-16T10:37:56.0859496Z [1m[92m  Downloaded[0m objc2-quartz-core v0.2.2
+2026-09-16T10:37:56.1183831Z [1m[92m  Downloaded[0m pin-project-internal v1.1.13
+2026-09-16T10:37:56.1320470Z [1m[92m  Downloaded[0m pkcs8 v0.10.2
+2026-09-16T10:37:56.1658343Z [1m[92m  Downloaded[0m rand_core v0.6.4
+2026-09-16T10:37:56.1774079Z [1m[92m  Downloaded[0m raw-window-handle v0.6.2
+2026-09-16T10:37:56.6776606Z [1m[92m  Downloaded[0m rustix-linux-procfs v0.1.1
+2026-09-16T10:37:56.7349186Z [1m[92m  Downloaded[0m rustversion v1.0.23
+2026-09-16T10:37:56.9199352Z [1m[92m  Downloaded[0m sha1 v0.10.6
+2026-09-16T10:37:56.9772102Z [1m[92m  Downloaded[0m sha2 v0.10.9
+2026-09-16T10:37:57.2915255Z [1m[92m  Downloaded[0m simd-adler32 v0.3.10
+2026-09-16T10:37:57.3115954Z [1m[92m  Downloaded[0m slab v0.4.12
+2026-09-16T10:37:57.3227407Z [1m[92m  Downloaded[0m smallvec v1.16.0
+2026-09-16T10:37:57.3334921Z [1m[92m  Downloaded[0m spki v0.7.3
+2026-09-16T10:37:57.3949073Z [1m[92m  Downloaded[0m target-lexicon v0.13.5
+2026-09-16T10:37:57.5400267Z [1m[92m  Downloaded[0m thiserror-impl v1.0.69
+2026-09-16T10:37:57.6618627Z [1m[92m  Downloaded[0m tinystr v0.8.4
+2026-09-16T10:37:57.7281628Z [1m[92m  Downloaded[0m wasmtime-internal-versioned-export-macros v48.0.1
+2026-09-16T10:37:57.8550243Z [1m[92m  Downloaded[0m wayland-csd-frame v0.3.0
+2026-09-16T10:37:57.8825178Z [1m[92m  Downloaded[0m zerovec-derive v0.11.6
+2026-09-16T10:37:57.9117952Z [1m[92m  Downloaded[0m zmij v1.0.23
+2026-09-16T10:37:57.9336977Z [1m[92m  Downloaded[0m base64ct v1.8.3
+2026-09-16T10:37:57.9741563Z [1m[92m  Downloaded[0m bitflags v1.3.2
+2026-09-16T10:37:58.0267515Z [1m[92m  Downloaded[0m block2 v0.5.1
+2026-09-16T10:37:58.0449084Z [1m[92m  Downloaded[0m concurrent-queue v2.5.0
+2026-09-16T10:37:58.0866115Z [1m[92m  Downloaded[0m core-foundation v0.9.4
+2026-09-16T10:37:58.1181615Z [1m[92m  Downloaded[0m core-graphics v0.23.2
+2026-09-16T10:37:58.1696071Z [1m[92m  Downloaded[0m critical-section v1.2.0
+2026-09-16T10:37:58.2196676Z [1m[92m  Downloaded[0m rand_core v0.10.1
+2026-09-16T10:37:58.3285961Z [1m[92m  Downloaded[0m redox_syscall v0.4.1
+2026-09-16T10:37:58.4668828Z [1m[92m  Downloaded[0m serde_spanned v0.6.9
+2026-09-16T10:37:58.5157453Z [1m[92m  Downloaded[0m shlex v2.0.1
+2026-09-16T10:37:58.6102229Z [1m[92m  Downloaded[0m simdutf8 v0.1.5
+2026-09-16T10:37:58.7437148Z [1m[92m  Downloaded[0m synstructure v0.13.2
+2026-09-16T10:37:58.7990827Z [1m[92m  Downloaded[0m termcolor v1.4.1
+2026-09-16T10:37:58.8456848Z [1m[92m  Downloaded[0m thiserror v1.0.69
+2026-09-16T10:37:59.5818341Z [1m[92m  Downloaded[0m thiserror v2.0.20
+2026-09-16T10:38:00.4313930Z [1m[92m  Downloaded[0m winapi-util v0.1.11
+2026-09-16T10:38:00.4483451Z [1m[92m  Downloaded[0m zeroize v1.9.0
+2026-09-16T10:38:00.5236035Z [1m[92m  Downloaded[0m accesskit_consumer v0.39.0
+2026-09-16T10:38:00.5844062Z [1m[92m  Downloaded[0m addr2line v0.26.1
+2026-09-16T10:38:00.6697940Z [1m[92m  Downloaded[0m ahash v0.8.12
+2026-09-16T10:38:00.7936819Z [1m[92m  Downloaded[0m arbitrary v1.4.2
+2026-09-16T10:38:01.0749418Z [1m[92m  Downloaded[0m async-trait v0.1.92
+2026-09-16T10:38:01.2749594Z [1m[92m  Downloaded[0m cap-std v4.0.3
+2026-09-16T10:38:01.5693940Z [1m[92m  Downloaded[0m chacha20 v0.10.2
+2026-09-16T10:38:01.6019782Z [1m[92m  Downloaded[0m cranelift-assembler-x64 v0.135.1
+2026-09-16T10:38:02.1044232Z [1m[92m  Downloaded[0m cranelift-bitset v0.135.1
+2026-09-16T10:38:02.2036172Z [1m[92m  Downloaded[0m cranelift-entity v0.135.1
+2026-09-16T10:38:02.2222967Z [1m[92m  Downloaded[0m crc32fast v1.5.1
+2026-09-16T10:38:02.2409522Z [1m[92m  Downloaded[0m digest v0.10.7
+2026-09-16T10:38:02.2600965Z [1m[92m  Downloaded[0m displaydoc v0.2.7
+2026-09-16T10:38:02.2974683Z [1m[92m  Downloaded[0m dpi v0.1.2
+2026-09-16T10:38:02.3109226Z [1m[92m  Downloaded[0m ed25519 v2.2.3
+2026-09-16T10:38:02.3354595Z [1m[92m  Downloaded[0m either v1.18.0
+2026-09-16T10:38:02.3659744Z [1m[92m  Downloaded[0m jni-sys-macros v0.4.1
+2026-09-16T10:38:02.3746308Z [1m[92m  Downloaded[0m once_cell v1.21.4
+2026-09-16T10:38:02.4153156Z [1m[92m  Downloaded[0m pin-project v1.1.13
+2026-09-16T10:38:02.5933339Z [1m[92m  Downloaded[0m pin-project-lite v0.2.17
+2026-09-16T10:38:02.6684726Z [1m[92m  Downloaded[0m pkg-config v0.3.34
+2026-09-16T10:38:02.6822670Z [1m[92m  Downloaded[0m polling v3.11.0
+2026-09-16T10:38:02.7130213Z [1m[92m  Downloaded[0m postcard v1.1.3
+2026-09-16T10:38:02.7344293Z [1m[92m  Downloaded[0m proc-macro2 v1.0.107
+2026-09-16T10:38:02.7653717Z [1m[92m  Downloaded[0m quote v1.0.47
+2026-09-16T10:38:02.7976816Z [1m[92m  Downloaded[0m r-efi v5.3.0
+2026-09-16T10:38:02.8697566Z [1m[92m  Downloaded[0m r-efi v6.0.0
+2026-09-16T10:38:02.9355226Z [1m[92m  Downloaded[0m redox_syscall v0.9.4
+2026-09-16T10:38:02.9598544Z [1m[92m  Downloaded[0m rustc-demangle v0.1.28
+2026-09-16T10:38:02.9752664Z [1m[92m  Downloaded[0m sctk-adwaita v0.10.1
+2026-09-16T10:38:03.0020129Z [1m[92m  Downloaded[0m semver v1.0.28
+2026-09-16T10:38:03.0292225Z [1m[92m  Downloaded[0m serde_derive v1.0.229
+2026-09-16T10:38:03.4201572Z [1m[92m  Downloaded[0m socket2 v0.6.5
+2026-09-16T10:38:03.4328621Z [1m[92m  Downloaded[0m spin v0.9.9
+2026-09-16T10:38:03.4576971Z [1m[92m  Downloaded[0m static_assertions v1.1.0
+2026-09-16T10:38:03.4721456Z [1m[92m  Downloaded[0m thiserror-impl v2.0.20
+2026-09-16T10:38:03.4886145Z [1m[92m  Downloaded[0m tiny-skia-path v0.11.4
+2026-09-16T10:38:03.5104803Z [1m[92m  Downloaded[0m wasmtime-internal-fiber v48.0.1
+2026-09-16T10:38:03.5311647Z [1m[92m  Downloaded[0m wasmtime-internal-wit-bindgen v48.0.1
+2026-09-16T10:38:03.5403021Z [1m[92m  Downloaded[0m web-time v1.1.0
+2026-09-16T10:38:03.5566373Z [1m[92m  Downloaded[0m windows-threading v0.2.1
+2026-09-16T10:38:03.5652722Z [1m[92m  Downloaded[0m winx v0.36.4
+2026-09-16T10:38:03.5784030Z [1m[92m  Downloaded[0m xcursor v0.3.11
+2026-09-16T10:38:03.5864404Z [1m[92m  Downloaded[0m zerotrie v0.2.5
+2026-09-16T10:38:03.6273368Z [1m[92m  Downloaded[0m zopfli v0.8.3
+2026-09-16T10:38:03.6512897Z [1m[92m  Downloaded[0m accesskit v0.25.0
+2026-09-16T10:38:03.6600215Z [1m[92m  Downloaded[0m allocator-api2 v0.2.21
+2026-09-16T10:38:03.6837791Z [1m[92m  Downloaded[0m anyhow v1.0.104
+2026-09-16T10:38:03.7287986Z [1m[92m  Downloaded[0m arrayvec v0.7.8
+2026-09-16T10:38:03.7508488Z [1m[92m  Downloaded[0m base64 v0.22.1
+2026-09-16T10:38:03.7838633Z [1m[92m  Downloaded[0m bitflags v2.13.1
+2026-09-16T10:38:03.8371411Z [1m[92m  Downloaded[0m blake2 v0.10.6
+2026-09-16T10:38:03.8816614Z [1m[92m  Downloaded[0m bytemuck v1.25.2
+2026-09-16T10:38:03.9128771Z [1m[92m  Downloaded[0m bytes v1.12.1
+2026-09-16T10:38:03.9514181Z [1m[92m  Downloaded[0m calloop v0.13.0
+2026-09-16T10:38:03.9954026Z [1m[92m  Downloaded[0m const-oid v0.9.6
+2026-09-16T10:38:04.0108465Z [1m[92m  Downloaded[0m core-foundation-sys v0.8.7
+2026-09-16T10:38:04.0473163Z [1m[92m  Downloaded[0m cranelift-assembler-x64-meta v0.135.1
+2026-09-16T10:38:04.0797329Z [1m[92m  Downloaded[0m cranelift-bforest v0.135.1
+2026-09-16T10:38:04.0892073Z [1m[92m  Downloaded[0m cranelift-frontend v0.135.1
+2026-09-16T10:38:04.0998196Z [1m[92m  Downloaded[0m crossbeam-utils v0.8.23
+2026-09-16T10:38:04.1269769Z [1m[92m  Downloaded[0m ed25519-dalek v2.2.0
+2026-09-16T10:38:04.1492365Z [1m[92m  Downloaded[0m form_urlencoded v1.2.2
+2026-09-16T10:38:04.1558943Z [1m[92m  Downloaded[0m futures-core v0.3.34
+2026-09-16T10:38:04.1663848Z [1m[92m  Downloaded[0m futures-io v0.3.34
+2026-09-16T10:38:04.1733173Z [1m[92m  Downloaded[0m futures-sink v0.3.34
+2026-09-16T10:38:04.1802376Z [1m[92m  Downloaded[0m futures-task v0.3.34
+2026-09-16T10:38:04.1929724Z [1m[92m  Downloaded[0m generic-array v0.14.7
+2026-09-16T10:38:04.2049154Z [1m[92m  Downloaded[0m icu_locale_core v2.1.1
+2026-09-16T10:38:05.0227332Z [1m[92m  Downloaded[0m jni-sys v0.3.1
+2026-09-16T10:38:05.0319212Z [1m[92m  Downloaded[0m jni-sys v0.4.1
+2026-09-16T10:38:05.0410245Z [1m[92m  Downloaded[0m jobserver v0.1.35
+2026-09-16T10:38:05.0593484Z [1m[92m  Downloaded[0m memfd v0.6.6
+2026-09-16T10:38:05.0733612Z [1m[92m  Downloaded[0m objc2-metal v0.2.2
+2026-09-16T10:38:05.1301451Z [1m[92m  Downloaded[0m prettyplease v0.2.37
+2026-09-16T10:38:05.1606973Z [1m[92m  Downloaded[0m pulley-interpreter v48.0.1
+2026-09-16T10:38:05.1800865Z [1m[92m  Downloaded[0m rand v0.10.2
+2026-09-16T10:38:05.2100400Z [1m[92m  Downloaded[0m serde v1.0.229
+2026-09-16T10:38:05.2347501Z [1m[92m  Downloaded[0m serde_core v1.0.229
+2026-09-16T10:38:05.2560341Z [1m[92m  Downloaded[0m smithay-client-toolkit v0.19.2
+2026-09-16T10:38:05.3099835Z [1m[92m  Downloaded[0m toml_edit v0.22.27
+2026-09-16T10:38:05.3490045Z [1m[92m  Downloaded[0m wasm-encoder v0.258.0
+2026-09-16T10:38:05.3816883Z [1m[92m  Downloaded[0m wayland-protocols-plasma v0.3.12
+2026-09-16T10:38:05.4253193Z [1m[92m  Downloaded[0m wit-bindgen v0.57.1
+2026-09-16T10:38:05.4555686Z [1m[92m  Downloaded[0m xkeysym v0.2.1
+2026-09-16T10:38:05.4699868Z [1m[92m  Downloaded[0m zerocopy-derive v0.8.56
+2026-09-16T10:38:05.5582442Z [1m[92m  Downloaded[0m zerovec v0.11.8
+2026-09-16T10:38:05.6171368Z [1m[92m  Downloaded[0m zip v2.4.2
+2026-09-16T10:38:05.6476727Z [1m[92m  Downloaded[0m bumpalo v3.20.3
+2026-09-16T10:38:05.6656705Z [1m[92m  Downloaded[0m cap-primitives v4.0.3
+2026-09-16T10:38:06.1112170Z [1m[92m  Downloaded[0m cc v1.4.5
+2026-09-16T10:38:06.1352146Z [1m[92m  Downloaded[0m combine v4.6.8
+2026-09-16T10:38:06.1633091Z [1m[92m  Downloaded[0m cpp_demangle v0.5.1
+2026-09-16T10:38:06.1820903Z [1m[92m  Downloaded[0m cranelift-codegen-meta v0.135.1
+2026-09-16T10:38:06.2098636Z [1m[92m  Downloaded[0m cranelift-isle v0.135.1
+2026-09-16T10:38:06.2591750Z [1m[92m  Downloaded[0m der v0.7.10
+2026-09-16T10:38:06.3031815Z [1m[92m  Downloaded[0m icu_normalizer v2.1.1
+2026-09-16T10:38:06.3306388Z [1m[92m  Downloaded[0m icu_normalizer_data v2.1.1
+2026-09-16T10:38:06.3451187Z [1m[92m  Downloaded[0m memchr v2.8.3
+2026-09-16T10:38:06.3900974Z [1m[92m  Downloaded[0m objc2 v0.5.2
+2026-09-16T10:38:06.4564880Z [1m[92m  Downloaded[0m regalloc2 v0.15.2
+2026-09-16T10:38:06.4901113Z [1m[92m  Downloaded[0m serde_json v1.0.150
+2026-09-16T10:38:06.5529699Z [1m[92m  Downloaded[0m walkdir v2.5.0
+2026-09-16T10:38:06.5701086Z [1m[92m  Downloaded[0m wasm-bindgen-futures v0.4.78
+2026-09-16T10:38:06.5771895Z [1m[92m  Downloaded[0m wasm-bindgen-macro v0.2.128
+2026-09-16T10:38:06.5851911Z [1m[92m  Downloaded[0m wasm-bindgen-shared v0.2.128
+2026-09-16T10:38:06.5935892Z [1m[92m  Downloaded[0m wasm-metadata v0.254.0
+2026-09-16T10:38:06.6166575Z [1m[92m  Downloaded[0m wasm-metadata v0.258.0
+2026-09-16T10:38:06.6388980Z [1m[92m  Downloaded[0m wasmtime-internal-component-macro v48.0.1
+2026-09-16T10:38:06.7742509Z [1m[92m  Downloaded[0m windows-implement v0.60.2
+2026-09-16T10:38:06.7822634Z [1m[92m  Downloaded[0m windows-numerics v0.3.1
+2026-09-16T10:38:06.7935987Z [1m[92m  Downloaded[0m zerocopy v0.8.56
+2026-09-16T10:38:07.0017424Z [1m[92m  Downloaded[0m futures-util v0.3.34
+2026-09-16T10:38:07.1357859Z [1m[92m  Downloaded[0m objc2-foundation v0.2.2
+2026-09-16T10:38:07.8454452Z [1m[92m  Downloaded[0m quick-xml v0.41.0
+2026-09-16T10:38:07.8814857Z [1m[92m  Downloaded[0m tiny-skia v0.11.4
+2026-09-16T10:38:08.0104036Z [1m[92m  Downloaded[0m wasm-bindgen v0.2.128
+2026-09-16T10:38:08.0294151Z [1m[92m  Downloaded[0m wasm-bindgen-macro-support v0.2.128
+2026-09-16T10:38:08.0422276Z [1m[92m  Downloaded[0m wasm-encoder v0.254.0
+2026-09-16T10:38:08.0746296Z [1m[92m  Downloaded[0m wasmparser v0.258.0
+2026-09-16T10:38:08.1355154Z [1m[92m  Downloaded[0m windows-core v0.62.2
+2026-09-16T10:38:08.1630834Z [1m[92m  Downloaded[0m windows-future v0.3.2
+2026-09-16T10:38:08.1802739Z [1m[92m  Downloaded[0m windows-interface v0.59.3
+2026-09-16T10:38:08.1884131Z [1m[92m  Downloaded[0m windows-link v0.2.1
+2026-09-16T10:38:08.1955773Z [1m[92m  Downloaded[0m windows-result v0.4.1
+2026-09-16T10:38:08.2082438Z [1m[92m  Downloaded[0m windows-strings v0.5.1
+2026-09-16T10:38:08.2234152Z [1m[92m  Downloaded[0m windows-targets v0.52.6
+2026-09-16T10:38:08.2302509Z [1m[92m  Downloaded[0m wit-component v0.254.0
+2026-09-16T10:38:09.1289065Z [1m[92m  Downloaded[0m x11rb v0.13.2
+2026-09-16T10:38:09.1887055Z [1m[92m  Downloaded[0m android-activity v0.6.1
+2026-09-16T10:38:09.2384385Z [1m[92m  Downloaded[0m curve25519-dalek v4.1.3
+2026-09-16T10:38:09.2953335Z [1m[92m  Downloaded[0m objc2-ui-kit v0.2.2
+2026-09-16T10:38:09.5376143Z [1m[92m  Downloaded[0m syn v3.0.5
+2026-09-16T10:38:09.6141028Z [1m[92m  Downloaded[0m toml_datetime v0.6.11
+2026-09-16T10:38:09.6220937Z [1m[92m  Downloaded[0m toml_datetime v1.1.1+spec-1.1.0
+2026-09-16T10:38:09.6309600Z [1m[92m  Downloaded[0m toml_write v0.1.2
+2026-09-16T10:38:09.6402922Z [1m[92m  Downloaded[0m windows-collections v0.3.2
+2026-09-16T10:38:09.6498375Z [1m[92m  Downloaded[0m wit-bindgen v0.61.1
+2026-09-16T10:38:09.6814406Z [1m[92m  Downloaded[0m wit-bindgen-core v0.61.1
+2026-09-16T10:38:09.6936530Z [1m[92m  Downloaded[0m wit-bindgen-rust-macro v0.61.1
+2026-09-16T10:38:09.7012145Z [1m[92m  Downloaded[0m writeable v0.6.4
+2026-09-16T10:38:09.7179967Z [1m[92m  Downloaded[0m x11-dl v2.21.0
+2026-09-16T10:38:09.7507990Z [1m[92m  Downloaded[0m errno v0.3.14
+2026-09-16T10:38:09.7632753Z [1m[92m  Downloaded[0m flate2 v1.1.10
+2026-09-16T10:38:09.8085300Z [1m[92m  Downloaded[0m fnv v1.0.7
+2026-09-16T10:38:09.8159491Z [1m[92m  Downloaded[0m foldhash v0.2.0
+2026-09-16T10:38:09.8250714Z [1m[92m  Downloaded[0m foreign-types-macros v0.2.4
+2026-09-16T10:38:09.8326600Z [1m[92m  Downloaded[0m foreign-types-shared v0.3.1
+2026-09-16T10:38:09.8386692Z [1m[92m  Downloaded[0m fs-set-times v0.20.3
+2026-09-16T10:38:09.8501106Z [1m[92m  Downloaded[0m gethostname v1.1.0
+2026-09-16T10:38:09.8627971Z [1m[92m  Downloaded[0m ndk-sys v0.6.0+11769913
+2026-09-16T10:38:09.8812307Z [1m[92m  Downloaded[0m objc2-app-kit v0.2.2
+2026-09-16T10:38:10.5897834Z [1m[92m  Downloaded[0m simd_cesu8 v1.2.0
+2026-09-16T10:38:10.6167790Z [1m[92m  Downloaded[0m syn v2.0.119
+2026-09-16T10:38:10.6888360Z [1m[92m  Downloaded[0m toml_edit v0.25.13+spec-1.1.0
+2026-09-16T10:38:10.7221723Z [1m[92m  Downloaded[0m toml_parser v1.1.3+spec-1.1.0
+2026-09-16T10:38:10.7388168Z [1m[92m  Downloaded[0m tracing-attributes v0.1.31
+2026-09-16T10:38:10.7607161Z [1m[92m  Downloaded[0m ttf-parser v0.25.1
+2026-09-16T10:38:10.8418953Z [1m[92m  Downloaded[0m unicode-ident v1.0.24
+2026-09-16T10:38:10.8634254Z [1m[92m  Downloaded[0m wit-bindgen-rust v0.61.1
+2026-09-16T10:38:10.8765665Z [1m[92m  Downloaded[0m find-msvc-tools v0.1.12
+2026-09-16T10:38:10.8899235Z [1m[92m  Downloaded[0m foreign-types v0.5.0
+2026-09-16T10:38:10.8972542Z [1m[92m  Downloaded[0m futures v0.3.34
+2026-09-16T10:38:10.9435586Z [1m[92m  Downloaded[0m futures-channel v0.3.34
+2026-09-16T10:38:10.9584499Z [1m[92m  Downloaded[0m getrandom v0.2.17
+2026-09-16T10:38:10.9836064Z [1m[92m  Downloaded[0m getrandom v0.3.4
+2026-09-16T10:38:11.0161691Z [1m[92m  Downloaded[0m object v0.39.1
+2026-09-16T10:38:11.1065791Z [1m[92m  Downloaded[0m rustix v0.38.44
+2026-09-16T10:38:11.3285922Z [1m[92m  Downloaded[0m tracing-core v0.1.36
+2026-09-16T10:38:11.3510074Z [1m[92m  Downloaded[0m typenum v1.20.1
+2026-09-16T10:38:11.3711594Z [1m[92m  Downloaded[0m rustix v1.1.4
+2026-09-16T10:38:11.9629013Z [1m[92m  Downloaded[0m unicode-width v0.2.2
+2026-09-16T10:38:11.9795117Z [1m[92m  Downloaded[0m winnow v0.7.15
+2026-09-16T10:38:12.0568073Z [1m[92m  Downloaded[0m winnow v1.0.4
+2026-09-16T10:38:12.1357999Z [1m[92m  Downloaded[0m wit-parser v0.254.0
+2026-09-16T10:38:12.5278674Z [1m[92m  Downloaded[0m wit-parser v0.258.0
+2026-09-16T10:38:13.1537000Z [1m[92m  Downloaded[0m tokio v1.53.1
+2026-09-16T10:38:13.5524947Z [1m[92m  Downloaded[0m windows_i686_gnullvm v0.52.6
+2026-09-16T10:38:13.5687221Z [1m[92m  Downloaded[0m wit-component v0.258.0
+2026-09-16T10:38:14.8441373Z [1m[92m  Downloaded[0m fiat-crypto v0.2.9
+2026-09-16T10:38:14.8789891Z [1m[92m  Downloaded[0m tracing v0.1.44
+2026-09-16T10:38:14.9623840Z [1m[92m  Downloaded[0m x11rb-protocol v0.13.2
+2026-09-16T10:38:15.0117533Z [1m[92m  Downloaded[0m cranelift-codegen v0.135.1
+2026-09-16T10:38:15.2049546Z [1m[92m  Downloaded[0m utf8_iter v1.0.4
+2026-09-16T10:38:15.2138681Z [1m[92m  Downloaded[0m version_check v0.9.5
+2026-09-16T10:38:15.2240855Z [1m[92m  Downloaded[0m encoding_rs v0.8.35
+2026-09-16T10:38:15.3050669Z [1m[92m  Downloaded[0m url v2.5.8
+2026-09-16T10:38:15.3228414Z [1m[92m  Downloaded[0m uuid v1.26.0
+2026-09-16T10:38:15.3450973Z [1m[92m  Downloaded[0m wasi v0.11.1+wasi-snapshot-preview1
+2026-09-16T10:38:15.3579946Z [1m[92m  Downloaded[0m wasmtime-internal-component-util v48.0.1
+2026-09-16T10:38:15.3635375Z [1m[92m  Downloaded[0m wasmtime-internal-jit-icache-coherence v48.0.1
+2026-09-16T10:38:15.3726280Z [1m[92m  Downloaded[0m wat v1.258.0
+2026-09-16T10:38:15.3802774Z [1m[92m  Downloaded[0m windows_aarch64_gnullvm v0.52.6
+2026-09-16T10:38:15.3969613Z [1m[92m  Downloaded[0m windows_x86_64_gnullvm v0.52.6
+2026-09-16T10:38:15.4125879Z [1m[92m  Downloaded[0m heck v0.5.0
+2026-09-16T10:38:15.4252864Z [1m[92m  Downloaded[0m hermit-abi v0.5.3
+2026-09-16T10:38:15.4330174Z [1m[92m  Downloaded[0m id-arena v2.3.0
+2026-09-16T10:38:15.4438592Z [1m[92m  Downloaded[0m unicode-segmentation v1.13.3
+2026-09-16T10:38:15.4616746Z [1m[92m  Downloaded[0m wasmprinter v0.254.0
+2026-09-16T10:38:15.8182944Z [1m[92m  Downloaded[0m wasmtime-internal-core v48.0.1
+2026-09-16T10:38:15.8438553Z [1m[92m  Downloaded[0m wasmtime-internal-jit-debug v48.0.1
+2026-09-16T10:38:15.8520869Z [1m[92m  Downloaded[0m wasmtime-internal-unwinder v48.0.1
+2026-09-16T10:38:15.8648729Z [1m[92m  Downloaded[0m wasmtime-wasi-io v48.0.1
+2026-09-16T10:38:15.8742428Z [1m[92m  Downloaded[0m getrandom v0.4.3
+2026-09-16T10:38:15.9102416Z [1m[92m  Downloaded[0m icu_provider v2.1.1
+2026-09-16T10:38:15.9294081Z [1m[92m  Downloaded[0m idna v1.1.0
+2026-09-16T10:38:15.9507452Z [1m[92m  Downloaded[0m io-extras v0.19.0
+2026-09-16T10:38:15.9691455Z [1m[92m  Downloaded[0m io-lifetimes v2.0.4
+2026-09-16T10:38:15.9832835Z [1m[92m  Downloaded[0m io-lifetimes v3.0.1
+2026-09-16T10:38:16.0004137Z [1m[92m  Downloaded[0m itoa v1.0.18
+2026-09-16T10:38:16.0120196Z [1m[92m  Downloaded[0m js-sys v0.3.105
+2026-09-16T10:38:16.0292520Z [1m[92m  Downloaded[0m hashbrown v0.17.1
+2026-09-16T10:38:16.0689696Z [1m[92m  Downloaded[0m heapless v0.7.17
+2026-09-16T10:38:16.1304440Z [1m[92m  Downloaded[0m icu_collections v2.1.1
+2026-09-16T10:38:16.1946789Z [1m[92m  Downloaded[0m ipnet v2.12.2
+2026-09-16T10:38:16.2074454Z [1m[92m  Downloaded[0m pcre2-sys v0.2.10
+2026-09-16T10:38:16.2908921Z [1m[92m  Downloaded[0m hash32 v0.2.1
+2026-09-16T10:38:16.3034327Z [1m[92m  Downloaded[0m icu_properties_data v2.1.2
+2026-09-16T10:38:16.3999791Z [1m[92m  Downloaded[0m idna_adapter v1.2.1
+2026-09-16T10:38:16.4079999Z [1m[92m  Downloaded[0m indexmap v2.14.2
+2026-09-16T10:38:16.4419163Z [1m[92m  Downloaded[0m jni-macros v0.22.4
+2026-09-16T10:38:16.4542143Z [1m[92m  Downloaded[0m wasip2 v1.0.4+wasi-0.2.12
+2026-09-16T10:38:16.4781736Z [1m[92m  Downloaded[0m wayland-backend v0.3.17
+2026-09-16T10:38:16.5187068Z [1m[92m  Downloaded[0m hashbrown v0.16.1
+2026-09-16T10:38:16.5550994Z [1m[92m  Downloaded[0m icu_properties v2.1.2
+2026-09-16T10:38:16.5720053Z [1m[92m  Downloaded[0m winit v0.30.13
+2026-09-16T10:38:16.7345396Z [1m[92m  Downloaded[0m gimli v0.33.0
+2026-09-16T10:38:16.7803702Z [1m[92m  Downloaded[0m itertools v0.14.0
+2026-09-16T10:38:16.8399756Z [1m[92m  Downloaded[0m wast v258.0.0
+2026-09-16T10:38:17.5237924Z [1m[92m  Downloaded[0m wasmtime-wasi v48.0.1
+2026-09-16T10:38:17.7391633Z [1m[92m  Downloaded[0m jni v0.22.4
+2026-09-16T10:38:17.8034448Z [1m[92m  Downloaded[0m wasmparser v0.254.0
+2026-09-16T10:38:17.8620447Z [1m[92m  Downloaded[0m windows_i686_msvc v0.52.6
+2026-09-16T10:38:17.8832742Z [1m[92m  Downloaded[0m linux-raw-sys v0.12.1
+2026-09-16T10:38:18.2190672Z [1m[92m  Downloaded[0m wasmtime-internal-cranelift v48.0.1
+2026-09-16T10:38:18.2621288Z [1m[92m  Downloaded[0m log v0.4.34
+2026-09-16T10:38:18.2796291Z [1m[92m  Downloaded[0m wasmtime-environ v48.0.1
+2026-09-16T10:38:18.7252143Z [1m[92m  Downloaded[0m litemap v0.8.3
+2026-09-16T10:38:18.7454384Z [1m[92m  Downloaded[0m windows_aarch64_msvc v0.52.6
+2026-09-16T10:38:18.7677898Z [1m[92m  Downloaded[0m leb128fmt v0.1.0
+2026-09-16T10:38:18.7756138Z [1m[92m  Downloaded[0m libm v0.2.16
+2026-09-16T10:38:18.8714285Z [1m[92m  Downloaded[0m lock_api v0.4.14
+2026-09-16T10:38:18.8799761Z [1m[92m  Downloaded[0m md-5 v0.10.6
+2026-09-16T10:38:18.8956741Z [1m[92m  Downloaded[0m memmap2 v0.9.11
+2026-09-16T10:38:18.9083454Z [1m[92m  Downloaded[0m minisign-verify v0.2.4
+2026-09-16T10:38:18.9248061Z [1m[92m  Downloaded[0m miniz_oxide v0.9.1
+2026-09-16T10:38:18.9409830Z [1m[92m  Downloaded[0m windows_i686_gnu v0.52.6
+2026-09-16T10:38:18.9728770Z [1m[92m  Downloaded[0m windows_x86_64_gnu v0.52.6
+2026-09-16T10:38:19.0014150Z [1m[92m  Downloaded[0m windows_x86_64_msvc v0.52.6
+2026-09-16T10:38:19.0213176Z [1m[92m  Downloaded[0m lexopt v0.3.1
+2026-09-16T10:38:19.0351562Z [1m[92m  Downloaded[0m maybe-owned v0.3.4
+2026-09-16T10:38:19.0463259Z [1m[92m  Downloaded[0m libloading v0.8.9
+2026-09-16T10:38:19.0724001Z [1m[92m  Downloaded[0m libredox v0.1.23
+2026-09-16T10:38:19.0790769Z [1m[92m  Downloaded[0m mio v1.2.3
+2026-09-16T10:38:19.1312166Z [1m[92m  Downloaded[0m mach2 v0.6.0
+2026-09-16T10:38:19.1735435Z [1m[92m  Downloaded[0m orbclient v0.3.55
+2026-09-16T10:38:19.2103028Z [1m[92m  Downloaded[0m wayland-cursor v0.31.14
+2026-09-16T10:38:19.2176752Z [1m[92m  Downloaded[0m ndk v0.9.0
+2026-09-16T10:38:19.2408025Z [1m[92m  Downloaded[0m wayland-sys v0.31.11
+2026-09-16T10:38:19.2511749Z [1m[92m  Downloaded[0m wayland-protocols-wlr v0.3.12
+2026-09-16T10:38:19.2703447Z [1m[92m  Downloaded[0m wayland-scanner v0.31.11
+2026-09-16T10:38:19.2909703Z [1m[92m  Downloaded[0m wayland-client v0.31.15
+2026-09-16T10:38:19.3079992Z [1m[92m  Downloaded[0m wasmtime v48.0.1
+2026-09-16T10:38:19.5045509Z [1m[92m  Downloaded[0m wayland-protocols v0.32.13
+2026-09-16T10:38:19.5730652Z [1m[92m  Downloaded[0m libc v0.2.189
+2026-09-16T10:38:20.4152984Z [1m[92m  Downloaded[0m web-sys v0.3.105
+2026-09-16T10:38:21.7050923Z [1m[92m  Downloaded[0m windows-sys v0.52.0
+2026-09-16T10:38:21.9991102Z [1m[92m  Downloaded[0m windows-sys v0.59.0
+2026-09-16T10:38:22.2868128Z [1m[92m  Downloaded[0m windows-sys v0.61.2
+2026-09-16T10:38:23.1537904Z [1m[92m  Downloaded[0m linux-raw-sys v0.4.15
+2026-09-16T10:38:23.4022939Z [1m[92m  Downloaded[0m windows v0.62.2
+2026-09-16T10:38:24.9941941Z ##[group]Run python .github/workflows/check_toolchain_contract.py --metadata cargo-metadata.json
+2026-09-16T10:38:24.9942730Z [36;1mpython .github/workflows/check_toolchain_contract.py --metadata cargo-metadata.json[0m
+2026-09-16T10:38:25.0015064Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+2026-09-16T10:38:25.0015569Z env:
+2026-09-16T10:38:25.0015777Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-09-16T10:38:25.0016045Z   CARGO_INCREMENTAL: 0
+2026-09-16T10:38:25.0016260Z   CARGO_TERM_COLOR: always
+2026-09-16T10:38:25.0016565Z   pythonLocation: C:\hostedtoolcache\windows\Python\3.12.10\x64
+2026-09-16T10:38:25.0017049Z   PKG_CONFIG_PATH: C:\hostedtoolcache\windows\Python\3.12.10\x64/lib/pkgconfig
+2026-09-16T10:38:25.0017495Z   Python_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.12.10\x64
+2026-09-16T10:38:25.0017895Z   Python2_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.12.10\x64
+2026-09-16T10:38:25.0018323Z   Python3_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.12.10\x64
+2026-09-16T10:38:25.0018641Z ##[endgroup]
+2026-09-16T10:38:25.8413012Z Toolchain contract passed: 31 members inherit Rust 1.98.1 and edition 2024 and resolved dependency requirements; negative fixtures passed.
+2026-09-16T10:38:26.0029101Z ##[group]Run cargo fmt --all --check
+2026-09-16T10:38:26.0029479Z [36;1mcargo fmt --all --check[0m
+2026-09-16T10:38:26.0101747Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+2026-09-16T10:38:26.0102112Z env:
+2026-09-16T10:38:26.0111753Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-09-16T10:38:26.0112239Z   CARGO_INCREMENTAL: 0
+2026-09-16T10:38:26.0112616Z   CARGO_TERM_COLOR: always
+2026-09-16T10:38:26.0112943Z   pythonLocation: C:\hostedtoolcache\windows\Python\3.12.10\x64
+2026-09-16T10:38:26.0113416Z   PKG_CONFIG_PATH: C:\hostedtoolcache\windows\Python\3.12.10\x64/lib/pkgconfig
+2026-09-16T10:38:26.0113870Z   Python_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.12.10\x64
+2026-09-16T10:38:26.0114276Z   Python2_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.12.10\x64
+2026-09-16T10:38:26.0114693Z   Python3_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.12.10\x64
+2026-09-16T10:38:26.0115034Z ##[endgroup]
+2026-09-16T10:38:30.6136637Z ##[group]Run New-Item -ItemType Directory -Force target | Out-Null
+2026-09-16T10:38:30.6137224Z [36;1mNew-Item -ItemType Directory -Force target | Out-Null[0m
+2026-09-16T10:38:30.6137953Z [36;1mcargo clippy --workspace --all-targets --locked --message-format=json 1> target/clippy-census.jsonl 2> target/clippy-census.stderr.log[0m
+2026-09-16T10:38:30.6138608Z [36;1m$clippyExit = $LASTEXITCODE[0m
+2026-09-16T10:38:30.6139102Z [36;1mif ($clippyExit -ne 0) {[0m
+2026-09-16T10:38:30.6139660Z [36;1m  "Clippy census process failed with exit $clippyExit; ratchet not evaluated." | Set-Content target/clippy-ratchet.log[0m
+2026-09-16T10:38:30.6140245Z [36;1m  exit $clippyExit[0m
+2026-09-16T10:38:30.6140470Z [36;1m}[0m
+2026-09-16T10:38:30.6140667Z [36;1m$rustcDetails = rustc -vV[0m
+2026-09-16T10:38:30.6141135Z [36;1m$hostTarget = (($rustcDetails | Where-Object { $_ -like 'host: *' }) -replace '^host: ', '').Trim()[0m
+2026-09-16T10:38:30.6141831Z [36;1m$toolchain = (($rustcDetails | Where-Object { $_ -like 'release: *' }) -replace '^release: ', '').Trim()[0m
+2026-09-16T10:38:30.6142493Z [36;1mif (!$hostTarget -or !$toolchain) { throw 'rustc did not report host target and release' }[0m
+2026-09-16T10:38:30.6143999Z [36;1mpython .github/workflows/check_clippy_ratchet.py check --diagnostics target/clippy-census.jsonl --baseline .github/workflows/clippy-baseline.json --source-root . --platform 'Windows' --target $hostTarget --toolchain $toolchain --exclude-source-path cargo-metadata.json 2>&1 | Tee-Object -FilePath target/clippy-ratchet.log[0m
+2026-09-16T10:38:30.6145346Z [36;1mexit $LASTEXITCODE[0m
+2026-09-16T10:38:30.6216523Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+2026-09-16T10:38:30.6216877Z env:
+2026-09-16T10:38:30.6217082Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-09-16T10:38:30.6217353Z   CARGO_INCREMENTAL: 0
+2026-09-16T10:38:30.6217573Z   CARGO_TERM_COLOR: always
+2026-09-16T10:38:30.6217895Z   pythonLocation: C:\hostedtoolcache\windows\Python\3.12.10\x64
+2026-09-16T10:38:30.6218365Z   PKG_CONFIG_PATH: C:\hostedtoolcache\windows\Python\3.12.10\x64/lib/pkgconfig
+2026-09-16T10:38:30.6218818Z   Python_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.12.10\x64
+2026-09-16T10:38:30.6219223Z   Python2_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.12.10\x64
+2026-09-16T10:38:30.6219637Z   Python3_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.12.10\x64
+2026-09-16T10:38:30.6219970Z ##[endgroup]
+2026-09-16T10:41:23.6893494Z clippy-ratchet: 755 reviewed occurrence(s); no new or stale debt; source=5afb76082739ac3c463c0f6d879796aa1557f09ad6794071c3be460eae6a6695
+2026-09-16T10:41:23.7563846Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-09-16T10:41:23.7565827Z ##[group]Run actions/upload-artifact@v4
+2026-09-16T10:41:23.7566232Z with:
+2026-09-16T10:41:23.7566543Z   name: clippy-ratchet-Windows
+2026-09-16T10:41:23.7567349Z   path: target/clippy-census.jsonl
+target/clippy-census.stderr.log
+target/clippy-ratchet.log
+
+2026-09-16T10:41:23.7568254Z   if-no-files-found: warn
+2026-09-16T10:41:23.7568673Z   compression-level: 6
+2026-09-16T10:41:23.7568957Z   overwrite: false
+2026-09-16T10:41:23.7569257Z   include-hidden-files: false
+2026-09-16T10:41:23.7569482Z env:
+2026-09-16T10:41:23.7569696Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-09-16T10:41:23.7570022Z   CARGO_INCREMENTAL: 0
+2026-09-16T10:41:23.7570382Z   CARGO_TERM_COLOR: always
+2026-09-16T10:41:23.7570752Z   pythonLocation: C:\hostedtoolcache\windows\Python\3.12.10\x64
+2026-09-16T10:41:23.7571254Z   PKG_CONFIG_PATH: C:\hostedtoolcache\windows\Python\3.12.10\x64/lib/pkgconfig
+2026-09-16T10:41:23.7571751Z   Python_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.12.10\x64
+2026-09-16T10:41:23.7572215Z   Python2_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.12.10\x64
+2026-09-16T10:41:23.7572687Z   Python3_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.12.10\x64
+2026-09-16T10:41:23.7573305Z ##[endgroup]
+2026-09-16T10:41:23.9563806Z (node:8112) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-09-16T10:41:23.9564535Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-09-16T10:41:23.9632943Z Multiple search paths detected. Calculating the least common ancestor of all paths
+2026-09-16T10:41:23.9640111Z The least common ancestor is D:\a\BareLine\BareLine\target. This will be the root directory of the artifact
+2026-09-16T10:41:23.9641616Z With the provided path, there will be 3 files uploaded
+2026-09-16T10:41:23.9645484Z Artifact name is valid!
+2026-09-16T10:41:23.9646930Z Root directory input is valid!
+2026-09-16T10:41:24.2286218Z Beginning upload of artifact content to blob storage
+2026-09-16T10:41:24.3024877Z (node:8112) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+2026-09-16T10:41:24.5671210Z Uploaded bytes 300515
+2026-09-16T10:41:24.6150712Z Finished uploading artifact content to blob storage!
+2026-09-16T10:41:24.6152474Z SHA256 digest of uploaded artifact zip is 61e94160ac91631a0252269a3395b2ed141682f65c42e2c1485b349727c4d249
+2026-09-16T10:41:24.6155006Z Finalizing artifact upload
+2026-09-16T10:41:24.8402243Z Artifact clippy-ratchet-Windows.zip successfully finalized. Artifact ID 10442721226
+2026-09-16T10:41:24.8403657Z Artifact clippy-ratchet-Windows has been successfully uploaded! Final size is 300515 bytes. Artifact ID is 10442721226
+2026-09-16T10:41:24.8414984Z Artifact download URL: https://github.com/TheWoovee/BareLine/actions/runs/35085954726/artifacts/10442721226
+2026-09-16T10:41:24.8870337Z ##[group]Run cargo test --workspace --locked
+2026-09-16T10:41:24.8870771Z [36;1mcargo test --workspace --locked[0m
+2026-09-16T10:41:24.8944531Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+2026-09-16T10:41:24.8945321Z env:
+2026-09-16T10:41:24.8945535Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-09-16T10:41:24.8945828Z   CARGO_INCREMENTAL: 0
+2026-09-16T10:41:24.8946042Z   CARGO_TERM_COLOR: always
+2026-09-16T10:41:24.8946349Z   pythonLocation: C:\hostedtoolcache\windows\Python\3.12.10\x64
+2026-09-16T10:41:24.8946834Z   PKG_CONFIG_PATH: C:\hostedtoolcache\windows\Python\3.12.10\x64/lib/pkgconfig
+2026-09-16T10:41:24.8947338Z   Python_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.12.10\x64
+2026-09-16T10:41:24.8947994Z   Python2_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.12.10\x64
+2026-09-16T10:41:24.8948489Z   Python3_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.12.10\x64
+2026-09-16T10:41:24.8948899Z ##[endgroup]
+2026-09-16T10:41:25.8380892Z [1m[92m   Compiling[0m serde_core v1.0.229
+2026-09-16T10:41:25.8381789Z [1m[92m   Compiling[0m foldhash v0.2.0
+2026-09-16T10:41:25.8383299Z [1m[92m   Compiling[0m cfg-if v1.0.4
+2026-09-16T10:41:25.8386954Z [1m[92m   Compiling[0m equivalent v1.0.2
+2026-09-16T10:41:25.9002028Z [1m[92m   Compiling[0m typenum v1.20.1
+2026-09-16T10:41:25.9138626Z [1m[92m   Compiling[0m subtle v2.6.1
+2026-09-16T10:41:26.0833629Z [1m[92m   Compiling[0m cpufeatures v0.2.17
+2026-09-16T10:41:26.0890963Z [1m[92m   Compiling[0m stable_deref_trait v1.2.1
+2026-09-16T10:41:26.1498995Z [1m[92m   Compiling[0m memchr v2.8.3
+2026-09-16T10:41:26.1588770Z [1m[92m   Compiling[0m log v0.4.34
+2026-09-16T10:41:26.4228161Z [1m[92m   Compiling[0m zmij v1.0.23
+2026-09-16T10:41:26.9128330Z [1m[92m   Compiling[0m itoa v1.0.18
+2026-09-16T10:41:27.1415030Z [1m[92m   Compiling[0m generic-array v0.14.7
+2026-09-16T10:41:27.1716800Z [1m[92m   Compiling[0m winnow v0.7.15
+2026-09-16T10:41:27.5515980Z [1m[92m   Compiling[0m toml_write v0.1.2
+2026-09-16T10:41:27.8093933Z [1m[92m   Compiling[0m scopeguard v1.2.0
+2026-09-16T10:41:27.8965419Z [1m[92m   Compiling[0m allocator-api2 v0.2.21
+2026-09-16T10:41:28.0662272Z [1m[92m   Compiling[0m crypto-common v0.1.7
+2026-09-16T10:41:28.2326223Z [1m[92m   Compiling[0m block-buffer v0.10.4
+2026-09-16T10:41:28.3709895Z [1m[92m   Compiling[0m digest v0.10.7
+2026-09-16T10:41:28.3936015Z [1m[92m   Compiling[0m bumpalo v3.20.3
+2026-09-16T10:41:28.6397494Z [1m[92m   Compiling[0m sha2 v0.10.9
+2026-09-16T10:41:28.7664971Z [1m[92m   Compiling[0m lock_api v0.4.14
+2026-09-16T10:41:29.0703507Z [1m[92m   Compiling[0m thiserror v2.0.20
+2026-09-16T10:41:29.1630900Z [1m[92m   Compiling[0m byteorder v1.5.0
+2026-09-16T10:41:29.3101766Z [1m[92m   Compiling[0m spin v0.9.9
+2026-09-16T10:41:29.3871985Z [1m[92m   Compiling[0m serde v1.0.229
+2026-09-16T10:41:29.5530843Z [1m[92m   Compiling[0m hashbrown v0.17.1
+2026-09-16T10:41:29.6145243Z [1m[92m   Compiling[0m hash32 v0.2.1
+2026-09-16T10:41:29.8513512Z [1m[92m   Compiling[0m serde_json v1.0.150
+2026-09-16T10:41:30.1269777Z [1m[92m   Compiling[0m crc32fast v1.5.1
+2026-09-16T10:41:30.3798015Z [1m[92m   Compiling[0m serde_spanned v0.6.9
+2026-09-16T10:41:30.4421224Z [1m[92m   Compiling[0m indexmap v2.14.2
+2026-09-16T10:41:30.5209650Z [1m[92m   Compiling[0m toml_datetime v0.6.11
+2026-09-16T10:41:30.5364446Z [1m[92m   Compiling[0m heapless v0.7.17
+2026-09-16T10:41:30.9633216Z [1m[92m   Compiling[0m cobs v0.3.0
+2026-09-16T10:41:31.2153753Z [1m[92m   Compiling[0m bareline-platform v0.1.0 (D:\a\BareLine\BareLine\crates\platform)
+2026-09-16T10:41:31.3877297Z [1m[92m   Compiling[0m postcard v1.1.3
+2026-09-16T10:41:31.5649807Z [1m[92m   Compiling[0m toml_edit v0.22.27
+2026-09-16T10:41:31.9410219Z [1m[92m   Compiling[0m simd-adler32 v0.3.10
+2026-09-16T10:41:32.3034564Z [1m[92m   Compiling[0m windows-link v0.2.1
+2026-09-16T10:41:32.3586890Z [1m[92m   Compiling[0m adler2 v2.0.1
+2026-09-16T10:41:32.3703409Z [1m[92m   Compiling[0m zopfli v0.8.3
+2026-09-16T10:41:32.4988777Z [1m[92m   Compiling[0m miniz_oxide v0.9.1
+2026-09-16T10:41:33.1402463Z [1m[92m   Compiling[0m minisign-verify v0.2.4
+2026-09-16T10:41:33.9152799Z [1m[92m   Compiling[0m flate2 v1.1.10
+2026-09-16T10:41:33.9340018Z [1m[92m   Compiling[0m getrandom v0.4.3
+2026-09-16T10:41:34.1338200Z [1m[92m   Compiling[0m jobserver v0.1.35
+2026-09-16T10:41:34.5511975Z [1m[92m   Compiling[0m zip v2.4.2
+2026-09-16T10:41:34.6437324Z [1m[92m   Compiling[0m cc v1.4.5
+2026-09-16T10:41:34.9161663Z [1m[92m   Compiling[0m bareline-renderer v0.1.0 (D:\a\BareLine\BareLine\crates\renderer)
+2026-09-16T10:41:35.2430387Z [1m[92m   Compiling[0m unicode-segmentation v1.13.3
+2026-09-16T10:41:35.9489333Z [1m[92m   Compiling[0m bareline-extensions-protocol v0.1.0 (D:\a\BareLine\BareLine\crates\extensions-protocol)
+2026-09-16T10:41:37.0533946Z [1m[92m   Compiling[0m bareline-commands v0.1.0 (D:\a\BareLine\BareLine\crates\commands)
+2026-09-16T10:41:37.4650576Z [1m[92m   Compiling[0m bareline-unicode-fold v0.1.0 (D:\a\BareLine\BareLine\crates\unicode-fold)
+2026-09-16T10:41:37.8594721Z [1m[92m   Compiling[0m encoding_rs v0.8.35
+2026-09-16T10:41:39.7604080Z [1m[92m   Compiling[0m libc v0.2.189
+2026-09-16T10:41:39.7786445Z [1m[92m   Compiling[0m bitflags v2.13.1
+2026-09-16T10:41:39.9134784Z [1m[92m   Compiling[0m libm v0.2.16
+2026-09-16T10:41:40.6901909Z [1m[92m   Compiling[0m base64 v0.22.1
+2026-09-16T10:41:41.1020148Z [1m[92m   Compiling[0m quick-xml v0.41.0
+2026-09-16T10:41:41.3636904Z [1m[92m   Compiling[0m windows_x86_64_msvc v0.52.6
+2026-09-16T10:41:41.4200285Z [1m[92m   Compiling[0m windows-sys v0.61.2
+2026-09-16T10:41:41.5514609Z [1m[92m   Compiling[0m bareline-document v0.1.0 (D:\a\BareLine\BareLine\crates\document)
+2026-09-16T10:41:42.4942855Z [1m[92m   Compiling[0m windows-targets v0.52.6
+2026-09-16T10:41:42.5536736Z [1m[92m   Compiling[0m anyhow v1.0.104
+2026-09-16T10:41:43.2654335Z [1m[92m   Compiling[0m windows-strings v0.5.1
+2026-09-16T10:41:43.3526562Z [1m[92m   Compiling[0m windows-result v0.4.1
+2026-09-16T10:41:43.7887035Z [1m[92m   Compiling[0m lexopt v0.3.1
+2026-09-16T10:41:43.8753465Z [1m[92m   Compiling[0m windows-core v0.62.2
+2026-09-16T10:41:44.3784512Z [1m[92m   Compiling[0m leb128fmt v0.1.0
+2026-09-16T10:41:44.5879766Z [1m[92m   Compiling[0m bareline-distribution v0.1.0 (D:\a\BareLine\BareLine\crates\distribution)
+2026-09-16T10:41:44.7474249Z [1m[92m   Compiling[0m wasmtime-internal-core v48.0.1
+2026-09-16T10:41:45.9907837Z [1m[92m   Compiling[0m bareline-macros v0.1.0 (D:\a\BareLine\BareLine\crates\macros)
+2026-09-16T10:41:46.3545352Z [1m[92m   Compiling[0m smallvec v1.16.0
+2026-09-16T10:41:46.6523543Z [1m[92m   Compiling[0m pin-project-lite v0.2.17
+2026-09-16T10:41:46.7327780Z [1m[92m   Compiling[0m zerofrom v0.1.8
+2026-09-16T10:41:46.9004742Z [1m[92m   Compiling[0m bareline-ui v0.1.0 (D:\a\BareLine\BareLine\crates\ui)
+2026-09-16T10:41:47.5348769Z [1m[92m   Compiling[0m windows-threading v0.2.1
+2026-09-16T10:41:47.6883420Z [1m[92m   Compiling[0m once_cell v1.21.4
+2026-09-16T10:41:47.9678696Z [1m[92m   Compiling[0m uuid v1.26.0
+2026-09-16T10:41:48.0781264Z [1m[92m   Compiling[0m pcre2-sys v0.2.10
+2026-09-16T10:41:48.1103343Z [1m[92m   Compiling[0m windows-future v0.3.2
+2026-09-16T10:41:48.4516779Z [1m[92m   Compiling[0m accesskit v0.25.0
+2026-09-16T10:41:48.5395937Z [1m[92m   Compiling[0m yoke v0.8.3
+2026-09-16T10:41:49.0708592Z [1m[92m   Compiling[0m cranelift-bitset v0.135.1
+2026-09-16T10:41:49.2465520Z [1m[92m   Compiling[0m windows-collections v0.3.2
+2026-09-16T10:41:49.3520322Z [1m[92m   Compiling[0m windows-numerics v0.3.1
+2026-09-16T10:41:49.5463857Z [1m[92m   Compiling[0m bareline-file-io v0.1.0 (D:\a\BareLine\BareLine\crates\file-io)
+2026-09-16T10:41:49.6896347Z [1m[92m   Compiling[0m accesskit_consumer v0.39.0
+2026-09-16T10:41:49.9662810Z [1m[92m   Compiling[0m windows v0.62.2
+2026-09-16T10:41:51.8977902Z [1m[92m   Compiling[0m tracing-core v0.1.36
+2026-09-16T10:41:53.0594927Z [1m[92m   Compiling[0m bareline-lexilla-bridge v0.1.0 (D:\a\BareLine\BareLine\native\lexilla-bridge)
+2026-09-16T10:41:53.3633855Z [1m[92m   Compiling[0m static_assertions v1.1.0
+2026-09-16T10:41:53.4628714Z [1m[92m   Compiling[0m bareline-search v0.1.0 (D:\a\BareLine\BareLine\crates\search)
+2026-09-16T10:41:54.0370929Z [1m[92m   Compiling[0m zerovec v0.11.8
+2026-09-16T10:41:54.9290877Z [1m[92m   Compiling[0m tracing v0.1.44
+2026-09-16T10:41:56.8328035Z [1m[92m   Compiling[0m pulley-interpreter v48.0.1
+2026-09-16T10:41:59.8183939Z [1m[92m   Compiling[0m cranelift-entity v0.135.1
+2026-09-16T10:42:00.4017606Z [1m[92m   Compiling[0m cranelift-codegen-shared v0.135.1
+2026-09-16T10:42:00.4887862Z [1m[92m   Compiling[0m hashbrown v0.16.1
+2026-09-16T10:42:01.3902017Z [1m[92m   Compiling[0m fnv v1.0.7
+2026-09-16T10:42:01.4624143Z [1m[92m   Compiling[0m gimli v0.33.0
+2026-09-16T10:42:08.3149867Z [1m[92m   Compiling[0m cranelift-codegen-meta v0.135.1
+2026-09-16T10:42:08.3791609Z [1m[92m   Compiling[0m cranelift-bforest v0.135.1
+2026-09-16T10:42:08.7849699Z [1m[92m   Compiling[0m target-lexicon v0.13.5
+2026-09-16T10:42:10.5714116Z [1m[92m   Compiling[0m wasmparser v0.254.0
+2026-09-16T10:42:14.1719503Z [1m[92m   Compiling[0m cranelift-codegen v0.135.1
+2026-09-16T10:42:17.9256039Z [1m[92m   Compiling[0m winapi-util v0.1.11
+2026-09-16T10:42:18.3177813Z [1m[92m   Compiling[0m bareline-renderer-recording v0.1.0 (D:\a\BareLine\BareLine\crates\renderer-recording)
+2026-09-16T10:42:19.3249252Z [1m[92m   Compiling[0m semver v1.0.28
+2026-09-16T10:42:19.9671760Z [1m[92m   Compiling[0m arbitrary v1.4.2
+2026-09-16T10:42:21.0664824Z [1m[92m   Compiling[0m rustc-hash v2.1.3
+2026-09-16T10:42:21.1875843Z [1m[92m   Compiling[0m cranelift-control v0.135.1
+2026-09-16T10:42:21.2842470Z [1m[92m   Compiling[0m regalloc2 v0.15.2
+2026-09-16T10:42:26.4666715Z [1m[92m   Compiling[0m termcolor v1.4.1
+2026-09-16T10:42:26.7823624Z [1m[92m   Compiling[0m cranelift-assembler-x64 v0.135.1
+2026-09-16T10:42:36.5258541Z [1m[92m   Compiling[0m tinystr v0.8.4
+2026-09-16T10:42:44.2283969Z [1m[92m   Compiling[0m litemap v0.8.3
+2026-09-16T10:42:44.4915366Z [1m[92m   Compiling[0m writeable v0.6.4
+2026-09-16T10:42:44.8454369Z [1m[92m   Compiling[0m wasmtime-internal-component-util v48.0.1
+2026-09-16T10:42:44.9518546Z [1m[92m   Compiling[0m icu_locale_core v2.1.1
+2026-09-16T10:42:46.9379357Z [1m[92m   Compiling[0m wasmprinter v0.254.0
+2026-09-16T10:42:48.2263133Z [1m[92m   Compiling[0m object v0.39.1
+2026-09-16T10:42:53.2454801Z [1m[92m   Compiling[0m accesskit_windows v0.35.0 (D:\a\BareLine\BareLine\vendor\accesskit_windows-0.35.0)
+2026-09-16T10:42:56.5746765Z [1m[92m   Compiling[0m bareline-platform-windows v0.1.0 (D:\a\BareLine\BareLine\crates\platform-windows)
+2026-09-16T10:42:58.1090922Z [1m[92m   Compiling[0m wasm-encoder v0.254.0
+2026-09-16T10:43:01.4627056Z [1m[92m   Compiling[0m potential_utf v0.1.6
+2026-09-16T10:43:01.6817436Z [1m[92m   Compiling[0m zerotrie v0.2.5
+2026-09-16T10:43:04.7717083Z [1m[92m   Compiling[0m windows-sys v0.59.0
+2026-09-16T10:43:08.1031522Z [1m[92m   Compiling[0m wit-parser v0.254.0
+2026-09-16T10:43:09.0490014Z [1m[92m   Compiling[0m wasmtime-environ v48.0.1
+2026-09-16T10:43:16.7766749Z [1m[92m   Compiling[0m icu_provider v2.1.1
+2026-09-16T10:43:17.2552846Z [1m[92m   Compiling[0m icu_collections v2.1.1
+2026-09-16T10:43:17.8410128Z [1m[92m   Compiling[0m wasm-metadata v0.254.0
+2026-09-16T10:43:18.2149710Z [1m[92m   Compiling[0m bareline-syntax v0.1.0 (D:\a\BareLine\BareLine\crates\syntax)
+2026-09-16T10:43:18.4521034Z [1m[92m   Compiling[0m wit-component v0.254.0
+2026-09-16T10:43:23.7189924Z [1m[92m   Compiling[0m icu_properties_data v2.1.2
+2026-09-16T10:43:23.8989513Z [1m[92m   Compiling[0m icu_normalizer_data v2.1.1
+2026-09-16T10:43:23.9684222Z [1m[92m   Compiling[0m io-lifetimes v2.0.4
+2026-09-16T10:43:24.0999580Z [1m[92m   Compiling[0m io-lifetimes v3.0.1
+2026-09-16T10:43:24.2358694Z [1m[92m   Compiling[0m wasmtime-internal-fiber v48.0.1
+2026-09-16T10:43:24.5888462Z [1m[92m   Compiling[0m bareline-settings v0.1.0 (D:\a\BareLine\BareLine\crates\settings)
+2026-09-16T10:43:26.8176552Z [1m[92m   Compiling[0m bareline-extension-sdk v0.1.0 (D:\a\BareLine\BareLine\crates\extension-sdk)
+2026-09-16T10:43:27.3225504Z [1m[92m   Compiling[0m futures-sink v0.3.34
+2026-09-16T10:43:27.3990515Z [1m[92m   Compiling[0m futures-core v0.3.34
+2026-09-16T10:43:27.5005083Z [1m[92m   Compiling[0m either v1.18.0
+2026-09-16T10:43:27.5576366Z [1m[92m   Compiling[0m cranelift-frontend v0.135.1
+2026-09-16T10:43:27.7922149Z [1m[92m   Compiling[0m itertools v0.14.0
+2026-09-16T10:43:29.9416043Z [1m[92m   Compiling[0m cranelift-native v0.135.1
+2026-09-16T10:43:30.1327505Z [1m[92m   Compiling[0m wasmtime-internal-unwinder v48.0.1
+2026-09-16T10:43:30.6597421Z [1m[92m   Compiling[0m io-extras v0.19.0
+2026-09-16T10:43:30.6862746Z [1m[92m   Compiling[0m fs-set-times v0.20.3
+2026-09-16T10:43:30.9275297Z [1m[92m   Compiling[0m icu_normalizer v2.1.1
+2026-09-16T10:43:31.1494830Z [1m[92m   Compiling[0m icu_properties v2.1.2
+2026-09-16T10:43:32.0701328Z [1m[92m   Compiling[0m wasmtime-internal-wit-bindgen v48.0.1
+2026-09-16T10:43:33.6071587Z [1m[92m   Compiling[0m winx v0.36.4
+2026-09-16T10:43:34.5512180Z [1m[92m   Compiling[0m wasmtime v48.0.1
+2026-09-16T10:43:34.6844383Z [1m[92m   Compiling[0m futures-task v0.3.34
+2026-09-16T10:43:34.8045953Z [1m[92m   Compiling[0m maybe-owned v0.3.4
+2026-09-16T10:43:34.9026547Z [1m[92m   Compiling[0m ipnet v2.12.2
+2026-09-16T10:43:35.0325959Z [1m[92m   Compiling[0m rand_core v0.10.1
+2026-09-16T10:43:35.2279374Z [1m[92m   Compiling[0m ambient-authority v0.0.2
+2026-09-16T10:43:35.2969328Z [1m[92m   Compiling[0m cap-primitives v4.0.3
+2026-09-16T10:43:35.9882067Z [1m[92m   Compiling[0m futures-util v0.3.34
+2026-09-16T10:43:36.4717463Z [1m[92m   Compiling[0m wasmtime-internal-component-macro v48.0.1
+2026-09-16T10:43:38.1332884Z [1m[92m   Compiling[0m idna_adapter v1.2.1
+2026-09-16T10:43:38.4193967Z [1m[92m   Compiling[0m wasmtime-internal-cranelift v48.0.1
+2026-09-16T10:43:38.5586474Z [1m[92m   Compiling[0m futures-channel v0.3.34
+2026-09-16T10:43:38.6182630Z [1m[92m   Compiling[0m bareline-editor-surface v0.1.0 (D:\a\BareLine\BareLine\crates\editor-surface)
+2026-09-16T10:43:40.0572746Z [1m[92m   Compiling[0m wasmtime-internal-jit-icache-coherence v48.0.1
+2026-09-16T10:43:40.2006225Z [1m[92m   Compiling[0m utf8_iter v1.0.4
+2026-09-16T10:43:40.3616476Z [1m[92m   Compiling[0m futures-io v0.3.34
+2026-09-16T10:43:40.4182936Z [1m[92m   Compiling[0m bytes v1.12.1
+2026-09-16T10:43:41.6440384Z [1m[92m   Compiling[0m percent-encoding v2.3.2
+2026-09-16T10:43:41.9518960Z [1m[92m   Compiling[0m cpufeatures v0.3.1
+2026-09-16T10:43:42.0170161Z [1m[92m   Compiling[0m chacha20 v0.10.2
+2026-09-16T10:43:42.4190382Z [1m[92m   Compiling[0m form_urlencoded v1.2.2
+2026-09-16T10:43:42.6408790Z [1m[92m   Compiling[0m futures v0.3.34
+2026-09-16T10:43:42.7049453Z [1m[92m   Compiling[0m idna v1.1.0
+2026-09-16T10:43:56.8639702Z [1m[92m   Compiling[0m cap-std v4.0.3
+2026-09-16T10:43:57.2921313Z [1m[92m   Compiling[0m bareline-first-party-common v0.1.0 (D:\a\BareLine\BareLine\extensions\common)
+2026-09-16T10:43:57.7395547Z [1m[92m   Compiling[0m socket2 v0.6.5
+2026-09-16T10:43:58.6270622Z [1m[92m   Compiling[0m mio v1.2.3
+2026-09-16T10:43:59.6800405Z [1m[92m   Compiling[0m errno v0.3.14
+2026-09-16T10:43:59.9554193Z [1m[92m   Compiling[0m rustix v1.1.4
+2026-09-16T10:44:00.2280012Z [1m[92m   Compiling[0m tokio v1.53.1
+2026-09-16T10:44:01.2538613Z [1m[92m   Compiling[0m wasmtime-wasi-io v48.0.1
+2026-09-16T10:44:02.9680355Z [1m[92m   Compiling[0m cap-fs-ext v4.0.3
+2026-09-16T10:44:03.1223534Z [1m[92m   Compiling[0m rand v0.10.2
+2026-09-16T10:44:04.3462753Z [1m[92m   Compiling[0m url v2.5.8
+2026-09-16T10:44:05.9956382Z [1m[92m   Compiling[0m bareline-diff v0.1.0 (D:\a\BareLine\BareLine\crates\diff)
+2026-09-16T10:44:07.4968032Z [1m[92m   Compiling[0m windows-sys v0.52.0
+2026-09-16T10:44:11.2850735Z [1m[92m   Compiling[0m smol_str v0.2.2
+2026-09-16T10:44:11.6460175Z [1m[92m   Compiling[0m raw-window-handle v0.6.2
+2026-09-16T10:44:12.0183251Z [1m[92m   Compiling[0m dpi v0.1.2
+2026-09-16T10:44:12.2583913Z [1m[92m   Compiling[0m cursor-icon v1.2.0
+2026-09-16T10:44:12.3828940Z [1m[92m   Compiling[0m bareline-extension-host v0.1.0 (D:\a\BareLine\BareLine\apps\extension-host)
+2026-09-16T10:44:13.0124180Z [1m[92m   Compiling[0m winit v0.30.13
+2026-09-16T10:44:13.7940849Z [1m[92m   Compiling[0m wasmtime-wasi v48.0.1
+2026-09-16T10:44:18.7654178Z [1m[92m   Compiling[0m wasm-encoder v0.258.0
+2026-09-16T10:44:21.3839676Z [1m[92m   Compiling[0m md-5 v0.10.6
+2026-09-16T10:44:21.5316058Z [1m[92m   Compiling[0m sha1 v0.10.6
+2026-09-16T10:44:21.8266727Z [1m[92m   Compiling[0m unicode-width v0.2.2
+2026-09-16T10:44:21.8417035Z [1m[92m   Compiling[0m bareline-app v0.1.0 (D:\a\BareLine\BareLine\crates\app)
+2026-09-16T10:44:22.1467154Z [1m[92m   Compiling[0m wast v258.0.0
+2026-09-16T10:44:22.1901625Z [1m[92m   Compiling[0m signature v2.2.0
+2026-09-16T10:44:22.3337972Z [1m[92m   Compiling[0m zeroize v1.9.0
+2026-09-16T10:44:22.6097991Z [1m[92m   Compiling[0m curve25519-dalek v4.1.3
+2026-09-16T10:44:25.0699670Z [1m[92m   Compiling[0m ed25519 v2.2.3
+2026-09-16T10:44:25.3523432Z [1m[92m   Compiling[0m ed25519-dalek v2.2.0
+2026-09-16T10:44:25.7917000Z [1m[92m   Compiling[0m blake2 v0.10.6
+2026-09-16T10:44:26.7309163Z [1m[92m   Compiling[0m bareline v0.1.0 (D:\a\BareLine\BareLine\apps\bareline)
+2026-09-16T10:44:42.4029405Z [1m[92m   Compiling[0m wat v1.258.0
+2026-09-16T10:44:42.6859928Z [1m[92m   Compiling[0m bareline-diagnostics v0.1.0 (D:\a\BareLine\BareLine\crates\diagnostics)
+2026-09-16T10:44:43.3423468Z [1m[92m   Compiling[0m bareline-platform-macos v0.1.0 (D:\a\BareLine\BareLine\crates\platform-macos)
+2026-09-16T10:44:43.5024461Z [1m[92m   Compiling[0m bareline-platform-linux v0.1.0 (D:\a\BareLine\BareLine\crates\platform-linux)
+2026-09-16T10:44:43.6380788Z [1m[92m   Compiling[0m bareline-update-helper v0.1.0 (D:\a\BareLine\BareLine\apps\update-helper)
+2026-09-16T10:44:44.2964799Z [1m[92m   Compiling[0m bareline-hex-view v0.1.0 (D:\a\BareLine\BareLine\extensions\hex-view)
+2026-09-16T10:44:44.6808280Z [1m[92m   Compiling[0m bareline-json-tools v0.1.0 (D:\a\BareLine\BareLine\extensions\json-tools)
+2026-09-16T10:44:44.9680070Z [1m[92m   Compiling[0m bareline-xml-tools v0.1.0 (D:\a\BareLine\BareLine\extensions\xml-tools)
+2026-09-16T10:44:46.7084164Z [1m[92m   Compiling[0m xtask v0.1.0 (D:\a\BareLine\BareLine\xtask)
+2026-09-16T10:46:06.0282882Z [1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 4m 40s
+2026-09-16T10:46:06.0831186Z [1m[92m     Running[0m unittests src\main.rs (target\debug\deps\bareline-6b50ced9e4ec7984.exe)
+2026-09-16T10:46:06.1029197Z 
+2026-09-16T10:46:06.1029758Z running 163 tests
+2026-09-16T10:46:06.1255430Z test windows_app::accessibility::tests::bottom_dock_exposes_one_selected_surface_and_retires_background_search_owner ... ok
+2026-09-16T10:46:06.1282850Z test windows_app::accessibility::tests::compare_dock_exposes_both_current_hunk_copy_directions ... ok
+2026-09-16T10:46:06.1290938Z test windows_app::accessibility::tests::compare_editor_providers_match_reserved_viewport_above_shared_dock ... ok
+2026-09-16T10:46:06.1331423Z test windows_app::accessibility::tests::find_focus_and_values_survive_native_snapshot_publication ... ok
+2026-09-16T10:46:06.1343460Z test windows_app::accessibility::tests::modal_text_reads_normalize_every_unicode_byte_start ... ok
+2026-09-16T10:46:06.1363596Z test windows_app::accessibility::tests::find_mode_name_survives_command_projection ... ok
+2026-09-16T10:46:06.1372360Z test windows_app::accessibility::tests::folder_button_suppresses_background_find_text_ownership ... ok
+2026-09-16T10:46:06.1374128Z test windows_app::accessibility::tests::provider_identity_follows_tab_move_clone_and_session_restore ... ok
+2026-09-16T10:46:06.1453681Z test windows_app::accessibility::tests::recovery_modal_hides_background_text_and_restores_the_find_invoker ... ok
+2026-09-16T10:46:06.1455399Z test windows_app::accessibility::tests::search_provider_tracks_field_selection_modes_and_close_without_editing_document ... ok
+2026-09-16T10:46:06.1512486Z test windows_app::accessibility::tests::prompt_and_compare_modals_own_focus_text_and_background_actions ... ok
+2026-09-16T10:46:06.1529809Z test windows_app::accessibility::tests::shared_body_focus_transfer_retires_header_and_shift_tab_returns_to_editor ... ok
+2026-09-16T10:46:06.1539192Z test windows_app::accessibility::tests::settings_layer_suppresses_background_find_text_ownership ... ok
+2026-09-16T10:46:06.1541248Z test windows_app::charsets::tests::filter_finds_ansi_by_fragment_and_family ... ok
+2026-09-16T10:46:06.1603391Z test windows_app::compare::tests::compact_dock_keeps_merge_directions_and_close_inside_body ... ok
+2026-09-16T10:46:06.1622874Z test windows_app::compare::tests::native_compare_merges_through_document_actor_and_undo ... ok
+2026-09-16T10:46:06.1686294Z test windows_app::accessibility::tests::split_panes_publish_independent_text_owners_and_retire_closed_provider ... ok
+2026-09-16T10:46:06.1760297Z test windows_app::deferred_close_tests::changed_document_retires_deferred_close_without_closing_or_requeueing ... ok
+2026-09-16T10:46:06.1825733Z test windows_app::deferred_close_tests::clean_read_only_close_and_non_discard_mismatch_preserve_read_only_state ... ok
+2026-09-16T10:46:06.1828858Z test windows_app::deferred_close_tests::deferred_close_rejects_changed_tab_document_or_index ... ok
+2026-09-16T10:46:06.2535395Z test windows_app::deferred_close_tests::application_close_intent_survives_busy_save_wake_and_cancel_is_terminal ... ok
+2026-09-16T10:46:06.3577803Z test windows_app::deferred_close_tests::document_close_intent_resumes_for_stable_owner_after_busy_save_and_tab_move ... ok
+2026-09-16T10:46:06.4934584Z test windows_app::compare::tests::large_selected_copy_promotes_exact_destination_and_waits_for_durable_actor ... ok
+2026-09-16T10:46:06.5010088Z test windows_app::deferred_close_tests::forced_paged_close_and_preflight_share_full_document_identity_after_viewport_move ... ok
+2026-09-16T10:46:06.5014321Z test windows_app::dock::tests::collapse_resize_restore_and_semantics_keep_one_selected_panel ... ok
+2026-09-16T10:46:06.5018228Z test windows_app::dock::tests::inactive_completion_is_unread_until_selected_and_removed_tabs_retire_focus ... ok
+2026-09-16T10:46:06.5020675Z test windows_app::dock::tests::retained_surface_requests_switch_and_reopen_the_requested_tab ... ok
+2026-09-16T10:46:06.5023608Z test windows_app::dock::tests::surfaces_share_one_bounded_region_and_switch_without_geometry_drift ... ok
+2026-09-16T10:46:06.5026515Z test windows_app::dock::tests::tiny_resize_preserves_a_session_valid_preferred_height ... ok
+2026-09-16T10:46:06.5030246Z test windows_app::dock::tests::tiny_viewport_bounds_panel_and_exposes_stable_disabled_tabs ... ok
+2026-09-16T10:46:06.5036899Z test windows_app::extensions::manager_tests::cancellation_after_manager_publication_preserves_receipt ... ok
+2026-09-16T10:46:06.5041265Z test windows_app::extensions::manager_tests::closing_runtime_cancels_owned_invocation ... ok
+2026-09-16T10:46:06.5282169Z test windows_app::extensions::manager_tests::deferred_disable_persists_against_latest_completed_manager_generation ... ok
+2026-09-16T10:46:06.5330972Z test windows_app::extensions::manager_tests::failed_exclusive_create_preserves_preexisting_stage ... ok
+2026-09-16T10:46:06.5335913Z test windows_app::extensions::manager_tests::failed_result_send_still_wakes_exactly_once ... ok
+2026-09-16T10:46:06.5858605Z test windows_app::extensions::manager_tests::fallback_inventory_blocks_removal_and_permission_writes ... ok
+2026-09-16T10:46:06.5866442Z test windows_app::extensions::manager_tests::invocation_rejection_revokes_owner_without_pending_state ... ok
+2026-09-16T10:46:06.5873534Z test windows_app::extensions::manager_tests::legacy_inventory_never_becomes_extension_mutation_root ... ok
+2026-09-16T10:46:06.5881331Z test windows_app::extensions::manager_tests::loaded_fallback_switches_only_after_exact_local_restore_completes ... ok
+2026-09-16T10:46:06.5891009Z test windows_app::extensions::manager_tests::manager_rejection_does_not_leave_pending_and_wakes_once ... ok
+2026-09-16T10:46:06.6153243Z test windows_app::extensions::manager_tests::manager_unwind_publishes_terminal_failure ... ok
+2026-09-16T10:46:06.6160791Z test windows_app::extensions::manager_tests::queued_manager_cancel_is_terminal_and_blocks_overlap ... ok
+2026-09-16T10:46:06.6166137Z test windows_app::extensions::manager_tests::release_without_owner_pins_cannot_open_or_install_catalog ... ok
+2026-09-16T10:46:06.6169043Z test windows_app::extensions::readers::tests::original_bytes_are_exact_bounded_and_cancelled_without_text_fallback ... ok
+2026-09-16T10:46:06.6173071Z test windows_app::extensions::tests::cancel_after_worker_completion_discards_queued_proposal ... ok
+2026-09-16T10:46:06.6185341Z test windows_app::extensions::tests::panel_actions_are_internal_and_only_manage_stays_user_facing ... ok
+2026-09-16T10:46:06.6186840Z test windows_app::deferred_close_tests::discard_close_resolves_stable_owner_after_another_tab_moves ... ok
+2026-09-16T10:46:06.6198654Z test windows_app::extensions::ui::tests::structured_arguments_are_separate_bounded_committed_fields ... ok
+2026-09-16T10:46:06.6200088Z test windows_app::extensions::ui::tests::untrusted_panel_output_is_capped_on_char_boundaries ... ok
+2026-09-16T10:46:06.6207336Z test windows_app::goto::tests::keyboard_button_focus_has_a_visible_cue_and_hides_the_field_caret ... ok
+2026-09-16T10:46:06.6208649Z test windows_app::goto::tests::parses_all_five_forms_and_rejects_invalid_input ... ok
+2026-09-16T10:46:06.6214108Z test windows_app::input_and_menu_tests::context_menu_item_enabled_state_follows_selection ... ok
+2026-09-16T10:46:06.6215533Z test windows_app::instance::tests::portable_handle_diagnostics_stay_out_of_single_instance_forwarding ... ok
+2026-09-16T10:46:06.6240318Z test windows_app::inventory::route_tests::a_duplicate_command_id_is_rejected_at_registration ... ok
+2026-09-16T10:46:06.6243827Z test windows_app::inventory::route_tests::a_registered_command_without_a_handler_fails_validation ... ok
+2026-09-16T10:46:06.6281803Z test windows_app::inventory::route_tests::every_registered_command_routes_to_a_handler ... ok
+2026-09-16T10:46:06.6284656Z test windows_app::inventory::worker_tests::dropping_inventory_runtime_signals_owned_export ... ok
+2026-09-16T10:46:06.6459896Z test windows_app::inventory::worker_tests::cancellation_before_inventory_publication_removes_stage ... ok
+2026-09-16T10:46:06.6476324Z test windows_app::inventory::worker_tests::queued_inventory_cancel_touches_no_target_or_stage ... ok
+2026-09-16T10:46:06.6486247Z test windows_app::inventory::worker_tests::rejected_inventory_never_creates_stage_and_wakes_once ... ok
+2026-09-16T10:46:06.6501868Z test windows_app::inventory::worker_tests::unpublished_inventory_stage_is_removed_on_owner_drop ... ok
+2026-09-16T10:46:06.7284012Z test windows_app::language::catalog_tests::cancelled_or_corrupt_store_preserves_installed_bytes_and_does_not_publish_success ... ok
+2026-09-16T10:46:06.8067473Z test windows_app::language::catalog_tests::imported_language_is_durable_before_publication_and_reloaded_on_restart ... ok
+2026-09-16T10:46:06.8076278Z test windows_app::launch::request_tests::closing_navigation_owner_cancels_task_and_releases_slot ... ok
+2026-09-16T10:46:06.8787519Z test windows_app::deferred_close_tests::pending_exit_discard_revalidates_new_dirty_documents_before_exit ... ok
+2026-09-16T10:46:06.8798092Z test windows_app::launch::request_tests::concurrent_bound_rejects_then_reopens_one_slot_with_flags_intact ... ok
+2026-09-16T10:46:07.0165647Z test windows_app::launch::request_tests::forced_paged_navigation_uses_full_source_after_viewport_moves ... ok
+2026-09-16T10:46:07.0179178Z test windows_app::launch::request_tests::sequential_failures_release_capacity_and_preserve_request_ids ... ok
+2026-09-16T10:46:07.0214932Z test windows_app::launch::tests::diagnostic_root_requires_an_owned_empty_regular_marker ... ok
+2026-09-16T10:46:07.0321069Z test windows_app::launch::tests::installed_initialization_retains_its_completion_receipt ... ok
+2026-09-16T10:46:07.0325264Z test windows_app::launch::tests::launch_coordinates_clamp_and_preserve_utf8_boundaries ... ok
+2026-09-16T10:46:07.0329495Z test windows_app::launch::tests::only_installed_mode_owns_profile_initialization ... ok
+2026-09-16T10:46:07.0335319Z test windows_app::launch::tests::parser_preserves_option_like_and_non_ascii_paths_after_separator ... ok
+2026-09-16T10:46:07.0340381Z test windows_app::launch::tests::parser_rejects_contradictory_and_invalid_modes ... ok
+2026-09-16T10:46:07.0344157Z test windows_app::launch::tests::parser_returns_typed_modes_without_preparing_paths ... ok
+2026-09-16T10:46:07.0471337Z test windows_app::lifecycle::tests::compare_peer_failure_after_a_separate_success_pump_drains_exact_requests ... ok
+2026-09-16T10:46:07.0496941Z test windows_app::launch::request_tests::completed_navigation_is_processed_before_an_earlier_waiter ... ok
+2026-09-16T10:46:07.0502840Z test windows_app::lifecycle::tests::save_all_menu_state_covers_idle_ready_and_running ... ok
+2026-09-16T10:46:07.0694695Z test windows_app::lifecycle::tests::tracked_conflict_compare_starts_the_exact_open_pair ... ok
+2026-09-16T10:46:07.0886768Z test windows_app::lifecycle::tests::tracked_save_elsewhere_reaches_picker_and_preflight ... ok
+2026-09-16T10:46:07.0892584Z test windows_app::macros::tests::dock_output_keeps_window_hit_bounds_and_local_controller_coordinates ... ok
+2026-09-16T10:46:07.0900053Z test windows_app::macros::tests::inapplicable_manager_and_run_commands_are_hidden_not_greyed ... ok
+2026-09-16T10:46:07.0905713Z test windows_app::macros::tests::legacy_reconciliation_changes_macro_reads_but_keeps_local_writes ... ok
+2026-09-16T10:46:07.0910474Z test windows_app::macros::tests::loaded_fallback_switches_future_reads_without_dropping_live_state ... ok
+2026-09-16T10:46:07.0923188Z test windows_app::macros::tests::manager_close_context_is_enabled_for_every_runtime_state ... ok
+2026-09-16T10:46:07.0925932Z test windows_app::modal::tests::modal_instances_have_distinct_generations ... ok
+2026-09-16T10:46:07.0929532Z test windows_app::modal::tests::modal_modifier_capture_tracks_press_and_release ... ok
+2026-09-16T10:46:07.0932717Z test windows_app::modal::tests::notification_details_uses_the_shared_inert_modal_contract ... ok
+2026-09-16T10:46:07.0996912Z test windows_app::modal::tests::notification_modal_close_returns_next_key_to_the_shell_owner ... ok
+2026-09-16T10:46:07.1086487Z test windows_app::notification_shell_tests::shell_sync_retains_more_than_visible_conflicts_without_replay_or_status_erasure ... ok
+2026-09-16T10:46:07.1454930Z test windows_app::lifecycle::tests::rejected_save_all_submission_does_not_wait_before_next_entry ... ok
+2026-09-16T10:46:07.1461024Z test windows_app::power::power_layout_tests::field_and_footer_bounds_match_the_drawn_controls ... ok
+2026-09-16T10:46:07.1467180Z test windows_app::power::power_layout_tests::scrolled_history_hits_and_semantics_follow_visible_rows ... ok
+2026-09-16T10:46:07.1472340Z test windows_app::power::stream::replay_terminal_tests::failed_preparation_stays_failed_when_status_is_cleared ... ok
+2026-09-16T10:46:07.1477556Z test windows_app::power::stream::replay_terminal_tests::unrelated_status_cannot_turn_committed_replay_into_retryable_failure ... ok
+2026-09-16T10:46:07.1483516Z test windows_app::recovery::tests::center_actions_share_keyboard_and_accessibility_targets ... ok
+2026-09-16T10:46:07.1488742Z test windows_app::recovery::tests::center_preserves_window_lifecycle_and_consumes_text_input ... ok
+2026-09-16T10:46:07.1494473Z test windows_app::recovery::tests::checkpoint_operations_are_mutually_exclusive_and_default_focus_is_enabled ... ok
+2026-09-16T10:46:07.1549584Z test windows_app::recovery::tests::closed_discovery_completion_notifies_once_per_generation ... ok
+2026-09-16T10:46:07.1555552Z test windows_app::recovery::tests::delayed_discovery_is_loading_until_a_tagged_terminal_result ... ok
+2026-09-16T10:46:07.1561091Z test windows_app::recovery::tests::discovery_rejects_obsolete_root_and_preserves_selection_identity ... ok
+2026-09-16T10:46:07.1566510Z test windows_app::recovery::tests::failed_discovery_exposes_full_error_retry_and_keeps_global_worker_on_close ... ok
+2026-09-16T10:46:07.2382244Z test windows_app::accessibility::tests::complete_native_semantic_json_golden ... ok
+2026-09-16T10:46:07.2390900Z test windows_app::recovery::tests::ninety_nine_directories_collapse_to_one_row_with_the_newest_checkpoint ... ok
+2026-09-16T10:46:07.2449591Z test windows_app::recovery::tests::open_transition_and_initial_command_match_keyboard_and_accessibility ... ok
+2026-09-16T10:46:07.2515336Z test windows_app::recovery::tests::pump_notice_transition_is_generation_fenced_and_closed_failure_is_retained ... ok
+2026-09-16T10:46:07.2521233Z test windows_app::recovery::tests::removed_rows_select_the_nearest_survivor_and_closed_discovery_stays_closed ... ok
+2026-09-16T10:46:07.2578213Z test windows_app::recovery::tests::restore_refresh_waits_for_matching_terminal_publication_and_fences_stale_results ... ok
+2026-09-16T10:46:07.2583892Z test windows_app::run_prompt::tests::keyboard_button_focus_has_a_visible_cue_and_hides_the_field_caret ... ok
+2026-09-16T10:46:07.2587477Z test windows_app::run_prompt::tests::parses_quoted_programs_and_arguments_and_requires_an_absolute_path ... ok
+2026-09-16T10:46:07.2590450Z test windows_app::scrolling::tests::byte_thumb_reaches_distant_source_with_deferred_capture ... ok
+2026-09-16T10:46:07.2593252Z test windows_app::scrolling::tests::paged_thumb_position_tracks_byte_offset ... ok
+2026-09-16T10:46:07.2596943Z test windows_app::search::folder::tests::cancelled_filter_composition_never_changes_the_search_scope ... ok
+2026-09-16T10:46:07.2601245Z test windows_app::search::folder::tests::folder_preferences_are_explicit_and_preserve_safe_defaults ... ok
+2026-09-16T10:46:07.2726805Z test windows_app::search::menu_projection_tests::composed_shell_file_and_search_popups_fit_supported_heights ... ok
+2026-09-16T10:46:07.2830038Z test windows_app::search::menu_projection_tests::scope_mode_and_options_follow_current_intent_after_panel_cancellation ... ok
+2026-09-16T10:46:07.2891009Z test windows_app::recovery::tests::generated_discovery_excludes_live_adopted_checkpoint_and_keeps_other_data ... ok
+2026-09-16T10:46:07.2896628Z test windows_app::search::replace::menu_state_tests::replacement_menu_state_covers_idle_running_cancelling_complete_and_stale ... ok
+2026-09-16T10:46:07.2903273Z test windows_app::search::replace::menu_state_tests::apply_route_preserves_preview_when_a_selected_source_changed ... ok
+2026-09-16T10:46:07.2916993Z test windows_app::session::close_tests::deferred_session_write_cannot_exit_after_an_intervening_edit_or_new_tab ... ok
+2026-09-16T10:46:07.2954638Z test windows_app::search::replace::menu_state_tests::replacement_preview_accessibility_tracks_only_rendered_rows_and_terminal_status ... ok
+2026-09-16T10:46:07.2972089Z test windows_app::settings::keymap_cache_tests::default_keymap_is_built_once_per_keymap_change ... ok
+2026-09-16T10:46:07.3030201Z test windows_app::settings::keymap_cache_tests::migrated_settings_reconciliation_preserves_the_open_tab ... ok
+2026-09-16T10:46:07.3034182Z test windows_app::settings::keymap_cache_tests::migration_receipt_does_not_overwrite_a_newer_live_settings_revision ... ok
+2026-09-16T10:46:07.3041361Z test windows_app::shortcuts::tests::dotted_titles_render_as_readable_labels_never_raw_ids ... ok
+2026-09-16T10:46:07.3063063Z test windows_app::shell_integration::tests::recent_files_round_trip_dedupe_cap_and_clear ... ok
+2026-09-16T10:46:07.3083487Z test windows_app::shortcuts::tests::invalid_chord_is_rejected_on_entry_and_on_apply ... ok
+2026-09-16T10:46:07.3093989Z test windows_app::shortcuts::tests::mapper_semantics_have_unique_ids_and_live_edit_values ... ok
+2026-09-16T10:46:07.3099905Z test windows_app::toast::tests::document_generation_close_expires_progress_but_retains_failure ... ok
+2026-09-16T10:46:07.3106461Z test windows_app::toast::tests::height_clipped_rows_are_only_reachable_through_overflow ... ok
+2026-09-16T10:46:07.3116681Z test windows_app::toast::tests::measured_wrapping_is_unicode_boundary_safe_and_keeps_full_summary ... ok
+2026-09-16T10:46:07.3123180Z test windows_app::toast::tests::narrow_geometry_and_keyboard_details_keep_complete_unicode_value ... ok
+2026-09-16T10:46:07.3136924Z test windows_app::toast::tests::persistent_ownership_is_separate_from_visible_capacity ... ok
+2026-09-16T10:46:07.3142266Z test windows_app::shortcuts::tests::mapper_preserves_map_on_conflict_and_supports_remove_and_multichord ... ok
+2026-09-16T10:46:07.3144231Z test windows_app::toast::tests::pointer_details_has_close_geometry_and_removed_owner_releases_focus ... ok
+2026-09-16T10:46:07.3149954Z test windows_app::toast::tests::scoped_progress_is_typed_and_document_owned ... ok
+2026-09-16T10:46:07.3151459Z test windows_app::toast::tests::warning_wording_does_not_choose_level_and_details_are_complete ... ok
+2026-09-16T10:46:07.3155201Z test windows_app::toast::tests::zero_row_capacity_does_not_publish_an_unpainted_overflow_control ... ok
+2026-09-16T10:46:07.3175579Z test windows_app::views::tests::close_compare_waits_for_secondary_history_to_settle ... ok
+2026-09-16T10:46:07.3187400Z test windows_app::views::tests::closed_view_retires_its_source_generation_without_recycling_the_survivor ... ok
+2026-09-16T10:46:07.3203831Z test windows_app::views::tests::closing_secondary_tab_returns_its_document_history ... ok
+2026-09-16T10:46:07.3230513Z test windows_app::views::tests::closing_split_preserves_shared_undo_redo_from_either_writer ... ok
+2026-09-16T10:46:07.3246097Z test windows_app::views::tests::completion_target_tracks_secondary_cursor_and_rejects_focus_change ... ok
+2026-09-16T10:46:07.3261085Z test windows_app::views::tests::delayed_fold_result_targets_the_requested_view_after_focus_moves ... ok
+2026-09-16T10:46:07.3268776Z test windows_app::views::tests::delayed_restore_guard_rejects_a_different_document_with_identical_text ... ok
+2026-09-16T10:46:07.3278346Z test windows_app::views::tests::find_selection_scope_uses_the_active_split_view ... ok
+2026-09-16T10:46:07.3960666Z test windows_app::utilities::publication_tests::native_export_publishes_new_and_replaces_existing_destination ... ok
+2026-09-16T10:46:07.5627096Z test windows_app::power::drag::tests::paged_drag_capture_keeps_global_selection_outside_viewport ... ok
+2026-09-16T10:46:07.5897267Z test windows_app::views::tests::pane_source_generation_tracks_full_document_replacement_and_revision ... ok
+2026-09-16T10:46:07.6337512Z test windows_app::views::tests::promotion_rebinds_linked_views_without_replacing_tabs_or_history ... ok
+2026-09-16T10:46:07.6358267Z test windows_app::views::tests::queued_edits_in_both_native_panes_share_the_document ... ok
+2026-09-16T10:46:07.6365951Z test windows_app::views::tests::session_capture_preserves_unavailable_tab_when_temporary_id_collides ... ok
+2026-09-16T10:46:07.6393505Z test windows_app::views::tests::split_pane_activation_retires_the_previous_documents_find_results ... ok
+2026-09-16T10:46:07.6401184Z test windows_app::views::tests::vertical_tabs_share_find_draw_and_hover_geometry ... ok
+2026-09-16T10:46:07.6408447Z test windows_app::watch::tests::automatic_reload_never_discards_dirty_or_unavailable_source ... ok
+2026-09-16T10:46:07.7419235Z test windows_app::watch::tests::launch_follow_resolves_its_workspace_document_when_secondary_is_active ... ok
+2026-09-16T10:46:07.7425204Z test windows_app::watch::tests::network_path_classification_is_lexical ... ok
+2026-09-16T10:46:07.7654821Z test windows_app::inventory::worker_tests::inventory_identifies_the_running_binary_and_sorted_commands ... ok
+2026-09-16T10:46:07.7657909Z test windows_app::workspace_panels::workspace_panel_regressions::disconnected_worker_is_a_terminal_error ... ok
+2026-09-16T10:46:07.8019432Z test windows_app::workspace_panels::workspace_panel_regressions::retained_folder_delete_restores_contents_and_refuses_collision ... ok
+2026-09-16T10:46:07.8478199Z test windows_app::watch::tests::verified_reopen_retires_a_persistent_dirty_period_conflict ... ok
+2026-09-16T10:46:08.0059458Z test windows_app::views::tests::folded_large_gap_keeps_independent_pane_source_layout_and_click ... ok
+2026-09-16T10:46:08.1509445Z test windows_app::views::tests::paged_split_synchronizes_global_lines_after_pending_lookup ... ok
+2026-09-16T10:46:08.1510293Z 
+2026-09-16T10:46:08.1510801Z test result: ok. 163 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.05s
+2026-09-16T10:46:08.1511517Z 
+2026-09-16T10:46:08.1578182Z [1m[92m     Running[0m unittests src\lib.rs (target\debug\deps\bareline_app-2c1f170a3502ea87.exe)
+2026-09-16T10:46:08.1694093Z 
+2026-09-16T10:46:08.1694421Z running 150 tests
+2026-09-16T10:46:08.1711110Z test accessibility::tests::find_semantics_follow_focus_toggle_and_field_value ... ok
+2026-09-16T10:46:08.1712699Z test accessibility::tests::find_replace_dynamic_tree_keeps_valid_focus_and_values ... ok
+2026-09-16T10:46:08.1718130Z test accessibility::tests::grapheme_offsets_and_offscreen_selection_are_bounded ... ok
+2026-09-16T10:46:08.1724054Z test accessibility::tests::default_editor_semantic_fields_regression ... ok
+2026-09-16T10:46:08.1730351Z test accessibility::tests::paged_read_terminal_cleanup_rejects_stale_results ... ok
+2026-09-16T10:46:08.1731939Z test compare::tests::old_revisions_and_cancelled_are_not_coarse ... ok
+2026-09-16T10:46:08.1738494Z test compare::tests::stale_results_never_paint_and_merge_undo ... ok
+2026-09-16T10:46:08.1744039Z test compare::tests::worker_merge_rejects_equal_revision_from_other_document ... ok
+2026-09-16T10:46:08.1745480Z test compare::tests::session_round_trip_preserves_options_sources ... ok
+2026-09-16T10:46:08.1753292Z test encoding::tests::character_sets_cover_every_codec_and_are_searchable ... ok
+2026-09-16T10:46:08.1758392Z test encoding::tests::readonly_and_unsupported_bom_cannot_dispatch_but_binary_choice_can ... ok
+2026-09-16T10:46:08.1763179Z test accessibility::tests::app_control_fields_regression ... ok
+2026-09-16T10:46:08.1768630Z test extensions::manager::lifecycle_tests::update_retains_only_approved_subset_and_new_capability_disables ... ok
+2026-09-16T10:46:08.1787420Z test extensions::manager::tests::duplicate_or_forged_index_is_not_loaded ... ok
+2026-09-16T10:46:08.1791301Z test extensions::tests::byte_chunks_cross_unicode_and_failed_child_discards_edits ... ok
+2026-09-16T10:46:08.1795450Z test extensions::tests::paged_read_authority_is_bounded_and_never_accepts_edits ... ok
+2026-09-16T10:46:08.1802282Z test find::find_bar_tests::document_switch_clears_byte_scope_and_restarts_a_cancelled_query ... ok
+2026-09-16T10:46:08.1805177Z test find::find_bar_tests::enter_and_f3_cycle_direction ... ok
+2026-09-16T10:46:08.1809270Z test find::find_bar_tests::option_toggles_map_to_query_flags ... ok
+2026-09-16T10:46:08.1810475Z test compare::tests::paged_worker_reads_beyond_first_window_and_utf8_page_boundaries ... ok
+2026-09-16T10:46:08.1813913Z test find::find_bar_tests::stale_worker_disconnect_cannot_replace_the_current_document_status ... ok
+2026-09-16T10:46:08.1817265Z test find::find_bar_tests::toggle_tooltip_deadline_wakes_once_and_dismisses_on_leave_or_close ... ok
+2026-09-16T10:46:08.1819364Z test find::find_bar_tests::short_replace_view_uses_summary_or_hides_without_covering_a_field ... ok
+2026-09-16T10:46:08.1820963Z test find::find_bar_tests::toggle_tooltips_share_names_and_pressed_state_with_semantics ... ok
+2026-09-16T10:46:08.1827443Z test find::find_bar_tests::tooltip_content_wraps_and_clamps_without_covering_the_query ... ok
+2026-09-16T10:46:08.1831077Z test language::tests::reviewed_udl_bytes_enforce_utf8_and_size_before_publication ... ok
+2026-09-16T10:46:08.1840267Z test language::tests::signatures_are_language_scoped_and_hint_uses_verified_context ... ok
+2026-09-16T10:46:08.1841909Z test language::tests::completion_policy_index_reuse_and_accessibility_invoke ... ok
+2026-09-16T10:46:08.1843987Z test language::tests::stale_provider_generation_cannot_accept ... ok
+2026-09-16T10:46:08.1848126Z test macros::manager::tests::close_ignores_cached_command_disablement_and_all_dismiss_inputs_match ... ok
+2026-09-16T10:46:08.1852458Z test macros::tests::output_arrows_only_select_enter_activates_and_scroll_is_bounded ... ok
+2026-09-16T10:46:08.1861158Z test extensions::manager::lifecycle_tests::contributions_are_bounded_before_index_mutation_and_on_reload ... ok
+2026-09-16T10:46:08.1864088Z test macros::tests::replay_comment_policy_requires_captured_tokens ... ok
+2026-09-16T10:46:08.1870954Z test macros::tests::mixed_receipts_keep_completion_order_through_save_and_replay ... ok
+2026-09-16T10:46:08.1880745Z test macros::tests::saved_slot_survives_rename_and_restart_and_rejects_duplicate_import ... ok
+2026-09-16T10:46:08.1886162Z test macros::tests::staged_replay_waits_for_matching_terminal_and_retries_failed_event ... ok
+2026-09-16T10:46:08.1953900Z test menus::tests::every_non_internal_command_is_reachable_and_internal_stays_hidden ... ok
+2026-09-16T10:46:08.1955675Z test extensions::manager::lifecycle_tests::durable_disable_and_remove_retain_runtime_and_advance_generation ... ok
+2026-09-16T10:46:08.1961949Z test palette::tests::composing_escape_cancels_preedit_before_palette ... ok
+2026-09-16T10:46:08.1967513Z test palette::tests::contributed_activation_keeps_owned_identity_and_rejects_revocation ... ok
+2026-09-16T10:46:08.1968781Z test menus::tests::codec_submenus_are_populated_by_declared_paths ... ok
+2026-09-16T10:46:08.1975513Z test palette::tests::paint_and_pointer_use_current_results_and_expose_semantics ... ok
+2026-09-16T10:46:08.1977439Z test palette::tests::result_focus_is_rejected_without_changing_keyboard_selection ... ok
+2026-09-16T10:46:08.1980880Z test palette::tests::searches_navigates_and_revalidates_before_activation ... ok
+2026-09-16T10:46:08.1982451Z test search_panel::tests::accessibility_tabs_select_modes_and_provider_revisions_do_not_recycle ... ok
+2026-09-16T10:46:08.1983702Z test search_panel::tests::external_dock_bounds_own_search_hit_and_semantic_geometry ... ok
+2026-09-16T10:46:08.1988252Z test search_panel::tests::panel_commands_and_search_request_keep_explicit_scope ... ok
+2026-09-16T10:46:08.1989993Z test session_service::tests::queued_cancellation_prevents_storage_and_failures_are_returned ... ok
+2026-09-16T10:46:08.1994259Z test session_service::tests::trust_resolution_is_batched_and_invalid_paths_never_reach_provider ... ok
+2026-09-16T10:46:08.2000493Z test session_ui::tests::capture_preserves_exact_view_and_cloned_document_identity ... ok
+2026-09-16T10:46:08.2001675Z test session_service::tests::worker_delivers_load_error_and_notifies_without_ui_wait ... ok
+2026-09-16T10:46:08.2007029Z test session_ui::tests::untrusted_or_rejected_path_never_becomes_open_request ... ok
+2026-09-16T10:46:08.2031420Z test settings::picker_tests::closed_kinds_use_named_values_and_lists_fall_back_to_typed_entry ... ok
+2026-09-16T10:46:08.2042711Z test search_panel::tests::grouped_panel_draws_only_visible_rows_and_activates_exact_source ... ok
+2026-09-16T10:46:08.2056761Z test settings::picker_tests::open_ended_rows_offer_a_list_that_ends_with_custom ... ok
+2026-09-16T10:46:08.2076913Z test settings::picker_tests::theme_cards_map_to_theme_mode_values ... ok
+2026-09-16T10:46:08.2086850Z test settings::picker_tests::toolbar_chip_editor_add_and_remove_keeps_ids_valid ... ok
+2026-09-16T10:46:08.2118609Z test settings::revert_contract_tests::autosave_then_revert_restores_opening_value_and_fences_late_acknowledgement ... ok
+2026-09-16T10:46:08.2149221Z test settings::revert_contract_tests::external_change_requires_reload_or_keep_and_preserves_opening_revert ... ok
+2026-09-16T10:46:08.2173612Z test session_ui::tests::five_hundred_restore_is_first_frame_and_trust_gated_with_two_in_flight ... ok
+2026-09-16T10:46:08.2681190Z test settings::revert_contract_tests::real_worker_failure_retry_and_external_edit_keep_truthful_ownership ... ok
+2026-09-16T10:46:08.2685347Z test settings::revert_contract_tests::failed_handoff_keeps_error_and_retries_before_installing_new_owner ... ok
+2026-09-16T10:46:08.2731115Z test settings::revert_contract_tests::reset_scope_switch_and_reopen_keep_independent_opening_baselines ... ok
+2026-09-16T10:46:08.3053418Z test settings::revert_contract_tests::newer_workspace_owner_cancels_an_older_deferred_handoff ... ok
+2026-09-16T10:46:08.3088389Z test settings::revert_contract_tests::workspace_replacement_invalidates_the_old_path_decision ... ok
+2026-09-16T10:46:08.3109766Z test settings::visual_contract_tests::failed_save_exposes_retry_even_without_an_unrelated_controller_error ... ok
+2026-09-16T10:46:08.3142255Z test settings::visual_contract_tests::invalid_value_keeps_draft_and_cancel_restores_row_focus ... ok
+2026-09-16T10:46:08.3160081Z test settings::revert_contract_tests::real_worker_refreshes_queued_authority_for_rapid_edit_and_revert ... ok
+2026-09-16T10:46:08.3173348Z test settings::visual_contract_tests::malformed_persisted_value_reports_its_key_without_resetting_other_values ... ok
+2026-09-16T10:46:08.3179049Z test settings::revert_contract_tests::same_path_workspace_handoff_waits_for_the_accepted_commit ... ok
+2026-09-16T10:46:08.3196913Z test settings::visual_contract_tests::migration_reconciliation_retains_an_uncommitted_value_draft ... ok
+2026-09-16T10:46:08.3212750Z test styling::tests::pane_caches_do_not_supersede_each_other_and_reject_foreign_views ... ok
+2026-09-16T10:46:08.3220302Z test task::tests::cancel_after_publication_suppresses_buffered_success ... ok
+2026-09-16T10:46:08.3227120Z test settings::visual_contract_tests::settings_reference_order_copy_target_and_opaque_popup ... ok
+2026-09-16T10:46:08.3228845Z test task::tests::cancel_before_dequeue_skips_work_and_reports_terminal ... ok
+2026-09-16T10:46:08.3231471Z test task::tests::closed_pool_rejects_new_work ... ok
+2026-09-16T10:46:08.3232491Z test task::tests::disconnected_result_is_a_one_shot_failure ... ok
+2026-09-16T10:46:08.3240553Z test task::tests::dropping_owner_signals_running_work_and_send_failure_is_harmless ... ok
+2026-09-16T10:46:08.3242815Z test task::tests::panicked_notification_does_not_kill_worker_or_lose_result ... ok
+2026-09-16T10:46:08.3248500Z test task::tests::panicked_work_is_sanitized_and_worker_metrics_recover ... ok
+2026-09-16T10:46:08.3250280Z test task::tests::pool_bound_is_respected_when_more_tasks_than_threads_are_queued ... ok
+2026-09-16T10:46:08.3257320Z test task::tests::task_cancel_prevents_delivery ... ok
+2026-09-16T10:46:08.3258713Z test task::tests::short_job_uses_idle_worker_while_long_job_remains_blocked ... ok
+2026-09-16T10:46:08.3265686Z test task::tests::task_completes_and_delivers_its_result ... ok
+2026-09-16T10:46:08.3266564Z test task::tests::wake_variant_routes_to_exactly_one_pump ... ok
+2026-09-16T10:46:08.3277009Z test text_prototype::tests::composition_is_overlay_and_grapheme_edits_are_atomic ... ok
+2026-09-16T10:46:08.3285043Z test toolbar::tests::disabled_focus_and_customization_preserve_ids ... ok
+2026-09-16T10:46:08.3286351Z test tests::lazy_tabs_survive_renderer_loss_without_document_io ... ok
+2026-09-16T10:46:08.3293079Z test toolbar::tests::pointer_press_survives_snapshot_refresh_but_disable_cancels_activation ... ok
+2026-09-16T10:46:08.3299082Z test utilities::command_oracle_tests::base64_decode_contract ... ok
+2026-09-16T10:46:08.3302473Z test utilities::command_oracle_tests::base64_encode_contract ... ok
+2026-09-16T10:46:08.3309345Z test utilities::command_oracle_tests::url_decode_contract ... ok
+2026-09-16T10:46:08.3311113Z test utilities::command_oracle_tests::url_encode_contract ... ok
+2026-09-16T10:46:08.3315470Z test utilities::tests::html_escapes_and_rtf_keeps_unicode ... ok
+2026-09-16T10:46:08.3320134Z test utilities::tests::invalid_decode_never_creates_edit_and_roundtrip_undo ... ok
+2026-09-16T10:46:08.3325255Z test utilities::tests::print_driver_error_propagates_and_selection_is_exact ... ok
+2026-09-16T10:46:08.3332087Z test utilities::tests::standard_hash_vectors ... ok
+2026-09-16T10:46:08.3340370Z test utilities::tests::stream_export_escapes_source_and_preserves_theme_and_multiline_state ... ok
+2026-09-16T10:46:08.3344664Z test utilities::tests::huge_generated_hash_cancels_after_one_chunk ... ok
+2026-09-16T10:46:08.3349512Z test utilities::tests::stream_lines_preserve_split_crlf_unicode_and_final_empty_line ... ok
+2026-09-16T10:46:08.3354249Z test views::tests::alignment_spacers_have_no_line_number_and_sync_tokens_do_not_echo ... ok
+2026-09-16T10:46:08.3358892Z test views::tests::clones_share_document_identity_with_independent_state_and_last_reference_close_guard ... ok
+2026-09-16T10:46:08.3372369Z test views::tests::cross_pane_drag_is_atomic_at_pin_boundary_and_closed_metadata_restores ... ok
+2026-09-16T10:46:08.3386007Z test utilities::tests::stream_export_writer_error_and_oversize_line_fail_without_source_mutation ... ok
+2026-09-16T10:46:08.3390219Z test views::tests::restored_tab_ids_must_fit_the_native_provider_block_contract ... ok
+2026-09-16T10:46:08.3409782Z test workspace::extensions::tests::normal_utf8_original_reader_verifies_disk_generation_not_editor_text ... ok
+2026-09-16T10:46:08.3429577Z test workspace::new_document::tests::new_file_defaults_are_clean_and_changes_affect_only_later_documents ... ok
+2026-09-16T10:46:08.3437111Z test workspace::new_document::tests::new_file_defaults_reject_unknown_system_code_page_without_publishing_a_tab ... ok
+2026-09-16T10:46:08.3926351Z test views::tests::five_hundred_tabs_pin_reorder_and_layout_roundtrip ... ok
+2026-09-16T10:46:08.3948008Z test workspace::new_document::tests::new_file_eol_conversion_before_first_enter_overrides_default_and_undo_restores_it ... ok
+2026-09-16T10:46:08.3964270Z test workspace::tests::close_requires_discard_and_preserves_pending_save_target_after_tab_removal ... ok
+2026-09-16T10:46:08.4016127Z test workspace::tests::conflict_selection_cycles_within_active_document_and_invalidates_on_tab_change ... ok
+2026-09-16T10:46:08.4026285Z test workspace::tests::encoding_failure_reveal_rejects_offsets_after_document_changes ... ok
+2026-09-16T10:46:08.4503508Z test workspace::tests::encoding_policy_undo_redo_and_untitled_save ... ok
+2026-09-16T10:46:08.5909353Z test workspace::new_document::tests::new_file_defaults_save_exact_encoding_bom_and_preserve_literal_mixed_eol ... ok
+2026-09-16T10:46:08.5931563Z test workspace::tests::find_results_and_replace_actions_follow_the_bound_document_generation ... ok
+2026-09-16T10:46:08.6626103Z test styling::tests::bounded_checkpoint_progress_and_revision_invalidation ... ok
+2026-09-16T10:46:09.0018752Z test workspace::tests::paged_eol_counts_whole_file_and_rejects_stale_scan_results ... ok
+2026-09-16T10:46:09.0603157Z test workspace::tests::late_paged_terminal_does_not_clear_resident_save_banner ... ok
+2026-09-16T10:46:09.3649679Z test macros::tests::rename_rejects_library_budget_growth_without_changing_slot ... ok
+2026-09-16T10:46:09.4793905Z test workspace::tests::paged_recovery_failed_retirement_is_retryable ... ok
+2026-09-16T10:46:09.8006906Z test workspace::tests::paged_save_publishes_terminal_before_recovery_retirement_finishes ... ok
+2026-09-16T10:46:10.0207030Z test workspace::tests::readonly_paged_reload_replaces_same_tab_and_preserves_policy ... ok
+2026-09-16T10:46:10.0482815Z test workspace::tests::paged_workspace_edits_undoes_navigates_and_saves ... ok
+2026-09-16T10:46:10.0484184Z test workspace::tests::recovery_discovery_is_async_deduplicated_and_worker_owned ... ok
+2026-09-16T10:46:10.0504728Z test workspace::tests::replace_all_is_one_undo_and_cancelled_preparation_cannot_mutate ... ok
+2026-09-16T10:46:10.4598746Z test workspace::tests::paged_recovery_restart_preserves_opaque_undo_and_recovers_stale_pointer ... ok
+2026-09-16T10:46:10.6643241Z test workspace::tests::resident_only_operation_is_reported_unsupported_for_a_paged_editor ... ok
+2026-09-16T10:46:10.8084471Z test workspace::tests::resident_and_untitled_automatic_recovery_restore_current_text ... ok
+2026-09-16T10:46:11.2145440Z test workspace::tests::save_copy_and_restore_closed_preserve_document_identity_and_history ... ok
+2026-09-16T10:46:11.3112037Z test workspace::tests::stale_prepared_destination_rejects_content_revision_for_resident_and_paged ... ok
+2026-09-16T10:46:11.5806516Z test workspace::tests::resident_clean_undo_and_save_retire_obsolete_recovery ... ok
+2026-09-16T10:46:11.5864766Z test workspace::tests::small_recovery_restores_an_editable_untitled_document ... ok
+2026-09-16T10:46:11.6194591Z test workspace::tests::tracked_missing_opens_emit_terminal_receipts_without_accumulating ... ok
+2026-09-16T10:46:11.6199531Z test workspace::tests::tracked_recovery_restore_results_are_selective_and_bounded ... ok
+2026-09-16T10:46:11.6228712Z test workspace::tests::tracked_recovery_restore_worker_failure_publishes_a_consumable_terminal ... ok
+2026-09-16T10:46:11.7269108Z test workspace::tests::verified_save_marks_clean_while_cleanup_retry_remains_owned ... ok
+2026-09-16T10:46:11.7360069Z test workspace_panel::documents::tests::five_thousand_metadata_rows_filter_sort_and_keep_tab_identity ... ok
+2026-09-16T10:46:11.7365392Z test workspace_panel::map::tests::map_cache_is_keyed_by_document_and_revision_and_cleared_on_close ... ok
+2026-09-16T10:46:11.7368628Z test workspace_panel::map::tests::partial_map_navigation_uses_bytes_and_rejects_other_documents ... ok
+2026-09-16T10:46:11.7374182Z test workspace_panel::outline::tests::document_switch_discards_old_batches_and_semantic_actions ... ok
+2026-09-16T10:46:11.7379087Z test workspace_panel::outline::tests::lexical_outline_ignores_comment_functions_and_rejects_other_document ... ok
+2026-09-16T10:46:11.7381606Z test workspace_panel::outline::tests::toml_multiline_state_survives_chunks ... ok
+2026-09-16T10:46:11.7385337Z test workspace_panel::tests::cancelled_discovery_cannot_publish_or_start_concurrent_work ... ok
+2026-09-16T10:46:11.7450813Z test workspace_panel::tests::continuation_visits_excluded_entries_and_retains_position ... ok
+2026-09-16T10:46:11.7518170Z test workspace_panel::tests::discovery_is_shallow_bounded_and_reports_missing_paths ... ok
+2026-09-16T10:46:11.7522765Z test workspace_panel::tests::incremental_refresh_preserves_survivors_and_other_branches ... ok
+2026-09-16T10:46:12.9856376Z test workspace::tests::streaming_prefix_is_read_only_then_same_tab_becomes_complete ... ok
+2026-09-16T10:46:13.4628006Z test workspace::tests::find_is_worker_backed_and_navigation_preserves_document_revision ... FAILED
+2026-09-16T10:46:27.6776320Z test workspace::tests::streamed_large_edit_undo_redo_restart_uses_compact_recipe_and_terminal_receipt ... ok
+2026-09-16T10:46:27.6777686Z 
+2026-09-16T10:46:27.6778147Z failures:
+2026-09-16T10:46:27.6778414Z 
+2026-09-16T10:46:27.6779266Z ---- workspace::tests::find_is_worker_backed_and_navigation_preserves_document_revision stdout ----
+2026-09-16T10:46:27.6779945Z 
+2026-09-16T10:46:27.6780732Z thread 'workspace::tests::find_is_worker_backed_and_navigation_preserves_document_revision' (6196) panicked at crates\app\src\workspace.rs:5519:70:
+2026-09-16T10:46:27.6781891Z called `Result::unwrap()` on an `Err` value: Timeout
+2026-09-16T10:46:27.6782270Z 
+2026-09-16T10:46:27.6782303Z 
+2026-09-16T10:46:27.6782435Z failures:
+2026-09-16T10:46:27.6783039Z     workspace::tests::find_is_worker_backed_and_navigation_preserves_document_revision
+2026-09-16T10:46:27.6783630Z 
+2026-09-16T10:46:27.6784126Z test result: FAILED. 149 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 19.51s
+2026-09-16T10:46:27.6784840Z 
+2026-09-16T10:46:27.6819784Z [1m[91merror[0m: test failed, to rerun pass `-p bareline-app --lib`
+2026-09-16T10:46:27.7991369Z ##[error]Process completed with exit code 1.
+2026-09-16T10:46:27.8816637Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-09-16T10:46:27.8818084Z Post job cleanup.
+2026-09-16T10:46:28.0905188Z [command]"C:\Program Files\Git\bin\git.exe" version
+2026-09-16T10:46:28.1185926Z git version 2.55.0.windows.5
+2026-09-16T10:46:28.1263536Z Temporarily overriding HOME='D:\a\_temp\e9742403-6265-40b4-891f-edf2fc381c9f' before making global git config changes
+2026-09-16T10:46:28.1264821Z Adding repository directory to the temporary git global config as a safe directory
+2026-09-16T10:46:28.1275802Z [command]"C:\Program Files\Git\bin\git.exe" config --global --add safe.directory D:\a\BareLine\BareLine
+2026-09-16T10:46:28.1596099Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp core\.sshCommand
+2026-09-16T10:46:28.1902818Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :\""
+2026-09-16T10:46:28.7474630Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-09-16T10:46:28.7742718Z http.https://github.com/.extraheader
+2026-09-16T10:46:28.7786619Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset-all http.https://github.com/.extraheader
+2026-09-16T10:46:28.8096044Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :\""
+2026-09-16T10:46:29.3363341Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-09-16T10:46:29.3673767Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "git config --local --show-origin --name-only --get-regexp remote.origin.url"
+2026-09-16T10:46:29.9398993Z Cleaning up orphan processes
+2026-09-16T10:46:29.9935193Z Terminate orphan process: pid (2516) (vctip)
+2026-09-16T10:46:30.0035310Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@v4, actions/setup-python@v5, actions/upload-artifact@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/

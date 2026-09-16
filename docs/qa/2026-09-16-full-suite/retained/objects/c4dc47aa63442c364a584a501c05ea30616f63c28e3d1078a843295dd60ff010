@@ -1,0 +1,56 @@
+{
+    "binary_sha256":  "64bb428b5bc61dd2f6042a15ba03314af0e4f21290b0d210091ee9bc4d80adb4",
+    "cleanup":  {
+                    "editor_exited":  true,
+                    "editor_exit_code":  0
+                },
+    "journey":  "plain_text",
+    "schema_version":  1,
+    "artifacts":  [
+                      {
+                          "sha256":  "b589c8b8e6678f1868e964b56c4a1cd4ad29baaa80e52b4ccb961c61395d66e8",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\f5e2ada5-d304-48b7-8da3-392206fdd061\\scratch\\native-observations.json"
+                      },
+                      {
+                          "sha256":  "0587f28e805c961255f691a4d23f97ead4122e235b7f53483d386a6103fcbb2f",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\f5e2ada5-d304-48b7-8da3-392206fdd061\\scratch\\plain-unicode.txt"
+                      },
+                      {
+                          "sha256":  "5057beca797e91383c795d0ecdaafc0e3ef41c60ae0d614d5085f668f834e7b4",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\f5e2ada5-d304-48b7-8da3-392206fdd061\\scratch\\local\\Bareline\\settings.toml"
+                      },
+                      {
+                          "sha256":  "437d840251cd630fe7ac07a5c47be2511e30af57e80e1f400e2eca995da7eab1",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\f5e2ada5-d304-48b7-8da3-392206fdd061\\scratch\\command-trace.jsonl"
+                      },
+                      {
+                          "sha256":  "d089a31a7d57eb27ad1c06f6fcc55d002f375dbef9a027d4c1d577327328b231",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\f5e2ada5-d304-48b7-8da3-392206fdd061\\scratch\\editor-1.stdout.log"
+                      },
+                      {
+                          "sha256":  "bdb9dcacf616280ab2bc866e07cd4ba20761914650eab61ece5c0c2420eee57a",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\f5e2ada5-d304-48b7-8da3-392206fdd061\\scratch\\editor-1.stderr.log"
+                      }
+                  ],
+    "fixture":  {
+                    "new_file_encoding":  "utf-8",
+                    "new_file_eol":  "crlf"
+                },
+    "steps":  [
+                  {
+                      "observed":  "Fresh empty Editor accepted astral, combining and CJK Unicode plus Enter; exact crlf document text and modified tab observed.",
+                      "status":  "PASS",
+                      "id":  "s1"
+                  },
+                  {
+                      "observed":  "Native Save As wrote exact utf-8 encoding/BOM and crlf bytes; Close removed the document; native Open restored exact text in a clean tab.",
+                      "status":  "PASS",
+                      "id":  "s2"
+                  },
+                  {
+                      "observed":  "One edit, Undo and Redo produced exact expected text/dirty transitions; unsaved edits did not alter disk bytes; final undo restored the clean document.",
+                      "status":  "PASS",
+                      "id":  "s3"
+                  }
+              ]
+}

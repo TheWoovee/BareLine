@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "command": [
+    "cargo",
+    "test",
+    "--locked",
+    "-p",
+    "bareline-app",
+    "--lib"
+  ],
+  "cwd": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor",
+  "source_before": {
+    "available": true,
+    "head": "82f517e20bfd94210c4adeb3adc870c0c70a399e",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "1054fa9ff339b8345d691f3ed327e6fe848f97ec2094d193f8c6b310377884ed"
+  },
+  "source_after": {
+    "available": true,
+    "head": "82f517e20bfd94210c4adeb3adc870c0c70a399e",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "1054fa9ff339b8345d691f3ed327e6fe848f97ec2094d193f8c6b310377884ed"
+  },
+  "source_changed_during_run": false,
+  "status": "completed",
+  "exit_code": 0,
+  "elapsed_ms": 27553,
+  "top_level_total": 1,
+  "top_level_passed": 1,
+  "top_level_failed": 0,
+  "observed_nested_or_parent_summaries": [
+    "test result: ok. 150 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 16.24s"
+  ],
+  "summary_lines_are_not_aggregate_counts": true,
+  "stdout": {
+    "path": "target\\qualification\\full-suite-20260916\\53-workspace-fixture-cleanup.json.stdout.log",
+    "sha256": "194f7751d041a58565f840bb0a1f2292f1c10371a3c0a9f336559e487d7aded4"
+  },
+  "stderr": {
+    "path": "target\\qualification\\full-suite-20260916\\53-workspace-fixture-cleanup.json.stderr.log",
+    "sha256": "39a63ccc756d3db2e0ff00a436948573424fab934e78c1484ee490e3963a0e7f"
+  }
+}

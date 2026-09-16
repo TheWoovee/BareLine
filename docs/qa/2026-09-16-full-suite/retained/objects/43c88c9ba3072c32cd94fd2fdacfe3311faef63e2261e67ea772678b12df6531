@@ -1,0 +1,4 @@
+   Compiling bareline-file-io v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\crates\file-io)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.30s
+     Running unittests src\lib.rs (target\debug\deps\bareline_file_io-c9b3eff943dcea1b.exe)
+     Running tests\recovery_process_death.rs (target\debug\deps\recovery_process_death-701cc94464aa3557.exe)

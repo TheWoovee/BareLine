@@ -1,0 +1,36 @@
+$ErrorActionPreference = 'Stop'
+$repo = (Get-Location).Path
+$evidence = Join-Path $repo 'target/qualification/full-suite-20260916'
+$manifest = Get-Content -LiteralPath (Join-Path $evidence 'package-manifest.json') -Raw | ConvertFrom-Json
+$installer = Join-Path $manifest.output 'bareline-0.1.0-windows-x64-setup.exe'
+$destination = Join-Path $env:LOCALAPPDATA 'Programs/Bareline'
+$log = Join-Path $evidence 'installer.log'
+$inf = Join-Path $evidence 'installer-settings.inf'
+if ((Test-Path -LiteralPath $log) -or (Test-Path -LiteralPath (Join-Path $evidence 'install-result.json'))) { throw 'Installation evidence already exists' }
+$active = @(Get-Process -Name bareline -ErrorAction SilentlyContinue)
+if ($active.Count) { throw 'An existing Bareline process is running; no application will be closed' }
+$associationKeys = @('HKCU:\Software\Classes\*\shell\Bareline','HKCU:\Software\Classes\Applications\bareline.exe','HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.txt\UserChoice')
+$associationBefore = @($associationKeys | ForEach-Object { [ordered]@{path=$_;exists=(Test-Path -LiteralPath $_);value=if(Test-Path -LiteralPath $_){(Get-ItemProperty -LiteralPath $_ | Select-Object -Property '*' -ExcludeProperty PS* | ConvertTo-Json -Compress)}else{$null}} })
+$arguments = @('/SP-','/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/CURRENTUSER','/NOCLOSEAPPLICATIONS','/NORESTARTAPPLICATIONS','/TASKS=""',('/DIR="'+$destination+'"'),('/LOG="'+$log+'"'),('/SAVEINF="'+$inf+'"'))
+$setup = Start-Process -FilePath $installer -ArgumentList $arguments -WindowStyle Hidden -PassThru
+$setup.WaitForExit()
+$exitCode = $setup.ExitCode
+if ($exitCode -ne 0) { throw "Installer exited with code $exitCode; retained log: $log" }
+$checks = @($manifest.files | ForEach-Object {
+ $file = Get-Item -LiteralPath (Join-Path $destination $_.name)
+ $hash = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+ if ($hash -cne $_.sha256 -or $file.Length -ne $_.length) { throw "Installed payload mismatch: $($_.name)" }
+ [ordered]@{name=$_.name;sha256=$hash;length=$file.Length;matches_payload=$true}
+})
+$uninstall = Get-ItemProperty -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{B91880A1-9E41-4868-B472-DF08FD48B7E4}_is1'
+if ($uninstall.DisplayName -ne 'Bareline version 0.1.0' -or $uninstall.DisplayVersion -ne '0.1.0' -or $uninstall.InstallLocation.TrimEnd('\') -ne $destination.Replace('/','\').TrimEnd('\')) { throw 'Per-user installation registration mismatch' }
+$shortcutPath = Join-Path ([Environment]::GetFolderPath('StartMenu')) 'Programs/Bareline/Bareline.lnk'
+if (-not (Test-Path -LiteralPath $shortcutPath -PathType Leaf)) { throw 'Missing Start Menu shortcut' }
+$shell = New-Object -ComObject WScript.Shell
+$shortcut = $shell.CreateShortcut($shortcutPath)
+if ($shortcut.TargetPath -ne (Join-Path $destination 'bareline.exe')) { throw 'Start Menu shortcut target mismatch' }
+$associationAfter = @($associationKeys | ForEach-Object { [ordered]@{path=$_;exists=(Test-Path -LiteralPath $_);value=if(Test-Path -LiteralPath $_){(Get-ItemProperty -LiteralPath $_ | Select-Object -Property '*' -ExcludeProperty PS* | ConvertTo-Json -Compress)}else{$null}} })
+if (($associationBefore | ConvertTo-Json -Depth 6 -Compress) -cne ($associationAfter | ConvertTo-Json -Depth 6 -Compress)) { throw 'Observed file association registration change' }
+$result = [ordered]@{status='PASS';installed_at_utc=[DateTimeOffset]::UtcNow.ToString('o');installer=$installer;installer_sha256=(Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant();installer_exit_code=$exitCode;mode='per-user unsigned preview';installation_path=$destination;shortcut=$shortcutPath;shortcut_target=$shortcut.TargetPath;uninstall_command=$uninstall.UninstallString;association_keys_unchanged=$true;files=$checks;log=$log}
+$result | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $evidence 'install-result.json') -Encoding utf8
+$result | ConvertTo-Json -Depth 8

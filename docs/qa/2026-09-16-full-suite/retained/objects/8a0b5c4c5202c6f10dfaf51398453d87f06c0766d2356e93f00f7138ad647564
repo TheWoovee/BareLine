@@ -1,0 +1,762 @@
+warning[duplicate]: found 2 duplicate entries for crate 'cpufeatures'
+   ┌─ D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor/Cargo.lock:55:1
+   │  
+55 │ ╭ cpufeatures 0.2.17 registry+https://github.com/rust-lang/crates.io-index
+56 │ │ cpufeatures 0.3.1 registry+https://github.com/rust-lang/crates.io-index
+   │ ╰───────────────────────────────────────────────────────────────────────┘ lock entries
+   │  
+   ├ cpufeatures v0.2.17
+     ├── curve25519-dalek v4.1.3
+     │   └── ed25519-dalek v2.2.0
+     │       ├── (dev) bareline v0.1.0
+     │       └── (dev) bareline-extensions-protocol v0.1.0
+     │           ├── bareline v0.1.0 (*)
+     │           ├── bareline-app v0.1.0
+     │           │   ├── bareline v0.1.0 (*)
+     │           │   └── xtask v0.1.0
+     │           ├── (dev) bareline-distribution v0.1.0
+     │           │   ├── bareline v0.1.0 (*)
+     │           │   ├── bareline-platform-windows v0.1.0
+     │           │   │   ├── bareline v0.1.0 (*)
+     │           │   │   ├── bareline-extension-host v0.1.0
+     │           │   │   ├── (dev) bareline-search v0.1.0
+     │           │   │   │   ├── bareline v0.1.0 (*)
+     │           │   │   │   ├── bareline-app v0.1.0 (*)
+     │           │   │   │   ├── bareline-syntax v0.1.0
+     │           │   │   │   │   ├── bareline v0.1.0 (*)
+     │           │   │   │   │   ├── bareline-app v0.1.0 (*)
+     │           │   │   │   │   ├── bareline-editor-surface v0.1.0
+     │           │   │   │   │   │   ├── bareline v0.1.0 (*)
+     │           │   │   │   │   │   ├── bareline-app v0.1.0 (*)
+     │           │   │   │   │   │   └── (dev) bareline-platform-windows v0.1.0 (*)
+     │           │   │   │   │   └── (dev) xtask v0.1.0 (*)
+     │           │   │   │   └── xtask v0.1.0 (*)
+     │           │   │   ├── bareline-update-helper v0.1.0
+     │           │   │   └── xtask v0.1.0 (*)
+     │           │   └── bareline-update-helper v0.1.0 (*)
+     │           ├── bareline-extension-host v0.1.0 (*)
+     │           ├── bareline-extension-sdk v0.1.0
+     │           │   ├── bareline-first-party-common v0.1.0
+     │           │   │   ├── bareline-hex-view v0.1.0
+     │           │   │   ├── bareline-json-tools v0.1.0
+     │           │   │   └── bareline-xml-tools v0.1.0
+     │           │   ├── bareline-hex-view v0.1.0 (*)
+     │           │   ├── bareline-json-tools v0.1.0 (*)
+     │           │   └── bareline-xml-tools v0.1.0 (*)
+     │           ├── bareline-platform-windows v0.1.0 (*)
+     │           └── (dev) xtask v0.1.0 (*)
+     ├── sha1 v0.10.6
+     │   └── bareline-app v0.1.0 (*)
+     └── sha2 v0.10.9
+         ├── (dev) bareline v0.1.0 (*)
+         ├── bareline-app v0.1.0 (*)
+         ├── bareline-distribution v0.1.0 (*)
+         ├── bareline-extension-host v0.1.0 (*)
+         ├── bareline-extensions-protocol v0.1.0 (*)
+         ├── bareline-file-io v0.1.0
+         │   ├── bareline v0.1.0 (*)
+         │   ├── bareline-app v0.1.0 (*)
+         │   ├── bareline-editor-surface v0.1.0 (*)
+         │   ├── (dev) bareline-platform-windows v0.1.0 (*)
+         │   ├── bareline-search v0.1.0 (*)
+         │   └── xtask v0.1.0 (*)
+         ├── bareline-platform-windows v0.1.0 (*)
+         ├── bareline-search v0.1.0 (*)
+         ├── cranelift-codegen v0.135.1
+         │   ├── cranelift-frontend v0.135.1
+         │   │   └── wasmtime-internal-cranelift v48.0.1
+         │   │       └── wasmtime v48.0.1
+         │   │           ├── bareline-extension-host v0.1.0 (*)
+         │   │           ├── wasmtime-wasi v48.0.1
+         │   │           │   └── bareline-extension-host v0.1.0 (*)
+         │   │           └── wasmtime-wasi-io v48.0.1
+         │   │               └── wasmtime-wasi v48.0.1 (*)
+         │   ├── cranelift-native v0.135.1
+         │   │   └── wasmtime-internal-cranelift v48.0.1 (*)
+         │   ├── wasmtime-internal-cranelift v48.0.1 (*)
+         │   └── wasmtime-internal-unwinder v48.0.1
+         │       ├── wasmtime v48.0.1 (*)
+         │       └── wasmtime-internal-cranelift v48.0.1 (*)
+         ├── ed25519-dalek v2.2.0 (*)
+         ├── wasmtime-environ v48.0.1
+         │   ├── wasmtime v48.0.1 (*)
+         │   ├── wasmtime-internal-cranelift v48.0.1 (*)
+         │   ├── wasmtime-internal-fiber v48.0.1
+         │   │   └── wasmtime v48.0.1 (*)
+         │   └── wasmtime-internal-unwinder v48.0.1 (*)
+         └── xtask v0.1.0 (*)
+   ├ cpufeatures v0.3.1
+     └── chacha20 v0.10.2
+         └── rand v0.10.2
+             └── wasmtime-wasi v48.0.1
+                 └── bareline-extension-host v0.1.0
+
+warning[duplicate]: found 2 duplicate entries for crate 'hashbrown'
+    ┌─ D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor/Cargo.lock:101:1
+    │  
+101 │ ╭ hashbrown 0.16.1 registry+https://github.com/rust-lang/crates.io-index
+102 │ │ hashbrown 0.17.1 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰──────────────────────────────────────────────────────────────────────┘ lock entries
+    │  
+    ├ hashbrown v0.16.1
+      └── gimli v0.33.0
+          ├── cranelift-codegen v0.135.1
+          │   ├── cranelift-frontend v0.135.1
+          │   │   └── wasmtime-internal-cranelift v48.0.1
+          │   │       └── wasmtime v48.0.1
+          │   │           ├── bareline-extension-host v0.1.0
+          │   │           ├── wasmtime-wasi v48.0.1
+          │   │           │   └── bareline-extension-host v0.1.0 (*)
+          │   │           └── wasmtime-wasi-io v48.0.1
+          │   │               └── wasmtime-wasi v48.0.1 (*)
+          │   ├── cranelift-native v0.135.1
+          │   │   └── wasmtime-internal-cranelift v48.0.1 (*)
+          │   ├── wasmtime-internal-cranelift v48.0.1 (*)
+          │   └── wasmtime-internal-unwinder v48.0.1
+          │       ├── wasmtime v48.0.1 (*)
+          │       └── wasmtime-internal-cranelift v48.0.1 (*)
+          ├── wasmtime-environ v48.0.1
+          │   ├── wasmtime v48.0.1 (*)
+          │   ├── wasmtime-internal-cranelift v48.0.1 (*)
+          │   ├── wasmtime-internal-fiber v48.0.1
+          │   │   └── wasmtime v48.0.1 (*)
+          │   └── wasmtime-internal-unwinder v48.0.1 (*)
+          └── wasmtime-internal-cranelift v48.0.1 (*)
+    ├ hashbrown v0.17.1
+      ├── accesskit_consumer v0.39.0
+      │   └── accesskit_windows v0.35.0
+      │       └── bareline-platform-windows v0.1.0
+      │           ├── bareline v0.1.0
+      │           ├── bareline-extension-host v0.1.0
+      │           ├── (dev) bareline-search v0.1.0
+      │           │   ├── bareline v0.1.0 (*)
+      │           │   ├── bareline-app v0.1.0
+      │           │   │   ├── bareline v0.1.0 (*)
+      │           │   │   └── xtask v0.1.0
+      │           │   ├── bareline-syntax v0.1.0
+      │           │   │   ├── bareline v0.1.0 (*)
+      │           │   │   ├── bareline-app v0.1.0 (*)
+      │           │   │   ├── bareline-editor-surface v0.1.0
+      │           │   │   │   ├── bareline v0.1.0 (*)
+      │           │   │   │   ├── bareline-app v0.1.0 (*)
+      │           │   │   │   └── (dev) bareline-platform-windows v0.1.0 (*)
+      │           │   │   └── (dev) xtask v0.1.0 (*)
+      │           │   └── xtask v0.1.0 (*)
+      │           ├── bareline-update-helper v0.1.0
+      │           └── xtask v0.1.0 (*)
+      ├── accesskit_windows v0.35.0 (*)
+      ├── cranelift-codegen v0.135.1
+      │   ├── cranelift-frontend v0.135.1
+      │   │   └── wasmtime-internal-cranelift v48.0.1
+      │   │       └── wasmtime v48.0.1
+      │   │           ├── bareline-extension-host v0.1.0 (*)
+      │   │           ├── wasmtime-wasi v48.0.1
+      │   │           │   └── bareline-extension-host v0.1.0 (*)
+      │   │           └── wasmtime-wasi-io v48.0.1
+      │   │               └── wasmtime-wasi v48.0.1 (*)
+      │   ├── cranelift-native v0.135.1
+      │   │   └── wasmtime-internal-cranelift v48.0.1 (*)
+      │   ├── wasmtime-internal-cranelift v48.0.1 (*)
+      │   └── wasmtime-internal-unwinder v48.0.1
+      │       ├── wasmtime v48.0.1 (*)
+      │       └── wasmtime-internal-cranelift v48.0.1 (*)
+      ├── cranelift-frontend v0.135.1 (*)
+      ├── indexmap v2.14.2
+      │   ├── gimli v0.33.0
+      │   │   ├── cranelift-codegen v0.135.1 (*)
+      │   │   ├── wasmtime-environ v48.0.1
+      │   │   │   ├── wasmtime v48.0.1 (*)
+      │   │   │   ├── wasmtime-internal-cranelift v48.0.1 (*)
+      │   │   │   ├── wasmtime-internal-fiber v48.0.1
+      │   │   │   │   └── wasmtime v48.0.1 (*)
+      │   │   │   └── wasmtime-internal-unwinder v48.0.1 (*)
+      │   │   └── wasmtime-internal-cranelift v48.0.1 (*)
+      │   ├── object v0.39.1
+      │   │   ├── wasmtime v48.0.1 (*)
+      │   │   ├── wasmtime-environ v48.0.1 (*)
+      │   │   ├── wasmtime-internal-cranelift v48.0.1 (*)
+      │   │   └── wasmtime-internal-unwinder v48.0.1 (*)
+      │   ├── toml_edit v0.22.27
+      │   │   ├── bareline-commands v0.1.0
+      │   │   │   ├── bareline v0.1.0 (*)
+      │   │   │   ├── bareline-app v0.1.0 (*)
+      │   │   │   ├── bareline-editor-surface v0.1.0 (*)
+      │   │   │   ├── bareline-macros v0.1.0
+      │   │   │   │   ├── bareline-app v0.1.0 (*)
+      │   │   │   │   ├── (dev) bareline-extension-host v0.1.0 (*)
+      │   │   │   │   └── bareline-platform-windows v0.1.0 (*)
+      │   │   │   ├── bareline-platform-windows v0.1.0 (*)
+      │   │   │   ├── bareline-settings v0.1.0
+      │   │   │   │   ├── bareline v0.1.0 (*)
+      │   │   │   │   ├── bareline-app v0.1.0 (*)
+      │   │   │   │   └── (dev) bareline-ui v0.1.0
+      │   │   │   │       ├── bareline v0.1.0 (*)
+      │   │   │   │       ├── bareline-app v0.1.0 (*)
+      │   │   │   │       ├── bareline-editor-surface v0.1.0 (*)
+      │   │   │   │       ├── (dev) bareline-platform-linux v0.1.0
+      │   │   │   │       └── (dev) bareline-platform-macos v0.1.0
+      │   │   │   └── xtask v0.1.0 (*)
+      │   │   ├── bareline-extensions-protocol v0.1.0
+      │   │   │   ├── bareline v0.1.0 (*)
+      │   │   │   ├── bareline-app v0.1.0 (*)
+      │   │   │   ├── (dev) bareline-distribution v0.1.0
+      │   │   │   │   ├── bareline v0.1.0 (*)
+      │   │   │   │   ├── bareline-platform-windows v0.1.0 (*)
+      │   │   │   │   └── bareline-update-helper v0.1.0 (*)
+      │   │   │   ├── bareline-extension-host v0.1.0 (*)
+      │   │   │   ├── bareline-extension-sdk v0.1.0
+      │   │   │   │   ├── bareline-first-party-common v0.1.0
+      │   │   │   │   │   ├── bareline-hex-view v0.1.0
+      │   │   │   │   │   ├── bareline-json-tools v0.1.0
+      │   │   │   │   │   └── bareline-xml-tools v0.1.0
+      │   │   │   │   ├── bareline-hex-view v0.1.0 (*)
+      │   │   │   │   ├── bareline-json-tools v0.1.0 (*)
+      │   │   │   │   └── bareline-xml-tools v0.1.0 (*)
+      │   │   │   ├── bareline-platform-windows v0.1.0 (*)
+      │   │   │   └── (dev) xtask v0.1.0 (*)
+      │   │   ├── bareline-macros v0.1.0 (*)
+      │   │   ├── bareline-settings v0.1.0 (*)
+      │   │   └── bareline-syntax v0.1.0 (*)
+      │   ├── wasm-metadata v0.254.0
+      │   │   └── wit-component v0.254.0
+      │   │       └── wasmtime-internal-wit-bindgen v48.0.1
+      │   │           └── wasmtime-internal-component-macro v48.0.1
+      │   │               └── wasmtime v48.0.1 (*)
+      │   ├── wasmparser v0.254.0
+      │   │   ├── wasm-encoder v0.254.0
+      │   │   │   ├── wasm-metadata v0.254.0 (*)
+      │   │   │   ├── wasmtime-environ v48.0.1 (*)
+      │   │   │   └── wit-component v0.254.0 (*)
+      │   │   ├── wasm-metadata v0.254.0 (*)
+      │   │   ├── wasmprinter v0.254.0
+      │   │   │   └── wasmtime-environ v48.0.1 (*)
+      │   │   ├── wasmtime v48.0.1 (*)
+      │   │   ├── wasmtime-environ v48.0.1 (*)
+      │   │   ├── wasmtime-internal-cranelift v48.0.1 (*)
+      │   │   ├── wit-component v0.254.0 (*)
+      │   │   └── wit-parser v0.254.0
+      │   │       ├── wasmtime-internal-component-macro v48.0.1 (*)
+      │   │       ├── wasmtime-internal-wit-bindgen v48.0.1 (*)
+      │   │       └── wit-component v0.254.0 (*)
+      │   ├── wasmtime-environ v48.0.1 (*)
+      │   ├── wasmtime-internal-wit-bindgen v48.0.1 (*)
+      │   ├── wit-component v0.254.0 (*)
+      │   ├── wit-parser v0.254.0 (*)
+      │   └── zip v2.4.2
+      │       └── bareline-extensions-protocol v0.1.0 (*)
+      ├── object v0.39.1 (*)
+      ├── regalloc2 v0.15.2
+      │   └── cranelift-codegen v0.135.1 (*)
+      ├── wasmparser v0.254.0 (*)
+      ├── wasmtime-environ v48.0.1 (*)
+      ├── wasmtime-internal-core v48.0.1
+      │   ├── cranelift-bforest v0.135.1
+      │   │   ├── cranelift-codegen v0.135.1 (*)
+      │   │   └── wasmtime-environ v48.0.1 (*)
+      │   ├── cranelift-bitset v0.135.1
+      │   │   ├── cranelift-codegen v0.135.1 (*)
+      │   │   ├── cranelift-entity v0.135.1
+      │   │   │   ├── cranelift-bforest v0.135.1 (*)
+      │   │   │   ├── cranelift-codegen v0.135.1 (*)
+      │   │   │   ├── wasmtime-environ v48.0.1 (*)
+      │   │   │   └── wasmtime-internal-cranelift v48.0.1 (*)
+      │   │   ├── pulley-interpreter v48.0.1
+      │   │   │   ├── cranelift-codegen v0.135.1 (*)
+      │   │   │   ├── cranelift-codegen-meta v0.135.1
+      │   │   │   │   └── (build) cranelift-codegen v0.135.1 (*)
+      │   │   │   ├── wasmtime v48.0.1 (*)
+      │   │   │   └── wasmtime-internal-cranelift v48.0.1 (*)
+      │   │   └── wasmtime-environ v48.0.1 (*)
+      │   ├── cranelift-codegen v0.135.1 (*)
+      │   ├── cranelift-entity v0.135.1 (*)
+      │   ├── pulley-interpreter v48.0.1 (*)
+      │   ├── wasmtime v48.0.1 (*)
+      │   ├── wasmtime-environ v48.0.1 (*)
+      │   ├── wasmtime-internal-cranelift v48.0.1 (*)
+      │   └── wasmtime-internal-jit-icache-coherence v48.0.1
+      │       └── wasmtime v48.0.1 (*)
+      └── wit-parser v0.254.0 (*)
+
+warning[license-exception-not-encountered]: license exception was not encountered
+    ┌─ D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\deny.toml:143:9
+    │
+143 │ name = "wasmtime-internal-jit-debug"
+    │         ━━━━━━━━━━━━━━━━━━━━━━━━━━━ unmatched license exception
+
+warning[license-not-encountered]: license was not encountered
+  ┌─ D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\deny.toml:7:59
+  │
+7 │ allow = ["MPL-2.0", "MIT", "Apache-2.0", "BSD-3-Clause", "ISC", "Unicode-3.0", "Zlib"]
+  │                                                           ━━━ unmatched license allowance
+
+warning[duplicate]: found 2 duplicate entries for crate 'io-lifetimes'
+    ┌─ D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor/Cargo.lock:117:1
+    │  
+117 │ ╭ io-lifetimes 2.0.4 registry+https://github.com/rust-lang/crates.io-index
+118 │ │ io-lifetimes 3.0.1 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰────────────────────────────────────────────────────────────────────────┘ lock entries
+    │  
+    ├ io-lifetimes v2.0.4
+      └── fs-set-times v0.20.3
+          └── cap-primitives v4.0.3
+              ├── cap-fs-ext v4.0.3
+              │   └── wasmtime-wasi v48.0.1
+              │       └── bareline-extension-host v0.1.0
+              ├── cap-std v4.0.3
+              │   └── cap-fs-ext v4.0.3 (*)
+              └── wasmtime-wasi v48.0.1 (*)
+    ├ io-lifetimes v3.0.1
+      ├── cap-fs-ext v4.0.3
+      │   └── wasmtime-wasi v48.0.1
+      │       └── bareline-extension-host v0.1.0
+      ├── cap-primitives v4.0.3
+      │   ├── cap-fs-ext v4.0.3 (*)
+      │   ├── cap-std v4.0.3
+      │   │   └── cap-fs-ext v4.0.3 (*)
+      │   └── wasmtime-wasi v48.0.1 (*)
+      ├── cap-std v4.0.3 (*)
+      └── io-extras v0.19.0
+          ├── cap-primitives v4.0.3 (*)
+          └── cap-std v4.0.3 (*)
+
+warning[duplicate]: found 2 duplicate entries for crate 'syn'
+    ┌─ D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor/Cargo.lock:175:1
+    │  
+175 │ ╭ syn 2.0.119 registry+https://github.com/rust-lang/crates.io-index
+176 │ │ syn 3.0.5 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰───────────────────────────────────────────────────────────────┘ lock entries
+    │  
+    ├ syn v2.0.119
+      ├── curve25519-dalek-derive v0.1.1
+      │   └── curve25519-dalek v4.1.3
+      │       └── ed25519-dalek v2.2.0
+      │           ├── (dev) bareline v0.1.0
+      │           └── (dev) bareline-extensions-protocol v0.1.0
+      │               ├── bareline v0.1.0 (*)
+      │               ├── bareline-app v0.1.0
+      │               │   ├── bareline v0.1.0 (*)
+      │               │   └── xtask v0.1.0
+      │               ├── (dev) bareline-distribution v0.1.0
+      │               │   ├── bareline v0.1.0 (*)
+      │               │   ├── bareline-platform-windows v0.1.0
+      │               │   │   ├── bareline v0.1.0 (*)
+      │               │   │   ├── bareline-extension-host v0.1.0
+      │               │   │   ├── (dev) bareline-search v0.1.0
+      │               │   │   │   ├── bareline v0.1.0 (*)
+      │               │   │   │   ├── bareline-app v0.1.0 (*)
+      │               │   │   │   ├── bareline-syntax v0.1.0
+      │               │   │   │   │   ├── bareline v0.1.0 (*)
+      │               │   │   │   │   ├── bareline-app v0.1.0 (*)
+      │               │   │   │   │   ├── bareline-editor-surface v0.1.0
+      │               │   │   │   │   │   ├── bareline v0.1.0 (*)
+      │               │   │   │   │   │   ├── bareline-app v0.1.0 (*)
+      │               │   │   │   │   │   └── (dev) bareline-platform-windows v0.1.0 (*)
+      │               │   │   │   │   └── (dev) xtask v0.1.0 (*)
+      │               │   │   │   └── xtask v0.1.0 (*)
+      │               │   │   ├── bareline-update-helper v0.1.0
+      │               │   │   └── xtask v0.1.0 (*)
+      │               │   └── bareline-update-helper v0.1.0 (*)
+      │               ├── bareline-extension-host v0.1.0 (*)
+      │               ├── bareline-extension-sdk v0.1.0
+      │               │   ├── bareline-first-party-common v0.1.0
+      │               │   │   ├── bareline-hex-view v0.1.0
+      │               │   │   ├── bareline-json-tools v0.1.0
+      │               │   │   └── bareline-xml-tools v0.1.0
+      │               │   ├── bareline-hex-view v0.1.0 (*)
+      │               │   ├── bareline-json-tools v0.1.0 (*)
+      │               │   └── bareline-xml-tools v0.1.0 (*)
+      │               ├── bareline-platform-windows v0.1.0 (*)
+      │               └── (dev) xtask v0.1.0 (*)
+      ├── pulley-macros v48.0.1
+      │   └── pulley-interpreter v48.0.1
+      │       ├── cranelift-codegen v0.135.1
+      │       │   ├── cranelift-frontend v0.135.1
+      │       │   │   └── wasmtime-internal-cranelift v48.0.1
+      │       │   │       └── wasmtime v48.0.1
+      │       │   │           ├── bareline-extension-host v0.1.0 (*)
+      │       │   │           ├── wasmtime-wasi v48.0.1
+      │       │   │           │   └── bareline-extension-host v0.1.0 (*)
+      │       │   │           └── wasmtime-wasi-io v48.0.1
+      │       │   │               └── wasmtime-wasi v48.0.1 (*)
+      │       │   ├── cranelift-native v0.135.1
+      │       │   │   └── wasmtime-internal-cranelift v48.0.1 (*)
+      │       │   ├── wasmtime-internal-cranelift v48.0.1 (*)
+      │       │   └── wasmtime-internal-unwinder v48.0.1
+      │       │       ├── wasmtime v48.0.1 (*)
+      │       │       └── wasmtime-internal-cranelift v48.0.1 (*)
+      │       ├── cranelift-codegen-meta v0.135.1
+      │       │   └── (build) cranelift-codegen v0.135.1 (*)
+      │       ├── wasmtime v48.0.1 (*)
+      │       └── wasmtime-internal-cranelift v48.0.1 (*)
+      ├── synstructure v0.13.2
+      │   ├── yoke-derive v0.8.2
+      │   │   └── yoke v0.8.3
+      │   │       ├── icu_collections v2.1.1
+      │   │       │   ├── icu_normalizer v2.1.1
+      │   │       │   │   └── idna_adapter v1.2.1
+      │   │       │   │       └── idna v1.1.0
+      │   │       │   │           └── url v2.5.8
+      │   │       │   │               └── wasmtime-wasi v48.0.1 (*)
+      │   │       │   └── icu_properties v2.1.2
+      │   │       │       └── idna_adapter v1.2.1 (*)
+      │   │       ├── icu_provider v2.1.1
+      │   │       │   ├── icu_normalizer v2.1.1 (*)
+      │   │       │   └── icu_properties v2.1.2 (*)
+      │   │       ├── zerotrie v0.2.5
+      │   │       │   ├── icu_properties v2.1.2 (*)
+      │   │       │   └── icu_provider v2.1.1 (*)
+      │   │       └── zerovec v0.11.8
+      │   │           ├── icu_collections v2.1.1 (*)
+      │   │           ├── icu_locale_core v2.1.1
+      │   │           │   ├── icu_properties v2.1.2 (*)
+      │   │           │   └── icu_provider v2.1.1 (*)
+      │   │           ├── icu_normalizer v2.1.1 (*)
+      │   │           ├── icu_properties v2.1.2 (*)
+      │   │           ├── icu_provider v2.1.1 (*)
+      │   │           ├── potential_utf v0.1.6
+      │   │           │   └── icu_collections v2.1.1 (*)
+      │   │           └── tinystr v0.8.4
+      │   │               └── icu_locale_core v2.1.1 (*)
+      │   └── zerofrom-derive v0.1.7
+      │       └── zerofrom v0.1.8
+      │           ├── icu_collections v2.1.1 (*)
+      │           ├── icu_provider v2.1.1 (*)
+      │           ├── yoke v0.8.3 (*)
+      │           ├── zerotrie v0.2.5 (*)
+      │           └── zerovec v0.11.8 (*)
+      ├── tracing-attributes v0.1.31
+      │   └── tracing v0.1.44
+      │       ├── wasmtime-wasi v48.0.1 (*)
+      │       ├── wasmtime-wasi-io v48.0.1 (*)
+      │       └── winit v0.30.13
+      │           ├── bareline v0.1.0 (*)
+      │           ├── (dev) bareline-platform-linux v0.1.0
+      │           └── (dev) bareline-platform-macos v0.1.0
+      ├── wasmtime-internal-component-macro v48.0.1
+      │   └── wasmtime v48.0.1 (*)
+      ├── wasmtime-internal-versioned-export-macros v48.0.1
+      │   ├── (build) wasmtime v48.0.1 (*)
+      │   ├── wasmtime-internal-cranelift v48.0.1 (*)
+      │   └── (build) wasmtime-internal-fiber v48.0.1
+      │       └── wasmtime v48.0.1 (*)
+      ├── windows-implement v0.60.2
+      │   └── windows-core v0.62.2
+      │       ├── accesskit_windows v0.35.0
+      │       │   └── bareline-platform-windows v0.1.0 (*)
+      │       ├── bareline-platform-windows v0.1.0 (*)
+      │       ├── windows v0.62.2
+      │       │   ├── accesskit_windows v0.35.0 (*)
+      │       │   ├── bareline v0.1.0 (*)
+      │       │   ├── bareline-platform-windows v0.1.0 (*)
+      │       │   └── xtask v0.1.0 (*)
+      │       ├── windows-collections v0.3.2
+      │       │   └── windows v0.62.2 (*)
+      │       ├── windows-future v0.3.2
+      │       │   └── windows v0.62.2 (*)
+      │       └── windows-numerics v0.3.1
+      │           ├── bareline-platform-windows v0.1.0 (*)
+      │           └── windows v0.62.2 (*)
+      ├── windows-interface v0.59.3
+      │   └── windows-core v0.62.2 (*)
+      ├── yoke-derive v0.8.2 (*)
+      └── zerofrom-derive v0.1.7 (*)
+    ├ syn v3.0.5
+      ├── async-trait v0.1.92
+      │   ├── wasmtime v48.0.1
+      │   │   ├── bareline-extension-host v0.1.0
+      │   │   ├── wasmtime-wasi v48.0.1
+      │   │   │   └── bareline-extension-host v0.1.0 (*)
+      │   │   └── wasmtime-wasi-io v48.0.1
+      │   │       └── wasmtime-wasi v48.0.1 (*)
+      │   ├── wasmtime-wasi v48.0.1 (*)
+      │   └── wasmtime-wasi-io v48.0.1 (*)
+      ├── displaydoc v0.2.7
+      │   ├── icu_collections v2.1.1
+      │   │   ├── icu_normalizer v2.1.1
+      │   │   │   └── idna_adapter v1.2.1
+      │   │   │       └── idna v1.1.0
+      │   │   │           └── url v2.5.8
+      │   │   │               └── wasmtime-wasi v48.0.1 (*)
+      │   │   └── icu_properties v2.1.2
+      │   │       └── idna_adapter v1.2.1 (*)
+      │   ├── icu_locale_core v2.1.1
+      │   │   ├── icu_properties v2.1.2 (*)
+      │   │   └── icu_provider v2.1.1
+      │   │       ├── icu_normalizer v2.1.1 (*)
+      │   │       └── icu_properties v2.1.2 (*)
+      │   ├── icu_provider v2.1.1 (*)
+      │   ├── tinystr v0.8.4
+      │   │   └── icu_locale_core v2.1.1 (*)
+      │   ├── zerotrie v0.2.5
+      │   │   ├── icu_properties v2.1.2 (*)
+      │   │   └── icu_provider v2.1.1 (*)
+      │   └── zip v2.4.2
+      │       └── bareline-extensions-protocol v0.1.0
+      │           ├── bareline v0.1.0
+      │           ├── bareline-app v0.1.0
+      │           │   ├── bareline v0.1.0 (*)
+      │           │   └── xtask v0.1.0
+      │           ├── (dev) bareline-distribution v0.1.0
+      │           │   ├── bareline v0.1.0 (*)
+      │           │   ├── bareline-platform-windows v0.1.0
+      │           │   │   ├── bareline v0.1.0 (*)
+      │           │   │   ├── bareline-extension-host v0.1.0 (*)
+      │           │   │   ├── (dev) bareline-search v0.1.0
+      │           │   │   │   ├── bareline v0.1.0 (*)
+      │           │   │   │   ├── bareline-app v0.1.0 (*)
+      │           │   │   │   ├── bareline-syntax v0.1.0
+      │           │   │   │   │   ├── bareline v0.1.0 (*)
+      │           │   │   │   │   ├── bareline-app v0.1.0 (*)
+      │           │   │   │   │   ├── bareline-editor-surface v0.1.0
+      │           │   │   │   │   │   ├── bareline v0.1.0 (*)
+      │           │   │   │   │   │   ├── bareline-app v0.1.0 (*)
+      │           │   │   │   │   │   └── (dev) bareline-platform-windows v0.1.0 (*)
+      │           │   │   │   │   └── (dev) xtask v0.1.0 (*)
+      │           │   │   │   └── xtask v0.1.0 (*)
+      │           │   │   ├── bareline-update-helper v0.1.0
+      │           │   │   └── xtask v0.1.0 (*)
+      │           │   └── bareline-update-helper v0.1.0 (*)
+      │           ├── bareline-extension-host v0.1.0 (*)
+      │           ├── bareline-extension-sdk v0.1.0
+      │           │   ├── bareline-first-party-common v0.1.0
+      │           │   │   ├── bareline-hex-view v0.1.0
+      │           │   │   ├── bareline-json-tools v0.1.0
+      │           │   │   └── bareline-xml-tools v0.1.0
+      │           │   ├── bareline-hex-view v0.1.0 (*)
+      │           │   ├── bareline-json-tools v0.1.0 (*)
+      │           │   └── bareline-xml-tools v0.1.0 (*)
+      │           ├── bareline-platform-windows v0.1.0 (*)
+      │           └── (dev) xtask v0.1.0 (*)
+      ├── serde_derive v1.0.229
+      │   ├── cranelift-bitset v0.135.1
+      │   │   ├── cranelift-codegen v0.135.1
+      │   │   │   ├── cranelift-frontend v0.135.1
+      │   │   │   │   └── wasmtime-internal-cranelift v48.0.1
+      │   │   │   │       └── wasmtime v48.0.1 (*)
+      │   │   │   ├── cranelift-native v0.135.1
+      │   │   │   │   └── wasmtime-internal-cranelift v48.0.1 (*)
+      │   │   │   ├── wasmtime-internal-cranelift v48.0.1 (*)
+      │   │   │   └── wasmtime-internal-unwinder v48.0.1
+      │   │   │       ├── wasmtime v48.0.1 (*)
+      │   │   │       └── wasmtime-internal-cranelift v48.0.1 (*)
+      │   │   ├── cranelift-entity v0.135.1
+      │   │   │   ├── cranelift-bforest v0.135.1
+      │   │   │   │   ├── cranelift-codegen v0.135.1 (*)
+      │   │   │   │   └── wasmtime-environ v48.0.1
+      │   │   │   │       ├── wasmtime v48.0.1 (*)
+      │   │   │   │       ├── wasmtime-internal-cranelift v48.0.1 (*)
+      │   │   │   │       ├── wasmtime-internal-fiber v48.0.1
+      │   │   │   │       │   └── wasmtime v48.0.1 (*)
+      │   │   │   │       └── wasmtime-internal-unwinder v48.0.1 (*)
+      │   │   │   ├── cranelift-codegen v0.135.1 (*)
+      │   │   │   ├── wasmtime-environ v48.0.1 (*)
+      │   │   │   └── wasmtime-internal-cranelift v48.0.1 (*)
+      │   │   ├── pulley-interpreter v48.0.1
+      │   │   │   ├── cranelift-codegen v0.135.1 (*)
+      │   │   │   ├── cranelift-codegen-meta v0.135.1
+      │   │   │   │   └── (build) cranelift-codegen v0.135.1 (*)
+      │   │   │   ├── wasmtime v48.0.1 (*)
+      │   │   │   └── wasmtime-internal-cranelift v48.0.1 (*)
+      │   │   └── wasmtime-environ v48.0.1 (*)
+      │   ├── cranelift-codegen v0.135.1 (*)
+      │   ├── cranelift-entity v0.135.1 (*)
+      │   ├── serde v1.0.229
+      │   │   ├── bareline-app v0.1.0 (*)
+      │   │   ├── bareline-distribution v0.1.0 (*)
+      │   │   ├── bareline-extensions-protocol v0.1.0 (*)
+      │   │   ├── bareline-file-io v0.1.0
+      │   │   │   ├── bareline v0.1.0 (*)
+      │   │   │   ├── bareline-app v0.1.0 (*)
+      │   │   │   ├── bareline-editor-surface v0.1.0 (*)
+      │   │   │   ├── (dev) bareline-platform-windows v0.1.0 (*)
+      │   │   │   ├── bareline-search v0.1.0 (*)
+      │   │   │   └── xtask v0.1.0 (*)
+      │   │   ├── bareline-platform v0.1.0
+      │   │   │   ├── bareline v0.1.0 (*)
+      │   │   │   ├── bareline-app v0.1.0 (*)
+      │   │   │   ├── (dev) bareline-distribution v0.1.0 (*)
+      │   │   │   ├── bareline-editor-surface v0.1.0 (*)
+      │   │   │   ├── bareline-file-io v0.1.0 (*)
+      │   │   │   ├── bareline-platform-linux v0.1.0
+      │   │   │   ├── bareline-platform-macos v0.1.0
+      │   │   │   ├── bareline-platform-windows v0.1.0 (*)
+      │   │   │   ├── bareline-search v0.1.0 (*)
+      │   │   │   ├── bareline-settings v0.1.0
+      │   │   │   │   ├── bareline v0.1.0 (*)
+      │   │   │   │   ├── bareline-app v0.1.0 (*)
+      │   │   │   │   └── (dev) bareline-ui v0.1.0
+      │   │   │   │       ├── bareline v0.1.0 (*)
+      │   │   │   │       ├── bareline-app v0.1.0 (*)
+      │   │   │   │       ├── bareline-editor-surface v0.1.0 (*)
+      │   │   │   │       ├── (dev) bareline-platform-linux v0.1.0 (*)
+      │   │   │   │       └── (dev) bareline-platform-macos v0.1.0 (*)
+      │   │   │   └── (dev) xtask v0.1.0 (*)
+      │   │   ├── bareline-search v0.1.0 (*)
+      │   │   ├── bareline-syntax v0.1.0 (*)
+      │   │   ├── cranelift-bitset v0.135.1 (*)
+      │   │   ├── cranelift-codegen v0.135.1 (*)
+      │   │   ├── cranelift-entity v0.135.1 (*)
+      │   │   ├── heapless v0.7.17
+      │   │   │   └── postcard v1.1.3
+      │   │   │       ├── bareline-extensions-protocol v0.1.0 (*)
+      │   │   │       ├── bareline-first-party-common v0.1.0 (*)
+      │   │   │       ├── cranelift-codegen v0.135.1 (*)
+      │   │   │       ├── wasmtime v48.0.1 (*)
+      │   │   │       └── wasmtime-environ v48.0.1 (*)
+      │   │   ├── postcard v1.1.3 (*)
+      │   │   ├── regalloc2 v0.15.2
+      │   │   │   └── cranelift-codegen v0.135.1 (*)
+      │   │   ├── serde_spanned v0.6.9
+      │   │   │   └── toml_edit v0.22.27
+      │   │   │       ├── bareline-commands v0.1.0
+      │   │   │       │   ├── bareline v0.1.0 (*)
+      │   │   │       │   ├── bareline-app v0.1.0 (*)
+      │   │   │       │   ├── bareline-editor-surface v0.1.0 (*)
+      │   │   │       │   ├── bareline-macros v0.1.0
+      │   │   │       │   │   ├── bareline-app v0.1.0 (*)
+      │   │   │       │   │   ├── (dev) bareline-extension-host v0.1.0 (*)
+      │   │   │       │   │   └── bareline-platform-windows v0.1.0 (*)
+      │   │   │       │   ├── bareline-platform-windows v0.1.0 (*)
+      │   │   │       │   ├── bareline-settings v0.1.0 (*)
+      │   │   │       │   └── xtask v0.1.0 (*)
+      │   │   │       ├── bareline-extensions-protocol v0.1.0 (*)
+      │   │   │       ├── bareline-macros v0.1.0 (*)
+      │   │   │       ├── bareline-settings v0.1.0 (*)
+      │   │   │       └── bareline-syntax v0.1.0 (*)
+      │   │   ├── smallvec v1.16.0
+      │   │   │   ├── cranelift-codegen v0.135.1 (*)
+      │   │   │   ├── cranelift-frontend v0.135.1 (*)
+      │   │   │   ├── icu_normalizer v2.1.1 (*)
+      │   │   │   ├── idna v1.1.0 (*)
+      │   │   │   ├── regalloc2 v0.15.2 (*)
+      │   │   │   ├── wasmtime v48.0.1 (*)
+      │   │   │   ├── wasmtime-environ v48.0.1 (*)
+      │   │   │   └── wasmtime-internal-cranelift v48.0.1 (*)
+      │   │   ├── toml_datetime v0.6.11
+      │   │   │   └── toml_edit v0.22.27 (*)
+      │   │   ├── toml_edit v0.22.27 (*)
+      │   │   ├── wasmparser v0.254.0
+      │   │   │   ├── wasm-encoder v0.254.0
+      │   │   │   │   ├── wasm-metadata v0.254.0
+      │   │   │   │   │   └── wit-component v0.254.0
+      │   │   │   │   │       └── wasmtime-internal-wit-bindgen v48.0.1
+      │   │   │   │   │           └── wasmtime-internal-component-macro v48.0.1
+      │   │   │   │   │               └── wasmtime v48.0.1 (*)
+      │   │   │   │   ├── wasmtime-environ v48.0.1 (*)
+      │   │   │   │   └── wit-component v0.254.0 (*)
+      │   │   │   ├── wasm-metadata v0.254.0 (*)
+      │   │   │   ├── wasmprinter v0.254.0
+      │   │   │   │   └── wasmtime-environ v48.0.1 (*)
+      │   │   │   ├── wasmtime v48.0.1 (*)
+      │   │   │   ├── wasmtime-environ v48.0.1 (*)
+      │   │   │   ├── wasmtime-internal-cranelift v48.0.1 (*)
+      │   │   │   ├── wit-component v0.254.0 (*)
+      │   │   │   └── wit-parser v0.254.0
+      │   │   │       ├── wasmtime-internal-component-macro v48.0.1 (*)
+      │   │   │       ├── wasmtime-internal-wit-bindgen v48.0.1 (*)
+      │   │   │       └── wit-component v0.254.0 (*)
+      │   │   ├── wasmtime v48.0.1 (*)
+      │   │   ├── wasmtime-environ v48.0.1 (*)
+      │   │   ├── wasmtime-internal-core v48.0.1
+      │   │   │   ├── cranelift-bforest v0.135.1 (*)
+      │   │   │   ├── cranelift-bitset v0.135.1 (*)
+      │   │   │   ├── cranelift-codegen v0.135.1 (*)
+      │   │   │   ├── cranelift-entity v0.135.1 (*)
+      │   │   │   ├── pulley-interpreter v48.0.1 (*)
+      │   │   │   ├── wasmtime v48.0.1 (*)
+      │   │   │   ├── wasmtime-environ v48.0.1 (*)
+      │   │   │   ├── wasmtime-internal-cranelift v48.0.1 (*)
+      │   │   │   └── wasmtime-internal-jit-icache-coherence v48.0.1
+      │   │   │       └── wasmtime v48.0.1 (*)
+      │   │   ├── wit-component v0.254.0 (*)
+      │   │   └── wit-parser v0.254.0 (*)
+      │   ├── wasmtime v48.0.1 (*)
+      │   ├── wasmtime-environ v48.0.1 (*)
+      │   ├── wit-component v0.254.0 (*)
+      │   └── wit-parser v0.254.0 (*)
+      ├── thiserror-impl v2.0.20
+      │   └── thiserror v2.0.20
+      │       ├── cobs v0.3.0
+      │       │   └── postcard v1.1.3 (*)
+      │       ├── wasmtime-internal-cranelift v48.0.1 (*)
+      │       ├── wasmtime-wasi v48.0.1 (*)
+      │       └── zip v2.4.2 (*)
+      └── zerovec-derive v0.11.6
+          └── zerovec v0.11.8
+              ├── icu_collections v2.1.1 (*)
+              ├── icu_locale_core v2.1.1 (*)
+              ├── icu_normalizer v2.1.1 (*)
+              ├── icu_properties v2.1.2 (*)
+              ├── icu_provider v2.1.1 (*)
+              ├── potential_utf v0.1.6
+              │   └── icu_collections v2.1.1 (*)
+              └── tinystr v0.8.4 (*)
+
+warning[duplicate]: found 3 duplicate entries for crate 'windows-sys'
+    ┌─ D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor/Cargo.lock:229:1
+    │  
+229 │ ╭ windows-sys 0.52.0 registry+https://github.com/rust-lang/crates.io-index
+230 │ │ windows-sys 0.59.0 registry+https://github.com/rust-lang/crates.io-index
+231 │ │ windows-sys 0.61.2 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰────────────────────────────────────────────────────────────────────────┘ lock entries
+    │  
+    ├ windows-sys v0.52.0
+      └── winit v0.30.13
+          ├── bareline v0.1.0
+          ├── (dev) bareline-platform-linux v0.1.0
+          └── (dev) bareline-platform-macos v0.1.0
+    ├ windows-sys v0.59.0
+      ├── fs-set-times v0.20.3
+      │   └── cap-primitives v4.0.3
+      │       ├── cap-fs-ext v4.0.3
+      │       │   └── wasmtime-wasi v48.0.1
+      │       │       └── bareline-extension-host v0.1.0
+      │       ├── cap-std v4.0.3
+      │       │   └── cap-fs-ext v4.0.3 (*)
+      │       └── wasmtime-wasi v48.0.1 (*)
+      ├── io-extras v0.19.0
+      │   ├── cap-primitives v4.0.3 (*)
+      │   └── cap-std v4.0.3 (*)
+      └── winx v0.36.4
+          └── cap-primitives v4.0.3 (*)
+    ├ windows-sys v0.61.2
+      ├── cap-fs-ext v4.0.3
+      │   └── wasmtime-wasi v48.0.1
+      │       └── bareline-extension-host v0.1.0
+      ├── cap-primitives v4.0.3
+      │   ├── cap-fs-ext v4.0.3 (*)
+      │   ├── cap-std v4.0.3
+      │   │   └── cap-fs-ext v4.0.3 (*)
+      │   └── wasmtime-wasi v48.0.1 (*)
+      ├── errno v0.3.14
+      │   └── rustix v1.1.4
+      │       └── wasmtime-wasi v48.0.1 (*)
+      ├── mio v1.2.3
+      │   └── tokio v1.53.1
+      │       └── wasmtime-wasi v48.0.1 (*)
+      ├── rustix v1.1.4 (*)
+      ├── socket2 v0.6.5
+      │   └── tokio v1.53.1 (*)
+      ├── tokio v1.53.1 (*)
+      ├── wasmtime v48.0.1
+      │   ├── bareline-extension-host v0.1.0 (*)
+      │   ├── wasmtime-wasi v48.0.1 (*)
+      │   └── wasmtime-wasi-io v48.0.1
+      │       └── wasmtime-wasi v48.0.1 (*)
+      ├── wasmtime-internal-fiber v48.0.1
+      │   └── wasmtime v48.0.1 (*)
+      ├── wasmtime-internal-jit-icache-coherence v48.0.1
+      │   └── wasmtime v48.0.1 (*)
+      ├── wasmtime-wasi v48.0.1 (*)
+      └── winapi-util v0.1.11
+          └── termcolor v1.4.1
+              └── wasmprinter v0.254.0
+                  └── wasmtime-environ v48.0.1
+                      ├── wasmtime v48.0.1 (*)
+                      ├── wasmtime-internal-cranelift v48.0.1
+                      │   └── wasmtime v48.0.1 (*)
+                      ├── wasmtime-internal-fiber v48.0.1 (*)
+                      └── wasmtime-internal-unwinder v48.0.1
+                          ├── wasmtime v48.0.1 (*)
+                          └── wasmtime-internal-cranelift v48.0.1 (*)
+

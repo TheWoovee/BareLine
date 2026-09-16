@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "command": [
+    "D:\\a\\BareLine\\BareLine\\target\\release\\deps\\first_party-a1639c4802e36c58.exe",
+    "fast_release_",
+    "--ignored",
+    "--test-threads=1",
+    "--nocapture"
+  ],
+  "cwd": "D:\\a\\BareLine\\BareLine",
+  "source_before": {
+    "available": true,
+    "head": "6badda3bba8038cec1f7c470555bae4c811af3ca",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "949ab2ee34569b4de20e890bc21b0d5ef15c3505fa18a7eef319744f6b37fcf2"
+  },
+  "source_after": {
+    "available": true,
+    "head": "6badda3bba8038cec1f7c470555bae4c811af3ca",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "949ab2ee34569b4de20e890bc21b0d5ef15c3505fa18a7eef319744f6b37fcf2"
+  },
+  "source_changed_during_run": false,
+  "status": "completed",
+  "exit_code": 0,
+  "elapsed_ms": 10804,
+  "top_level_total": 1,
+  "top_level_passed": 1,
+  "top_level_failed": 0,
+  "observed_nested_or_parent_summaries": [
+    "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 10.65s"
+  ],
+  "summary_lines_are_not_aggregate_counts": true,
+  "stdout": {
+    "path": "D:\\a\\BareLine\\BareLine\\target\\first-party\\20260916T111338.4533536Z-9044-a4369eae\\test-fast.json.stdout.log",
+    "sha256": "f534d01e3d77c8071706b02c8bf6d622cd0f505d4beb2bb47eb2552f4a8ccfa9"
+  },
+  "stderr": {
+    "path": "D:\\a\\BareLine\\BareLine\\target\\first-party\\20260916T111338.4533536Z-9044-a4369eae\\test-fast.json.stderr.log",
+    "sha256": "0c1209f73410da7de02034dcc0a1112516b57c9cad9eb28c35756808beeabfc5"
+  }
+}

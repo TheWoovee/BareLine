@@ -1,0 +1,261 @@
+name: Supply chain
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+
+jobs:
+  dependencies:
+    runs-on: windows-2022
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+      - name: Validate public release configuration contract
+        run: python scripts/test_release_config.py
+      # Cargo/rustup use the checked-in rust-toolchain.toml; tools have their own
+      # exact versions and locked installation graphs. No application lock edits.
+      - run: cargo install --locked cargo-deny --version 0.20.2
+      - run: cargo install --locked cargo-audit --version 0.22.2
+      - run: cargo install --locked cargo-cyclonedx --version 0.5.9
+      - run: cargo metadata --locked --format-version 1 > cargo-metadata.json
+      - run: python .github/workflows/check_toolchain_contract.py --metadata cargo-metadata.json
+      - name: License, source, dependency and advisory policy
+        run: cargo deny --locked check
+      - name: RustSec audit
+        if: ${{ !cancelled() }}
+        run: cargo audit --json > cargo-audit.json
+      - name: CycloneDX SBOMs for release target
+        if: ${{ !cancelled() }}
+        run: |
+          cargo cyclonedx --format json --all --target x86_64-pc-windows-msvc --override-filename bom
+          if ($LASTEXITCODE -ne 0) { throw 'SBOM generation failed' }
+          # cyclonedx has no --locked switch. Fail if its metadata resolution
+          # changed the lockfile established by the locked metadata step.
+          git diff --exit-code -- Cargo.lock
+          if ($LASTEXITCODE -ne 0) { throw 'SBOM generation changed Cargo.lock' }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: ${{ !cancelled() }}
+        with:
+          name: dependency-evidence
+          path: |
+            cargo-metadata.json
+            cargo-audit.json
+            **/bom.json
+          if-no-files-found: error
+          retention-days: 30
+
+  clean-build:
+    strategy:
+      fail-fast: false
+      matrix:
+        replica: [a, b]
+    runs-on: windows-2022
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      # Independent fresh VMs, no restored target/dependency caches. Identical
+      # checkout paths and fixed PE timestamp prevent avoidable nondeterminism.
+      - name: Build explicit unsigned preview executables (trust features disabled)
+        env:
+          CARGO_INCREMENTAL: '0'
+          RUSTFLAGS: '-C link-arg=/Brepro'
+        run: |
+          if (Test-Path -LiteralPath target) { throw 'Expected clean build directory' }
+          cargo build --release --locked -p bareline -p bareline-update-helper -p bareline-extension-host --no-default-features
+          if ($LASTEXITCODE -ne 0) { throw 'Release build failed' }
+          New-Item -ItemType Directory -Path evidence | Out-Null
+          $hashes = foreach ($name in @('bareline.exe', 'bareline-update-helper.exe', 'bareline-extension-host.exe')) {
+            '{0}  {1}' -f (Get-FileHash -LiteralPath (Join-Path target/release $name) -Algorithm SHA256).Hash.ToLowerInvariant(), $name
+          }
+          $hashes | Set-Content -LiteralPath evidence/SHA-256SUMS -Encoding utf8
+          New-Item -ItemType Directory -Path payload | Out-Null
+          Copy-Item -LiteralPath target/release/bareline.exe,target/release/bareline-update-helper.exe,LICENSE -Destination payload
+          # Offline workspace metadata also resolves dev-only dependencies that
+          # the release executable build does not download on a clean runner.
+          cargo fetch --locked --target x86_64-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) { throw 'Locked Windows metadata dependencies unavailable' }
+          ./packaging/windows/generate-notices.ps1 -OutputFile payload/THIRD-PARTY-NOTICES.md
+          cargo install --locked cargo-cyclonedx --version 0.5.9
+          if ($LASTEXITCODE -ne 0) { throw 'SBOM tool installation failed' }
+          cargo cyclonedx --format json --all --target x86_64-pc-windows-msvc --override-filename bom
+          if ($LASTEXITCODE -ne 0) { throw 'SBOM generation failed' }
+          # Workspace generation must produce both packaged executable graphs.
+          foreach ($sbom in @('apps/bareline/bom.json', 'apps/update-helper/bom.json')) {
+            if (-not (Test-Path -LiteralPath $sbom -PathType Leaf)) { throw "Missing packaged executable SBOM: $sbom" }
+          }
+          git diff --exit-code -- Cargo.lock
+          if ($LASTEXITCODE -ne 0) { throw 'SBOM generation changed Cargo.lock' }
+          ./packaging/windows/generate-sbom.ps1 -CargoSbom apps/bareline/bom.json -HelperCargoSbom apps/update-helper/bom.json -OutputFile payload/SBOM.json
+          $metadata = cargo metadata --locked --offline --no-deps --format-version 1 | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Package metadata failed' }
+          $version = ($metadata.packages | Where-Object name -eq bareline).version
+          ./packaging/windows/build.ps1 -PayloadDir payload -Version $version -OutputDir unsigned-package
+          Copy-Item -LiteralPath unsigned-package/SHA-256SUMS -Destination evidence/package-SHA-256SUMS
+          git rev-parse HEAD | Set-Content -LiteralPath evidence/commit.txt
+          rustc -vV | Set-Content -LiteralPath evidence/toolchain.txt
+          Get-ComputerInfo -Property WindowsProductName,WindowsVersion,OsBuildNumber | Out-String | Set-Content -LiteralPath evidence/os.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: clean-build-${{ matrix.replica }}
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 30
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: unsigned-payload-${{ matrix.replica }}
+          path: payload/
+          if-no-files-found: error
+          retention-days: 30
+
+  reproducibility:
+    needs: clean-build
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: clean-build-*
+          path: evidence
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: unsigned-payload-*
+          path: payloads
+      - name: Require equal commit, compiler and executable hashes
+        shell: pwsh
+        run: |
+          foreach ($name in @('commit.txt', 'toolchain.txt', 'SHA-256SUMS', 'package-SHA-256SUMS')) {
+            $a = Get-Content -Raw -LiteralPath (Join-Path evidence/clean-build-a $name)
+            $b = Get-Content -Raw -LiteralPath (Join-Path evidence/clean-build-b $name)
+            if ($a -cne $b) { throw "Clean builds differ: $name. Retain evidence and fix/document the nondeterminism before release." }
+          }
+          ./packaging/windows/compare-payloads.ps1 -First payloads/unsigned-payload-a -Second payloads/unsigned-payload-b
+      # These are unsigned executables. Signing, installers and publication are
+      # separate protected release gates; no secret/token/write permission here.
+
+  configured-build:
+    if: startsWith(github.ref, 'refs/tags/') && vars.BARELINE_RELEASE_CONFIG_PATH != ''
+    strategy:
+      max-parallel: 1
+      fail-fast: false
+      matrix:
+        replica: [a, b]
+    runs-on: windows-2022
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: Build a clean configured Windows candidate and external components
+        shell: pwsh
+        env:
+          PUBLIC_CONFIG: ${{ vars.BARELINE_RELEASE_CONFIG_PATH }}
+          CARGO_INCREMENTAL: '0'
+        run: |
+          rustup target add wasm32-wasip2
+          if ($LASTEXITCODE) { throw 'Pinned component target unavailable' }
+          ./packaging/windows/build-configured.ps1 -Config $env:PUBLIC_CONFIG -OutputDir target/configured -TargetDir target/configured-build
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: configured-replica-${{ matrix.replica }}
+          path: target/configured/
+          if-no-files-found: error
+          retention-days: 30
+
+  configured-comparison:
+    needs: configured-build
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: configured-replica-*
+          path: target/replicas
+      - name: Compare exact configured executables, components and capabilities
+        shell: pwsh
+        env:
+          PUBLIC_CONFIG: ${{ vars.BARELINE_RELEASE_CONFIG_PATH }}
+        run: |
+          python scripts/release_pipeline.py compare --config $env:PUBLIC_CONFIG --first target/replicas/configured-replica-a --second target/replicas/configured-replica-b --output target/configured-handoff
+          if ($LASTEXITCODE) { throw 'Configured replica comparison failed' }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: configured-signing-handoff
+          path: target/configured-handoff/
+          if-no-files-found: error
+          retention-days: 30
+
+  signing:
+    needs: [dependencies, configured-comparison]
+    if: startsWith(github.ref, 'refs/tags/') && vars.BARELINE_SIGNING_ENABLED == 'true'
+    runs-on: windows-2022
+    environment: release-signing
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require tagged commit on the protected default branch
+        shell: pwsh
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          PROTECTION_CONFIRMED: ${{ vars.BARELINE_PROTECTED_RELEASE_ENVIRONMENT }}
+        run: |
+          if ($env:PROTECTION_CONFIRMED -ne 'true') { throw 'Repository owner must configure branch protection and release-signing environment approval first' }
+          if (-not $env:GITHUB_REF.StartsWith('refs/tags/')) { throw 'Tag required' }
+          git merge-base --is-ancestor HEAD "refs/remotes/origin/$env:DEFAULT_BRANCH"
+          if ($LASTEXITCODE -ne 0) { throw 'Release commit is not on default branch' }
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: configured-signing-handoff
+          path: configured-handoff
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: Sign and verify exact payload bytes
+        shell: pwsh
+        env:
+          BARELINE_SIGNING_AUTHORIZED: tagged-protected-environment
+          SIGN_TOOL: ${{ vars.BARELINE_SIGNTOOL }}
+          SIGNER_THUMBPRINT: ${{ vars.BARELINE_SIGNER_THUMBPRINT }}
+          PUBLISHER_SHA256: ${{ vars.BARELINE_PUBLISHER_SHA256 }}
+          TIMESTAMP_URL: ${{ vars.BARELINE_TIMESTAMP_URL }}
+        run: |
+          python scripts/release_pipeline.py verify-handoff --handoff configured-handoff
+          if ($LASTEXITCODE) { throw 'Configured handoff verification failed' }
+          $config = Get-Content -Raw -LiteralPath configured-handoff/public-release-config.json | ConvertFrom-Json
+          if ($config.trust.publisher_certificate_sha256 -ne $env:PUBLISHER_SHA256) { throw 'Signing publisher differs from compared configuration' }
+          New-Item -ItemType Directory -Path signing-payload | Out-Null
+          Copy-Item -LiteralPath configured-handoff/unsigned/bareline.exe,configured-handoff/unsigned/bareline-update-helper.exe,configured-handoff/unsigned/bareline-extension-host.exe -Destination signing-payload
+          # Certificate provisioning / SignPath enrollment is an external owner
+          # prerequisite. Missing tools, credentials or trust pins fail closed.
+          ./packaging/windows/sign-artifacts.ps1 -ArtifactDir signing-payload -SignTool $env:SIGN_TOOL -SignerCertificateThumbprint $env:SIGNER_THUMBPRINT -PublisherCertificateSha256 $env:PUBLISHER_SHA256 -TimestampUrl $env:TIMESTAMP_URL
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: signed-payload-with-hash-evidence
+          path: signing-payload/
+          if-no-files-found: error
+          retention-days: 30
+      # Release packaging must happen after signing; no release is published here.

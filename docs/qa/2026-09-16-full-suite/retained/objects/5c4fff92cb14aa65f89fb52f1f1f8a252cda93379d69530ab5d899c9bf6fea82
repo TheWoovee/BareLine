@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "command": [
+    "cargo",
+    "check",
+    "--locked",
+    "-p",
+    "bareline-platform-windows",
+    "--all-targets"
+  ],
+  "cwd": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor",
+  "source_before": {
+    "available": true,
+    "head": "b64ecd57257a9b57389213c329f4ee2d25e0e008",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "6ba59547613f47f2ecf6e5bf08df9893a6b04ec9e3fee19a3cae1fae271e02ec"
+  },
+  "source_after": {
+    "available": true,
+    "head": "b64ecd57257a9b57389213c329f4ee2d25e0e008",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "6ba59547613f47f2ecf6e5bf08df9893a6b04ec9e3fee19a3cae1fae271e02ec"
+  },
+  "source_changed_during_run": false,
+  "status": "completed",
+  "exit_code": 0,
+  "elapsed_ms": 4308,
+  "top_level_total": 1,
+  "top_level_passed": 1,
+  "top_level_failed": 0,
+  "observed_nested_or_parent_summaries": [],
+  "summary_lines_are_not_aggregate_counts": true,
+  "stdout": {
+    "path": "target\\qualification\\full-suite-20260916\\24-adapter-target-boundary.json.stdout.log",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "stderr": {
+    "path": "target\\qualification\\full-suite-20260916\\24-adapter-target-boundary.json.stderr.log",
+    "sha256": "673fbb0d5c7a2bf13df31d4b35910f94ee3caecc680bc278b158e282cf6d5cb0"
+  }
+}

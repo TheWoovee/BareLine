@@ -1,0 +1,19 @@
+from pathlib import Path
+import json,runpy,subprocess
+root=Path.cwd()
+capture=runpy.run_path(str(root/'.github/workflows/run_test_evidence.py'))['run_receipt']
+evidence=root/'target/qualification/full-suite-20260916'
+head=subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()
+plans=[('42-package',['pwsh','-NoProfile','-File',str(evidence/'prepare-package.ps1')],300),('43-install',['pwsh','-NoProfile','-File',str(evidence/'install-local.ps1')],300)]
+for old,new in [('05-column','44-column'),('06-plain-text','45-plain-text'),('07-code-config','46-code-config'),('08-regex','47-regex')]:
+ d=json.loads((root/'target/qualification/windows-install-smoke-20260916'/f'{old}.json').read_text(encoding='utf-8-sig'))
+ command=d['command']
+ command[command.index('--commit')+1]=head
+ plans.append((new,command,300))
+for name,command,timeout in plans:
+ print('START '+name,flush=True)
+ receipt=capture(evidence/(name+'.json'),command,root,timeout)
+ print(json.dumps({'step':name,'exit_code':receipt['exit_code'],'source_changed':receipt['source_changed_during_run']}),flush=True)
+ if receipt['top_level_failed'] or receipt['source_changed_during_run']:
+  raise SystemExit(1)
+print('PACKAGE, INSTALL AND NATIVE SMOKE COMPLETE',flush=True)

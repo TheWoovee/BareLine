@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "command": [
+    "cargo",
+    "build",
+    "--locked",
+    "--release",
+    "--target",
+    "wasm32-wasip2",
+    "-p",
+    "bareline-json-tools",
+    "-p",
+    "bareline-xml-tools",
+    "-p",
+    "bareline-hex-view"
+  ],
+  "cwd": "D:\\a\\BareLine\\BareLine",
+  "source_before": {
+    "available": true,
+    "head": "6badda3bba8038cec1f7c470555bae4c811af3ca",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "949ab2ee34569b4de20e890bc21b0d5ef15c3505fa18a7eef319744f6b37fcf2"
+  },
+  "source_after": {
+    "available": true,
+    "head": "6badda3bba8038cec1f7c470555bae4c811af3ca",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "949ab2ee34569b4de20e890bc21b0d5ef15c3505fa18a7eef319744f6b37fcf2"
+  },
+  "source_changed_during_run": false,
+  "status": "completed",
+  "exit_code": 0,
+  "elapsed_ms": 44747,
+  "top_level_total": 1,
+  "top_level_passed": 1,
+  "top_level_failed": 0,
+  "observed_nested_or_parent_summaries": [],
+  "summary_lines_are_not_aggregate_counts": true,
+  "stdout": {
+    "path": "D:\\a\\BareLine\\BareLine\\target\\first-party\\20260916T111338.4533536Z-9044-a4369eae\\component-build.json.stdout.log",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "stderr": {
+    "path": "D:\\a\\BareLine\\BareLine\\target\\first-party\\20260916T111338.4533536Z-9044-a4369eae\\component-build.json.stderr.log",
+    "sha256": "bc9dfb65ce260e3f8b5366c204fb3927a59604551660edf00fde44052c5c0620"
+  }
+}

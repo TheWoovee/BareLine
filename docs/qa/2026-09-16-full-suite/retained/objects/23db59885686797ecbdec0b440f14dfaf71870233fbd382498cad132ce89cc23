@@ -1,0 +1,67 @@
+{
+    "binary_sha256":  "64bb428b5bc61dd2f6042a15ba03314af0e4f21290b0d210091ee9bc4d80adb4",
+    "cleanup":  {
+                    "editor_exited":  true,
+                    "editor_exit_code":  0
+                },
+    "journey":  "column_multi_cursor",
+    "schema_version":  1,
+    "artifacts":  [
+                      {
+                          "sha256":  "74be5f0dbabd2eb9a9a4b00fb73ef3b2b771f8fb3cc0c47efc01d605c4c5599b",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\96635971-efdc-430f-aafc-cdbbf632c014\\scratch\\native-observations.json"
+                      },
+                      {
+                          "sha256":  "c0ee59a93e970a5fe0ed4d41272f6d16b6d6c334039347266c3a10c76783f4ab",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\96635971-efdc-430f-aafc-cdbbf632c014\\scratch\\column.txt"
+                      },
+                      {
+                          "sha256":  "5057beca797e91383c795d0ecdaafc0e3ef41c60ae0d614d5085f668f834e7b4",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\96635971-efdc-430f-aafc-cdbbf632c014\\scratch\\local\\Bareline\\settings.toml"
+                      },
+                      {
+                          "sha256":  "08c0c0ec0a740eb695c394d7854acaf56a80bb049a9211d48a522077242850af",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\96635971-efdc-430f-aafc-cdbbf632c014\\scratch\\command-trace.jsonl"
+                      },
+                      {
+                          "sha256":  "625357d8cbf4e0e954263843017777eb5cd4efc42c87b0f239ef44cf5237ea76",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\96635971-efdc-430f-aafc-cdbbf632c014\\scratch\\column-fixture.json"
+                      },
+                      {
+                          "sha256":  "4631537383cce39e42353573cbfece4ea43985fa8d92a51bcc7d89f8c9409e2f",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\96635971-efdc-430f-aafc-cdbbf632c014\\scratch\\column-inserted.bin"
+                      },
+                      {
+                          "sha256":  "39b9c182132c65e20f48b1b264432e661ce421ea985fe10de82aba8c2e8417a6",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\96635971-efdc-430f-aafc-cdbbf632c014\\scratch\\editor-1.stdout.log"
+                      },
+                      {
+                          "sha256":  "dfa56ebe6c70aab9288479e04e855147abbc5ce215649f5da4a1bc7aaaadbe6e",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\96635971-efdc-430f-aafc-cdbbf632c014\\scratch\\editor-1.stderr.log"
+                      }
+                  ],
+    "fixture":  {
+                    "procedure":  "column_multi_cursor-v1",
+                    "fixture_sha256":  "47370a824f4c73ded643069274bc0f3c197521f2a5b64bde8a83bea0484aab35",
+                    "encoding":  "utf-8",
+                    "eol":  "lf",
+                    "tab_width":  4
+                },
+    "steps":  [
+                  {
+                      "observed":  "Three empty UIA selections follow display column four across a tab, wide glyph and short line; source bytes remain exact.",
+                      "status":  "PASS",
+                      "id":  "s1"
+                  },
+                  {
+                      "observed":  "One native Column Editor Apply inserts at every display column and pads the short line; Save writes exact bytes.",
+                      "status":  "PASS",
+                      "id":  "s2"
+                  },
+                  {
+                      "observed":  "One native Undo restores every original row in one transaction; Save restores original UTF-8/LF bytes.",
+                      "status":  "PASS",
+                      "id":  "s3"
+                  }
+              ]
+}

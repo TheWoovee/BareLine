@@ -1,0 +1,50 @@
+
+running 40 tests
+test regex::tests::engine_callout_stops_cancelled_and_expired_matching ... ok
+test regex::tests::range_expansion_reads_only_referenced_global_capture_and_checks_budget_first ... ok
+test regex::tests::captures_expand_before_atomic_transaction_and_obey_budget ... ok
+test regex::tests::context_catalog_and_utf8_empty_progress ... ok
+test regex::tests::capped_batches_emit_retained_tail_and_disable_replacement ... ok
+test folders::tests::folder_trust_io_limit_and_cancellation_fail_closed ... ok
+test folders::tests::folder_streams_identity_ranges_and_visible_skips_without_retaining_files ... ok
+test replace_disk::tests::changed_file_and_new_open_document_are_skipped_for_review ... ok
+test replace_disk::tests::failed_source_commit_keeps_original_and_receipt_reconciliation_is_safe ... ok
+test replace_disk::tests::cancellation_preserves_completed_file_and_leaves_rest_byte_identical ... ok
+test replace_disk::tests::interrupted_commit_reconciles_by_hash_without_reapplying ... ok
+test replace_files::tests::changed_revision_aborts_entire_group_and_cancelled_preview_never_submits ... ok
+test replace_files::tests::excluded_document_and_bounded_capture_preview_are_exact ... ok
+test replace_files::tests::hundred_document_replacement_is_one_bounded_atomic_group_and_undo ... ok
+test replace_files::tests::preview_exclusions_apply_only_reviewed_matches_and_linked_undo_restores_both ... ok
+test replacement_case_tests::uniform_and_initial_case_preserve_unicode_without_changing_mixed_case ... ok
+test service::tests::open_document_ticket_notifies_with_grouped_results ... ok
+test service::tests::rapid_queries_coalesce_and_latest_completion_notifies_without_polling ... ok
+test sources::tests::cancellation_and_partial_prefixes_cannot_be_complete ... ok
+test sources::tests::grouped_identity_and_aggregate_budget_are_preserved ... ok
+test replace_disk::tests::reviewed_selection_preserves_bom_eol_and_unique_original_backup ... ok
+test replace_disk::tests::readonly_target_is_skipped_while_eligible_target_commits_and_open_reasons_persist ... ok
+test tests::count_can_finish_after_retained_results_fill_without_enabling_replace ... ok
+test tests::extended_mode_finds_multiline_unicode_and_rejects_malformed_escapes ... ok
+test tests::bounded_results_cancellation_and_unsupported_queries_cannot_replace ... ok
+test replace_disk::tests::encoded_replace_and_backup_rollback_preserve_utf16_bytes ... ok
+test tests::replacement_scope_cancellation_and_atomic_undo ... ok
+test tests::selection_nonoverlap_navigation_and_document_identity ... ok
+test tests::whole_word_checks_combining_marks_connectors_and_selection_edges ... ok
+test sources::tests::mixed_results_scan_beyond_viewport_with_global_offsets_and_cancellation ... ok
+test regex::tests::hard_partial_multiline_crosses_windows_and_preserves_capture_offsets ... ok
+test regex::tests::partial_candidate_cap_is_explicit_and_cancellation_is_not_complete ... ok
+test paged::tests::paged_partial_regex_crosses_windows_beyond_former_subject_limit ... ok
+test regex::tests::multiline_regex_crosses_sixteen_mib_with_full_anchor_context ... ok
+test paged::tests::streamed_capture_replacement_beyond_sixty_four_mib_reads_only_bounded_ranges ... ok
+test paged::tests::paged_folded_match_crosses_window_with_one_page_cache_and_absolute_selection ... ok
+test regex::tests::unsupported_subject_limits_and_invalid_patterns_never_replace ... ok
+test tests::literal_crosses_sixteen_mib_in_twenty_mib_line_and_replaces_atomically ... ok
+test tests::full_unicode_folding_preserves_text_ranges_and_rejects_partial_expansions ... ok
+test replace_disk::tests::paged_rollback_restores_large_utf16_original_after_shrinking ... ok
+
+test result: ok. 40 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 27.81s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

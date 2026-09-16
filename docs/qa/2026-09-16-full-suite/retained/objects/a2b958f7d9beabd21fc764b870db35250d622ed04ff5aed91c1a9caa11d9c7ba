@@ -1,0 +1,14 @@
+
+running 4 tests
+test resident_recovery::journal_tests::checkpoint_waits_for_retirement_acknowledgment_before_reusing_a_slot ... ok
+test resident_recovery::journal_tests::next_durable_checkpoint_retires_the_previous_one_on_an_untitled_document ... ok
+test resident_recovery::journal_tests::discard_removes_every_generation_even_mid_rotation ... ok
+test resident_recovery::journal_tests::fifty_checkpoints_keep_at_most_two_journal_directories ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 91 filtered out; finished in 1.47s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+

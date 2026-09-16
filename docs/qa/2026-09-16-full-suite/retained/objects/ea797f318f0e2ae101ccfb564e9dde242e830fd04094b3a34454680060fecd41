@@ -1,0 +1,18 @@
+
+running 1 test
+test resident_recovery::journal_tests::checkpoint_waits_for_retirement_acknowledgment_before_reusing_a_slot ... FAILED
+
+failures:
+
+---- resident_recovery::journal_tests::checkpoint_waits_for_retirement_acknowledgment_before_reusing_a_slot stdout ----
+
+thread 'resident_recovery::journal_tests::checkpoint_waits_for_retirement_acknowledgment_before_reusing_a_slot' (31324) panicked at crates\file-io\src\resident_recovery.rs:675:9:
+checkpoint started before retirement acknowledgment
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    resident_recovery::journal_tests::checkpoint_waits_for_retirement_acknowledgment_before_reusing_a_slot
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 94 filtered out; finished in 0.00s
+

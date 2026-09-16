@@ -1,0 +1,39 @@
+import datetime
+import json
+from pathlib import Path
+import subprocess
+import time
+
+output = Path('target/qualification/full-suite-20260916/hosted-final-current.json')
+runs = [35087642458, 35087642380]
+previous = None
+deadline = time.monotonic() + 2700
+while True:
+    results = []
+    for run in runs:
+        result = subprocess.run(
+            ['gh', 'run', 'view', str(run), '--json',
+             'databaseId,headSha,workflowName,status,conclusion,url,jobs'],
+            check=True, capture_output=True, text=True, encoding='utf-8', timeout=60)
+        results.append(json.loads(result.stdout))
+    output.write_text(json.dumps({
+        'captured_at_utc': datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        'runs': results}, indent=2) + '\n', encoding='utf-8')
+    summary = [{
+        'run': r['databaseId'], 'workflow': r['workflowName'], 'status': r['status'],
+        'conclusion': r['conclusion'],
+        'jobs': [{'name': j['name'], 'status': j['status'], 'conclusion': j['conclusion'],
+                  'active': [s['name'] for s in j['steps'] if s['status'] == 'in_progress']}
+                 for j in r['jobs']]}
+        for r in results]
+    if summary != previous:
+        print(json.dumps(summary), flush=True)
+        previous = summary
+    if any(j['conclusion'] == 'failure' for r in results for j in r['jobs']):
+        raise SystemExit(1)
+    if all(r['status'] == 'completed' for r in results):
+        print('FINAL HOSTED WORKFLOWS PASSED', flush=True)
+        break
+    if time.monotonic() >= deadline:
+        raise SystemExit('Timed out waiting for final hosted workflows; no pass inferred')
+    time.sleep(45)

@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "command": [
+    "cargo",
+    "test",
+    "-p",
+    "bareline-diff",
+    "--lib",
+    "--locked",
+    "paged::tests::divergent_multi_gb_full_traversal",
+    "--",
+    "--exact",
+    "--ignored",
+    "--nocapture"
+  ],
+  "cwd": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor",
+  "source_before": {
+    "available": true,
+    "head": "6badda3bba8038cec1f7c470555bae4c811af3ca",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "8f73a6d51a31874cd1e3780f958150c0a2e01daabdd2e4d57faeb0c564681199"
+  },
+  "source_after": {
+    "available": true,
+    "head": "6badda3bba8038cec1f7c470555bae4c811af3ca",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "8f73a6d51a31874cd1e3780f958150c0a2e01daabdd2e4d57faeb0c564681199"
+  },
+  "source_changed_during_run": false,
+  "status": "completed",
+  "exit_code": 0,
+  "elapsed_ms": 1089,
+  "top_level_total": 1,
+  "top_level_passed": 1,
+  "top_level_failed": 0,
+  "observed_nested_or_parent_summaries": [
+    "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 23 filtered out; finished in 0.60s"
+  ],
+  "summary_lines_are_not_aggregate_counts": true,
+  "stdout": {
+    "path": "target\\qualification\\full-suite-20260916\\66-multi-gib-diff.json.stdout.log",
+    "sha256": "25f161d0bd003862daa45d4bd2cd912f28415d47dc87cff94783d8e6a22f918f"
+  },
+  "stderr": {
+    "path": "target\\qualification\\full-suite-20260916\\66-multi-gib-diff.json.stderr.log",
+    "sha256": "e8781238509281034310b913a869fa1bc9923012547d64516e7454b2bb4d55eb"
+  }
+}

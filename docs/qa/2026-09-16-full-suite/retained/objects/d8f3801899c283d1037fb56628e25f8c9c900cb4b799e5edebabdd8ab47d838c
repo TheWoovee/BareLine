@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "command": [
+    "C:\\Users\\Woovee\\AppData\\Local\\Python\\pythoncore-3.14-64\\python.exe",
+    "-m",
+    "unittest",
+    "discover",
+    "-s",
+    "scripts",
+    "-p",
+    "test*.py"
+  ],
+  "cwd": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor",
+  "source_before": {
+    "available": true,
+    "head": "e74780f2eac3727a80d0387b513eb4c1b80d5a23",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "9a6a16a1c8c86587f359793fcc4353443570244ad58bf708a35a627be5a55ef9"
+  },
+  "source_after": {
+    "available": true,
+    "head": "e74780f2eac3727a80d0387b513eb4c1b80d5a23",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "9a6a16a1c8c86587f359793fcc4353443570244ad58bf708a35a627be5a55ef9"
+  },
+  "source_changed_during_run": false,
+  "status": "completed",
+  "exit_code": 0,
+  "elapsed_ms": 9842,
+  "top_level_total": 1,
+  "top_level_passed": 1,
+  "top_level_failed": 0,
+  "observed_nested_or_parent_summaries": [],
+  "summary_lines_are_not_aggregate_counts": true,
+  "stdout": {
+    "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\full-suite-20260916\\12-release-tooling.json.stdout.log",
+    "sha256": "c823648a6e7922a1ba3de1d6af9c5ded05e9ab1f9448886b6ad3f2fe9fe01df1"
+  },
+  "stderr": {
+    "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\full-suite-20260916\\12-release-tooling.json.stderr.log",
+    "sha256": "7ec0587a781c5f769d2c82a45f4152538e62231b6b36f3c073b70f4cd93c3fe0"
+  }
+}

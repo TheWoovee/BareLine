@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "command": [
+    "python",
+    ".github/workflows/check_clippy_ratchet.py",
+    "check",
+    "--diagnostics",
+    "target/qualification/full-suite-20260916/64-consolidated-clippy.json.stdout.log",
+    "--baseline",
+    ".github/workflows/clippy-baseline.json",
+    "--source-root",
+    ".",
+    "--platform",
+    "Windows",
+    "--target",
+    "x86_64-pc-windows-msvc",
+    "--toolchain",
+    "1.98.1"
+  ],
+  "cwd": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor",
+  "source_before": {
+    "available": true,
+    "head": "6badda3bba8038cec1f7c470555bae4c811af3ca",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "0b29db668051c4cc33f591e7992e2b3aa9bfc08c27358c818652b1ba6fa46507"
+  },
+  "source_after": {
+    "available": true,
+    "head": "6badda3bba8038cec1f7c470555bae4c811af3ca",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "0b29db668051c4cc33f591e7992e2b3aa9bfc08c27358c818652b1ba6fa46507"
+  },
+  "source_changed_during_run": false,
+  "status": "completed",
+  "exit_code": 0,
+  "elapsed_ms": 26629,
+  "top_level_total": 1,
+  "top_level_passed": 1,
+  "top_level_failed": 0,
+  "observed_nested_or_parent_summaries": [],
+  "summary_lines_are_not_aggregate_counts": true,
+  "stdout": {
+    "path": "target\\qualification\\full-suite-20260916\\65-consolidated-ratchet.json.stdout.log",
+    "sha256": "12904d46d92c0493daf9e7f38ba10f7a3ca1dac2e6ae73455e4a5b4b955d8f77"
+  },
+  "stderr": {
+    "path": "target\\qualification\\full-suite-20260916\\65-consolidated-ratchet.json.stderr.log",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+}

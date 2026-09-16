@@ -1,0 +1,76 @@
+Generated notices: D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\target\package-20260916-full-suite\payload\THIRD-PARTY-NOTICES.md
+Generated SDK license aggregation: D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\target\package-20260916-full-suite\payload\SDK-LICENSES.md
+Inno Setup 6 Command-Line Compiler
+Copyright (C) 1997-2025 Jordan Russell. All rights reserved.
+Portions Copyright (C) 2000-2025 Martijn Laan. All rights reserved.
+Portions Copyright (C) 2001-2004 Alex Yackimoff. All rights reserved.
+https://www.innosetup.com
+
+Compiler engine version: Inno Setup 6.4.3
+
+Preprocessing
+   Reading file: D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\target\package-20260908\inno-archive\tools\ISPPBuiltins.iss
+Parsing [Setup] section, line 16
+Parsing [Setup] section, line 17
+Parsing [Setup] section, line 18
+Parsing [Setup] section, line 19
+Parsing [Setup] section, line 20
+Parsing [Setup] section, line 21
+Parsing [Setup] section, line 22
+Parsing [Setup] section, line 23
+Parsing [Setup] section, line 24
+Parsing [Setup] section, line 25
+Parsing [Setup] section, line 26
+Parsing [Setup] section, line 27
+Parsing [Setup] section, line 28
+Parsing [Setup] section, line 29
+Parsing [Setup] section, line 30
+Parsing [Setup] section, line 31
+Parsing [Setup] section, line 32
+Parsing [Setup] section, line 33
+Parsing [Setup] section, line 34
+Parsing [Setup] section, line 35
+Parsing [Setup] section, line 36
+Reading file (WizardImageFile)
+Reading file (WizardSmallImageFile)
+Preparing Setup program executable
+   Updating icons (SETUP.E32)
+   Updating version info (SETUP.E32)
+Determining language code pages
+   Reading file: D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\target\package-20260908\inno-archive\tools\Default.isl
+   Messages in script file
+Reading default messages from Default.isl
+Parsing [LangOptions], [Messages], and [CustomMessages] sections
+   Reading file: D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\target\package-20260908\inno-archive\tools\Default.isl
+   Messages in script file
+Reading [Code] section
+Parsing [Tasks] section, line 38
+Parsing [Tasks] section, line 39
+Parsing [Icons] section, line 54
+Parsing [Registry] section, line 56
+Parsing [Registry] section, line 57
+Parsing [Registry] section, line 58
+Parsing [Registry] section, line 59
+Parsing [Files] section, line 41
+Parsing [Files] section, line 42
+Parsing [Files] section, line 43
+Parsing [Files] section, line 44
+Parsing [Files] section, line 45
+Creating setup files
+   Updating icons (SETUP.EXE)
+   Compressing: D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\target\package-20260916-full-suite\payload\bareline.exe
+   Compressing: D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\target\package-20260916-full-suite\payload\LICENSE
+   Compressing: D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\target\package-20260916-full-suite\payload\THIRD-PARTY-NOTICES.md
+   Compressing: D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\target\package-20260916-full-suite\payload\SBOM.json
+   Compressing: D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\target\package-20260916-full-suite\payload\bareline-update-helper.exe
+   Compressing Setup program executable
+   Updating version info (SETUP.EXE)
+   Updating manifest (SETUP.EXE)
+
+
+Successful compile (2.813 sec). Resulting Setup program filename is:
+D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\dist\windows\0.1.0-full-suite-20260916\bareline-0.1.0-windows-x64-setup.exe
+Local unsigned package assembled: D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\dist\windows\0.1.0-full-suite-20260916\bareline-0.1.0-windows-x64-portable.zip
+Local unsigned installer assembled: D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\dist\windows\0.1.0-full-suite-20260916\bareline-0.1.0-windows-x64-setup.exe
+Release requires owner-approved signing and final signed-byte inventory regeneration.
+D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\dist\windows\0.1.0-full-suite-20260916

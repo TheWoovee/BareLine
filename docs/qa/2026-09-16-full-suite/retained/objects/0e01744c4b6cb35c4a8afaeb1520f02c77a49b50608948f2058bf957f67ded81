@@ -1,0 +1,11 @@
+schema_version = 1
+id = "org.bareline.json-tools"
+version = "0.1.0"
+publisher = "Bareline"
+minimum_protocol = 1
+maximum_protocol = 1
+entry_component = "extension.wasm"
+commands = ["ext.json.format", "ext.json.minify", "ext.json.validate", "ext.json.tree"]
+panels = ["ext.json.tree"]
+capabilities = ["DocumentRead", "DocumentEdit", "UiPanel"]
+background_commands = ["ext.json.validate"]

@@ -1,0 +1,7 @@
+
+running 2 tests
+test generated_one_gib_json_validates_and_tree_reads_only_one_page ... ok
+test hex_five_gib_goto_reads_only_visible_original_range ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 85.20s
+

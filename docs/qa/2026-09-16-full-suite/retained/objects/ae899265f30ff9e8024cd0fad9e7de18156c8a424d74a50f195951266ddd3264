@@ -1,0 +1,70 @@
+{
+    "binary_sha256":  "64bb428b5bc61dd2f6042a15ba03314af0e4f21290b0d210091ee9bc4d80adb4",
+    "cleanup":  {
+                    "editor_exited":  true,
+                    "editor_exit_code":  0
+                },
+    "journey":  "regex_transform",
+    "schema_version":  1,
+    "artifacts":  [
+                      {
+                          "sha256":  "6f6acecdf1bf634cb9191d2c21070d1b0ab4decdc0f6ba440dc17f7e5aeb250d",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\446b8912-c1a0-41af-ba59-b92c8ae0ed43\\scratch\\native-observations.json"
+                      },
+                      {
+                          "sha256":  "b8a1417ec9129d09993a018aca83a9513c7323b48116b1a20d563932f4d3adba",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\446b8912-c1a0-41af-ba59-b92c8ae0ed43\\scratch\\fixture\\input.txt"
+                      },
+                      {
+                          "sha256":  "5057beca797e91383c795d0ecdaafc0e3ef41c60ae0d614d5085f668f834e7b4",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\446b8912-c1a0-41af-ba59-b92c8ae0ed43\\scratch\\local\\Bareline\\settings.toml"
+                      },
+                      {
+                          "sha256":  "25fc0bfdf90d547cab630003d66737c937d46c0938d3fa0ee351b539263130d9",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\446b8912-c1a0-41af-ba59-b92c8ae0ed43\\scratch\\command-trace.jsonl"
+                      },
+                      {
+                          "sha256":  "52c2842ad6cfb3e8e16d2b948dab33db235cdc42a6e69a9f3ceba9dea93ea95e",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\446b8912-c1a0-41af-ba59-b92c8ae0ed43\\scratch\\regex-fixture.json"
+                      },
+                      {
+                          "sha256":  "bc32fc87bb2e4f1b3748e9c444ed252834cb01d30422494bdfe9f8d5d4cbad86",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\446b8912-c1a0-41af-ba59-b92c8ae0ed43\\scratch\\regex-preview.png"
+                      },
+                      {
+                          "sha256":  "4760b3aaee5d3cf2299266fcbd2d643072f8974d1d329f3c4225af40c5ab8426",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\446b8912-c1a0-41af-ba59-b92c8ae0ed43\\scratch\\regex-replaced.bin"
+                      },
+                      {
+                          "sha256":  "55c66728211f475fd15f2785f8995c5beafd1ba556f959308994e5c87e9aaaee",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\446b8912-c1a0-41af-ba59-b92c8ae0ed43\\scratch\\editor-1.stdout.log"
+                      },
+                      {
+                          "sha256":  "4a26e6dd6be7c45a90ba49280225cbdc6c1fa22634823a4bf4b4f3fa1f6d0d7a",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\446b8912-c1a0-41af-ba59-b92c8ae0ed43\\scratch\\editor-1.stderr.log"
+                      }
+                  ],
+    "fixture":  {
+                    "procedure":  "regex_transform-v1",
+                    "encoding":  "utf-8",
+                    "eol":  "lf",
+                    "fixture_sha256":  "e54981ef07a60bac3791f169e4743b0c216ab01f0689f9525981543e07cdc719"
+                },
+    "steps":  [
+                  {
+                      "observed":  "Generated multiline Unicode source opens unchanged; native regex mode, exact PCRE2 query and complete two-match count are observed.",
+                      "status":  "PASS",
+                      "id":  "s1"
+                  },
+                  {
+                      "observed":  "Read-only preview expands named and numbered captures for exactly two multiline matches; Apply changes one open document, native Save writes exact expected UTF-8/LF bytes.",
+                      "status":  "PASS",
+                      "id":  "s2"
+                  },
+                  {
+                      "observed":  "One native Undo restores the entire original document; disk retains the replacement until Save then exactly restores original Unicode and LF bytes.",
+                      "status":  "PASS",
+                      "id":  "s3"
+                  }
+              ]
+}

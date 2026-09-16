@@ -1,0 +1,20 @@
+$ErrorActionPreference='Stop'
+$lockBefore=(Get-FileHash -LiteralPath Cargo.lock -Algorithm SHA256).Hash
+cargo fetch --locked --target x86_64-pc-windows-msvc
+if($LASTEXITCODE){throw 'Locked fetch failed'}
+$documents=Join-Path (Get-Location).Path 'target/qualification/full-suite-20260916/notices'
+[IO.Directory]::CreateDirectory($documents) | Out-Null
+./packaging/windows/generate-notices.ps1 -OutputFile (Join-Path $documents 'THIRD-PARTY-NOTICES.md')
+if((Get-FileHash -LiteralPath Cargo.lock -Algorithm SHA256).Hash -ne $lockBefore){throw 'Lockfile changed'}
+python -c 'import pathlib,yaml; [yaml.safe_load(p.read_text(encoding="utf-8-sig")) for p in pathlib.Path(".github/workflows").glob("*.yml")]; print("Workflow YAML parsed")'
+if($LASTEXITCODE){throw 'Workflow syntax check failed'}
+$errors=@()
+foreach($directory in @('scripts','packaging/windows','tests/e2e','tests/soak')){
+ foreach($file in Get-ChildItem -LiteralPath $directory -Filter '*.ps1' -Recurse){
+  $parseErrors=$null
+  [void][Management.Automation.Language.Parser]::ParseFile($file.FullName,[ref]$null,[ref]$parseErrors)
+  $errors+=@($parseErrors)
+ }
+}
+if($errors.Count){$errors | Out-String | Write-Output;throw 'PowerShell syntax errors'}
+Write-Output 'Locked metadata dependency fetch, offline notices, workflow YAML and PowerShell syntax passed.'

@@ -1,0 +1,3191 @@
+{
+  "schema_version": 1,
+  "kind": "evidence_collection_plan",
+  "label": "Full Windows automated suite and unsigned local preview smoke; byte retention only, not release acceptance",
+  "files": [
+    {
+      "path": ".cargo/config.toml",
+      "kind": "source"
+    },
+    {
+      "path": ".gitattributes",
+      "kind": "source"
+    },
+    {
+      "path": ".github/workflows/ci.yml",
+      "kind": "source"
+    },
+    {
+      "path": ".github/workflows/clippy-baseline.json",
+      "kind": "source"
+    },
+    {
+      "path": ".github/workflows/run_test_evidence.py",
+      "kind": "source"
+    },
+    {
+      "path": ".github/workflows/supply-chain.yml",
+      "kind": "source"
+    },
+    {
+      "path": "Cargo.lock",
+      "kind": "source"
+    },
+    {
+      "path": "apps/bareline/Cargo.toml",
+      "kind": "source"
+    },
+    {
+      "path": "apps/bareline/examples/recovery_inspect.rs",
+      "kind": "source"
+    },
+    {
+      "path": "apps/bareline/src/main.rs",
+      "kind": "source"
+    },
+    {
+      "path": "apps/bareline/src/qa_faults.rs",
+      "kind": "source"
+    },
+    {
+      "path": "crates/app/src/workspace.rs",
+      "kind": "source"
+    },
+    {
+      "path": "crates/app/src/workspace/new_document.rs",
+      "kind": "source"
+    },
+    {
+      "path": "crates/editor-surface/src/lib.rs",
+      "kind": "source"
+    },
+    {
+      "path": "crates/file-io/src/lib.rs",
+      "kind": "source"
+    },
+    {
+      "path": "crates/file-io/src/qa_faults.rs",
+      "kind": "source"
+    },
+    {
+      "path": "crates/file-io/src/recovery_retirement.rs",
+      "kind": "source"
+    },
+    {
+      "path": "crates/file-io/src/resident_recovery.rs",
+      "kind": "source"
+    },
+    {
+      "path": "crates/platform-windows/src/lib.rs",
+      "kind": "source"
+    },
+    {
+      "path": "docs/IMPLEMENTATION_STATUS.md",
+      "kind": "source"
+    },
+    {
+      "path": "docs/UNLOCK_CHECKLIST.md",
+      "kind": "source"
+    },
+    {
+      "path": "docs/implementation/production-readiness/BACKLOG.json",
+      "kind": "source"
+    },
+    {
+      "path": "docs/implementation/production-readiness/BACKLOG.md",
+      "kind": "source"
+    },
+    {
+      "path": "docs/implementation/production-readiness/FULL-SUITE-20260916.md",
+      "kind": "source"
+    },
+    {
+      "path": "docs/implementation/production-readiness/KNOWN-LIMITS-20260916.md",
+      "kind": "source"
+    },
+    {
+      "path": "docs/qa/2026-09-16-full-suite/README.md",
+      "kind": "file"
+    },
+    {
+      "path": "docs/qa/2026-09-16-full-suite/execution-summary.json",
+      "kind": "file"
+    },
+    {
+      "path": "docs/qa/2026-09-16-full-suite/hosted-ci.json",
+      "kind": "file"
+    },
+    {
+      "path": "docs/qa/2026-09-16-full-suite/release-fixture-inventory.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T093643.7415204Z-12748-e8dee3d9/component-build.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/first-party/20260916T093643.7415204Z-12748-e8dee3d9/component-build.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T093643.7415204Z-12748-e8dee3d9/component-build.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T093643.7415204Z-12748-e8dee3d9/component-build.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T093643.7415204Z-12748-e8dee3d9/component-build.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T093643.7415204Z-12748-e8dee3d9/host-test-compile.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/first-party/20260916T093643.7415204Z-12748-e8dee3d9/host-test-compile.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T093643.7415204Z-12748-e8dee3d9/host-test-compile.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T093643.7415204Z-12748-e8dee3d9/host-test-compile.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T093643.7415204Z-12748-e8dee3d9/host-test-compile.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T093643.7415204Z-12748-e8dee3d9/run.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T093643.7415204Z-12748-e8dee3d9/test-fast.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/first-party/20260916T093643.7415204Z-12748-e8dee3d9/test-fast.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T093643.7415204Z-12748-e8dee3d9/test-fast.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T093643.7415204Z-12748-e8dee3d9/test-fast.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T093643.7415204Z-12748-e8dee3d9/test-fast.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T093643.7415204Z-12748-e8dee3d9/test-large.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/first-party/20260916T093643.7415204Z-12748-e8dee3d9/test-large.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T093643.7415204Z-12748-e8dee3d9/test-large.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T093643.7415204Z-12748-e8dee3d9/test-large.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T093643.7415204Z-12748-e8dee3d9/test-large.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T093643.7415204Z-12748-e8dee3d9/wasi-target.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/first-party/20260916T093643.7415204Z-12748-e8dee3d9/wasi-target.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T093643.7415204Z-12748-e8dee3d9/wasi-target.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T093643.7415204Z-12748-e8dee3d9/wasi-target.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T093643.7415204Z-12748-e8dee3d9/wasi-target.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T095121.4099438Z-14044-68ea5d1e/component-build.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/first-party/20260916T095121.4099438Z-14044-68ea5d1e/component-build.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T095121.4099438Z-14044-68ea5d1e/component-build.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T095121.4099438Z-14044-68ea5d1e/component-build.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T095121.4099438Z-14044-68ea5d1e/component-build.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T095121.4099438Z-14044-68ea5d1e/host-test-compile.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/first-party/20260916T095121.4099438Z-14044-68ea5d1e/host-test-compile.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T095121.4099438Z-14044-68ea5d1e/host-test-compile.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T095121.4099438Z-14044-68ea5d1e/host-test-compile.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T095121.4099438Z-14044-68ea5d1e/host-test-compile.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T095121.4099438Z-14044-68ea5d1e/run.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T095121.4099438Z-14044-68ea5d1e/test-fast.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/first-party/20260916T095121.4099438Z-14044-68ea5d1e/test-fast.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T095121.4099438Z-14044-68ea5d1e/test-fast.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T095121.4099438Z-14044-68ea5d1e/test-fast.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T095121.4099438Z-14044-68ea5d1e/test-fast.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T095121.4099438Z-14044-68ea5d1e/wasi-target.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/first-party/20260916T095121.4099438Z-14044-68ea5d1e/wasi-target.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T095121.4099438Z-14044-68ea5d1e/wasi-target.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T095121.4099438Z-14044-68ea5d1e/wasi-target.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T095121.4099438Z-14044-68ea5d1e/wasi-target.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T101032.2886881Z-28792-fe5928bc/component-build.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/first-party/20260916T101032.2886881Z-28792-fe5928bc/component-build.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T101032.2886881Z-28792-fe5928bc/component-build.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T101032.2886881Z-28792-fe5928bc/component-build.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T101032.2886881Z-28792-fe5928bc/component-build.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T101032.2886881Z-28792-fe5928bc/host-test-compile.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/first-party/20260916T101032.2886881Z-28792-fe5928bc/host-test-compile.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T101032.2886881Z-28792-fe5928bc/host-test-compile.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T101032.2886881Z-28792-fe5928bc/host-test-compile.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T101032.2886881Z-28792-fe5928bc/host-test-compile.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T101032.2886881Z-28792-fe5928bc/run.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T101032.2886881Z-28792-fe5928bc/test-fast.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/first-party/20260916T101032.2886881Z-28792-fe5928bc/test-fast.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T101032.2886881Z-28792-fe5928bc/test-fast.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T101032.2886881Z-28792-fe5928bc/test-fast.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T101032.2886881Z-28792-fe5928bc/test-fast.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T101032.2886881Z-28792-fe5928bc/test-large.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/first-party/20260916T101032.2886881Z-28792-fe5928bc/test-large.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T101032.2886881Z-28792-fe5928bc/test-large.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T101032.2886881Z-28792-fe5928bc/test-large.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T101032.2886881Z-28792-fe5928bc/test-large.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T101032.2886881Z-28792-fe5928bc/wasi-target.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/first-party/20260916T101032.2886881Z-28792-fe5928bc/wasi-target.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T101032.2886881Z-28792-fe5928bc/wasi-target.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T101032.2886881Z-28792-fe5928bc/wasi-target.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T101032.2886881Z-28792-fe5928bc/wasi-target.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/01-portability.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/01-portability.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/01-portability.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/01-portability.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/01-portability.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/02-workspace-tests.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/02-workspace-tests.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/02-workspace-tests.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/02-workspace-tests.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/02-workspace-tests.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/03-workspace-tests.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/03-workspace-tests.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/03-workspace-tests.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/03-workspace-tests.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/03-workspace-tests.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/04-qa-dispatch.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/04-qa-dispatch.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/04-qa-dispatch.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/04-qa-dispatch.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/04-qa-dispatch.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/05-qa-boundary.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/05-qa-boundary.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/05-qa-boundary.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/05-qa-boundary.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/05-qa-boundary.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/06-recovery-probe.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/06-recovery-probe.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/06-recovery-probe.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/06-recovery-probe.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/06-recovery-probe.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/07-rustfmt.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/07-rustfmt.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/07-rustfmt.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/07-rustfmt.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/07-rustfmt.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/08-toolchain.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/08-toolchain.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/08-toolchain.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/08-toolchain.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/08-toolchain.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/09-clippy-census.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/09-clippy-census.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/09-clippy-census.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/09-clippy-census.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/09-clippy-census.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/10-clippy-ratchet.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/10-clippy-ratchet.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/10-clippy-ratchet.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/10-clippy-ratchet.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/10-clippy-ratchet.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/11-e2e-tooling.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/11-e2e-tooling.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/11-e2e-tooling.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/11-e2e-tooling.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/11-e2e-tooling.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/12-release-tooling.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/12-release-tooling.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/12-release-tooling.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/12-release-tooling.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/12-release-tooling.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/13-performance-tooling.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/13-performance-tooling.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/13-performance-tooling.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/13-performance-tooling.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/13-performance-tooling.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/14-soak-tooling.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/14-soak-tooling.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/14-soak-tooling.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/14-soak-tooling.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/14-soak-tooling.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/15-capture-selftest.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/15-capture-selftest.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/15-capture-selftest.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/15-capture-selftest.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/15-capture-selftest.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/16-clippy-selftest.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/16-clippy-selftest.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/16-clippy-selftest.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/16-clippy-selftest.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/16-clippy-selftest.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/17-package-local.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/17-package-local.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/17-package-local.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/17-package-local.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/17-package-local.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/18-visual-oracles.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/18-visual-oracles.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/18-visual-oracles.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/18-visual-oracles.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/18-visual-oracles.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/19-runtime-boundary.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/19-runtime-boundary.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/19-runtime-boundary.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/19-runtime-boundary.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/19-runtime-boundary.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/20-journey-manifest.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/20-journey-manifest.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/20-journey-manifest.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/20-journey-manifest.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/20-journey-manifest.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/21-dependency-policy.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/21-dependency-policy.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/21-dependency-policy.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/21-dependency-policy.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/21-dependency-policy.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/22-first-party-all.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/22-first-party-all.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/22-first-party-all.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/22-first-party-all.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/22-first-party-all.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/23-ci-preflight.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/23-ci-preflight.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/23-ci-preflight.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/23-ci-preflight.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/23-ci-preflight.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/24-adapter-target-boundary.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/24-adapter-target-boundary.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/24-adapter-target-boundary.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/24-adapter-target-boundary.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/24-adapter-target-boundary.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/25-release-fixture.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/25-release-fixture.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/25-release-fixture.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/25-release-fixture.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/25-release-fixture.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/26-pinned-pcre2.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/26-pinned-pcre2.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/26-pinned-pcre2.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/26-pinned-pcre2.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/26-pinned-pcre2.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/27-recovery-regression-before.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/27-recovery-regression-before.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/27-recovery-regression-before.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/27-recovery-regression-before.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/27-recovery-regression-before.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/28-recovery-regression-after.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/28-recovery-regression-after.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/28-recovery-regression-after.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/28-recovery-regression-after.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/28-recovery-regression-after.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/29-ci-sbom.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/29-ci-sbom.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/29-ci-sbom.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/29-ci-sbom.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/29-ci-sbom.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/30-final-clippy.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/30-final-clippy.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/30-final-clippy.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/30-final-clippy.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/30-final-clippy.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/31-final-clippy-ratchet.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/31-final-clippy-ratchet.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/31-final-clippy-ratchet.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/31-final-clippy-ratchet.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/31-final-clippy-ratchet.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/32-final-workspace.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/32-final-workspace.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/32-final-workspace.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/32-final-workspace.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/32-final-workspace.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/33-final-preview-build.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/33-final-preview-build.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/33-final-preview-build.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/33-final-preview-build.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/33-final-preview-build.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/34-final-debug-build.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/34-final-debug-build.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/34-final-debug-build.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/34-final-debug-build.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/34-final-debug-build.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/35-final-render-smoke.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/35-final-render-smoke.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/35-final-render-smoke.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/35-final-render-smoke.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/35-final-render-smoke.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/36-final-first-party-all.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/36-final-first-party-all.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/36-final-first-party-all.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/36-final-first-party-all.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/36-final-first-party-all.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/37-warning-routing.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/37-warning-routing.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/37-warning-routing.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/37-warning-routing.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/37-warning-routing.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/38-routing-clippy.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/38-routing-clippy.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/38-routing-clippy.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/38-routing-clippy.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/38-routing-clippy.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/39-routing-ratchet.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/39-routing-ratchet.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/39-routing-ratchet.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/39-routing-ratchet.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/39-routing-ratchet.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/40-offline-version.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/40-offline-version.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/40-offline-version.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/40-offline-version.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/40-offline-version.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/41-current-preview-build.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/41-current-preview-build.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/41-current-preview-build.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/41-current-preview-build.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/41-current-preview-build.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/42-package.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/42-package.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/42-package.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/42-package.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/42-package.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/43-install.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/43-install.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/43-install.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/43-install.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/43-install.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/44-column.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/44-column.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/44-column.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/44-column.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/44-column.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/45-plain-text.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/45-plain-text.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/45-plain-text.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/45-plain-text.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/45-plain-text.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/46-code-config.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/46-code-config.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/46-code-config.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/46-code-config.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/46-code-config.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/47-regex.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/47-regex.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/47-regex.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/47-regex.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/47-regex.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/48-linux-native-ratchet.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/48-linux-native-ratchet.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/48-linux-native-ratchet.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/48-linux-native-ratchet.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/48-linux-native-ratchet.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/49-group-admission-test.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/49-group-admission-test.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/49-group-admission-test.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/49-group-admission-test.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/49-group-admission-test.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/50-test-clippy.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/50-test-clippy.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/50-test-clippy.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/50-test-clippy.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/50-test-clippy.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/51-test-ratchet.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/51-test-ratchet.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/51-test-ratchet.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/51-test-ratchet.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/51-test-ratchet.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/52-test-clippy-retry.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/52-test-clippy-retry.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/52-test-clippy-retry.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/52-test-clippy-retry.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/52-test-clippy-retry.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/53-workspace-fixture-cleanup.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/53-workspace-fixture-cleanup.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/53-workspace-fixture-cleanup.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/53-workspace-fixture-cleanup.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/53-workspace-fixture-cleanup.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/54-cleanup-clippy.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/54-cleanup-clippy.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/54-cleanup-clippy.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/54-cleanup-clippy.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/54-cleanup-clippy.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/55-cleanup-ratchet.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/55-cleanup-ratchet.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/55-cleanup-ratchet.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/55-cleanup-ratchet.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/55-cleanup-ratchet.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/56-eol-admission-test.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/56-eol-admission-test.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/56-eol-admission-test.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/56-eol-admission-test.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/56-eol-admission-test.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/57-eol-clippy.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/57-eol-clippy.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/57-eol-clippy.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/57-eol-clippy.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/57-eol-clippy.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/58-eol-ratchet.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/58-eol-ratchet.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/58-eol-ratchet.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/58-eol-ratchet.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/58-eol-ratchet.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/59-queued-fixture-tests.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/59-queued-fixture-tests.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/59-queued-fixture-tests.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/59-queued-fixture-tests.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/59-queued-fixture-tests.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/60-queued-fixture-clippy.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/60-queued-fixture-clippy.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/60-queued-fixture-clippy.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/60-queued-fixture-clippy.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/60-queued-fixture-clippy.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/61-queued-fixture-ratchet.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/61-queued-fixture-ratchet.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/61-queued-fixture-ratchet.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/61-queued-fixture-ratchet.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/61-queued-fixture-ratchet.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/62-linked-peer-test.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/62-linked-peer-test.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/62-linked-peer-test.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/62-linked-peer-test.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/62-linked-peer-test.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/63-consolidated-workspace.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/63-consolidated-workspace.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/63-consolidated-workspace.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/63-consolidated-workspace.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/63-consolidated-workspace.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/64-consolidated-clippy.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/64-consolidated-clippy.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/64-consolidated-clippy.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/64-consolidated-clippy.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/64-consolidated-clippy.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/65-consolidated-ratchet.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/65-consolidated-ratchet.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/65-consolidated-ratchet.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/65-consolidated-ratchet.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/65-consolidated-ratchet.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/66-multi-gib-diff.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/66-multi-gib-diff.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/66-multi-gib-diff.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/66-multi-gib-diff.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/66-multi-gib-diff.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/SBOM.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/capture-hosted.py",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/check-ci.ps1",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/check-sbom.ps1",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-dependencies-6585c4a/apps/bareline/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-dependencies-6585c4a/apps/extension-host/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-dependencies-6585c4a/apps/update-helper/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-dependencies-6585c4a/cargo-audit.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-dependencies-6585c4a/cargo-metadata.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-dependencies-6585c4a/crates/app/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-dependencies-6585c4a/crates/commands/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-dependencies-6585c4a/crates/diagnostics/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-dependencies-6585c4a/crates/diff/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-dependencies-6585c4a/crates/distribution/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-dependencies-6585c4a/crates/document/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-dependencies-6585c4a/crates/editor-surface/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-dependencies-6585c4a/crates/extension-sdk/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-dependencies-6585c4a/crates/extensions-protocol/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-dependencies-6585c4a/crates/file-io/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-dependencies-6585c4a/crates/macros/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-dependencies-6585c4a/crates/platform-linux/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-dependencies-6585c4a/crates/platform-macos/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-dependencies-6585c4a/crates/platform-windows/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-dependencies-6585c4a/crates/platform/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-dependencies-6585c4a/crates/renderer-recording/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-dependencies-6585c4a/crates/renderer/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-dependencies-6585c4a/crates/search/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-dependencies-6585c4a/crates/settings/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-dependencies-6585c4a/crates/syntax/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-dependencies-6585c4a/crates/ui/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-dependencies-6585c4a/crates/unicode-fold/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-dependencies-6585c4a/extensions/common/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-dependencies-6585c4a/extensions/hex-view/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-dependencies-6585c4a/extensions/json-tools/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-dependencies-6585c4a/extensions/xml-tools/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-dependencies-6585c4a/native/lexilla-bridge/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-dependencies-6585c4a/xtask/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-clippy-6badda3/clippy-ratchet-Linux/clippy-census.jsonl",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-clippy-6badda3/clippy-ratchet-Linux/clippy-census.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-clippy-6badda3/clippy-ratchet-Linux/clippy-ratchet.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-clippy-6badda3/clippy-ratchet-Windows/clippy-census.jsonl",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-clippy-6badda3/clippy-ratchet-Windows/clippy-census.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-clippy-6badda3/clippy-ratchet-Windows/clippy-ratchet.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-clippy-6badda3/clippy-ratchet-macOS/clippy-census.jsonl",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-clippy-6badda3/clippy-ratchet-macOS/clippy-census.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-clippy-6badda3/clippy-ratchet-macOS/clippy-ratchet.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-dependencies-6badda3/apps/bareline/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-dependencies-6badda3/apps/extension-host/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-dependencies-6badda3/apps/update-helper/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-dependencies-6badda3/cargo-audit.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-dependencies-6badda3/cargo-metadata.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-dependencies-6badda3/crates/app/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-dependencies-6badda3/crates/commands/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-dependencies-6badda3/crates/diagnostics/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-dependencies-6badda3/crates/diff/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-dependencies-6badda3/crates/distribution/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-dependencies-6badda3/crates/document/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-dependencies-6badda3/crates/editor-surface/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-dependencies-6badda3/crates/extension-sdk/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-dependencies-6badda3/crates/extensions-protocol/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-dependencies-6badda3/crates/file-io/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-dependencies-6badda3/crates/macros/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-dependencies-6badda3/crates/platform-linux/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-dependencies-6badda3/crates/platform-macos/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-dependencies-6badda3/crates/platform-windows/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-dependencies-6badda3/crates/platform/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-dependencies-6badda3/crates/renderer-recording/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-dependencies-6badda3/crates/renderer/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-dependencies-6badda3/crates/search/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-dependencies-6badda3/crates/settings/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-dependencies-6badda3/crates/syntax/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-dependencies-6badda3/crates/ui/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-dependencies-6badda3/crates/unicode-fold/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-dependencies-6badda3/extensions/common/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-dependencies-6badda3/extensions/hex-view/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-dependencies-6badda3/extensions/json-tools/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-dependencies-6badda3/extensions/xml-tools/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-dependencies-6badda3/native/lexilla-bridge/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-dependencies-6badda3/xtask/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-first-party-6badda3/20260916T111338.4533536Z-9044-a4369eae/component-build.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-first-party-6badda3/20260916T111338.4533536Z-9044-a4369eae/component-build.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-first-party-6badda3/20260916T111338.4533536Z-9044-a4369eae/component-build.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-first-party-6badda3/20260916T111338.4533536Z-9044-a4369eae/component-build.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-first-party-6badda3/20260916T111338.4533536Z-9044-a4369eae/component-build.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-first-party-6badda3/20260916T111338.4533536Z-9044-a4369eae/host-test-compile.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-first-party-6badda3/20260916T111338.4533536Z-9044-a4369eae/host-test-compile.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-first-party-6badda3/20260916T111338.4533536Z-9044-a4369eae/host-test-compile.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-first-party-6badda3/20260916T111338.4533536Z-9044-a4369eae/host-test-compile.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-first-party-6badda3/20260916T111338.4533536Z-9044-a4369eae/host-test-compile.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-first-party-6badda3/20260916T111338.4533536Z-9044-a4369eae/run.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-first-party-6badda3/20260916T111338.4533536Z-9044-a4369eae/test-fast.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-first-party-6badda3/20260916T111338.4533536Z-9044-a4369eae/test-fast.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-first-party-6badda3/20260916T111338.4533536Z-9044-a4369eae/test-fast.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-first-party-6badda3/20260916T111338.4533536Z-9044-a4369eae/test-fast.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-first-party-6badda3/20260916T111338.4533536Z-9044-a4369eae/test-fast.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-first-party-6badda3/20260916T111338.4533536Z-9044-a4369eae/wasi-target.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-first-party-6badda3/20260916T111338.4533536Z-9044-a4369eae/wasi-target.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-first-party-6badda3/20260916T111338.4533536Z-9044-a4369eae/wasi-target.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-first-party-6badda3/20260916T111338.4533536Z-9044-a4369eae/wasi-target.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-first-party-6badda3/20260916T111338.4533536Z-9044-a4369eae/wasi-target.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-repro-6badda3/clean-build-a/SHA-256SUMS",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-repro-6badda3/clean-build-a/commit.txt",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-repro-6badda3/clean-build-a/os.txt",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-repro-6badda3/clean-build-a/package-SHA-256SUMS",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-repro-6badda3/clean-build-a/toolchain.txt",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-repro-6badda3/clean-build-b/SHA-256SUMS",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-repro-6badda3/clean-build-b/commit.txt",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-repro-6badda3/clean-build-b/os.txt",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-repro-6badda3/clean-build-b/package-SHA-256SUMS",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-repro-6badda3/clean-build-b/toolchain.txt",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-final-repro-6badda3/comparison.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-job-104736620593.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-job-104736620604.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-job-104736620761.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-job-104736620804.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-job-104736620810.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-job-104742754633.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-job-104742754843.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-job-104742755191.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-job-104742755330.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-job-104744324605.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-job-104744324657.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-job-104744324665.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-job-104744325016.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-job-104750077731.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-job-104750077782.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-job-104750078100.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-job-104750078351.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-job-104755857088.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-job-104755857201.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-job-104757739408.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-job-104757739775.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-job-104760698988.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-job-104760699227.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-job-104762350553.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-job-104766147559.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-job-104768583987.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-job-104768584168.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-job-104768584363.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-job-104768584457.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-job-104768584585.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-job-104768584622.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-job-104772592304.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-linux-6585c4a/clippy-census.jsonl",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-linux-6585c4a/clippy-census.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-linux-6585c4a/clippy-ratchet.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-linux-candidate.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-linux-reviewed.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-macos-c33cb6f/clippy-census.jsonl",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-macos-c33cb6f/clippy-census.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-macos-c33cb6f/clippy-ratchet.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-macos-candidate.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-macos-failed.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-macos-reviewed.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-repro-6585c4a/a/SHA-256SUMS",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-repro-6585c4a/a/commit.txt",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-repro-6585c4a/a/os.txt",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-repro-6585c4a/a/package-SHA-256SUMS",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-repro-6585c4a/a/toolchain.txt",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-repro-6585c4a/b/SHA-256SUMS",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-repro-6585c4a/b/commit.txt",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-repro-6585c4a/b/os.txt",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-repro-6585c4a/b/package-SHA-256SUMS",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-repro-6585c4a/b/toolchain.txt",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-repro-6585c4a/comparison.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-supply-b64ecd5-failure.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-supply-c33cb6f-failure.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/ci-supply-chain-failure.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/generated-sboms/apps/bareline/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/generated-sboms/apps/extension-host/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/generated-sboms/apps/update-helper/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/generated-sboms/crates/app/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/generated-sboms/crates/commands/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/generated-sboms/crates/diagnostics/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/generated-sboms/crates/diff/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/generated-sboms/crates/distribution/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/generated-sboms/crates/document/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/generated-sboms/crates/editor-surface/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/generated-sboms/crates/extension-sdk/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/generated-sboms/crates/extensions-protocol/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/generated-sboms/crates/file-io/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/generated-sboms/crates/macros/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/generated-sboms/crates/platform-linux/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/generated-sboms/crates/platform-macos/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/generated-sboms/crates/platform-windows/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/generated-sboms/crates/platform/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/generated-sboms/crates/renderer-recording/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/generated-sboms/crates/renderer/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/generated-sboms/crates/search/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/generated-sboms/crates/settings/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/generated-sboms/crates/syntax/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/generated-sboms/crates/ui/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/generated-sboms/crates/unicode-fold/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/generated-sboms/extensions/common/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/generated-sboms/extensions/hex-view/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/generated-sboms/extensions/json-tools/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/generated-sboms/extensions/xml-tools/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/generated-sboms/native/lexilla-bridge/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/generated-sboms/xtask/bom.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/hosted-ci-snapshot-v2.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/hosted-ci-snapshot.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/install-local.ps1",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/install-result.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/installer-settings.inf",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/installer.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/notices/SDK-LICENSES.md",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/notices/THIRD-PARTY-NOTICES.md",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/package-manifest.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/prepare-package.ps1",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/prepare-retention.py",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/refresh-install.py",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/run_remaining.py",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/watch-hosted-6badda3.py",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/watch-hosted-current.py",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/full-suite-20260916/watch-hosted.py",
+      "kind": "file"
+    },
+    {
+      "path": "target/release-fixture/d3761234fee14aaa88021adcf6fca563/build-capabilities.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/release-fixture/d3761234fee14aaa88021adcf6fca563/connected-delivery/catalog.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/release-fixture/d3761234fee14aaa88021adcf6fca563/connected-delivery/catalog.minisig",
+      "kind": "file"
+    },
+    {
+      "path": "target/release-fixture/d3761234fee14aaa88021adcf6fca563/connected-delivery/installation/4cf13037efe3344fa993640e8013a5bb3f57eff6ac6e763d6cb23a928925ace0.receipt.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/release-fixture/d3761234fee14aaa88021adcf6fca563/connected-delivery/installation/4cf13037efe3344fa993640e8013a5bb3f57eff6ac6e763d6cb23a928925ace0/manifest.toml",
+      "kind": "file"
+    },
+    {
+      "path": "target/release-fixture/d3761234fee14aaa88021adcf6fca563/connected-delivery/installation/cb43d5b81260420f012bbf61552e83b2be205ae274c4039f8c9726faa02829ca.receipt.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/release-fixture/d3761234fee14aaa88021adcf6fca563/connected-delivery/installation/cb43d5b81260420f012bbf61552e83b2be205ae274c4039f8c9726faa02829ca/manifest.toml",
+      "kind": "file"
+    },
+    {
+      "path": "target/release-fixture/d3761234fee14aaa88021adcf6fca563/connected-delivery/installation/d44d1fc627fb1bfa540615e8d2dae17cb74f25cd25c2d168ce59a7e3d8bfb513.receipt.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/release-fixture/d3761234fee14aaa88021adcf6fca563/connected-delivery/installation/d44d1fc627fb1bfa540615e8d2dae17cb74f25cd25c2d168ce59a7e3d8bfb513/manifest.toml",
+      "kind": "file"
+    },
+    {
+      "path": "target/release-fixture/d3761234fee14aaa88021adcf6fca563/connected-delivery/installation/manager-v1.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/release-fixture/d3761234fee14aaa88021adcf6fca563/connected-delivery/installation/runtimes/1f6d58e4066c1b42e4d3097e1ddca5f0f8f317c3d030ae6cf0fd431023c273bd/accepted-at",
+      "kind": "file"
+    },
+    {
+      "path": "target/release-fixture/d3761234fee14aaa88021adcf6fca563/connected-delivery/installation/runtimes/1f6d58e4066c1b42e4d3097e1ddca5f0f8f317c3d030ae6cf0fd431023c273bd/runtime.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/release-fixture/d3761234fee14aaa88021adcf6fca563/connected-delivery/installation/runtimes/1f6d58e4066c1b42e4d3097e1ddca5f0f8f317c3d030ae6cf0fd431023c273bd/runtime.minisig",
+      "kind": "file"
+    },
+    {
+      "path": "target/release-fixture/d3761234fee14aaa88021adcf6fca563/connected-delivery/installed-artifacts.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/release-fixture/d3761234fee14aaa88021adcf6fca563/delivery-assets/catalog-inventory.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/release-fixture/d3761234fee14aaa88021adcf6fca563/delivery-assets/catalog.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/release-fixture/d3761234fee14aaa88021adcf6fca563/delivery-assets/catalog.json.minisig",
+      "kind": "file"
+    },
+    {
+      "path": "target/release-fixture/d3761234fee14aaa88021adcf6fca563/delivery-assets/components-inventory.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/release-fixture/d3761234fee14aaa88021adcf6fca563/delivery-assets/runtime-inventory.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/release-fixture/d3761234fee14aaa88021adcf6fca563/fixture-delivery-report.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/release-fixture/d3761234fee14aaa88021adcf6fca563/release-config.prepared",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/WINDOWS-LAB.md",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/results/446b8912-c1a0-41af-ba59-b92c8ae0ed43/request.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/446b8912-c1a0-41af-ba59-b92c8ae0ed43/response.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/446b8912-c1a0-41af-ba59-b92c8ae0ed43/result.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/446b8912-c1a0-41af-ba59-b92c8ae0ed43/scratch/command-trace.jsonl",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/446b8912-c1a0-41af-ba59-b92c8ae0ed43/scratch/editor-1.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/446b8912-c1a0-41af-ba59-b92c8ae0ed43/scratch/editor-1.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/446b8912-c1a0-41af-ba59-b92c8ae0ed43/scratch/fixture/input.txt",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/446b8912-c1a0-41af-ba59-b92c8ae0ed43/scratch/local/Bareline/diagnostics/bareline.crash.log",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/446b8912-c1a0-41af-ba59-b92c8ae0ed43/scratch/local/Bareline/diagnostics/bareline.log",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/446b8912-c1a0-41af-ba59-b92c8ae0ed43/scratch/local/Bareline/recent.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/446b8912-c1a0-41af-ba59-b92c8ae0ed43/scratch/local/Bareline/recovery/instances/28756/bareline-transcode-28756-2/original.raw",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/446b8912-c1a0-41af-ba59-b92c8ae0ed43/scratch/local/Bareline/recovery/instances/28756/bareline-transcode-28756-2/provenance.bin",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/446b8912-c1a0-41af-ba59-b92c8ae0ed43/scratch/local/Bareline/recovery/instances/28756/bareline-transcode-28756-2/text.utf8",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/446b8912-c1a0-41af-ba59-b92c8ae0ed43/scratch/local/Bareline/recovery/instances/28756/paged-28756-1789554529600135100-2-g0/baseline.bin",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/446b8912-c1a0-41af-ba59-b92c8ae0ed43/scratch/local/Bareline/recovery/instances/28756/paged-28756-1789554529600135100-2-g0/journal.bin",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/446b8912-c1a0-41af-ba59-b92c8ae0ed43/scratch/local/Bareline/recovery/instances/28756/paged-28756-1789554529600135100-2-g0/manifest.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/446b8912-c1a0-41af-ba59-b92c8ae0ed43/scratch/local/Bareline/recovery/instances/28756/paged-28756-1789554529600135100-2-g0/manifest.json.28756-8.pending",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/446b8912-c1a0-41af-ba59-b92c8ae0ed43/scratch/local/Bareline/recovery/instances/28756/paged-28756-1789554529600135100-2-g0/manifest.previous.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/446b8912-c1a0-41af-ba59-b92c8ae0ed43/scratch/local/Bareline/recovery/instances/28756/paged-28756-1789554529600135100-2-g0/paged-root.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/446b8912-c1a0-41af-ba59-b92c8ae0ed43/scratch/local/Bareline/recovery/instances/28756/paged-28756-1789554529600135100-2-g0/paged-source.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/446b8912-c1a0-41af-ba59-b92c8ae0ed43/scratch/local/Bareline/recovery/instances/28756/paged-28756-1789554529600135100-2-g0/root-3.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/446b8912-c1a0-41af-ba59-b92c8ae0ed43/scratch/local/Bareline/recovery/instances/28756/paged-28756-1789554529600135100-2-g0/root-3.receipt.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/446b8912-c1a0-41af-ba59-b92c8ae0ed43/scratch/local/Bareline/recovery/instances/28756/paged-28756-1789554529600135100-2-g0/root-owned-3.bin",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/446b8912-c1a0-41af-ba59-b92c8ae0ed43/scratch/local/Bareline/recovery/instances/28756/paged-28756-1789554529600135100-2-g0/segment-3.bin",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/446b8912-c1a0-41af-ba59-b92c8ae0ed43/scratch/local/Bareline/recovery/instances/28756/paged-28756-1789554529600135100-2-g0/source-1/original.raw",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/446b8912-c1a0-41af-ba59-b92c8ae0ed43/scratch/local/Bareline/recovery/instances/28756/paged-28756-1789554529600135100-2-g0/source-1/provenance.bin",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/446b8912-c1a0-41af-ba59-b92c8ae0ed43/scratch/local/Bareline/recovery/instances/28756/paged-28756-1789554529600135100-2-g0/source-1/source.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/446b8912-c1a0-41af-ba59-b92c8ae0ed43/scratch/local/Bareline/recovery/instances/28756/paged-28756-1789554529600135100-2-g0/source-1/text.utf8",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/446b8912-c1a0-41af-ba59-b92c8ae0ed43/scratch/local/Bareline/recovery/instances/28756/replace-28756-1789554535937342900-1/receipt.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/446b8912-c1a0-41af-ba59-b92c8ae0ed43/scratch/local/Bareline/recovery/instances/28756/resident-input-28756-2.tmp",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/446b8912-c1a0-41af-ba59-b92c8ae0ed43/scratch/local/Bareline/settings.toml",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/446b8912-c1a0-41af-ba59-b92c8ae0ed43/scratch/native-observations.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/446b8912-c1a0-41af-ba59-b92c8ae0ed43/scratch/native-response.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/446b8912-c1a0-41af-ba59-b92c8ae0ed43/scratch/regex-fixture.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/446b8912-c1a0-41af-ba59-b92c8ae0ed43/scratch/regex-preview.png",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/446b8912-c1a0-41af-ba59-b92c8ae0ed43/scratch/regex-replaced.bin",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/564a0881-eac6-4de3-a557-a77f168db0ff/request.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/564a0881-eac6-4de3-a557-a77f168db0ff/response.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/564a0881-eac6-4de3-a557-a77f168db0ff/result.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/564a0881-eac6-4de3-a557-a77f168db0ff/scratch/code-config.rs",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/564a0881-eac6-4de3-a557-a77f168db0ff/scratch/code-fixture.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/564a0881-eac6-4de3-a557-a77f168db0ff/scratch/code-highlighting.png",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/564a0881-eac6-4de3-a557-a77f168db0ff/scratch/command-trace.jsonl",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/564a0881-eac6-4de3-a557-a77f168db0ff/scratch/editor-1.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/564a0881-eac6-4de3-a557-a77f168db0ff/scratch/editor-1.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/564a0881-eac6-4de3-a557-a77f168db0ff/scratch/local/Bareline/diagnostics/bareline.crash.log",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/564a0881-eac6-4de3-a557-a77f168db0ff/scratch/local/Bareline/diagnostics/bareline.log",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/564a0881-eac6-4de3-a557-a77f168db0ff/scratch/local/Bareline/recent.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/564a0881-eac6-4de3-a557-a77f168db0ff/scratch/local/Bareline/settings.toml",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/564a0881-eac6-4de3-a557-a77f168db0ff/scratch/native-observations.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/564a0881-eac6-4de3-a557-a77f168db0ff/scratch/native-response.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/96635971-efdc-430f-aafc-cdbbf632c014/request.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/96635971-efdc-430f-aafc-cdbbf632c014/response.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/96635971-efdc-430f-aafc-cdbbf632c014/result.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/96635971-efdc-430f-aafc-cdbbf632c014/scratch/column-fixture.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/96635971-efdc-430f-aafc-cdbbf632c014/scratch/column-inserted.bin",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/96635971-efdc-430f-aafc-cdbbf632c014/scratch/column.txt",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/96635971-efdc-430f-aafc-cdbbf632c014/scratch/command-trace.jsonl",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/96635971-efdc-430f-aafc-cdbbf632c014/scratch/editor-1.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/96635971-efdc-430f-aafc-cdbbf632c014/scratch/editor-1.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/96635971-efdc-430f-aafc-cdbbf632c014/scratch/local/Bareline/diagnostics/bareline.crash.log",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/96635971-efdc-430f-aafc-cdbbf632c014/scratch/local/Bareline/diagnostics/bareline.log",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/96635971-efdc-430f-aafc-cdbbf632c014/scratch/local/Bareline/recent.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/96635971-efdc-430f-aafc-cdbbf632c014/scratch/local/Bareline/recovery/instances/18312/bareline-transcode-18312-1/original.raw",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/96635971-efdc-430f-aafc-cdbbf632c014/scratch/local/Bareline/recovery/instances/18312/bareline-transcode-18312-1/provenance.bin",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/96635971-efdc-430f-aafc-cdbbf632c014/scratch/local/Bareline/recovery/instances/18312/bareline-transcode-18312-1/text.utf8",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/96635971-efdc-430f-aafc-cdbbf632c014/scratch/local/Bareline/recovery/instances/18312/bareline-transcode-18312-2/original.raw",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/96635971-efdc-430f-aafc-cdbbf632c014/scratch/local/Bareline/recovery/instances/18312/bareline-transcode-18312-2/provenance.bin",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/96635971-efdc-430f-aafc-cdbbf632c014/scratch/local/Bareline/recovery/instances/18312/bareline-transcode-18312-2/text.utf8",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/96635971-efdc-430f-aafc-cdbbf632c014/scratch/local/Bareline/recovery/instances/18312/paged-18312-1789554482967828300-2-g0/journal.bin",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/96635971-efdc-430f-aafc-cdbbf632c014/scratch/local/Bareline/recovery/instances/18312/paged-18312-1789554482967828300-2-g0/manifest.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/96635971-efdc-430f-aafc-cdbbf632c014/scratch/local/Bareline/recovery/instances/18312/paged-18312-1789554482967828300-2-g0/root-3.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/96635971-efdc-430f-aafc-cdbbf632c014/scratch/local/Bareline/recovery/instances/18312/paged-18312-1789554482967828300-2-g0/root-owned-3.bin",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/96635971-efdc-430f-aafc-cdbbf632c014/scratch/local/Bareline/recovery/instances/18312/paged-18312-1789554482967828300-2-g0/segment-3.bin",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/96635971-efdc-430f-aafc-cdbbf632c014/scratch/local/Bareline/recovery/instances/18312/paged-18312-1789554482967828300-2-g0/source-1/original.raw",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/96635971-efdc-430f-aafc-cdbbf632c014/scratch/local/Bareline/recovery/instances/18312/paged-18312-1789554482967828300-2-g0/source-1/provenance.bin",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/96635971-efdc-430f-aafc-cdbbf632c014/scratch/local/Bareline/recovery/instances/18312/paged-18312-1789554482967828300-2-g0/source-1/text.utf8",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/96635971-efdc-430f-aafc-cdbbf632c014/scratch/local/Bareline/recovery/instances/18312/paged-18312-1789554482967828300-2-g1/baseline.bin",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/96635971-efdc-430f-aafc-cdbbf632c014/scratch/local/Bareline/recovery/instances/18312/paged-18312-1789554482967828300-2-g1/journal.bin",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/96635971-efdc-430f-aafc-cdbbf632c014/scratch/local/Bareline/recovery/instances/18312/paged-18312-1789554482967828300-2-g1/manifest.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/96635971-efdc-430f-aafc-cdbbf632c014/scratch/local/Bareline/recovery/instances/18312/paged-18312-1789554482967828300-2-g1/manifest.previous.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/96635971-efdc-430f-aafc-cdbbf632c014/scratch/local/Bareline/recovery/instances/18312/paged-18312-1789554482967828300-2-g1/paged-root.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/96635971-efdc-430f-aafc-cdbbf632c014/scratch/local/Bareline/recovery/instances/18312/paged-18312-1789554482967828300-2-g1/paged-source.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/96635971-efdc-430f-aafc-cdbbf632c014/scratch/local/Bareline/recovery/instances/18312/paged-18312-1789554482967828300-2-g1/root-2.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/96635971-efdc-430f-aafc-cdbbf632c014/scratch/local/Bareline/recovery/instances/18312/paged-18312-1789554482967828300-2-g1/root-2.receipt.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/96635971-efdc-430f-aafc-cdbbf632c014/scratch/local/Bareline/recovery/instances/18312/paged-18312-1789554482967828300-2-g1/root-owned-2.bin",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/96635971-efdc-430f-aafc-cdbbf632c014/scratch/local/Bareline/recovery/instances/18312/paged-18312-1789554482967828300-2-g1/segment-2.bin",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/96635971-efdc-430f-aafc-cdbbf632c014/scratch/local/Bareline/recovery/instances/18312/paged-18312-1789554482967828300-2-g1/source-1/original.raw",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/96635971-efdc-430f-aafc-cdbbf632c014/scratch/local/Bareline/recovery/instances/18312/paged-18312-1789554482967828300-2-g1/source-1/provenance.bin",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/96635971-efdc-430f-aafc-cdbbf632c014/scratch/local/Bareline/recovery/instances/18312/paged-18312-1789554482967828300-2-g1/source-1/source.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/96635971-efdc-430f-aafc-cdbbf632c014/scratch/local/Bareline/recovery/instances/18312/paged-18312-1789554482967828300-2-g1/source-1/text.utf8",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/96635971-efdc-430f-aafc-cdbbf632c014/scratch/local/Bareline/recovery/instances/18312/resident-input-18312-2.tmp",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/96635971-efdc-430f-aafc-cdbbf632c014/scratch/local/Bareline/settings.toml",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/96635971-efdc-430f-aafc-cdbbf632c014/scratch/native-observations.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/96635971-efdc-430f-aafc-cdbbf632c014/scratch/native-response.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/f5e2ada5-d304-48b7-8da3-392206fdd061/request.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/f5e2ada5-d304-48b7-8da3-392206fdd061/response.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/f5e2ada5-d304-48b7-8da3-392206fdd061/result.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/f5e2ada5-d304-48b7-8da3-392206fdd061/scratch/command-trace.jsonl",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/f5e2ada5-d304-48b7-8da3-392206fdd061/scratch/editor-1.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/f5e2ada5-d304-48b7-8da3-392206fdd061/scratch/editor-1.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/f5e2ada5-d304-48b7-8da3-392206fdd061/scratch/local/Bareline/diagnostics/bareline.crash.log",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/f5e2ada5-d304-48b7-8da3-392206fdd061/scratch/local/Bareline/diagnostics/bareline.log",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/f5e2ada5-d304-48b7-8da3-392206fdd061/scratch/local/Bareline/recent.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/f5e2ada5-d304-48b7-8da3-392206fdd061/scratch/local/Bareline/recovery/instances/2204/bareline-transcode-2204-3/original.raw",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/f5e2ada5-d304-48b7-8da3-392206fdd061/scratch/local/Bareline/recovery/instances/2204/bareline-transcode-2204-3/provenance.bin",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/f5e2ada5-d304-48b7-8da3-392206fdd061/scratch/local/Bareline/recovery/instances/2204/bareline-transcode-2204-3/text.utf8",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/f5e2ada5-d304-48b7-8da3-392206fdd061/scratch/local/Bareline/recovery/instances/2204/paged-2204-1789554501673085400-3-g1/baseline.bin",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/f5e2ada5-d304-48b7-8da3-392206fdd061/scratch/local/Bareline/recovery/instances/2204/paged-2204-1789554501673085400-3-g1/journal.bin",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/f5e2ada5-d304-48b7-8da3-392206fdd061/scratch/local/Bareline/recovery/instances/2204/paged-2204-1789554501673085400-3-g1/manifest.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/f5e2ada5-d304-48b7-8da3-392206fdd061/scratch/local/Bareline/recovery/instances/2204/paged-2204-1789554501673085400-3-g1/manifest.previous.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/f5e2ada5-d304-48b7-8da3-392206fdd061/scratch/local/Bareline/recovery/instances/2204/paged-2204-1789554501673085400-3-g1/manifest.previous.json.2204-17.pending",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/f5e2ada5-d304-48b7-8da3-392206fdd061/scratch/local/Bareline/recovery/instances/2204/paged-2204-1789554501673085400-3-g1/paged-root.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/f5e2ada5-d304-48b7-8da3-392206fdd061/scratch/local/Bareline/recovery/instances/2204/paged-2204-1789554501673085400-3-g1/paged-source.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/f5e2ada5-d304-48b7-8da3-392206fdd061/scratch/local/Bareline/recovery/instances/2204/paged-2204-1789554501673085400-3-g1/root-2.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/f5e2ada5-d304-48b7-8da3-392206fdd061/scratch/local/Bareline/recovery/instances/2204/paged-2204-1789554501673085400-3-g1/root-2.receipt.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/f5e2ada5-d304-48b7-8da3-392206fdd061/scratch/local/Bareline/recovery/instances/2204/paged-2204-1789554501673085400-3-g1/root-owned-2.bin",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/f5e2ada5-d304-48b7-8da3-392206fdd061/scratch/local/Bareline/recovery/instances/2204/paged-2204-1789554501673085400-3-g1/segment-2.bin",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/f5e2ada5-d304-48b7-8da3-392206fdd061/scratch/local/Bareline/recovery/instances/2204/paged-2204-1789554501673085400-3-g1/source-1/original.raw",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/f5e2ada5-d304-48b7-8da3-392206fdd061/scratch/local/Bareline/recovery/instances/2204/paged-2204-1789554501673085400-3-g1/source-1/provenance.bin",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/f5e2ada5-d304-48b7-8da3-392206fdd061/scratch/local/Bareline/recovery/instances/2204/paged-2204-1789554501673085400-3-g1/source-1/source.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/f5e2ada5-d304-48b7-8da3-392206fdd061/scratch/local/Bareline/recovery/instances/2204/paged-2204-1789554501673085400-3-g1/source-1/text.utf8",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/f5e2ada5-d304-48b7-8da3-392206fdd061/scratch/local/Bareline/settings.toml",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/f5e2ada5-d304-48b7-8da3-392206fdd061/scratch/native-observations.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/f5e2ada5-d304-48b7-8da3-392206fdd061/scratch/native-response.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/f5e2ada5-d304-48b7-8da3-392206fdd061/scratch/plain-unicode.txt",
+      "kind": "file"
+    },
+    {
+      "path": "tests/perf/results/launch-1789553425005313700.json",
+      "kind": "file"
+    }
+  ]
+}

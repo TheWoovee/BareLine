@@ -1,0 +1,4037 @@
+{
+  "schema_version": 1,
+  "scope": "Full available Windows automated validation and refreshed unsigned local preview smoke; not final release acceptance",
+  "records": [
+    {
+      "receipt": "target/qualification/full-suite-20260916/01-portability.json",
+      "sha256": "f92ad762cfdb35219d1e0c55cc2f848aedbb65b9707e0dc22ad92a3b90232beb",
+      "command": [
+        "python",
+        ".github/workflows/check_portability.py"
+      ],
+      "status": "completed",
+      "exit_code": 0,
+      "elapsed_ms": 679,
+      "source_before": {
+        "available": true,
+        "head": "e74780f2eac3727a80d0387b513eb4c1b80d5a23",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "cdd5659a73ccaa10abbc6c8fc23b178a0442d0ad34b4217f33b92f8a0931f538"
+      },
+      "source_after": {
+        "available": true,
+        "head": "e74780f2eac3727a80d0387b513eb4c1b80d5a23",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "cdd5659a73ccaa10abbc6c8fc23b178a0442d0ad34b4217f33b92f8a0931f538"
+      },
+      "source_changed_during_run": false,
+      "note": null
+    },
+    {
+      "receipt": "target/qualification/full-suite-20260916/02-workspace-tests.json",
+      "sha256": "63c852791e5cae4ad73f32e0db0c6833cc6f674dd2eb0b4431c834c7f0e0540a",
+      "command": [
+        "cargo",
+        "test",
+        "--workspace",
+        "--locked"
+      ],
+      "status": "completed",
+      "exit_code": 101,
+      "elapsed_ms": 381,
+      "source_before": {
+        "available": true,
+        "head": "e74780f2eac3727a80d0387b513eb4c1b80d5a23",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "cdd5659a73ccaa10abbc6c8fc23b178a0442d0ad34b4217f33b92f8a0931f538"
+      },
+      "source_after": {
+        "available": true,
+        "head": "e74780f2eac3727a80d0387b513eb4c1b80d5a23",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "cdd5659a73ccaa10abbc6c8fc23b178a0442d0ad34b4217f33b92f8a0931f538"
+      },
+      "source_changed_during_run": false,
+      "note": "Locked metadata refused the new direct optional serde edge before test execution; 03 passed after lock update without dependency version changes."
+    },
+    {
+      "receipt": "target/qualification/full-suite-20260916/03-workspace-tests.json",
+      "sha256": "c9f6feb668a67be363728d669e46f7ba95b5d74846bd829cf5a7b283585bb94a",
+      "command": [
+        "cargo",
+        "test",
+        "--workspace",
+        "--locked"
+      ],
+      "status": "completed",
+      "exit_code": 0,
+      "elapsed_ms": 200926,
+      "source_before": {
+        "available": true,
+        "head": "e74780f2eac3727a80d0387b513eb4c1b80d5a23",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "0030d5b21842ed3e0d29d9457208cdbe3d57c5bea17c23c2ed3dd4d046918269"
+      },
+      "source_after": {
+        "available": true,
+        "head": "e74780f2eac3727a80d0387b513eb4c1b80d5a23",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "0030d5b21842ed3e0d29d9457208cdbe3d57c5bea17c23c2ed3dd4d046918269"
+      },
+      "source_changed_during_run": false,
+      "note": null
+    },
+    {
+      "receipt": "target/qualification/full-suite-20260916/04-qa-dispatch.json",
+      "sha256": "b8ad15ee52f80127f0cbcae732597a67ccb9903dd9cd4675e24849cf9e409129",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "bareline-file-io",
+        "--features",
+        "qa-faults",
+        "qa_faults"
+      ],
+      "status": "completed",
+      "exit_code": 0,
+      "elapsed_ms": 9187,
+      "source_before": {
+        "available": true,
+        "head": "e74780f2eac3727a80d0387b513eb4c1b80d5a23",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "9a6a16a1c8c86587f359793fcc4353443570244ad58bf708a35a627be5a55ef9"
+      },
+      "source_after": {
+        "available": true,
+        "head": "e74780f2eac3727a80d0387b513eb4c1b80d5a23",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "9a6a16a1c8c86587f359793fcc4353443570244ad58bf708a35a627be5a55ef9"
+      },
+      "source_changed_during_run": false,
+      "note": null
+    },
+    {
+      "receipt": "target/qualification/full-suite-20260916/05-qa-boundary.json",
+      "sha256": "39c9ff4c161e6ab012f445ee063c50a2a7669e023edc91685eb1c4101a232364",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "bareline",
+        "--features",
+        "qa-faults",
+        "qa_faults"
+      ],
+      "status": "completed",
+      "exit_code": 0,
+      "elapsed_ms": 41357,
+      "source_before": {
+        "available": true,
+        "head": "e74780f2eac3727a80d0387b513eb4c1b80d5a23",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "9a6a16a1c8c86587f359793fcc4353443570244ad58bf708a35a627be5a55ef9"
+      },
+      "source_after": {
+        "available": true,
+        "head": "e74780f2eac3727a80d0387b513eb4c1b80d5a23",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "9a6a16a1c8c86587f359793fcc4353443570244ad58bf708a35a627be5a55ef9"
+      },
+      "source_changed_during_run": false,
+      "note": null
+    },
+    {
+      "receipt": "target/qualification/full-suite-20260916/06-recovery-probe.json",
+      "sha256": "a0d428c1cfa9cf846a91711bd75e3e5e1a46bb644b9f05dcc912b07e437303f7",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "bareline",
+        "--example",
+        "recovery_inspect"
+      ],
+      "status": "completed",
+      "exit_code": 0,
+      "elapsed_ms": 17126,
+      "source_before": {
+        "available": true,
+        "head": "e74780f2eac3727a80d0387b513eb4c1b80d5a23",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "9a6a16a1c8c86587f359793fcc4353443570244ad58bf708a35a627be5a55ef9"
+      },
+      "source_after": {
+        "available": true,
+        "head": "e74780f2eac3727a80d0387b513eb4c1b80d5a23",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "9a6a16a1c8c86587f359793fcc4353443570244ad58bf708a35a627be5a55ef9"
+      },
+      "source_changed_during_run": false,
+      "note": null
+    },
+    {
+      "receipt": "target/qualification/full-suite-20260916/07-rustfmt.json",
+      "sha256": "5eaa0b86b63239aeb5cf43be240f53dfdbbd4eee8b560f070a3e8346234ed9f8",
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--check"
+      ],
+      "status": "completed",
+      "exit_code": 0,
+      "elapsed_ms": 3386,
+      "source_before": {
+        "available": true,
+        "head": "e74780f2eac3727a80d0387b513eb4c1b80d5a23",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "9a6a16a1c8c86587f359793fcc4353443570244ad58bf708a35a627be5a55ef9"
+      },
+      "source_after": {
+        "available": true,
+        "head": "e74780f2eac3727a80d0387b513eb4c1b80d5a23",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "9a6a16a1c8c86587f359793fcc4353443570244ad58bf708a35a627be5a55ef9"
+      },
+      "source_changed_during_run": false,
+      "note": null
+    },
+    {
+      "receipt": "target/qualification/full-suite-20260916/08-toolchain.json",
+      "sha256": "57335d779b9d477151235f6001aac271a81f65e293cc950aa5119b32c4bbce46",
+      "command": [
+        "C:\\Users\\Woovee\\AppData\\Local\\Python\\pythoncore-3.14-64\\python.exe",
+        ".github/workflows/check_toolchain_contract.py",
+        "--metadata",
+        "target/qualification-full-suite-metadata.json"
+      ],
+      "status": "completed",
+      "exit_code": 0,
+      "elapsed_ms": 269,
+      "source_before": {
+        "available": true,
+        "head": "e74780f2eac3727a80d0387b513eb4c1b80d5a23",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "9a6a16a1c8c86587f359793fcc4353443570244ad58bf708a35a627be5a55ef9"
+      },
+      "source_after": {
+        "available": true,
+        "head": "e74780f2eac3727a80d0387b513eb4c1b80d5a23",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "9a6a16a1c8c86587f359793fcc4353443570244ad58bf708a35a627be5a55ef9"
+      },
+      "source_changed_during_run": false,
+      "note": null
+    },
+    {
+      "receipt": "target/qualification/full-suite-20260916/09-clippy-census.json",
+      "sha256": "ff52e6922e953fce6d92737fab8a7ebfb27f4348587a732f550c5376e4848c8f",
+      "command": [
+        "cargo",
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--locked",
+        "--message-format=json"
+      ],
+      "status": "completed",
+      "exit_code": 0,
+      "elapsed_ms": 25880,
+      "source_before": {
+        "available": true,
+        "head": "e74780f2eac3727a80d0387b513eb4c1b80d5a23",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "9a6a16a1c8c86587f359793fcc4353443570244ad58bf708a35a627be5a55ef9"
+      },
+      "source_after": {
+        "available": true,
+        "head": "e74780f2eac3727a80d0387b513eb4c1b80d5a23",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "9a6a16a1c8c86587f359793fcc4353443570244ad58bf708a35a627be5a55ef9"
+      },
+      "source_changed_during_run": false,
+      "note": null
+    },
+    {
+      "receipt": "target/qualification/full-suite-20260916/10-clippy-ratchet.json",
+      "sha256": "0ee2cfdc8a333eac6936762eb934e6b52bfb656436320f492a50350423248a01",
+      "command": [
+        "C:\\Users\\Woovee\\AppData\\Local\\Python\\pythoncore-3.14-64\\python.exe",
+        ".github/workflows/check_clippy_ratchet.py",
+        "check",
+        "--diagnostics",
+        "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\full-suite-20260916\\09-clippy-census.json.stdout.log",
+        "--baseline",
+        ".github/workflows/clippy-baseline.json",
+        "--source-root",
+        ".",
+        "--platform",
+        "Windows",
+        "--target",
+        "x86_64-pc-windows-msvc",
+        "--toolchain",
+        "1.98.1"
+      ],
+      "status": "completed",
+      "exit_code": 0,
+      "elapsed_ms": 32314,
+      "source_before": {
+        "available": true,
+        "head": "e74780f2eac3727a80d0387b513eb4c1b80d5a23",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "9a6a16a1c8c86587f359793fcc4353443570244ad58bf708a35a627be5a55ef9"
+      },
+      "source_after": {
+        "available": true,
+        "head": "e74780f2eac3727a80d0387b513eb4c1b80d5a23",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "9a6a16a1c8c86587f359793fcc4353443570244ad58bf708a35a627be5a55ef9"
+      },
+      "source_changed_during_run": false,
+      "note": null
+    },
+    {
+      "receipt": "target/qualification/full-suite-20260916/11-e2e-tooling.json",
+      "sha256": "b83d7a409f8441e4121db41a34dc3db48f4d93cc5ed5335ad43cabb6e01b0028",
+      "command": [
+        "C:\\Users\\Woovee\\AppData\\Local\\Python\\pythoncore-3.14-64\\python.exe",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests/e2e",
+        "-p",
+        "test*.py"
+      ],
+      "status": "completed",
+      "exit_code": 0,
+      "elapsed_ms": 10534,
+      "source_before": {
+        "available": true,
+        "head": "e74780f2eac3727a80d0387b513eb4c1b80d5a23",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "9a6a16a1c8c86587f359793fcc4353443570244ad58bf708a35a627be5a55ef9"
+      },
+      "source_after": {
+        "available": true,
+        "head": "e74780f2eac3727a80d0387b513eb4c1b80d5a23",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "9a6a16a1c8c86587f359793fcc4353443570244ad58bf708a35a627be5a55ef9"
+      },
+      "source_changed_during_run": false,
+      "note": null
+    },
+    {
+      "receipt": "target/qualification/full-suite-20260916/12-release-tooling.json",
+      "sha256": "d8f3801899c283d1037fb56628e25f8c9c900cb4b799e5edebabdd8ab47d838c",
+      "command": [
+        "C:\\Users\\Woovee\\AppData\\Local\\Python\\pythoncore-3.14-64\\python.exe",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "scripts",
+        "-p",
+        "test*.py"
+      ],
+      "status": "completed",
+      "exit_code": 0,
+      "elapsed_ms": 9842,
+      "source_before": {
+        "available": true,
+        "head": "e74780f2eac3727a80d0387b513eb4c1b80d5a23",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "9a6a16a1c8c86587f359793fcc4353443570244ad58bf708a35a627be5a55ef9"
+      },
+      "source_after": {
+        "available": true,
+        "head": "e74780f2eac3727a80d0387b513eb4c1b80d5a23",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "9a6a16a1c8c86587f359793fcc4353443570244ad58bf708a35a627be5a55ef9"
+      },
+      "source_changed_during_run": false,
+      "note": null
+    },
+    {
+      "receipt": "target/qualification/full-suite-20260916/13-performance-tooling.json",
+      "sha256": "bcdbdee4cef9ca2ce08e54bce6eb6c5260fc99e924db223208d9f4de8271e0cb",
+      "command": [
+        "C:\\Users\\Woovee\\AppData\\Local\\Python\\pythoncore-3.14-64\\python.exe",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests/perf",
+        "-p",
+        "test*.py"
+      ],
+      "status": "completed",
+      "exit_code": 0,
+      "elapsed_ms": 3195,
+      "source_before": {
+        "available": true,
+        "head": "e74780f2eac3727a80d0387b513eb4c1b80d5a23",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "9a6a16a1c8c86587f359793fcc4353443570244ad58bf708a35a627be5a55ef9"
+      },
+      "source_after": {
+        "available": true,
+        "head": "e74780f2eac3727a80d0387b513eb4c1b80d5a23",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "9a6a16a1c8c86587f359793fcc4353443570244ad58bf708a35a627be5a55ef9"
+      },
+      "source_changed_during_run": false,
+      "note": null
+    },
+    {
+      "receipt": "target/qualification/full-suite-20260916/14-soak-tooling.json",
+      "sha256": "4ce2c9479c4836d214b3c1a5519efdf6ab50ac0b6c9bb9082746843721fecbfc",
+      "command": [
+        "C:\\Users\\Woovee\\AppData\\Local\\Python\\pythoncore-3.14-64\\python.exe",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests/soak",
+        "-p",
+        "test*.py"
+      ],
+      "status": "completed",
+      "exit_code": 0,
+      "elapsed_ms": 317,
+      "source_before": {
+        "available": true,
+        "head": "e74780f2eac3727a80d0387b513eb4c1b80d5a23",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "9a6a16a1c8c86587f359793fcc4353443570244ad58bf708a35a627be5a55ef9"
+      },
+      "source_after": {
+        "available": true,
+        "head": "e74780f2eac3727a80d0387b513eb4c1b80d5a23",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "9a6a16a1c8c86587f359793fcc4353443570244ad58bf708a35a627be5a55ef9"
+      },
+      "source_changed_during_run": false,
+      "note": null
+    },
+    {
+      "receipt": "target/qualification/full-suite-20260916/15-capture-selftest.json",
+      "sha256": "e012c331383b4a25c0e7b4e2252360d001428037ac15bf82ad49e36e91eba861",
+      "command": [
+        "C:\\Users\\Woovee\\AppData\\Local\\Python\\pythoncore-3.14-64\\python.exe",
+        ".github/workflows/run_test_evidence.py",
+        "--self-test"
+      ],
+      "status": "completed",
+      "exit_code": 0,
+      "elapsed_ms": 2029,
+      "source_before": {
+        "available": true,
+        "head": "e74780f2eac3727a80d0387b513eb4c1b80d5a23",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "9a6a16a1c8c86587f359793fcc4353443570244ad58bf708a35a627be5a55ef9"
+      },
+      "source_after": {
+        "available": true,
+        "head": "e74780f2eac3727a80d0387b513eb4c1b80d5a23",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "9a6a16a1c8c86587f359793fcc4353443570244ad58bf708a35a627be5a55ef9"
+      },
+      "source_changed_during_run": false,
+      "note": null
+    },
+    {
+      "receipt": "target/qualification/full-suite-20260916/16-clippy-selftest.json",
+      "sha256": "6eb59124be2629252d8cd18486768472463351fb737a59bb754d6f95220cf733",
+      "command": [
+        "C:\\Users\\Woovee\\AppData\\Local\\Python\\pythoncore-3.14-64\\python.exe",
+        ".github/workflows/check_clippy_ratchet.py",
+        "self-test"
+      ],
+      "status": "completed",
+      "exit_code": 0,
+      "elapsed_ms": 721,
+      "source_before": {
+        "available": true,
+        "head": "e74780f2eac3727a80d0387b513eb4c1b80d5a23",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "9a6a16a1c8c86587f359793fcc4353443570244ad58bf708a35a627be5a55ef9"
+      },
+      "source_after": {
+        "available": true,
+        "head": "e74780f2eac3727a80d0387b513eb4c1b80d5a23",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "9a6a16a1c8c86587f359793fcc4353443570244ad58bf708a35a627be5a55ef9"
+      },
+      "source_changed_during_run": false,
+      "note": null
+    },
+    {
+      "receipt": "target/qualification/full-suite-20260916/17-package-local.json",
+      "sha256": "1b0f1f7f7c45bc7f656294df08e1df6f905666a5c057f434b2e84bdfcf6ee88d",
+      "command": [
+        "pwsh",
+        "-NoProfile",
+        "-File",
+        "packaging/windows/test-local.ps1"
+      ],
+      "status": "completed",
+      "exit_code": 0,
+      "elapsed_ms": 972,
+      "source_before": {
+        "available": true,
+        "head": "e74780f2eac3727a80d0387b513eb4c1b80d5a23",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "9a6a16a1c8c86587f359793fcc4353443570244ad58bf708a35a627be5a55ef9"
+      },
+      "source_after": {
+        "available": true,
+        "head": "e74780f2eac3727a80d0387b513eb4c1b80d5a23",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "9a6a16a1c8c86587f359793fcc4353443570244ad58bf708a35a627be5a55ef9"
+      },
+      "source_changed_during_run": false,
+      "note": null
+    },
+    {
+      "receipt": "target/qualification/full-suite-20260916/18-visual-oracles.json",
+      "sha256": "b3005753171974e1564d76a55ae23a9056c50aea19dbd21374ebef14f09016ae",
+      "command": [
+        "powershell",
+        "-NoProfile",
+        "-File",
+        "tests/e2e/test_native_visual.ps1"
+      ],
+      "status": "completed",
+      "exit_code": 0,
+      "elapsed_ms": 569,
+      "source_before": {
+        "available": true,
+        "head": "e74780f2eac3727a80d0387b513eb4c1b80d5a23",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "9a6a16a1c8c86587f359793fcc4353443570244ad58bf708a35a627be5a55ef9"
+      },
+      "source_after": {
+        "available": true,
+        "head": "e74780f2eac3727a80d0387b513eb4c1b80d5a23",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "9a6a16a1c8c86587f359793fcc4353443570244ad58bf708a35a627be5a55ef9"
+      },
+      "source_changed_during_run": false,
+      "note": null
+    },
+    {
+      "receipt": "target/qualification/full-suite-20260916/19-runtime-boundary.json",
+      "sha256": "e1c3ca2fa39c361ccb25d0b58a12477cc99b176874b851517bc644ed592d1b1a",
+      "command": [
+        "pwsh",
+        "-NoProfile",
+        "-File",
+        "scripts/check-extension-boundary.ps1"
+      ],
+      "status": "completed",
+      "exit_code": 0,
+      "elapsed_ms": 1328,
+      "source_before": {
+        "available": true,
+        "head": "e74780f2eac3727a80d0387b513eb4c1b80d5a23",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "9a6a16a1c8c86587f359793fcc4353443570244ad58bf708a35a627be5a55ef9"
+      },
+      "source_after": {
+        "available": true,
+        "head": "e74780f2eac3727a80d0387b513eb4c1b80d5a23",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "9a6a16a1c8c86587f359793fcc4353443570244ad58bf708a35a627be5a55ef9"
+      },
+      "source_changed_during_run": false,
+      "note": null
+    },
+    {
+      "receipt": "target/qualification/full-suite-20260916/20-journey-manifest.json",
+      "sha256": "3640458a1987f24601cf26b4febf08dd4b13bc04c64c1fa773c92b1c72de3696",
+      "command": [
+        "C:\\Users\\Woovee\\AppData\\Local\\Python\\pythoncore-3.14-64\\python.exe",
+        "tests/e2e/runner.py",
+        "validate"
+      ],
+      "status": "completed",
+      "exit_code": 0,
+      "elapsed_ms": 217,
+      "source_before": {
+        "available": true,
+        "head": "e74780f2eac3727a80d0387b513eb4c1b80d5a23",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "9a6a16a1c8c86587f359793fcc4353443570244ad58bf708a35a627be5a55ef9"
+      },
+      "source_after": {
+        "available": true,
+        "head": "e74780f2eac3727a80d0387b513eb4c1b80d5a23",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "9a6a16a1c8c86587f359793fcc4353443570244ad58bf708a35a627be5a55ef9"
+      },
+      "source_changed_during_run": false,
+      "note": null
+    },
+    {
+      "receipt": "target/qualification/full-suite-20260916/21-dependency-policy.json",
+      "sha256": "73a8385fffb68dfd24e57552db18118ea36f74ef75a6355d3aa6b3bb0c076847",
+      "command": [
+        "cargo",
+        "deny",
+        "--locked",
+        "check"
+      ],
+      "status": "completed",
+      "exit_code": 0,
+      "elapsed_ms": 9041,
+      "source_before": {
+        "available": true,
+        "head": "e74780f2eac3727a80d0387b513eb4c1b80d5a23",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "9a6a16a1c8c86587f359793fcc4353443570244ad58bf708a35a627be5a55ef9"
+      },
+      "source_after": {
+        "available": true,
+        "head": "e74780f2eac3727a80d0387b513eb4c1b80d5a23",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "9a6a16a1c8c86587f359793fcc4353443570244ad58bf708a35a627be5a55ef9"
+      },
+      "source_changed_during_run": false,
+      "note": null
+    },
+    {
+      "receipt": "target/qualification/full-suite-20260916/22-first-party-all.json",
+      "sha256": "e10ce49c2f4763ebb9ebf47a2bb015d010a58ef3fd9c95f73c7568a1a25ae448",
+      "command": [
+        "pwsh",
+        "-NoProfile",
+        "-File",
+        "scripts/test-first-party.ps1",
+        "-Suite",
+        "All"
+      ],
+      "status": "completed",
+      "exit_code": 0,
+      "elapsed_ms": 109964,
+      "source_before": {
+        "available": true,
+        "head": "b64ecd57257a9b57389213c329f4ee2d25e0e008",
+        "working_tree_dirty": false,
+        "source_manifest_sha256": "c05ae878b9de51316baefd7bc4c28c80b947f0f26ecb6fa8b1dbb5ab7a96bc09"
+      },
+      "source_after": {
+        "available": true,
+        "head": "b64ecd57257a9b57389213c329f4ee2d25e0e008",
+        "working_tree_dirty": false,
+        "source_manifest_sha256": "c05ae878b9de51316baefd7bc4c28c80b947f0f26ecb6fa8b1dbb5ab7a96bc09"
+      },
+      "source_changed_during_run": false,
+      "note": null
+    },
+    {
+      "receipt": "target/qualification/full-suite-20260916/23-ci-preflight.json",
+      "sha256": "602ee5091b234a8060f85a5df4c3da281d3356cff60e57b8c62c8126bb3dabd3",
+      "command": [
+        "pwsh",
+        "-NoProfile",
+        "-File",
+        "target/qualification/full-suite-20260916/check-ci.ps1"
+      ],
+      "status": "completed",
+      "exit_code": 0,
+      "elapsed_ms": 4709,
+      "source_before": {
+        "available": true,
+        "head": "e74780f2eac3727a80d0387b513eb4c1b80d5a23",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "9a6a16a1c8c86587f359793fcc4353443570244ad58bf708a35a627be5a55ef9"
+      },
+      "source_after": {
+        "available": true,
+        "head": "e74780f2eac3727a80d0387b513eb4c1b80d5a23",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "9a6a16a1c8c86587f359793fcc4353443570244ad58bf708a35a627be5a55ef9"
+      },
+      "source_changed_during_run": false,
+      "note": null
+    },
+    {
+      "receipt": "target/qualification/full-suite-20260916/24-adapter-target-boundary.json",
+      "sha256": "5c4fff92cb14aa65f89fb52f1f1f8a252cda93379d69530ab5d899c9bf6fea82",
+      "command": [
+        "cargo",
+        "check",
+        "--locked",
+        "-p",
+        "bareline-platform-windows",
+        "--all-targets"
+      ],
+      "status": "completed",
+      "exit_code": 0,
+      "elapsed_ms": 4308,
+      "source_before": {
+        "available": true,
+        "head": "b64ecd57257a9b57389213c329f4ee2d25e0e008",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "6ba59547613f47f2ecf6e5bf08df9893a6b04ec9e3fee19a3cae1fae271e02ec"
+      },
+      "source_after": {
+        "available": true,
+        "head": "b64ecd57257a9b57389213c329f4ee2d25e0e008",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "6ba59547613f47f2ecf6e5bf08df9893a6b04ec9e3fee19a3cae1fae271e02ec"
+      },
+      "source_changed_during_run": false,
+      "note": null
+    },
+    {
+      "receipt": "target/qualification/full-suite-20260916/25-release-fixture.json",
+      "sha256": "bd2617d041788b527479454ce2fc11565e2c51aee70dbe023120ddb40b5d3fee",
+      "command": [
+        "pwsh",
+        "-NoProfile",
+        "-File",
+        "packaging/windows/test-release-fixture.ps1"
+      ],
+      "status": "completed",
+      "exit_code": 0,
+      "elapsed_ms": 795595,
+      "source_before": {
+        "available": true,
+        "head": "a576de58e3115fb59bfe529d3dd5fe2924f335df",
+        "working_tree_dirty": false,
+        "source_manifest_sha256": "c05ae878b9de51316baefd7bc4c28c80b947f0f26ecb6fa8b1dbb5ab7a96bc09"
+      },
+      "source_after": {
+        "available": true,
+        "head": "a576de58e3115fb59bfe529d3dd5fe2924f335df",
+        "working_tree_dirty": false,
+        "source_manifest_sha256": "c05ae878b9de51316baefd7bc4c28c80b947f0f26ecb6fa8b1dbb5ab7a96bc09"
+      },
+      "source_changed_during_run": false,
+      "note": null
+    },
+    {
+      "receipt": "target/qualification/full-suite-20260916/26-pinned-pcre2.json",
+      "sha256": "838679bd0d9becd7cef71c47698e09635fc9c8adf01ce70cc2132f2b5a66ab8d",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "bareline-search"
+      ],
+      "status": "completed",
+      "exit_code": 0,
+      "elapsed_ms": 39834,
+      "source_before": {
+        "available": true,
+        "head": "a576de58e3115fb59bfe529d3dd5fe2924f335df",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "d41fba507781ed3bd3b0d1d8b1041f0d6f66b75abdb0a818b34bba6ae192fa0f"
+      },
+      "source_after": {
+        "available": true,
+        "head": "a576de58e3115fb59bfe529d3dd5fe2924f335df",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "d41fba507781ed3bd3b0d1d8b1041f0d6f66b75abdb0a818b34bba6ae192fa0f"
+      },
+      "source_changed_during_run": false,
+      "note": null
+    },
+    {
+      "receipt": "target/qualification/full-suite-20260916/27-recovery-regression-before.json",
+      "sha256": "18e3b60b2db62b135d572fe0ed1d33fa6cad52743c835705efa0b2b917af671a",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "bareline-file-io",
+        "checkpoint_waits_for_retirement_acknowledgment_before_reusing_a_slot"
+      ],
+      "status": "completed",
+      "exit_code": 101,
+      "elapsed_ms": 17204,
+      "source_before": {
+        "available": true,
+        "head": "a576de58e3115fb59bfe529d3dd5fe2924f335df",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "366a70d62ca007f0b003c2ea8e5ab251bde176ddf7aa7dd5737e2934710bb608"
+      },
+      "source_after": {
+        "available": true,
+        "head": "a576de58e3115fb59bfe529d3dd5fe2924f335df",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "366a70d62ca007f0b003c2ea8e5ab251bde176ddf7aa7dd5737e2934710bb608"
+      },
+      "source_changed_during_run": false,
+      "note": "Expected failing regression before the slot-retirement correction; 28 passed after it."
+    },
+    {
+      "receipt": "target/qualification/full-suite-20260916/28-recovery-regression-after.json",
+      "sha256": "99c7cc2be47757b12e92e43bf1361efefe63ebd140687d5d1fec9d188051e0bd",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "bareline-file-io",
+        "resident_recovery"
+      ],
+      "status": "completed",
+      "exit_code": 0,
+      "elapsed_ms": 8787,
+      "source_before": {
+        "available": true,
+        "head": "a576de58e3115fb59bfe529d3dd5fe2924f335df",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "d3fb3bcd057d03025595ed758be083cd85fb4d2ec2121a93930a7a3185dfa7cb"
+      },
+      "source_after": {
+        "available": true,
+        "head": "a576de58e3115fb59bfe529d3dd5fe2924f335df",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "d3fb3bcd057d03025595ed758be083cd85fb4d2ec2121a93930a7a3185dfa7cb"
+      },
+      "source_changed_during_run": false,
+      "note": null
+    },
+    {
+      "receipt": "target/qualification/full-suite-20260916/29-ci-sbom.json",
+      "sha256": "d05ddb62fa59f59979a0013221b6cb8625f5357cdadf3170c74d32531f08d814",
+      "command": [
+        "pwsh",
+        "-NoProfile",
+        "-File",
+        "target/qualification/full-suite-20260916/check-sbom.ps1"
+      ],
+      "status": "completed",
+      "exit_code": 0,
+      "elapsed_ms": 2659,
+      "source_before": {
+        "available": true,
+        "head": "a576de58e3115fb59bfe529d3dd5fe2924f335df",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "9c550ee0fb3e3a206c05ba7d67c8d4d39f1084175673d216b5ab21d716a690d3"
+      },
+      "source_after": {
+        "available": true,
+        "head": "a576de58e3115fb59bfe529d3dd5fe2924f335df",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "87b99d05955bc9768926a9f032fa0b2d2f24080dbde905c961f098a0946081d0"
+      },
+      "source_changed_during_run": true,
+      "note": "Generator created 31 untracked bom.json files; source-manifest drift is retained and is not a stable-source pass. Generated outputs moved into this evidence root afterward."
+    },
+    {
+      "receipt": "target/qualification/full-suite-20260916/30-final-clippy.json",
+      "sha256": "54dd0c1304b628c0fc6fbc5bfde8edaf2dea872cff1f793453584bf51fc4649c",
+      "command": [
+        "cargo",
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--locked",
+        "--message-format=json"
+      ],
+      "status": "completed",
+      "exit_code": 0,
+      "elapsed_ms": 9022,
+      "source_before": {
+        "available": true,
+        "head": "a576de58e3115fb59bfe529d3dd5fe2924f335df",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "100f514527f696716d26e350720b7ed34fd2bdf6e7a419b1ba72430a20b0462d"
+      },
+      "source_after": {
+        "available": true,
+        "head": "a576de58e3115fb59bfe529d3dd5fe2924f335df",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "100f514527f696716d26e350720b7ed34fd2bdf6e7a419b1ba72430a20b0462d"
+      },
+      "source_changed_during_run": false,
+      "note": null
+    },
+    {
+      "receipt": "target/qualification/full-suite-20260916/31-final-clippy-ratchet.json",
+      "sha256": "5d239eddd9eee36ee8ce91d840beb38425086b4b1ddf7a45ea1626ee9c5e7a12",
+      "command": [
+        "python",
+        ".github/workflows/check_clippy_ratchet.py",
+        "check",
+        "--diagnostics",
+        "target/qualification/full-suite-20260916/30-final-clippy.json.stdout.log",
+        "--baseline",
+        ".github/workflows/clippy-baseline.json",
+        "--source-root",
+        ".",
+        "--platform",
+        "Windows",
+        "--target",
+        "x86_64-pc-windows-msvc",
+        "--toolchain",
+        "1.98.1"
+      ],
+      "status": "completed",
+      "exit_code": 0,
+      "elapsed_ms": 26628,
+      "source_before": {
+        "available": true,
+        "head": "a576de58e3115fb59bfe529d3dd5fe2924f335df",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "100f514527f696716d26e350720b7ed34fd2bdf6e7a419b1ba72430a20b0462d"
+      },
+      "source_after": {
+        "available": true,
+        "head": "a576de58e3115fb59bfe529d3dd5fe2924f335df",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "100f514527f696716d26e350720b7ed34fd2bdf6e7a419b1ba72430a20b0462d"
+      },
+      "source_changed_during_run": false,
+      "note": null
+    },
+    {
+      "receipt": "target/qualification/full-suite-20260916/32-final-workspace.json",
+      "sha256": "cedeeeacaf0e72dc145ff06cd24257c5451be99192b0ffade90863c27a23bbc1",
+      "command": [
+        "cargo",
+        "test",
+        "--workspace",
+        "--locked"
+      ],
+      "status": "completed",
+      "exit_code": 0,
+      "elapsed_ms": 169526,
+      "source_before": {
+        "available": true,
+        "head": "c33cb6fa7abd009bb124e3c59275d8c6a2395749",
+        "working_tree_dirty": false,
+        "source_manifest_sha256": "c05ae878b9de51316baefd7bc4c28c80b947f0f26ecb6fa8b1dbb5ab7a96bc09"
+      },
+      "source_after": {
+        "available": true,
+        "head": "c33cb6fa7abd009bb124e3c59275d8c6a2395749",
+        "working_tree_dirty": false,
+        "source_manifest_sha256": "c05ae878b9de51316baefd7bc4c28c80b947f0f26ecb6fa8b1dbb5ab7a96bc09"
+      },
+      "source_changed_during_run": false,
+      "note": null
+    },
+    {
+      "receipt": "target/qualification/full-suite-20260916/33-final-preview-build.json",
+      "sha256": "fff6acf4b1289cd79cd46a3d3ce30de41d83806d0e27e7192f203b84c91ba95f",
+      "command": [
+        "cargo",
+        "build",
+        "--release",
+        "--locked",
+        "-p",
+        "bareline",
+        "-p",
+        "bareline-update-helper",
+        "-p",
+        "bareline-extension-host",
+        "--no-default-features"
+      ],
+      "status": "completed",
+      "exit_code": 0,
+      "elapsed_ms": 288215,
+      "source_before": {
+        "available": true,
+        "head": "c33cb6fa7abd009bb124e3c59275d8c6a2395749",
+        "working_tree_dirty": false,
+        "source_manifest_sha256": "c05ae878b9de51316baefd7bc4c28c80b947f0f26ecb6fa8b1dbb5ab7a96bc09"
+      },
+      "source_after": {
+        "available": true,
+        "head": "c33cb6fa7abd009bb124e3c59275d8c6a2395749",
+        "working_tree_dirty": false,
+        "source_manifest_sha256": "c05ae878b9de51316baefd7bc4c28c80b947f0f26ecb6fa8b1dbb5ab7a96bc09"
+      },
+      "source_changed_during_run": false,
+      "note": null
+    },
+    {
+      "receipt": "target/qualification/full-suite-20260916/34-final-debug-build.json",
+      "sha256": "3eb759fae3e7e8b7956b82175bff8594e9ed1141ea0a9f22674e9f293d64c7b1",
+      "command": [
+        "cargo",
+        "build",
+        "-p",
+        "bareline",
+        "--locked"
+      ],
+      "status": "completed",
+      "exit_code": 0,
+      "elapsed_ms": 19619,
+      "source_before": {
+        "available": true,
+        "head": "c33cb6fa7abd009bb124e3c59275d8c6a2395749",
+        "working_tree_dirty": false,
+        "source_manifest_sha256": "c05ae878b9de51316baefd7bc4c28c80b947f0f26ecb6fa8b1dbb5ab7a96bc09"
+      },
+      "source_after": {
+        "available": true,
+        "head": "c33cb6fa7abd009bb124e3c59275d8c6a2395749",
+        "working_tree_dirty": false,
+        "source_manifest_sha256": "c05ae878b9de51316baefd7bc4c28c80b947f0f26ecb6fa8b1dbb5ab7a96bc09"
+      },
+      "source_changed_during_run": false,
+      "note": null
+    },
+    {
+      "receipt": "target/qualification/full-suite-20260916/35-final-render-smoke.json",
+      "sha256": "4779a2da6fc4553f5fc7b5b5eb2970eeb8ecb933e1d0634f2fe367a15e8754ce",
+      "command": [
+        "cargo",
+        "xtask",
+        "perf",
+        "smoke"
+      ],
+      "status": "completed",
+      "exit_code": 0,
+      "elapsed_ms": 34065,
+      "source_before": {
+        "available": true,
+        "head": "c33cb6fa7abd009bb124e3c59275d8c6a2395749",
+        "working_tree_dirty": false,
+        "source_manifest_sha256": "c05ae878b9de51316baefd7bc4c28c80b947f0f26ecb6fa8b1dbb5ab7a96bc09"
+      },
+      "source_after": {
+        "available": true,
+        "head": "c33cb6fa7abd009bb124e3c59275d8c6a2395749",
+        "working_tree_dirty": false,
+        "source_manifest_sha256": "c05ae878b9de51316baefd7bc4c28c80b947f0f26ecb6fa8b1dbb5ab7a96bc09"
+      },
+      "source_changed_during_run": false,
+      "note": null
+    },
+    {
+      "receipt": "target/qualification/full-suite-20260916/36-final-first-party-all.json",
+      "sha256": "bca344e0c15b36f78a2672bc8fbe59a15e64e8f87263fbc16d72ed26dee6d5d6",
+      "command": [
+        "pwsh",
+        "-NoProfile",
+        "-File",
+        "scripts/test-first-party.ps1",
+        "-Suite",
+        "All"
+      ],
+      "status": "completed",
+      "exit_code": 0,
+      "elapsed_ms": 310213,
+      "source_before": {
+        "available": true,
+        "head": "c33cb6fa7abd009bb124e3c59275d8c6a2395749",
+        "working_tree_dirty": false,
+        "source_manifest_sha256": "c05ae878b9de51316baefd7bc4c28c80b947f0f26ecb6fa8b1dbb5ab7a96bc09"
+      },
+      "source_after": {
+        "available": true,
+        "head": "c33cb6fa7abd009bb124e3c59275d8c6a2395749",
+        "working_tree_dirty": false,
+        "source_manifest_sha256": "c05ae878b9de51316baefd7bc4c28c80b947f0f26ecb6fa8b1dbb5ab7a96bc09"
+      },
+      "source_changed_during_run": false,
+      "note": null
+    },
+    {
+      "receipt": "target/qualification/full-suite-20260916/37-warning-routing.json",
+      "sha256": "d13654cd8feac10fdf2931eed2096dbc814c6cf35ab1d5c5449401f3b66645dd",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "bareline-file-io",
+        "-p",
+        "bareline-app"
+      ],
+      "status": "completed",
+      "exit_code": 0,
+      "elapsed_ms": 52693,
+      "source_before": {
+        "available": true,
+        "head": "c33cb6fa7abd009bb124e3c59275d8c6a2395749",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "68e9a7934728ce49ef0291530fd0bc70fb19dcda2d71b5c7f2ebe62212696058"
+      },
+      "source_after": {
+        "available": true,
+        "head": "c33cb6fa7abd009bb124e3c59275d8c6a2395749",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "68e9a7934728ce49ef0291530fd0bc70fb19dcda2d71b5c7f2ebe62212696058"
+      },
+      "source_changed_during_run": false,
+      "note": null
+    },
+    {
+      "receipt": "target/qualification/full-suite-20260916/38-routing-clippy.json",
+      "sha256": "336962614f8789f89198681899d28602b85fde7221bdbc270557a457f6bb623d",
+      "command": [
+        "cargo",
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--locked",
+        "--message-format=json"
+      ],
+      "status": "completed",
+      "exit_code": 0,
+      "elapsed_ms": 9546,
+      "source_before": {
+        "available": true,
+        "head": "c33cb6fa7abd009bb124e3c59275d8c6a2395749",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "68e9a7934728ce49ef0291530fd0bc70fb19dcda2d71b5c7f2ebe62212696058"
+      },
+      "source_after": {
+        "available": true,
+        "head": "c33cb6fa7abd009bb124e3c59275d8c6a2395749",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "68e9a7934728ce49ef0291530fd0bc70fb19dcda2d71b5c7f2ebe62212696058"
+      },
+      "source_changed_during_run": false,
+      "note": null
+    },
+    {
+      "receipt": "target/qualification/full-suite-20260916/39-routing-ratchet.json",
+      "sha256": "670bda902b796ec1950f16ecdf5a099e49c1b96d137409762c6a65f01816c64d",
+      "command": [
+        "python",
+        ".github/workflows/check_clippy_ratchet.py",
+        "check",
+        "--diagnostics",
+        "target/qualification/full-suite-20260916/38-routing-clippy.json.stdout.log",
+        "--baseline",
+        ".github/workflows/clippy-baseline.json",
+        "--source-root",
+        ".",
+        "--platform",
+        "Windows",
+        "--target",
+        "x86_64-pc-windows-msvc",
+        "--toolchain",
+        "1.98.1"
+      ],
+      "status": "completed",
+      "exit_code": 0,
+      "elapsed_ms": 26832,
+      "source_before": {
+        "available": true,
+        "head": "c33cb6fa7abd009bb124e3c59275d8c6a2395749",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "1e8ae94321fdc657c5faa77a972cebb8244b81c233ff0733a0d2c9c0bf260aff"
+      },
+      "source_after": {
+        "available": true,
+        "head": "c33cb6fa7abd009bb124e3c59275d8c6a2395749",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "1e8ae94321fdc657c5faa77a972cebb8244b81c233ff0733a0d2c9c0bf260aff"
+      },
+      "source_changed_during_run": false,
+      "note": null
+    },
+    {
+      "receipt": "target/qualification/full-suite-20260916/40-offline-version.json",
+      "sha256": "b62fea182bac0cb75bb338e58c0fce6b21e4245038e077e5305639d0fd26ab72",
+      "command": [
+        "cargo",
+        "metadata",
+        "--locked",
+        "--offline",
+        "--no-deps",
+        "--format-version",
+        "1"
+      ],
+      "status": "completed",
+      "exit_code": 0,
+      "elapsed_ms": 228,
+      "source_before": {
+        "available": true,
+        "head": "c33cb6fa7abd009bb124e3c59275d8c6a2395749",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "1e8ae94321fdc657c5faa77a972cebb8244b81c233ff0733a0d2c9c0bf260aff"
+      },
+      "source_after": {
+        "available": true,
+        "head": "c33cb6fa7abd009bb124e3c59275d8c6a2395749",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "1e8ae94321fdc657c5faa77a972cebb8244b81c233ff0733a0d2c9c0bf260aff"
+      },
+      "source_changed_during_run": false,
+      "note": null
+    },
+    {
+      "receipt": "target/qualification/full-suite-20260916/41-current-preview-build.json",
+      "sha256": "55e552fa13d7baa38ec34a7347cc8f1f91387f2d0683be7c42361b87860e0bb2",
+      "command": [
+        "cargo",
+        "build",
+        "--release",
+        "--locked",
+        "-p",
+        "bareline",
+        "-p",
+        "bareline-update-helper",
+        "-p",
+        "bareline-extension-host",
+        "--no-default-features"
+      ],
+      "status": "completed",
+      "exit_code": 0,
+      "elapsed_ms": 276578,
+      "source_before": {
+        "available": true,
+        "head": "6585c4aa71f0539d38d36881d4175630808d2bed",
+        "working_tree_dirty": false,
+        "source_manifest_sha256": "c05ae878b9de51316baefd7bc4c28c80b947f0f26ecb6fa8b1dbb5ab7a96bc09"
+      },
+      "source_after": {
+        "available": true,
+        "head": "6585c4aa71f0539d38d36881d4175630808d2bed",
+        "working_tree_dirty": false,
+        "source_manifest_sha256": "c05ae878b9de51316baefd7bc4c28c80b947f0f26ecb6fa8b1dbb5ab7a96bc09"
+      },
+      "source_changed_during_run": false,
+      "note": null
+    },
+    {
+      "receipt": "target/qualification/full-suite-20260916/42-package.json",
+      "sha256": "feb98cacfc2a1a04e7a8133cd583fb24068a6b0545b7e2162cbbe77b5f3862ca",
+      "command": [
+        "pwsh",
+        "-NoProfile",
+        "-File",
+        "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\full-suite-20260916\\prepare-package.ps1"
+      ],
+      "status": "completed",
+      "exit_code": 0,
+      "elapsed_ms": 7900,
+      "source_before": {
+        "available": true,
+        "head": "dc1bf2389e7bd2551a8fa36a960c6c12173939d7",
+        "working_tree_dirty": false,
+        "source_manifest_sha256": "c05ae878b9de51316baefd7bc4c28c80b947f0f26ecb6fa8b1dbb5ab7a96bc09"
+      },
+      "source_after": {
+        "available": true,
+        "head": "dc1bf2389e7bd2551a8fa36a960c6c12173939d7",
+        "working_tree_dirty": false,
+        "source_manifest_sha256": "c05ae878b9de51316baefd7bc4c28c80b947f0f26ecb6fa8b1dbb5ab7a96bc09"
+      },
+      "source_changed_during_run": false,
+      "note": null
+    },
+    {
+      "receipt": "target/qualification/full-suite-20260916/43-install.json",
+      "sha256": "13d35d758c6741ed48be970c3f5f954dff1d2d72df1b351a9544b6e0606fdce4",
+      "command": [
+        "pwsh",
+        "-NoProfile",
+        "-File",
+        "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\full-suite-20260916\\install-local.ps1"
+      ],
+      "status": "completed",
+      "exit_code": 0,
+      "elapsed_ms": 4598,
+      "source_before": {
+        "available": true,
+        "head": "dc1bf2389e7bd2551a8fa36a960c6c12173939d7",
+        "working_tree_dirty": false,
+        "source_manifest_sha256": "c05ae878b9de51316baefd7bc4c28c80b947f0f26ecb6fa8b1dbb5ab7a96bc09"
+      },
+      "source_after": {
+        "available": true,
+        "head": "dc1bf2389e7bd2551a8fa36a960c6c12173939d7",
+        "working_tree_dirty": false,
+        "source_manifest_sha256": "c05ae878b9de51316baefd7bc4c28c80b947f0f26ecb6fa8b1dbb5ab7a96bc09"
+      },
+      "source_changed_during_run": false,
+      "note": null
+    },
+    {
+      "receipt": "target/qualification/full-suite-20260916/44-column.json",
+      "sha256": "55d2b8716a3021e7deb4a0b24bb03f12e51d552366d2391146629510548f6983",
+      "command": [
+        "python",
+        "tests/e2e/runner.py",
+        "run",
+        "column_multi_cursor",
+        "--commit",
+        "dc1bf2389e7bd2551a8fa36a960c6c12173939d7",
+        "--reviewer",
+        "Codex local smoke (not independent acceptance)",
+        "--os-build",
+        "26200.9457",
+        "--hardware",
+        "AMD Ryzen 5 3600; 128 GiB RAM; local Windows x64",
+        "--executable",
+        "C:\\Users\\Woovee\\AppData\\Local\\Programs\\Bareline\\bareline.exe",
+        "--dpi",
+        "100",
+        "--mode",
+        "keyboard",
+        "--theme",
+        "dark",
+        "--adapter",
+        "C:\\Users\\Woovee\\AppData\\Local\\Microsoft\\WindowsApps\\python.exe",
+        "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_adapter.py"
+      ],
+      "status": "completed",
+      "exit_code": 0,
+      "elapsed_ms": 15366,
+      "source_before": {
+        "available": true,
+        "head": "dc1bf2389e7bd2551a8fa36a960c6c12173939d7",
+        "working_tree_dirty": false,
+        "source_manifest_sha256": "c05ae878b9de51316baefd7bc4c28c80b947f0f26ecb6fa8b1dbb5ab7a96bc09"
+      },
+      "source_after": {
+        "available": true,
+        "head": "dc1bf2389e7bd2551a8fa36a960c6c12173939d7",
+        "working_tree_dirty": false,
+        "source_manifest_sha256": "c05ae878b9de51316baefd7bc4c28c80b947f0f26ecb6fa8b1dbb5ab7a96bc09"
+      },
+      "source_changed_during_run": false,
+      "note": null
+    },
+    {
+      "receipt": "target/qualification/full-suite-20260916/45-plain-text.json",
+      "sha256": "8b1e67361be4f6f14e902770adf9fff05a0e81593d82cd4d61871aacd80a2f90",
+      "command": [
+        "python",
+        "tests/e2e/runner.py",
+        "run",
+        "plain_text",
+        "--commit",
+        "dc1bf2389e7bd2551a8fa36a960c6c12173939d7",
+        "--reviewer",
+        "Codex local smoke (not independent acceptance)",
+        "--os-build",
+        "26200.9457",
+        "--hardware",
+        "AMD Ryzen 5 3600; 128 GiB RAM; local Windows x64",
+        "--executable",
+        "C:\\Users\\Woovee\\AppData\\Local\\Programs\\Bareline\\bareline.exe",
+        "--dpi",
+        "100",
+        "--mode",
+        "keyboard",
+        "--theme",
+        "dark",
+        "--adapter",
+        "C:\\Users\\Woovee\\AppData\\Local\\Microsoft\\WindowsApps\\python.exe",
+        "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_adapter.py"
+      ],
+      "status": "completed",
+      "exit_code": 0,
+      "elapsed_ms": 15166,
+      "source_before": {
+        "available": true,
+        "head": "dc1bf2389e7bd2551a8fa36a960c6c12173939d7",
+        "working_tree_dirty": false,
+        "source_manifest_sha256": "c05ae878b9de51316baefd7bc4c28c80b947f0f26ecb6fa8b1dbb5ab7a96bc09"
+      },
+      "source_after": {
+        "available": true,
+        "head": "dc1bf2389e7bd2551a8fa36a960c6c12173939d7",
+        "working_tree_dirty": false,
+        "source_manifest_sha256": "c05ae878b9de51316baefd7bc4c28c80b947f0f26ecb6fa8b1dbb5ab7a96bc09"
+      },
+      "source_changed_during_run": false,
+      "note": null
+    },
+    {
+      "receipt": "target/qualification/full-suite-20260916/46-code-config.json",
+      "sha256": "3929321a50979f8b15a694646cb69e902d4ead8f6fcf63253df85918c5dc6da0",
+      "command": [
+        "python",
+        "tests/e2e/runner.py",
+        "run",
+        "code_config",
+        "--commit",
+        "dc1bf2389e7bd2551a8fa36a960c6c12173939d7",
+        "--reviewer",
+        "Codex local smoke (not independent acceptance)",
+        "--os-build",
+        "26200.9457",
+        "--hardware",
+        "AMD Ryzen 5 3600; 128 GiB RAM; local Windows x64",
+        "--executable",
+        "C:\\Users\\Woovee\\AppData\\Local\\Programs\\Bareline\\bareline.exe",
+        "--dpi",
+        "100",
+        "--mode",
+        "keyboard",
+        "--theme",
+        "dark",
+        "--adapter",
+        "C:\\Users\\Woovee\\AppData\\Local\\Microsoft\\WindowsApps\\python.exe",
+        "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_adapter.py"
+      ],
+      "status": "completed",
+      "exit_code": 0,
+      "elapsed_ms": 17573,
+      "source_before": {
+        "available": true,
+        "head": "dc1bf2389e7bd2551a8fa36a960c6c12173939d7",
+        "working_tree_dirty": false,
+        "source_manifest_sha256": "c05ae878b9de51316baefd7bc4c28c80b947f0f26ecb6fa8b1dbb5ab7a96bc09"
+      },
+      "source_after": {
+        "available": true,
+        "head": "dc1bf2389e7bd2551a8fa36a960c6c12173939d7",
+        "working_tree_dirty": false,
+        "source_manifest_sha256": "c05ae878b9de51316baefd7bc4c28c80b947f0f26ecb6fa8b1dbb5ab7a96bc09"
+      },
+      "source_changed_during_run": false,
+      "note": null
+    },
+    {
+      "receipt": "target/qualification/full-suite-20260916/47-regex.json",
+      "sha256": "00358de8d42bd25efbb8c91dd0d2da6fa833cd217e63d937fccb1f9150031f87",
+      "command": [
+        "python",
+        "tests/e2e/runner.py",
+        "run",
+        "regex_transform",
+        "--commit",
+        "dc1bf2389e7bd2551a8fa36a960c6c12173939d7",
+        "--reviewer",
+        "Codex local smoke (not independent acceptance)",
+        "--os-build",
+        "26200.9457",
+        "--hardware",
+        "AMD Ryzen 5 3600; 128 GiB RAM; local Windows x64",
+        "--executable",
+        "C:\\Users\\Woovee\\AppData\\Local\\Programs\\Bareline\\bareline.exe",
+        "--dpi",
+        "100",
+        "--mode",
+        "keyboard",
+        "--theme",
+        "dark",
+        "--adapter",
+        "C:\\Users\\Woovee\\AppData\\Local\\Microsoft\\WindowsApps\\python.exe",
+        "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_adapter.py"
+      ],
+      "status": "completed",
+      "exit_code": 0,
+      "elapsed_ms": 17934,
+      "source_before": {
+        "available": true,
+        "head": "dc1bf2389e7bd2551a8fa36a960c6c12173939d7",
+        "working_tree_dirty": false,
+        "source_manifest_sha256": "c05ae878b9de51316baefd7bc4c28c80b947f0f26ecb6fa8b1dbb5ab7a96bc09"
+      },
+      "source_after": {
+        "available": true,
+        "head": "dc1bf2389e7bd2551a8fa36a960c6c12173939d7",
+        "working_tree_dirty": false,
+        "source_manifest_sha256": "c05ae878b9de51316baefd7bc4c28c80b947f0f26ecb6fa8b1dbb5ab7a96bc09"
+      },
+      "source_changed_during_run": false,
+      "note": null
+    },
+    {
+      "receipt": "target/qualification/full-suite-20260916/48-linux-native-ratchet.json",
+      "sha256": "d53943939475ed60dbeaee6baccc0a0b03fd64f2036e377543b28fd78f97012e",
+      "command": [
+        "python",
+        ".github/workflows/check_clippy_ratchet.py",
+        "check",
+        "--diagnostics",
+        "target/qualification/full-suite-20260916/ci-linux-6585c4a/clippy-census.jsonl",
+        "--baseline",
+        ".github/workflows/clippy-baseline.json",
+        "--source-root",
+        ".",
+        "--platform",
+        "Linux",
+        "--target",
+        "x86_64-unknown-linux-gnu",
+        "--toolchain",
+        "1.98.1"
+      ],
+      "status": "completed",
+      "exit_code": 0,
+      "elapsed_ms": 11912,
+      "source_before": {
+        "available": true,
+        "head": "6585c4aa71f0539d38d36881d4175630808d2bed",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "7091be6fe5763635c4e167d00ba08e187307982fa4a08467dc6d336671af1df6"
+      },
+      "source_after": {
+        "available": true,
+        "head": "6585c4aa71f0539d38d36881d4175630808d2bed",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "7091be6fe5763635c4e167d00ba08e187307982fa4a08467dc6d336671af1df6"
+      },
+      "source_changed_during_run": false,
+      "note": null
+    },
+    {
+      "receipt": "target/qualification/full-suite-20260916/49-group-admission-test.json",
+      "sha256": "28e156f99686c003c045a7ace66863d29def01bd4fe8b677c0bf38d1303170fc",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "bareline-editor-surface",
+        "--lib"
+      ],
+      "status": "completed",
+      "exit_code": 0,
+      "elapsed_ms": 51916,
+      "source_before": {
+        "available": true,
+        "head": "dc1bf2389e7bd2551a8fa36a960c6c12173939d7",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "eb44806a143d618ec031a58bc20ec17797c9603a5a2a6362ac412d340a1693e1"
+      },
+      "source_after": {
+        "available": true,
+        "head": "dc1bf2389e7bd2551a8fa36a960c6c12173939d7",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "eb44806a143d618ec031a58bc20ec17797c9603a5a2a6362ac412d340a1693e1"
+      },
+      "source_changed_during_run": false,
+      "note": null
+    },
+    {
+      "receipt": "target/qualification/full-suite-20260916/50-test-clippy.json",
+      "sha256": "6c17f75b3293b67773d75015cfa16741fd8c13d6b847a2334b0c64e45ad23cf8",
+      "command": [
+        "cargo",
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--locked",
+        "--message-format=json"
+      ],
+      "status": "inherited_pipe_open",
+      "exit_code": 0,
+      "elapsed_ms": 6330,
+      "source_before": {
+        "available": true,
+        "head": "dc1bf2389e7bd2551a8fa36a960c6c12173939d7",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "eb44806a143d618ec031a58bc20ec17797c9603a5a2a6362ac412d340a1693e1"
+      },
+      "source_after": {
+        "available": true,
+        "head": "dc1bf2389e7bd2551a8fa36a960c6c12173939d7",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "eb44806a143d618ec031a58bc20ec17797c9603a5a2a6362ac412d340a1693e1"
+      },
+      "source_changed_during_run": false,
+      "note": "Compiler succeeded, but capture reported inherited_pipe_open; retained as a capture failure. Exact rerun 52 completed normally; 51 passed the ratchet."
+    },
+    {
+      "receipt": "target/qualification/full-suite-20260916/51-test-ratchet.json",
+      "sha256": "f933fb5eaa1bc0ea011be67a5adb9a32789d7a9f194674ae4854a54fcd597179",
+      "command": [
+        "python",
+        ".github/workflows/check_clippy_ratchet.py",
+        "check",
+        "--diagnostics",
+        "target/qualification/full-suite-20260916/52-test-clippy-retry.json.stdout.log",
+        "--baseline",
+        ".github/workflows/clippy-baseline.json",
+        "--source-root",
+        ".",
+        "--platform",
+        "Windows",
+        "--target",
+        "x86_64-pc-windows-msvc",
+        "--toolchain",
+        "1.98.1"
+      ],
+      "status": "completed",
+      "exit_code": 0,
+      "elapsed_ms": 26531,
+      "source_before": {
+        "available": true,
+        "head": "dc1bf2389e7bd2551a8fa36a960c6c12173939d7",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "eb44806a143d618ec031a58bc20ec17797c9603a5a2a6362ac412d340a1693e1"
+      },
+      "source_after": {
+        "available": true,
+        "head": "dc1bf2389e7bd2551a8fa36a960c6c12173939d7",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "eb44806a143d618ec031a58bc20ec17797c9603a5a2a6362ac412d340a1693e1"
+      },
+      "source_changed_during_run": false,
+      "note": null
+    },
+    {
+      "receipt": "target/qualification/full-suite-20260916/52-test-clippy-retry.json",
+      "sha256": "81ace09709cd55b30fb008990640cb736db2ea982b88712036937085d793b3ae",
+      "command": [
+        "cargo",
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--locked",
+        "--message-format=json"
+      ],
+      "status": "completed",
+      "exit_code": 0,
+      "elapsed_ms": 1392,
+      "source_before": {
+        "available": true,
+        "head": "dc1bf2389e7bd2551a8fa36a960c6c12173939d7",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "eb44806a143d618ec031a58bc20ec17797c9603a5a2a6362ac412d340a1693e1"
+      },
+      "source_after": {
+        "available": true,
+        "head": "dc1bf2389e7bd2551a8fa36a960c6c12173939d7",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "eb44806a143d618ec031a58bc20ec17797c9603a5a2a6362ac412d340a1693e1"
+      },
+      "source_changed_during_run": false,
+      "note": null
+    },
+    {
+      "receipt": "target/qualification/full-suite-20260916/53-workspace-fixture-cleanup.json",
+      "sha256": "60c9fb74aee42e790bae9eededae4673cdd4f149e1818d2d3037e567f5decaa8",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "bareline-app",
+        "--lib"
+      ],
+      "status": "completed",
+      "exit_code": 0,
+      "elapsed_ms": 27553,
+      "source_before": {
+        "available": true,
+        "head": "82f517e20bfd94210c4adeb3adc870c0c70a399e",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "1054fa9ff339b8345d691f3ed327e6fe848f97ec2094d193f8c6b310377884ed"
+      },
+      "source_after": {
+        "available": true,
+        "head": "82f517e20bfd94210c4adeb3adc870c0c70a399e",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "1054fa9ff339b8345d691f3ed327e6fe848f97ec2094d193f8c6b310377884ed"
+      },
+      "source_changed_during_run": false,
+      "note": null
+    },
+    {
+      "receipt": "target/qualification/full-suite-20260916/54-cleanup-clippy.json",
+      "sha256": "e0255b1f6e087bcdda9864f11a74d29092e49be7722eef8f7976f81cade0b8cd",
+      "command": [
+        "cargo",
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--locked",
+        "--message-format=json"
+      ],
+      "status": "completed",
+      "exit_code": 0,
+      "elapsed_ms": 3612,
+      "source_before": {
+        "available": true,
+        "head": "82f517e20bfd94210c4adeb3adc870c0c70a399e",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "1054fa9ff339b8345d691f3ed327e6fe848f97ec2094d193f8c6b310377884ed"
+      },
+      "source_after": {
+        "available": true,
+        "head": "82f517e20bfd94210c4adeb3adc870c0c70a399e",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "1054fa9ff339b8345d691f3ed327e6fe848f97ec2094d193f8c6b310377884ed"
+      },
+      "source_changed_during_run": false,
+      "note": null
+    },
+    {
+      "receipt": "target/qualification/full-suite-20260916/55-cleanup-ratchet.json",
+      "sha256": "c8794e20ec9451dc5d05c0c39a869329fa779bb16a54b08929bc15be8c85d8e6",
+      "command": [
+        "python",
+        ".github/workflows/check_clippy_ratchet.py",
+        "check",
+        "--diagnostics",
+        "target/qualification/full-suite-20260916/54-cleanup-clippy.json.stdout.log",
+        "--baseline",
+        ".github/workflows/clippy-baseline.json",
+        "--source-root",
+        ".",
+        "--platform",
+        "Windows",
+        "--target",
+        "x86_64-pc-windows-msvc",
+        "--toolchain",
+        "1.98.1"
+      ],
+      "status": "completed",
+      "exit_code": 0,
+      "elapsed_ms": 26670,
+      "source_before": {
+        "available": true,
+        "head": "82f517e20bfd94210c4adeb3adc870c0c70a399e",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "1054fa9ff339b8345d691f3ed327e6fe848f97ec2094d193f8c6b310377884ed"
+      },
+      "source_after": {
+        "available": true,
+        "head": "82f517e20bfd94210c4adeb3adc870c0c70a399e",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "1054fa9ff339b8345d691f3ed327e6fe848f97ec2094d193f8c6b310377884ed"
+      },
+      "source_changed_during_run": false,
+      "note": null
+    },
+    {
+      "receipt": "target/qualification/full-suite-20260916/56-eol-admission-test.json",
+      "sha256": "f3c4192143c880357833016c61deff7f43873e916e55d1603d0572f57b2547f1",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "bareline-app",
+        "--lib",
+        "--locked"
+      ],
+      "status": "completed",
+      "exit_code": 0,
+      "elapsed_ms": 24128,
+      "source_before": {
+        "available": true,
+        "head": "75bf384e436bd0514a03c9860f3f3cd6bd101abd",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "89ae8cb88aee873de13c7727e763f556ecc7bd691c825178117f105c24156a43"
+      },
+      "source_after": {
+        "available": true,
+        "head": "75bf384e436bd0514a03c9860f3f3cd6bd101abd",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "89ae8cb88aee873de13c7727e763f556ecc7bd691c825178117f105c24156a43"
+      },
+      "source_changed_during_run": false,
+      "note": null
+    },
+    {
+      "receipt": "target/qualification/full-suite-20260916/57-eol-clippy.json",
+      "sha256": "3d8e9d42421109b68357c12cd92ee4239aee2eaad7f4e4de7a1b22394b4d877c",
+      "command": [
+        "cargo",
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--locked",
+        "--message-format=json"
+      ],
+      "status": "completed",
+      "exit_code": 0,
+      "elapsed_ms": 3562,
+      "source_before": {
+        "available": true,
+        "head": "75bf384e436bd0514a03c9860f3f3cd6bd101abd",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "89ae8cb88aee873de13c7727e763f556ecc7bd691c825178117f105c24156a43"
+      },
+      "source_after": {
+        "available": true,
+        "head": "75bf384e436bd0514a03c9860f3f3cd6bd101abd",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "89ae8cb88aee873de13c7727e763f556ecc7bd691c825178117f105c24156a43"
+      },
+      "source_changed_during_run": false,
+      "note": null
+    },
+    {
+      "receipt": "target/qualification/full-suite-20260916/58-eol-ratchet.json",
+      "sha256": "0a4063a78a071522cc3d0f6a94873b1e4e8cf80aceef7139592d421981a2998d",
+      "command": [
+        "python",
+        ".github/workflows/check_clippy_ratchet.py",
+        "check",
+        "--diagnostics",
+        "target/qualification/full-suite-20260916/57-eol-clippy.json.stdout.log",
+        "--baseline",
+        ".github/workflows/clippy-baseline.json",
+        "--source-root",
+        ".",
+        "--platform",
+        "Windows",
+        "--target",
+        "x86_64-pc-windows-msvc",
+        "--toolchain",
+        "1.98.1"
+      ],
+      "status": "completed",
+      "exit_code": 0,
+      "elapsed_ms": 26686,
+      "source_before": {
+        "available": true,
+        "head": "75bf384e436bd0514a03c9860f3f3cd6bd101abd",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "89ae8cb88aee873de13c7727e763f556ecc7bd691c825178117f105c24156a43"
+      },
+      "source_after": {
+        "available": true,
+        "head": "75bf384e436bd0514a03c9860f3f3cd6bd101abd",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "89ae8cb88aee873de13c7727e763f556ecc7bd691c825178117f105c24156a43"
+      },
+      "source_changed_during_run": false,
+      "note": null
+    },
+    {
+      "receipt": "target/qualification/full-suite-20260916/59-queued-fixture-tests.json",
+      "sha256": "2382e9684bdf345568a9284f12b3457c7f2fcaf1ce6cf6f6c7445dbde76c3935",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "bareline-app",
+        "--lib",
+        "--locked"
+      ],
+      "status": "completed",
+      "exit_code": 0,
+      "elapsed_ms": 23823,
+      "source_before": {
+        "available": true,
+        "head": "1c582f72b45bdb7e26017b93f15f5b5972d1ab0a",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "29275953c8c0f1a69e298fd5aced55845a4b2599a7e520298c5a77cae253075a"
+      },
+      "source_after": {
+        "available": true,
+        "head": "1c582f72b45bdb7e26017b93f15f5b5972d1ab0a",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "29275953c8c0f1a69e298fd5aced55845a4b2599a7e520298c5a77cae253075a"
+      },
+      "source_changed_during_run": false,
+      "note": null
+    },
+    {
+      "receipt": "target/qualification/full-suite-20260916/60-queued-fixture-clippy.json",
+      "sha256": "5e6f8a29d7ec8bb5ccfad4917903a29c1cddd653629a9a6e1a2a68cab17603d4",
+      "command": [
+        "cargo",
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--locked",
+        "--message-format=json"
+      ],
+      "status": "completed",
+      "exit_code": 0,
+      "elapsed_ms": 3611,
+      "source_before": {
+        "available": true,
+        "head": "1c582f72b45bdb7e26017b93f15f5b5972d1ab0a",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "29275953c8c0f1a69e298fd5aced55845a4b2599a7e520298c5a77cae253075a"
+      },
+      "source_after": {
+        "available": true,
+        "head": "1c582f72b45bdb7e26017b93f15f5b5972d1ab0a",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "29275953c8c0f1a69e298fd5aced55845a4b2599a7e520298c5a77cae253075a"
+      },
+      "source_changed_during_run": false,
+      "note": null
+    },
+    {
+      "receipt": "target/qualification/full-suite-20260916/61-queued-fixture-ratchet.json",
+      "sha256": "9b020f916ffb124465521d331cf4cdf5939e9c775f38eb2bdde65e11fd768624",
+      "command": [
+        "python",
+        ".github/workflows/check_clippy_ratchet.py",
+        "check",
+        "--diagnostics",
+        "target/qualification/full-suite-20260916/60-queued-fixture-clippy.json.stdout.log",
+        "--baseline",
+        ".github/workflows/clippy-baseline.json",
+        "--source-root",
+        ".",
+        "--platform",
+        "Windows",
+        "--target",
+        "x86_64-pc-windows-msvc",
+        "--toolchain",
+        "1.98.1"
+      ],
+      "status": "completed",
+      "exit_code": 0,
+      "elapsed_ms": 26434,
+      "source_before": {
+        "available": true,
+        "head": "1c582f72b45bdb7e26017b93f15f5b5972d1ab0a",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "29275953c8c0f1a69e298fd5aced55845a4b2599a7e520298c5a77cae253075a"
+      },
+      "source_after": {
+        "available": true,
+        "head": "1c582f72b45bdb7e26017b93f15f5b5972d1ab0a",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "29275953c8c0f1a69e298fd5aced55845a4b2599a7e520298c5a77cae253075a"
+      },
+      "source_changed_during_run": false,
+      "note": null
+    },
+    {
+      "receipt": "target/qualification/full-suite-20260916/62-linked-peer-test.json",
+      "sha256": "9cea233e9d407b185cca5e02ac494a13c6dc4fba989b2dd3a1432661d69212ee",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "bareline-editor-surface",
+        "--lib",
+        "--locked"
+      ],
+      "status": "completed",
+      "exit_code": 0,
+      "elapsed_ms": 29809,
+      "source_before": {
+        "available": true,
+        "head": "1c582f72b45bdb7e26017b93f15f5b5972d1ab0a",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "159ddfb709013762990ecfc908a81bcebaf2a8f420a41058e17a5247ac42fbfa"
+      },
+      "source_after": {
+        "available": true,
+        "head": "1c582f72b45bdb7e26017b93f15f5b5972d1ab0a",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "159ddfb709013762990ecfc908a81bcebaf2a8f420a41058e17a5247ac42fbfa"
+      },
+      "source_changed_during_run": false,
+      "note": null
+    },
+    {
+      "receipt": "target/qualification/full-suite-20260916/63-consolidated-workspace.json",
+      "sha256": "94affa6c80ccf2836aa5bff6829aefdf988ca7ee1798a19bdc9980d43ab50d18",
+      "command": [
+        "cargo",
+        "test",
+        "--workspace",
+        "--locked"
+      ],
+      "status": "completed",
+      "exit_code": 0,
+      "elapsed_ms": 154953,
+      "source_before": {
+        "available": true,
+        "head": "6badda3bba8038cec1f7c470555bae4c811af3ca",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "0b29db668051c4cc33f591e7992e2b3aa9bfc08c27358c818652b1ba6fa46507"
+      },
+      "source_after": {
+        "available": true,
+        "head": "6badda3bba8038cec1f7c470555bae4c811af3ca",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "0b29db668051c4cc33f591e7992e2b3aa9bfc08c27358c818652b1ba6fa46507"
+      },
+      "source_changed_during_run": false,
+      "note": null
+    },
+    {
+      "receipt": "target/qualification/full-suite-20260916/64-consolidated-clippy.json",
+      "sha256": "3fc5a4137955f2e23a4011289d9f736921cce5afd4338e1098cf18c6a9f4bcb9",
+      "command": [
+        "cargo",
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--locked",
+        "--message-format=json"
+      ],
+      "status": "completed",
+      "exit_code": 0,
+      "elapsed_ms": 4622,
+      "source_before": {
+        "available": true,
+        "head": "6badda3bba8038cec1f7c470555bae4c811af3ca",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "0b29db668051c4cc33f591e7992e2b3aa9bfc08c27358c818652b1ba6fa46507"
+      },
+      "source_after": {
+        "available": true,
+        "head": "6badda3bba8038cec1f7c470555bae4c811af3ca",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "0b29db668051c4cc33f591e7992e2b3aa9bfc08c27358c818652b1ba6fa46507"
+      },
+      "source_changed_during_run": false,
+      "note": null
+    },
+    {
+      "receipt": "target/qualification/full-suite-20260916/65-consolidated-ratchet.json",
+      "sha256": "11587170843f753b3ddee6be478b48e10534d73c2fe95f93e664d95e018327a6",
+      "command": [
+        "python",
+        ".github/workflows/check_clippy_ratchet.py",
+        "check",
+        "--diagnostics",
+        "target/qualification/full-suite-20260916/64-consolidated-clippy.json.stdout.log",
+        "--baseline",
+        ".github/workflows/clippy-baseline.json",
+        "--source-root",
+        ".",
+        "--platform",
+        "Windows",
+        "--target",
+        "x86_64-pc-windows-msvc",
+        "--toolchain",
+        "1.98.1"
+      ],
+      "status": "completed",
+      "exit_code": 0,
+      "elapsed_ms": 26629,
+      "source_before": {
+        "available": true,
+        "head": "6badda3bba8038cec1f7c470555bae4c811af3ca",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "0b29db668051c4cc33f591e7992e2b3aa9bfc08c27358c818652b1ba6fa46507"
+      },
+      "source_after": {
+        "available": true,
+        "head": "6badda3bba8038cec1f7c470555bae4c811af3ca",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "0b29db668051c4cc33f591e7992e2b3aa9bfc08c27358c818652b1ba6fa46507"
+      },
+      "source_changed_during_run": false,
+      "note": null
+    },
+    {
+      "receipt": "target/qualification/full-suite-20260916/66-multi-gib-diff.json",
+      "sha256": "15c6ed5f07ac925917859fbcc9990613b11cf721399c6c799e475c4d53efa113",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "bareline-diff",
+        "--lib",
+        "--locked",
+        "paged::tests::divergent_multi_gb_full_traversal",
+        "--",
+        "--exact",
+        "--ignored",
+        "--nocapture"
+      ],
+      "status": "completed",
+      "exit_code": 0,
+      "elapsed_ms": 1089,
+      "source_before": {
+        "available": true,
+        "head": "6badda3bba8038cec1f7c470555bae4c811af3ca",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "8f73a6d51a31874cd1e3780f958150c0a2e01daabdd2e4d57faeb0c564681199"
+      },
+      "source_after": {
+        "available": true,
+        "head": "6badda3bba8038cec1f7c470555bae4c811af3ca",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "8f73a6d51a31874cd1e3780f958150c0a2e01daabdd2e4d57faeb0c564681199"
+      },
+      "source_changed_during_run": false,
+      "note": null
+    }
+  ],
+  "native_smoke": [
+    {
+      "journey": "column_multi_cursor",
+      "status": "PASS",
+      "step_count": 3,
+      "steps": [
+        {
+          "observed": "Three empty UIA selections follow display column four across a tab, wide glyph and short line; source bytes remain exact.",
+          "status": "PASS",
+          "id": "s1",
+          "artifacts": [
+            {
+              "sha256": "74be5f0dbabd2eb9a9a4b00fb73ef3b2b771f8fb3cc0c47efc01d605c4c5599b",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\96635971-efdc-430f-aafc-cdbbf632c014\\scratch\\native-observations.json"
+            },
+            {
+              "sha256": "c0ee59a93e970a5fe0ed4d41272f6d16b6d6c334039347266c3a10c76783f4ab",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\96635971-efdc-430f-aafc-cdbbf632c014\\scratch\\column.txt"
+            },
+            {
+              "sha256": "5057beca797e91383c795d0ecdaafc0e3ef41c60ae0d614d5085f668f834e7b4",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\96635971-efdc-430f-aafc-cdbbf632c014\\scratch\\local\\Bareline\\settings.toml"
+            },
+            {
+              "sha256": "08c0c0ec0a740eb695c394d7854acaf56a80bb049a9211d48a522077242850af",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\96635971-efdc-430f-aafc-cdbbf632c014\\scratch\\command-trace.jsonl"
+            },
+            {
+              "sha256": "625357d8cbf4e0e954263843017777eb5cd4efc42c87b0f239ef44cf5237ea76",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\96635971-efdc-430f-aafc-cdbbf632c014\\scratch\\column-fixture.json"
+            },
+            {
+              "sha256": "4631537383cce39e42353573cbfece4ea43985fa8d92a51bcc7d89f8c9409e2f",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\96635971-efdc-430f-aafc-cdbbf632c014\\scratch\\column-inserted.bin"
+            },
+            {
+              "sha256": "39b9c182132c65e20f48b1b264432e661ce421ea985fe10de82aba8c2e8417a6",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\96635971-efdc-430f-aafc-cdbbf632c014\\scratch\\editor-1.stdout.log"
+            },
+            {
+              "sha256": "dfa56ebe6c70aab9288479e04e855147abbc5ce215649f5da4a1bc7aaaadbe6e",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\96635971-efdc-430f-aafc-cdbbf632c014\\scratch\\editor-1.stderr.log"
+            }
+          ],
+          "fixture": {
+            "procedure": "column_multi_cursor-v1",
+            "fixture_sha256": "47370a824f4c73ded643069274bc0f3c197521f2a5b64bde8a83bea0484aab35",
+            "encoding": "utf-8",
+            "eol": "lf",
+            "tab_width": 4
+          },
+          "adapter": {
+            "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_adapter.py",
+            "sha256": "2dab80f191f91e7cf71e89b7ee5d26cc1add01bd08fa48410407bfe56408d9ee",
+            "driver_path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_driver.ps1",
+            "driver_sha256": "7ddd647c01c5aa6120e9eb414320c49e5688a321760043c6e5e7d1d5ed11d94f",
+            "manifest_sha256": "f24b9accc9d8ed9fc606696fd37342765d603e10b5023bb31344f436244e960e",
+            "auxiliary_sources": [
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\lab_fixture.py",
+                "sha256": "af60b47c201b12a008e298d683dec637022fd177aa9204cb87a8449f5123e1a0"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_lab.ps1",
+                "sha256": "3029079c83c4cca3c4a80ab3e195da32c36a7c94416b4fb85cfd18e054ccca38"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_lab_driver.ps1",
+                "sha256": "77cbe845cb0c5784ea1b8e2c0b4856ec37de8de06d3bca7ded3ce44eb6e67f5c"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\code_config_fixture.py",
+                "sha256": "4f445819f60befa3a4809291fbd3fdcb9664a0d177955808f75280bda8f153f8"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_code_config.ps1",
+                "sha256": "6909fa60311a4c3acfe688bfe4e3cbe798785123334d87b50cd098dd856f3a56"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_visual.cs",
+                "sha256": "8cf398a8afa01e92cb286bfed616d3385c30a7602f652e6e9c09d2b26096f4f7"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\regex_transform_fixture.py",
+                "sha256": "9a360a7c2c80b338e27041d24da8b1294483e4ee61c5a38754d4152417f8abc8"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_regex_transform.ps1",
+                "sha256": "12d105d8ac8390c9cee7fb706c25e6a430b60d50cb8370b95c2d7437b2098144"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\column_fixture.py",
+                "sha256": "37de4b9f4094dfa72c6430f6bc7596482ff8dd3aa9e093f53c5d56c7c3f6a4b2"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_column.ps1",
+                "sha256": "8fba8d6579a61814968ebdac8b754f21e56c8ea728fb607a6f7952e8f7925599"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\udl_fixture.py",
+                "sha256": "6ea8897bd0aaee3b757f22525465fa3441f43dfd7ca66ef445c1c04caafa54ea"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_udl.ps1",
+                "sha256": "693633d5769f0a3d8df613979dc1bd46de3ad7585237cdf62b89f98305521bec"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_session.ps1",
+                "sha256": "213f6b02f9f3a9d195b39327920f347eb8744b574af48acc5c01d024e0d089de"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\split_fixture.py",
+                "sha256": "4b9ec9dab46ac1764f04c71f38fccccf52ce537f9b4aa73abea65d180cb4544e"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_split.ps1",
+                "sha256": "d90f1a9ef817781ba2cb1d42abb3902af87f092b1895eb535edea3d01925cd97"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\workspace_fixture.py",
+                "sha256": "94f84799508cba311dc8721a5cac67dab99c4337bd0a06f7be36f94ff669ac22"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_workspace.ps1",
+                "sha256": "a9ccf9463ac98003f280f7851f3c8f280f644b60d120dbc186d3c3c533572503"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\portable_fixture.py",
+                "sha256": "fffe329e82f9b83dea75f8bb00cbc89a347c24d0855278162147e64e93399ccc"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_portable.ps1",
+                "sha256": "bac801d20317cabe0583e3939b77db56e9cd296e2cd2e8fffe2f4267196a0693"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\huge_log_fixture.py",
+                "sha256": "239f9e4b1a9c0a9a8fd93b677d45783b94c7fdf4534abef13dc5c7a30e1db230"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_huge_log.ps1",
+                "sha256": "02614f66ba6f32ea365c14ee62dc62a10490fbfc0413282b9cb7e4fd45bd455f"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\macro_fixture.py",
+                "sha256": "99f49543c1004b216170734f6c601fd907c082d06918b4ef8dfd48327543f6ee"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\external_fixture.py",
+                "sha256": "e044214f6c1e79c2fa44d961954c17ee81765a8b76efdaaf5693342e4aef5a83"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_macro.ps1",
+                "sha256": "5c32df124cc564f50203d2b8cc5c7713e2722fb904bcfdce377559ca86d5711c"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\evidence_json.py",
+                "sha256": "666df4c7ac7fffefef2cb62eaf3aad9323ab447e211a0e974d04808a417a738f"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\qualification_cells.py",
+                "sha256": "1ee14acdd379bab3cba214b79232dd4f8955cc7d4e3aaf710ffb5e5dea7a95fd"
+              }
+            ]
+          }
+        },
+        {
+          "observed": "One native Column Editor Apply inserts at every display column and pads the short line; Save writes exact bytes.",
+          "status": "PASS",
+          "id": "s2",
+          "artifacts": [
+            {
+              "sha256": "74be5f0dbabd2eb9a9a4b00fb73ef3b2b771f8fb3cc0c47efc01d605c4c5599b",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\96635971-efdc-430f-aafc-cdbbf632c014\\scratch\\native-observations.json"
+            },
+            {
+              "sha256": "c0ee59a93e970a5fe0ed4d41272f6d16b6d6c334039347266c3a10c76783f4ab",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\96635971-efdc-430f-aafc-cdbbf632c014\\scratch\\column.txt"
+            },
+            {
+              "sha256": "5057beca797e91383c795d0ecdaafc0e3ef41c60ae0d614d5085f668f834e7b4",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\96635971-efdc-430f-aafc-cdbbf632c014\\scratch\\local\\Bareline\\settings.toml"
+            },
+            {
+              "sha256": "08c0c0ec0a740eb695c394d7854acaf56a80bb049a9211d48a522077242850af",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\96635971-efdc-430f-aafc-cdbbf632c014\\scratch\\command-trace.jsonl"
+            },
+            {
+              "sha256": "625357d8cbf4e0e954263843017777eb5cd4efc42c87b0f239ef44cf5237ea76",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\96635971-efdc-430f-aafc-cdbbf632c014\\scratch\\column-fixture.json"
+            },
+            {
+              "sha256": "4631537383cce39e42353573cbfece4ea43985fa8d92a51bcc7d89f8c9409e2f",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\96635971-efdc-430f-aafc-cdbbf632c014\\scratch\\column-inserted.bin"
+            },
+            {
+              "sha256": "39b9c182132c65e20f48b1b264432e661ce421ea985fe10de82aba8c2e8417a6",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\96635971-efdc-430f-aafc-cdbbf632c014\\scratch\\editor-1.stdout.log"
+            },
+            {
+              "sha256": "dfa56ebe6c70aab9288479e04e855147abbc5ce215649f5da4a1bc7aaaadbe6e",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\96635971-efdc-430f-aafc-cdbbf632c014\\scratch\\editor-1.stderr.log"
+            }
+          ],
+          "fixture": {
+            "procedure": "column_multi_cursor-v1",
+            "fixture_sha256": "47370a824f4c73ded643069274bc0f3c197521f2a5b64bde8a83bea0484aab35",
+            "encoding": "utf-8",
+            "eol": "lf",
+            "tab_width": 4
+          },
+          "adapter": {
+            "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_adapter.py",
+            "sha256": "2dab80f191f91e7cf71e89b7ee5d26cc1add01bd08fa48410407bfe56408d9ee",
+            "driver_path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_driver.ps1",
+            "driver_sha256": "7ddd647c01c5aa6120e9eb414320c49e5688a321760043c6e5e7d1d5ed11d94f",
+            "manifest_sha256": "f24b9accc9d8ed9fc606696fd37342765d603e10b5023bb31344f436244e960e",
+            "auxiliary_sources": [
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\lab_fixture.py",
+                "sha256": "af60b47c201b12a008e298d683dec637022fd177aa9204cb87a8449f5123e1a0"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_lab.ps1",
+                "sha256": "3029079c83c4cca3c4a80ab3e195da32c36a7c94416b4fb85cfd18e054ccca38"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_lab_driver.ps1",
+                "sha256": "77cbe845cb0c5784ea1b8e2c0b4856ec37de8de06d3bca7ded3ce44eb6e67f5c"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\code_config_fixture.py",
+                "sha256": "4f445819f60befa3a4809291fbd3fdcb9664a0d177955808f75280bda8f153f8"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_code_config.ps1",
+                "sha256": "6909fa60311a4c3acfe688bfe4e3cbe798785123334d87b50cd098dd856f3a56"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_visual.cs",
+                "sha256": "8cf398a8afa01e92cb286bfed616d3385c30a7602f652e6e9c09d2b26096f4f7"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\regex_transform_fixture.py",
+                "sha256": "9a360a7c2c80b338e27041d24da8b1294483e4ee61c5a38754d4152417f8abc8"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_regex_transform.ps1",
+                "sha256": "12d105d8ac8390c9cee7fb706c25e6a430b60d50cb8370b95c2d7437b2098144"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\column_fixture.py",
+                "sha256": "37de4b9f4094dfa72c6430f6bc7596482ff8dd3aa9e093f53c5d56c7c3f6a4b2"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_column.ps1",
+                "sha256": "8fba8d6579a61814968ebdac8b754f21e56c8ea728fb607a6f7952e8f7925599"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\udl_fixture.py",
+                "sha256": "6ea8897bd0aaee3b757f22525465fa3441f43dfd7ca66ef445c1c04caafa54ea"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_udl.ps1",
+                "sha256": "693633d5769f0a3d8df613979dc1bd46de3ad7585237cdf62b89f98305521bec"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_session.ps1",
+                "sha256": "213f6b02f9f3a9d195b39327920f347eb8744b574af48acc5c01d024e0d089de"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\split_fixture.py",
+                "sha256": "4b9ec9dab46ac1764f04c71f38fccccf52ce537f9b4aa73abea65d180cb4544e"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_split.ps1",
+                "sha256": "d90f1a9ef817781ba2cb1d42abb3902af87f092b1895eb535edea3d01925cd97"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\workspace_fixture.py",
+                "sha256": "94f84799508cba311dc8721a5cac67dab99c4337bd0a06f7be36f94ff669ac22"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_workspace.ps1",
+                "sha256": "a9ccf9463ac98003f280f7851f3c8f280f644b60d120dbc186d3c3c533572503"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\portable_fixture.py",
+                "sha256": "fffe329e82f9b83dea75f8bb00cbc89a347c24d0855278162147e64e93399ccc"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_portable.ps1",
+                "sha256": "bac801d20317cabe0583e3939b77db56e9cd296e2cd2e8fffe2f4267196a0693"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\huge_log_fixture.py",
+                "sha256": "239f9e4b1a9c0a9a8fd93b677d45783b94c7fdf4534abef13dc5c7a30e1db230"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_huge_log.ps1",
+                "sha256": "02614f66ba6f32ea365c14ee62dc62a10490fbfc0413282b9cb7e4fd45bd455f"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\macro_fixture.py",
+                "sha256": "99f49543c1004b216170734f6c601fd907c082d06918b4ef8dfd48327543f6ee"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\external_fixture.py",
+                "sha256": "e044214f6c1e79c2fa44d961954c17ee81765a8b76efdaaf5693342e4aef5a83"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_macro.ps1",
+                "sha256": "5c32df124cc564f50203d2b8cc5c7713e2722fb904bcfdce377559ca86d5711c"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\evidence_json.py",
+                "sha256": "666df4c7ac7fffefef2cb62eaf3aad9323ab447e211a0e974d04808a417a738f"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\qualification_cells.py",
+                "sha256": "1ee14acdd379bab3cba214b79232dd4f8955cc7d4e3aaf710ffb5e5dea7a95fd"
+              }
+            ]
+          }
+        },
+        {
+          "observed": "One native Undo restores every original row in one transaction; Save restores original UTF-8/LF bytes.",
+          "status": "PASS",
+          "id": "s3",
+          "artifacts": [
+            {
+              "sha256": "74be5f0dbabd2eb9a9a4b00fb73ef3b2b771f8fb3cc0c47efc01d605c4c5599b",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\96635971-efdc-430f-aafc-cdbbf632c014\\scratch\\native-observations.json"
+            },
+            {
+              "sha256": "c0ee59a93e970a5fe0ed4d41272f6d16b6d6c334039347266c3a10c76783f4ab",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\96635971-efdc-430f-aafc-cdbbf632c014\\scratch\\column.txt"
+            },
+            {
+              "sha256": "5057beca797e91383c795d0ecdaafc0e3ef41c60ae0d614d5085f668f834e7b4",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\96635971-efdc-430f-aafc-cdbbf632c014\\scratch\\local\\Bareline\\settings.toml"
+            },
+            {
+              "sha256": "08c0c0ec0a740eb695c394d7854acaf56a80bb049a9211d48a522077242850af",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\96635971-efdc-430f-aafc-cdbbf632c014\\scratch\\command-trace.jsonl"
+            },
+            {
+              "sha256": "625357d8cbf4e0e954263843017777eb5cd4efc42c87b0f239ef44cf5237ea76",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\96635971-efdc-430f-aafc-cdbbf632c014\\scratch\\column-fixture.json"
+            },
+            {
+              "sha256": "4631537383cce39e42353573cbfece4ea43985fa8d92a51bcc7d89f8c9409e2f",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\96635971-efdc-430f-aafc-cdbbf632c014\\scratch\\column-inserted.bin"
+            },
+            {
+              "sha256": "39b9c182132c65e20f48b1b264432e661ce421ea985fe10de82aba8c2e8417a6",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\96635971-efdc-430f-aafc-cdbbf632c014\\scratch\\editor-1.stdout.log"
+            },
+            {
+              "sha256": "dfa56ebe6c70aab9288479e04e855147abbc5ce215649f5da4a1bc7aaaadbe6e",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\96635971-efdc-430f-aafc-cdbbf632c014\\scratch\\editor-1.stderr.log"
+            }
+          ],
+          "fixture": {
+            "procedure": "column_multi_cursor-v1",
+            "fixture_sha256": "47370a824f4c73ded643069274bc0f3c197521f2a5b64bde8a83bea0484aab35",
+            "encoding": "utf-8",
+            "eol": "lf",
+            "tab_width": 4
+          },
+          "adapter": {
+            "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_adapter.py",
+            "sha256": "2dab80f191f91e7cf71e89b7ee5d26cc1add01bd08fa48410407bfe56408d9ee",
+            "driver_path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_driver.ps1",
+            "driver_sha256": "7ddd647c01c5aa6120e9eb414320c49e5688a321760043c6e5e7d1d5ed11d94f",
+            "manifest_sha256": "f24b9accc9d8ed9fc606696fd37342765d603e10b5023bb31344f436244e960e",
+            "auxiliary_sources": [
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\lab_fixture.py",
+                "sha256": "af60b47c201b12a008e298d683dec637022fd177aa9204cb87a8449f5123e1a0"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_lab.ps1",
+                "sha256": "3029079c83c4cca3c4a80ab3e195da32c36a7c94416b4fb85cfd18e054ccca38"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_lab_driver.ps1",
+                "sha256": "77cbe845cb0c5784ea1b8e2c0b4856ec37de8de06d3bca7ded3ce44eb6e67f5c"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\code_config_fixture.py",
+                "sha256": "4f445819f60befa3a4809291fbd3fdcb9664a0d177955808f75280bda8f153f8"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_code_config.ps1",
+                "sha256": "6909fa60311a4c3acfe688bfe4e3cbe798785123334d87b50cd098dd856f3a56"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_visual.cs",
+                "sha256": "8cf398a8afa01e92cb286bfed616d3385c30a7602f652e6e9c09d2b26096f4f7"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\regex_transform_fixture.py",
+                "sha256": "9a360a7c2c80b338e27041d24da8b1294483e4ee61c5a38754d4152417f8abc8"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_regex_transform.ps1",
+                "sha256": "12d105d8ac8390c9cee7fb706c25e6a430b60d50cb8370b95c2d7437b2098144"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\column_fixture.py",
+                "sha256": "37de4b9f4094dfa72c6430f6bc7596482ff8dd3aa9e093f53c5d56c7c3f6a4b2"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_column.ps1",
+                "sha256": "8fba8d6579a61814968ebdac8b754f21e56c8ea728fb607a6f7952e8f7925599"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\udl_fixture.py",
+                "sha256": "6ea8897bd0aaee3b757f22525465fa3441f43dfd7ca66ef445c1c04caafa54ea"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_udl.ps1",
+                "sha256": "693633d5769f0a3d8df613979dc1bd46de3ad7585237cdf62b89f98305521bec"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_session.ps1",
+                "sha256": "213f6b02f9f3a9d195b39327920f347eb8744b574af48acc5c01d024e0d089de"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\split_fixture.py",
+                "sha256": "4b9ec9dab46ac1764f04c71f38fccccf52ce537f9b4aa73abea65d180cb4544e"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_split.ps1",
+                "sha256": "d90f1a9ef817781ba2cb1d42abb3902af87f092b1895eb535edea3d01925cd97"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\workspace_fixture.py",
+                "sha256": "94f84799508cba311dc8721a5cac67dab99c4337bd0a06f7be36f94ff669ac22"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_workspace.ps1",
+                "sha256": "a9ccf9463ac98003f280f7851f3c8f280f644b60d120dbc186d3c3c533572503"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\portable_fixture.py",
+                "sha256": "fffe329e82f9b83dea75f8bb00cbc89a347c24d0855278162147e64e93399ccc"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_portable.ps1",
+                "sha256": "bac801d20317cabe0583e3939b77db56e9cd296e2cd2e8fffe2f4267196a0693"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\huge_log_fixture.py",
+                "sha256": "239f9e4b1a9c0a9a8fd93b677d45783b94c7fdf4534abef13dc5c7a30e1db230"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_huge_log.ps1",
+                "sha256": "02614f66ba6f32ea365c14ee62dc62a10490fbfc0413282b9cb7e4fd45bd455f"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\macro_fixture.py",
+                "sha256": "99f49543c1004b216170734f6c601fd907c082d06918b4ef8dfd48327543f6ee"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\external_fixture.py",
+                "sha256": "e044214f6c1e79c2fa44d961954c17ee81765a8b76efdaaf5693342e4aef5a83"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_macro.ps1",
+                "sha256": "5c32df124cc564f50203d2b8cc5c7713e2722fb904bcfdce377559ca86d5711c"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\evidence_json.py",
+                "sha256": "666df4c7ac7fffefef2cb62eaf3aad9323ab447e211a0e974d04808a417a738f"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\qualification_cells.py",
+                "sha256": "1ee14acdd379bab3cba214b79232dd4f8955cc7d4e3aaf710ffb5e5dea7a95fd"
+              }
+            ]
+          }
+        }
+      ],
+      "result": {
+        "evidence_result": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\96635971-efdc-430f-aafc-cdbbf632c014\\result.json",
+        "sha256": "fc258afbf507eba828baf61da2a4ee6881b9dd28d5f17ea2215a3f78b1ac1b51"
+      },
+      "binary_sha256": "64bb428b5bc61dd2f6042a15ba03314af0e4f21290b0d210091ee9bc4d80adb4"
+    },
+    {
+      "journey": "plain_text",
+      "status": "PASS",
+      "step_count": 3,
+      "steps": [
+        {
+          "observed": "Fresh empty Editor accepted astral, combining and CJK Unicode plus Enter; exact crlf document text and modified tab observed.",
+          "status": "PASS",
+          "id": "s1",
+          "artifacts": [
+            {
+              "sha256": "b589c8b8e6678f1868e964b56c4a1cd4ad29baaa80e52b4ccb961c61395d66e8",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\f5e2ada5-d304-48b7-8da3-392206fdd061\\scratch\\native-observations.json"
+            },
+            {
+              "sha256": "0587f28e805c961255f691a4d23f97ead4122e235b7f53483d386a6103fcbb2f",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\f5e2ada5-d304-48b7-8da3-392206fdd061\\scratch\\plain-unicode.txt"
+            },
+            {
+              "sha256": "5057beca797e91383c795d0ecdaafc0e3ef41c60ae0d614d5085f668f834e7b4",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\f5e2ada5-d304-48b7-8da3-392206fdd061\\scratch\\local\\Bareline\\settings.toml"
+            },
+            {
+              "sha256": "437d840251cd630fe7ac07a5c47be2511e30af57e80e1f400e2eca995da7eab1",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\f5e2ada5-d304-48b7-8da3-392206fdd061\\scratch\\command-trace.jsonl"
+            },
+            {
+              "sha256": "d089a31a7d57eb27ad1c06f6fcc55d002f375dbef9a027d4c1d577327328b231",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\f5e2ada5-d304-48b7-8da3-392206fdd061\\scratch\\editor-1.stdout.log"
+            },
+            {
+              "sha256": "bdb9dcacf616280ab2bc866e07cd4ba20761914650eab61ece5c0c2420eee57a",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\f5e2ada5-d304-48b7-8da3-392206fdd061\\scratch\\editor-1.stderr.log"
+            }
+          ],
+          "fixture": {
+            "new_file_encoding": "utf-8",
+            "new_file_eol": "crlf"
+          },
+          "adapter": {
+            "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_adapter.py",
+            "sha256": "2dab80f191f91e7cf71e89b7ee5d26cc1add01bd08fa48410407bfe56408d9ee",
+            "driver_path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_driver.ps1",
+            "driver_sha256": "7ddd647c01c5aa6120e9eb414320c49e5688a321760043c6e5e7d1d5ed11d94f",
+            "manifest_sha256": "f24b9accc9d8ed9fc606696fd37342765d603e10b5023bb31344f436244e960e",
+            "auxiliary_sources": [
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\lab_fixture.py",
+                "sha256": "af60b47c201b12a008e298d683dec637022fd177aa9204cb87a8449f5123e1a0"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_lab.ps1",
+                "sha256": "3029079c83c4cca3c4a80ab3e195da32c36a7c94416b4fb85cfd18e054ccca38"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_lab_driver.ps1",
+                "sha256": "77cbe845cb0c5784ea1b8e2c0b4856ec37de8de06d3bca7ded3ce44eb6e67f5c"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\code_config_fixture.py",
+                "sha256": "4f445819f60befa3a4809291fbd3fdcb9664a0d177955808f75280bda8f153f8"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_code_config.ps1",
+                "sha256": "6909fa60311a4c3acfe688bfe4e3cbe798785123334d87b50cd098dd856f3a56"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_visual.cs",
+                "sha256": "8cf398a8afa01e92cb286bfed616d3385c30a7602f652e6e9c09d2b26096f4f7"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\regex_transform_fixture.py",
+                "sha256": "9a360a7c2c80b338e27041d24da8b1294483e4ee61c5a38754d4152417f8abc8"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_regex_transform.ps1",
+                "sha256": "12d105d8ac8390c9cee7fb706c25e6a430b60d50cb8370b95c2d7437b2098144"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\column_fixture.py",
+                "sha256": "37de4b9f4094dfa72c6430f6bc7596482ff8dd3aa9e093f53c5d56c7c3f6a4b2"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_column.ps1",
+                "sha256": "8fba8d6579a61814968ebdac8b754f21e56c8ea728fb607a6f7952e8f7925599"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\udl_fixture.py",
+                "sha256": "6ea8897bd0aaee3b757f22525465fa3441f43dfd7ca66ef445c1c04caafa54ea"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_udl.ps1",
+                "sha256": "693633d5769f0a3d8df613979dc1bd46de3ad7585237cdf62b89f98305521bec"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_session.ps1",
+                "sha256": "213f6b02f9f3a9d195b39327920f347eb8744b574af48acc5c01d024e0d089de"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\split_fixture.py",
+                "sha256": "4b9ec9dab46ac1764f04c71f38fccccf52ce537f9b4aa73abea65d180cb4544e"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_split.ps1",
+                "sha256": "d90f1a9ef817781ba2cb1d42abb3902af87f092b1895eb535edea3d01925cd97"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\workspace_fixture.py",
+                "sha256": "94f84799508cba311dc8721a5cac67dab99c4337bd0a06f7be36f94ff669ac22"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_workspace.ps1",
+                "sha256": "a9ccf9463ac98003f280f7851f3c8f280f644b60d120dbc186d3c3c533572503"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\portable_fixture.py",
+                "sha256": "fffe329e82f9b83dea75f8bb00cbc89a347c24d0855278162147e64e93399ccc"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_portable.ps1",
+                "sha256": "bac801d20317cabe0583e3939b77db56e9cd296e2cd2e8fffe2f4267196a0693"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\huge_log_fixture.py",
+                "sha256": "239f9e4b1a9c0a9a8fd93b677d45783b94c7fdf4534abef13dc5c7a30e1db230"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_huge_log.ps1",
+                "sha256": "02614f66ba6f32ea365c14ee62dc62a10490fbfc0413282b9cb7e4fd45bd455f"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\macro_fixture.py",
+                "sha256": "99f49543c1004b216170734f6c601fd907c082d06918b4ef8dfd48327543f6ee"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\external_fixture.py",
+                "sha256": "e044214f6c1e79c2fa44d961954c17ee81765a8b76efdaaf5693342e4aef5a83"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_macro.ps1",
+                "sha256": "5c32df124cc564f50203d2b8cc5c7713e2722fb904bcfdce377559ca86d5711c"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\evidence_json.py",
+                "sha256": "666df4c7ac7fffefef2cb62eaf3aad9323ab447e211a0e974d04808a417a738f"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\qualification_cells.py",
+                "sha256": "1ee14acdd379bab3cba214b79232dd4f8955cc7d4e3aaf710ffb5e5dea7a95fd"
+              }
+            ]
+          }
+        },
+        {
+          "observed": "Native Save As wrote exact utf-8 encoding/BOM and crlf bytes; Close removed the document; native Open restored exact text in a clean tab.",
+          "status": "PASS",
+          "id": "s2",
+          "artifacts": [
+            {
+              "sha256": "b589c8b8e6678f1868e964b56c4a1cd4ad29baaa80e52b4ccb961c61395d66e8",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\f5e2ada5-d304-48b7-8da3-392206fdd061\\scratch\\native-observations.json"
+            },
+            {
+              "sha256": "0587f28e805c961255f691a4d23f97ead4122e235b7f53483d386a6103fcbb2f",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\f5e2ada5-d304-48b7-8da3-392206fdd061\\scratch\\plain-unicode.txt"
+            },
+            {
+              "sha256": "5057beca797e91383c795d0ecdaafc0e3ef41c60ae0d614d5085f668f834e7b4",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\f5e2ada5-d304-48b7-8da3-392206fdd061\\scratch\\local\\Bareline\\settings.toml"
+            },
+            {
+              "sha256": "437d840251cd630fe7ac07a5c47be2511e30af57e80e1f400e2eca995da7eab1",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\f5e2ada5-d304-48b7-8da3-392206fdd061\\scratch\\command-trace.jsonl"
+            },
+            {
+              "sha256": "d089a31a7d57eb27ad1c06f6fcc55d002f375dbef9a027d4c1d577327328b231",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\f5e2ada5-d304-48b7-8da3-392206fdd061\\scratch\\editor-1.stdout.log"
+            },
+            {
+              "sha256": "bdb9dcacf616280ab2bc866e07cd4ba20761914650eab61ece5c0c2420eee57a",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\f5e2ada5-d304-48b7-8da3-392206fdd061\\scratch\\editor-1.stderr.log"
+            }
+          ],
+          "fixture": {
+            "new_file_encoding": "utf-8",
+            "new_file_eol": "crlf"
+          },
+          "adapter": {
+            "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_adapter.py",
+            "sha256": "2dab80f191f91e7cf71e89b7ee5d26cc1add01bd08fa48410407bfe56408d9ee",
+            "driver_path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_driver.ps1",
+            "driver_sha256": "7ddd647c01c5aa6120e9eb414320c49e5688a321760043c6e5e7d1d5ed11d94f",
+            "manifest_sha256": "f24b9accc9d8ed9fc606696fd37342765d603e10b5023bb31344f436244e960e",
+            "auxiliary_sources": [
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\lab_fixture.py",
+                "sha256": "af60b47c201b12a008e298d683dec637022fd177aa9204cb87a8449f5123e1a0"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_lab.ps1",
+                "sha256": "3029079c83c4cca3c4a80ab3e195da32c36a7c94416b4fb85cfd18e054ccca38"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_lab_driver.ps1",
+                "sha256": "77cbe845cb0c5784ea1b8e2c0b4856ec37de8de06d3bca7ded3ce44eb6e67f5c"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\code_config_fixture.py",
+                "sha256": "4f445819f60befa3a4809291fbd3fdcb9664a0d177955808f75280bda8f153f8"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_code_config.ps1",
+                "sha256": "6909fa60311a4c3acfe688bfe4e3cbe798785123334d87b50cd098dd856f3a56"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_visual.cs",
+                "sha256": "8cf398a8afa01e92cb286bfed616d3385c30a7602f652e6e9c09d2b26096f4f7"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\regex_transform_fixture.py",
+                "sha256": "9a360a7c2c80b338e27041d24da8b1294483e4ee61c5a38754d4152417f8abc8"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_regex_transform.ps1",
+                "sha256": "12d105d8ac8390c9cee7fb706c25e6a430b60d50cb8370b95c2d7437b2098144"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\column_fixture.py",
+                "sha256": "37de4b9f4094dfa72c6430f6bc7596482ff8dd3aa9e093f53c5d56c7c3f6a4b2"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_column.ps1",
+                "sha256": "8fba8d6579a61814968ebdac8b754f21e56c8ea728fb607a6f7952e8f7925599"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\udl_fixture.py",
+                "sha256": "6ea8897bd0aaee3b757f22525465fa3441f43dfd7ca66ef445c1c04caafa54ea"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_udl.ps1",
+                "sha256": "693633d5769f0a3d8df613979dc1bd46de3ad7585237cdf62b89f98305521bec"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_session.ps1",
+                "sha256": "213f6b02f9f3a9d195b39327920f347eb8744b574af48acc5c01d024e0d089de"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\split_fixture.py",
+                "sha256": "4b9ec9dab46ac1764f04c71f38fccccf52ce537f9b4aa73abea65d180cb4544e"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_split.ps1",
+                "sha256": "d90f1a9ef817781ba2cb1d42abb3902af87f092b1895eb535edea3d01925cd97"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\workspace_fixture.py",
+                "sha256": "94f84799508cba311dc8721a5cac67dab99c4337bd0a06f7be36f94ff669ac22"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_workspace.ps1",
+                "sha256": "a9ccf9463ac98003f280f7851f3c8f280f644b60d120dbc186d3c3c533572503"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\portable_fixture.py",
+                "sha256": "fffe329e82f9b83dea75f8bb00cbc89a347c24d0855278162147e64e93399ccc"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_portable.ps1",
+                "sha256": "bac801d20317cabe0583e3939b77db56e9cd296e2cd2e8fffe2f4267196a0693"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\huge_log_fixture.py",
+                "sha256": "239f9e4b1a9c0a9a8fd93b677d45783b94c7fdf4534abef13dc5c7a30e1db230"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_huge_log.ps1",
+                "sha256": "02614f66ba6f32ea365c14ee62dc62a10490fbfc0413282b9cb7e4fd45bd455f"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\macro_fixture.py",
+                "sha256": "99f49543c1004b216170734f6c601fd907c082d06918b4ef8dfd48327543f6ee"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\external_fixture.py",
+                "sha256": "e044214f6c1e79c2fa44d961954c17ee81765a8b76efdaaf5693342e4aef5a83"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_macro.ps1",
+                "sha256": "5c32df124cc564f50203d2b8cc5c7713e2722fb904bcfdce377559ca86d5711c"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\evidence_json.py",
+                "sha256": "666df4c7ac7fffefef2cb62eaf3aad9323ab447e211a0e974d04808a417a738f"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\qualification_cells.py",
+                "sha256": "1ee14acdd379bab3cba214b79232dd4f8955cc7d4e3aaf710ffb5e5dea7a95fd"
+              }
+            ]
+          }
+        },
+        {
+          "observed": "One edit, Undo and Redo produced exact expected text/dirty transitions; unsaved edits did not alter disk bytes; final undo restored the clean document.",
+          "status": "PASS",
+          "id": "s3",
+          "artifacts": [
+            {
+              "sha256": "b589c8b8e6678f1868e964b56c4a1cd4ad29baaa80e52b4ccb961c61395d66e8",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\f5e2ada5-d304-48b7-8da3-392206fdd061\\scratch\\native-observations.json"
+            },
+            {
+              "sha256": "0587f28e805c961255f691a4d23f97ead4122e235b7f53483d386a6103fcbb2f",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\f5e2ada5-d304-48b7-8da3-392206fdd061\\scratch\\plain-unicode.txt"
+            },
+            {
+              "sha256": "5057beca797e91383c795d0ecdaafc0e3ef41c60ae0d614d5085f668f834e7b4",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\f5e2ada5-d304-48b7-8da3-392206fdd061\\scratch\\local\\Bareline\\settings.toml"
+            },
+            {
+              "sha256": "437d840251cd630fe7ac07a5c47be2511e30af57e80e1f400e2eca995da7eab1",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\f5e2ada5-d304-48b7-8da3-392206fdd061\\scratch\\command-trace.jsonl"
+            },
+            {
+              "sha256": "d089a31a7d57eb27ad1c06f6fcc55d002f375dbef9a027d4c1d577327328b231",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\f5e2ada5-d304-48b7-8da3-392206fdd061\\scratch\\editor-1.stdout.log"
+            },
+            {
+              "sha256": "bdb9dcacf616280ab2bc866e07cd4ba20761914650eab61ece5c0c2420eee57a",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\f5e2ada5-d304-48b7-8da3-392206fdd061\\scratch\\editor-1.stderr.log"
+            }
+          ],
+          "fixture": {
+            "new_file_encoding": "utf-8",
+            "new_file_eol": "crlf"
+          },
+          "adapter": {
+            "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_adapter.py",
+            "sha256": "2dab80f191f91e7cf71e89b7ee5d26cc1add01bd08fa48410407bfe56408d9ee",
+            "driver_path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_driver.ps1",
+            "driver_sha256": "7ddd647c01c5aa6120e9eb414320c49e5688a321760043c6e5e7d1d5ed11d94f",
+            "manifest_sha256": "f24b9accc9d8ed9fc606696fd37342765d603e10b5023bb31344f436244e960e",
+            "auxiliary_sources": [
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\lab_fixture.py",
+                "sha256": "af60b47c201b12a008e298d683dec637022fd177aa9204cb87a8449f5123e1a0"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_lab.ps1",
+                "sha256": "3029079c83c4cca3c4a80ab3e195da32c36a7c94416b4fb85cfd18e054ccca38"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_lab_driver.ps1",
+                "sha256": "77cbe845cb0c5784ea1b8e2c0b4856ec37de8de06d3bca7ded3ce44eb6e67f5c"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\code_config_fixture.py",
+                "sha256": "4f445819f60befa3a4809291fbd3fdcb9664a0d177955808f75280bda8f153f8"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_code_config.ps1",
+                "sha256": "6909fa60311a4c3acfe688bfe4e3cbe798785123334d87b50cd098dd856f3a56"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_visual.cs",
+                "sha256": "8cf398a8afa01e92cb286bfed616d3385c30a7602f652e6e9c09d2b26096f4f7"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\regex_transform_fixture.py",
+                "sha256": "9a360a7c2c80b338e27041d24da8b1294483e4ee61c5a38754d4152417f8abc8"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_regex_transform.ps1",
+                "sha256": "12d105d8ac8390c9cee7fb706c25e6a430b60d50cb8370b95c2d7437b2098144"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\column_fixture.py",
+                "sha256": "37de4b9f4094dfa72c6430f6bc7596482ff8dd3aa9e093f53c5d56c7c3f6a4b2"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_column.ps1",
+                "sha256": "8fba8d6579a61814968ebdac8b754f21e56c8ea728fb607a6f7952e8f7925599"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\udl_fixture.py",
+                "sha256": "6ea8897bd0aaee3b757f22525465fa3441f43dfd7ca66ef445c1c04caafa54ea"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_udl.ps1",
+                "sha256": "693633d5769f0a3d8df613979dc1bd46de3ad7585237cdf62b89f98305521bec"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_session.ps1",
+                "sha256": "213f6b02f9f3a9d195b39327920f347eb8744b574af48acc5c01d024e0d089de"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\split_fixture.py",
+                "sha256": "4b9ec9dab46ac1764f04c71f38fccccf52ce537f9b4aa73abea65d180cb4544e"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_split.ps1",
+                "sha256": "d90f1a9ef817781ba2cb1d42abb3902af87f092b1895eb535edea3d01925cd97"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\workspace_fixture.py",
+                "sha256": "94f84799508cba311dc8721a5cac67dab99c4337bd0a06f7be36f94ff669ac22"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_workspace.ps1",
+                "sha256": "a9ccf9463ac98003f280f7851f3c8f280f644b60d120dbc186d3c3c533572503"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\portable_fixture.py",
+                "sha256": "fffe329e82f9b83dea75f8bb00cbc89a347c24d0855278162147e64e93399ccc"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_portable.ps1",
+                "sha256": "bac801d20317cabe0583e3939b77db56e9cd296e2cd2e8fffe2f4267196a0693"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\huge_log_fixture.py",
+                "sha256": "239f9e4b1a9c0a9a8fd93b677d45783b94c7fdf4534abef13dc5c7a30e1db230"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_huge_log.ps1",
+                "sha256": "02614f66ba6f32ea365c14ee62dc62a10490fbfc0413282b9cb7e4fd45bd455f"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\macro_fixture.py",
+                "sha256": "99f49543c1004b216170734f6c601fd907c082d06918b4ef8dfd48327543f6ee"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\external_fixture.py",
+                "sha256": "e044214f6c1e79c2fa44d961954c17ee81765a8b76efdaaf5693342e4aef5a83"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_macro.ps1",
+                "sha256": "5c32df124cc564f50203d2b8cc5c7713e2722fb904bcfdce377559ca86d5711c"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\evidence_json.py",
+                "sha256": "666df4c7ac7fffefef2cb62eaf3aad9323ab447e211a0e974d04808a417a738f"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\qualification_cells.py",
+                "sha256": "1ee14acdd379bab3cba214b79232dd4f8955cc7d4e3aaf710ffb5e5dea7a95fd"
+              }
+            ]
+          }
+        }
+      ],
+      "result": {
+        "evidence_result": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\f5e2ada5-d304-48b7-8da3-392206fdd061\\result.json",
+        "sha256": "81ea6111bc70115085ef342ece0956e5126776fe8692a2ad5eb2fe7cc0599a26"
+      },
+      "binary_sha256": "64bb428b5bc61dd2f6042a15ba03314af0e4f21290b0d210091ee9bc4d80adb4"
+    },
+    {
+      "journey": "code_config",
+      "status": "PASS",
+      "step_count": 3,
+      "steps": [
+        {
+          "observed": "Generated UTF-8 Rust opened unchanged; language status and actual keyword/string/number/comment pixel colors match the selected language/theme.",
+          "status": "PASS",
+          "id": "s1",
+          "artifacts": [
+            {
+              "sha256": "37c71e19a868cc383b30f5a4df61c6b02cbdf0d8261ac74b20406ebb441ff9ce",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\564a0881-eac6-4de3-a557-a77f168db0ff\\scratch\\native-observations.json"
+            },
+            {
+              "sha256": "16b407f607760e2201bb3e3bfbaf5ebaa74281bce78de4c2a4f6b159024472d3",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\564a0881-eac6-4de3-a557-a77f168db0ff\\scratch\\code-config.rs"
+            },
+            {
+              "sha256": "5057beca797e91383c795d0ecdaafc0e3ef41c60ae0d614d5085f668f834e7b4",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\564a0881-eac6-4de3-a557-a77f168db0ff\\scratch\\local\\Bareline\\settings.toml"
+            },
+            {
+              "sha256": "aa04574920d11672570d98ccde8c4211a76ef953a9d75764a1c4db2e5c52e108",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\564a0881-eac6-4de3-a557-a77f168db0ff\\scratch\\command-trace.jsonl"
+            },
+            {
+              "sha256": "6774f611621fa5bac69522fa8d2a0cb1b32d83b1969d2b48d881b186d1b48b4a",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\564a0881-eac6-4de3-a557-a77f168db0ff\\scratch\\code-fixture.json"
+            },
+            {
+              "sha256": "421902167b9954b5f07f9f92919e22755bb09c107003dc71bbca1f837f8265a2",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\564a0881-eac6-4de3-a557-a77f168db0ff\\scratch\\code-highlighting.png"
+            },
+            {
+              "sha256": "2a63a29f8c8da14e830fe678847087d08ff7e1ca04b66a207b8391d4b4cb3bf5",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\564a0881-eac6-4de3-a557-a77f168db0ff\\scratch\\editor-1.stdout.log"
+            },
+            {
+              "sha256": "ad02d8137fc85050bbb16088e6bbefeaabc893e2151eeeaf768c22809a9883eb",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\564a0881-eac6-4de3-a557-a77f168db0ff\\scratch\\editor-1.stderr.log"
+            }
+          ],
+          "fixture": {
+            "procedure": "code_config-v1",
+            "language": "Rust",
+            "encoding": "utf-8",
+            "eol": "lf",
+            "fixture_sha256": "8b29f5bb09b5169ada92014310c92f3e760c7d2bb1dbdfb38889c397255ac359"
+          },
+          "adapter": {
+            "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_adapter.py",
+            "sha256": "2dab80f191f91e7cf71e89b7ee5d26cc1add01bd08fa48410407bfe56408d9ee",
+            "driver_path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_driver.ps1",
+            "driver_sha256": "7ddd647c01c5aa6120e9eb414320c49e5688a321760043c6e5e7d1d5ed11d94f",
+            "manifest_sha256": "f24b9accc9d8ed9fc606696fd37342765d603e10b5023bb31344f436244e960e",
+            "auxiliary_sources": [
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\lab_fixture.py",
+                "sha256": "af60b47c201b12a008e298d683dec637022fd177aa9204cb87a8449f5123e1a0"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_lab.ps1",
+                "sha256": "3029079c83c4cca3c4a80ab3e195da32c36a7c94416b4fb85cfd18e054ccca38"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_lab_driver.ps1",
+                "sha256": "77cbe845cb0c5784ea1b8e2c0b4856ec37de8de06d3bca7ded3ce44eb6e67f5c"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\code_config_fixture.py",
+                "sha256": "4f445819f60befa3a4809291fbd3fdcb9664a0d177955808f75280bda8f153f8"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_code_config.ps1",
+                "sha256": "6909fa60311a4c3acfe688bfe4e3cbe798785123334d87b50cd098dd856f3a56"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_visual.cs",
+                "sha256": "8cf398a8afa01e92cb286bfed616d3385c30a7602f652e6e9c09d2b26096f4f7"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\regex_transform_fixture.py",
+                "sha256": "9a360a7c2c80b338e27041d24da8b1294483e4ee61c5a38754d4152417f8abc8"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_regex_transform.ps1",
+                "sha256": "12d105d8ac8390c9cee7fb706c25e6a430b60d50cb8370b95c2d7437b2098144"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\column_fixture.py",
+                "sha256": "37de4b9f4094dfa72c6430f6bc7596482ff8dd3aa9e093f53c5d56c7c3f6a4b2"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_column.ps1",
+                "sha256": "8fba8d6579a61814968ebdac8b754f21e56c8ea728fb607a6f7952e8f7925599"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\udl_fixture.py",
+                "sha256": "6ea8897bd0aaee3b757f22525465fa3441f43dfd7ca66ef445c1c04caafa54ea"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_udl.ps1",
+                "sha256": "693633d5769f0a3d8df613979dc1bd46de3ad7585237cdf62b89f98305521bec"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_session.ps1",
+                "sha256": "213f6b02f9f3a9d195b39327920f347eb8744b574af48acc5c01d024e0d089de"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\split_fixture.py",
+                "sha256": "4b9ec9dab46ac1764f04c71f38fccccf52ce537f9b4aa73abea65d180cb4544e"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_split.ps1",
+                "sha256": "d90f1a9ef817781ba2cb1d42abb3902af87f092b1895eb535edea3d01925cd97"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\workspace_fixture.py",
+                "sha256": "94f84799508cba311dc8721a5cac67dab99c4337bd0a06f7be36f94ff669ac22"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_workspace.ps1",
+                "sha256": "a9ccf9463ac98003f280f7851f3c8f280f644b60d120dbc186d3c3c533572503"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\portable_fixture.py",
+                "sha256": "fffe329e82f9b83dea75f8bb00cbc89a347c24d0855278162147e64e93399ccc"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_portable.ps1",
+                "sha256": "bac801d20317cabe0583e3939b77db56e9cd296e2cd2e8fffe2f4267196a0693"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\huge_log_fixture.py",
+                "sha256": "239f9e4b1a9c0a9a8fd93b677d45783b94c7fdf4534abef13dc5c7a30e1db230"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_huge_log.ps1",
+                "sha256": "02614f66ba6f32ea365c14ee62dc62a10490fbfc0413282b9cb7e4fd45bd455f"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\macro_fixture.py",
+                "sha256": "99f49543c1004b216170734f6c601fd907c082d06918b4ef8dfd48327543f6ee"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\external_fixture.py",
+                "sha256": "e044214f6c1e79c2fa44d961954c17ee81765a8b76efdaaf5693342e4aef5a83"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_macro.ps1",
+                "sha256": "5c32df124cc564f50203d2b8cc5c7713e2722fb904bcfdce377559ca86d5711c"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\evidence_json.py",
+                "sha256": "666df4c7ac7fffefef2cb62eaf3aad9323ab447e211a0e974d04808a417a738f"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\qualification_cells.py",
+                "sha256": "1ee14acdd379bab3cba214b79232dd4f8955cc7d4e3aaf710ffb5e5dea7a95fd"
+              }
+            ]
+          }
+        },
+        {
+          "observed": "Native Enter preserves indentation; Ctrl+Space offers the actual document-word completion, selected Enter accepts it, one Undo/Redo restores prefix/completion, and surrounding Unicode/source plus unsaved disk bytes remain unchanged.",
+          "status": "PASS",
+          "id": "s2",
+          "artifacts": [
+            {
+              "sha256": "37c71e19a868cc383b30f5a4df61c6b02cbdf0d8261ac74b20406ebb441ff9ce",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\564a0881-eac6-4de3-a557-a77f168db0ff\\scratch\\native-observations.json"
+            },
+            {
+              "sha256": "16b407f607760e2201bb3e3bfbaf5ebaa74281bce78de4c2a4f6b159024472d3",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\564a0881-eac6-4de3-a557-a77f168db0ff\\scratch\\code-config.rs"
+            },
+            {
+              "sha256": "5057beca797e91383c795d0ecdaafc0e3ef41c60ae0d614d5085f668f834e7b4",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\564a0881-eac6-4de3-a557-a77f168db0ff\\scratch\\local\\Bareline\\settings.toml"
+            },
+            {
+              "sha256": "aa04574920d11672570d98ccde8c4211a76ef953a9d75764a1c4db2e5c52e108",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\564a0881-eac6-4de3-a557-a77f168db0ff\\scratch\\command-trace.jsonl"
+            },
+            {
+              "sha256": "6774f611621fa5bac69522fa8d2a0cb1b32d83b1969d2b48d881b186d1b48b4a",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\564a0881-eac6-4de3-a557-a77f168db0ff\\scratch\\code-fixture.json"
+            },
+            {
+              "sha256": "421902167b9954b5f07f9f92919e22755bb09c107003dc71bbca1f837f8265a2",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\564a0881-eac6-4de3-a557-a77f168db0ff\\scratch\\code-highlighting.png"
+            },
+            {
+              "sha256": "2a63a29f8c8da14e830fe678847087d08ff7e1ca04b66a207b8391d4b4cb3bf5",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\564a0881-eac6-4de3-a557-a77f168db0ff\\scratch\\editor-1.stdout.log"
+            },
+            {
+              "sha256": "ad02d8137fc85050bbb16088e6bbefeaabc893e2151eeeaf768c22809a9883eb",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\564a0881-eac6-4de3-a557-a77f168db0ff\\scratch\\editor-1.stderr.log"
+            }
+          ],
+          "fixture": {
+            "procedure": "code_config-v1",
+            "language": "Rust",
+            "encoding": "utf-8",
+            "eol": "lf",
+            "fixture_sha256": "8b29f5bb09b5169ada92014310c92f3e760c7d2bb1dbdfb38889c397255ac359"
+          },
+          "adapter": {
+            "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_adapter.py",
+            "sha256": "2dab80f191f91e7cf71e89b7ee5d26cc1add01bd08fa48410407bfe56408d9ee",
+            "driver_path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_driver.ps1",
+            "driver_sha256": "7ddd647c01c5aa6120e9eb414320c49e5688a321760043c6e5e7d1d5ed11d94f",
+            "manifest_sha256": "f24b9accc9d8ed9fc606696fd37342765d603e10b5023bb31344f436244e960e",
+            "auxiliary_sources": [
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\lab_fixture.py",
+                "sha256": "af60b47c201b12a008e298d683dec637022fd177aa9204cb87a8449f5123e1a0"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_lab.ps1",
+                "sha256": "3029079c83c4cca3c4a80ab3e195da32c36a7c94416b4fb85cfd18e054ccca38"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_lab_driver.ps1",
+                "sha256": "77cbe845cb0c5784ea1b8e2c0b4856ec37de8de06d3bca7ded3ce44eb6e67f5c"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\code_config_fixture.py",
+                "sha256": "4f445819f60befa3a4809291fbd3fdcb9664a0d177955808f75280bda8f153f8"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_code_config.ps1",
+                "sha256": "6909fa60311a4c3acfe688bfe4e3cbe798785123334d87b50cd098dd856f3a56"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_visual.cs",
+                "sha256": "8cf398a8afa01e92cb286bfed616d3385c30a7602f652e6e9c09d2b26096f4f7"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\regex_transform_fixture.py",
+                "sha256": "9a360a7c2c80b338e27041d24da8b1294483e4ee61c5a38754d4152417f8abc8"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_regex_transform.ps1",
+                "sha256": "12d105d8ac8390c9cee7fb706c25e6a430b60d50cb8370b95c2d7437b2098144"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\column_fixture.py",
+                "sha256": "37de4b9f4094dfa72c6430f6bc7596482ff8dd3aa9e093f53c5d56c7c3f6a4b2"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_column.ps1",
+                "sha256": "8fba8d6579a61814968ebdac8b754f21e56c8ea728fb607a6f7952e8f7925599"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\udl_fixture.py",
+                "sha256": "6ea8897bd0aaee3b757f22525465fa3441f43dfd7ca66ef445c1c04caafa54ea"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_udl.ps1",
+                "sha256": "693633d5769f0a3d8df613979dc1bd46de3ad7585237cdf62b89f98305521bec"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_session.ps1",
+                "sha256": "213f6b02f9f3a9d195b39327920f347eb8744b574af48acc5c01d024e0d089de"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\split_fixture.py",
+                "sha256": "4b9ec9dab46ac1764f04c71f38fccccf52ce537f9b4aa73abea65d180cb4544e"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_split.ps1",
+                "sha256": "d90f1a9ef817781ba2cb1d42abb3902af87f092b1895eb535edea3d01925cd97"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\workspace_fixture.py",
+                "sha256": "94f84799508cba311dc8721a5cac67dab99c4337bd0a06f7be36f94ff669ac22"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_workspace.ps1",
+                "sha256": "a9ccf9463ac98003f280f7851f3c8f280f644b60d120dbc186d3c3c533572503"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\portable_fixture.py",
+                "sha256": "fffe329e82f9b83dea75f8bb00cbc89a347c24d0855278162147e64e93399ccc"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_portable.ps1",
+                "sha256": "bac801d20317cabe0583e3939b77db56e9cd296e2cd2e8fffe2f4267196a0693"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\huge_log_fixture.py",
+                "sha256": "239f9e4b1a9c0a9a8fd93b677d45783b94c7fdf4534abef13dc5c7a30e1db230"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_huge_log.ps1",
+                "sha256": "02614f66ba6f32ea365c14ee62dc62a10490fbfc0413282b9cb7e4fd45bd455f"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\macro_fixture.py",
+                "sha256": "99f49543c1004b216170734f6c601fd907c082d06918b4ef8dfd48327543f6ee"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\external_fixture.py",
+                "sha256": "e044214f6c1e79c2fa44d961954c17ee81765a8b76efdaaf5693342e4aef5a83"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_macro.ps1",
+                "sha256": "5c32df124cc564f50203d2b8cc5c7713e2722fb904bcfdce377559ca86d5711c"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\evidence_json.py",
+                "sha256": "666df4c7ac7fffefef2cb62eaf3aad9323ab447e211a0e974d04808a417a738f"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\qualification_cells.py",
+                "sha256": "1ee14acdd379bab3cba214b79232dd4f8955cc7d4e3aaf710ffb5e5dea7a95fd"
+              }
+            ]
+          }
+        },
+        {
+          "observed": "Native Save writes the independently expected UTF-8/LF source, Close removes its tab, Open restores exact text in a clean document, and reopening leaves disk bytes unchanged.",
+          "status": "PASS",
+          "id": "s3",
+          "artifacts": [
+            {
+              "sha256": "37c71e19a868cc383b30f5a4df61c6b02cbdf0d8261ac74b20406ebb441ff9ce",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\564a0881-eac6-4de3-a557-a77f168db0ff\\scratch\\native-observations.json"
+            },
+            {
+              "sha256": "16b407f607760e2201bb3e3bfbaf5ebaa74281bce78de4c2a4f6b159024472d3",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\564a0881-eac6-4de3-a557-a77f168db0ff\\scratch\\code-config.rs"
+            },
+            {
+              "sha256": "5057beca797e91383c795d0ecdaafc0e3ef41c60ae0d614d5085f668f834e7b4",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\564a0881-eac6-4de3-a557-a77f168db0ff\\scratch\\local\\Bareline\\settings.toml"
+            },
+            {
+              "sha256": "aa04574920d11672570d98ccde8c4211a76ef953a9d75764a1c4db2e5c52e108",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\564a0881-eac6-4de3-a557-a77f168db0ff\\scratch\\command-trace.jsonl"
+            },
+            {
+              "sha256": "6774f611621fa5bac69522fa8d2a0cb1b32d83b1969d2b48d881b186d1b48b4a",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\564a0881-eac6-4de3-a557-a77f168db0ff\\scratch\\code-fixture.json"
+            },
+            {
+              "sha256": "421902167b9954b5f07f9f92919e22755bb09c107003dc71bbca1f837f8265a2",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\564a0881-eac6-4de3-a557-a77f168db0ff\\scratch\\code-highlighting.png"
+            },
+            {
+              "sha256": "2a63a29f8c8da14e830fe678847087d08ff7e1ca04b66a207b8391d4b4cb3bf5",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\564a0881-eac6-4de3-a557-a77f168db0ff\\scratch\\editor-1.stdout.log"
+            },
+            {
+              "sha256": "ad02d8137fc85050bbb16088e6bbefeaabc893e2151eeeaf768c22809a9883eb",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\564a0881-eac6-4de3-a557-a77f168db0ff\\scratch\\editor-1.stderr.log"
+            }
+          ],
+          "fixture": {
+            "procedure": "code_config-v1",
+            "language": "Rust",
+            "encoding": "utf-8",
+            "eol": "lf",
+            "fixture_sha256": "8b29f5bb09b5169ada92014310c92f3e760c7d2bb1dbdfb38889c397255ac359"
+          },
+          "adapter": {
+            "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_adapter.py",
+            "sha256": "2dab80f191f91e7cf71e89b7ee5d26cc1add01bd08fa48410407bfe56408d9ee",
+            "driver_path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_driver.ps1",
+            "driver_sha256": "7ddd647c01c5aa6120e9eb414320c49e5688a321760043c6e5e7d1d5ed11d94f",
+            "manifest_sha256": "f24b9accc9d8ed9fc606696fd37342765d603e10b5023bb31344f436244e960e",
+            "auxiliary_sources": [
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\lab_fixture.py",
+                "sha256": "af60b47c201b12a008e298d683dec637022fd177aa9204cb87a8449f5123e1a0"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_lab.ps1",
+                "sha256": "3029079c83c4cca3c4a80ab3e195da32c36a7c94416b4fb85cfd18e054ccca38"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_lab_driver.ps1",
+                "sha256": "77cbe845cb0c5784ea1b8e2c0b4856ec37de8de06d3bca7ded3ce44eb6e67f5c"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\code_config_fixture.py",
+                "sha256": "4f445819f60befa3a4809291fbd3fdcb9664a0d177955808f75280bda8f153f8"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_code_config.ps1",
+                "sha256": "6909fa60311a4c3acfe688bfe4e3cbe798785123334d87b50cd098dd856f3a56"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_visual.cs",
+                "sha256": "8cf398a8afa01e92cb286bfed616d3385c30a7602f652e6e9c09d2b26096f4f7"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\regex_transform_fixture.py",
+                "sha256": "9a360a7c2c80b338e27041d24da8b1294483e4ee61c5a38754d4152417f8abc8"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_regex_transform.ps1",
+                "sha256": "12d105d8ac8390c9cee7fb706c25e6a430b60d50cb8370b95c2d7437b2098144"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\column_fixture.py",
+                "sha256": "37de4b9f4094dfa72c6430f6bc7596482ff8dd3aa9e093f53c5d56c7c3f6a4b2"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_column.ps1",
+                "sha256": "8fba8d6579a61814968ebdac8b754f21e56c8ea728fb607a6f7952e8f7925599"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\udl_fixture.py",
+                "sha256": "6ea8897bd0aaee3b757f22525465fa3441f43dfd7ca66ef445c1c04caafa54ea"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_udl.ps1",
+                "sha256": "693633d5769f0a3d8df613979dc1bd46de3ad7585237cdf62b89f98305521bec"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_session.ps1",
+                "sha256": "213f6b02f9f3a9d195b39327920f347eb8744b574af48acc5c01d024e0d089de"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\split_fixture.py",
+                "sha256": "4b9ec9dab46ac1764f04c71f38fccccf52ce537f9b4aa73abea65d180cb4544e"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_split.ps1",
+                "sha256": "d90f1a9ef817781ba2cb1d42abb3902af87f092b1895eb535edea3d01925cd97"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\workspace_fixture.py",
+                "sha256": "94f84799508cba311dc8721a5cac67dab99c4337bd0a06f7be36f94ff669ac22"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_workspace.ps1",
+                "sha256": "a9ccf9463ac98003f280f7851f3c8f280f644b60d120dbc186d3c3c533572503"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\portable_fixture.py",
+                "sha256": "fffe329e82f9b83dea75f8bb00cbc89a347c24d0855278162147e64e93399ccc"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_portable.ps1",
+                "sha256": "bac801d20317cabe0583e3939b77db56e9cd296e2cd2e8fffe2f4267196a0693"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\huge_log_fixture.py",
+                "sha256": "239f9e4b1a9c0a9a8fd93b677d45783b94c7fdf4534abef13dc5c7a30e1db230"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_huge_log.ps1",
+                "sha256": "02614f66ba6f32ea365c14ee62dc62a10490fbfc0413282b9cb7e4fd45bd455f"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\macro_fixture.py",
+                "sha256": "99f49543c1004b216170734f6c601fd907c082d06918b4ef8dfd48327543f6ee"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\external_fixture.py",
+                "sha256": "e044214f6c1e79c2fa44d961954c17ee81765a8b76efdaaf5693342e4aef5a83"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_macro.ps1",
+                "sha256": "5c32df124cc564f50203d2b8cc5c7713e2722fb904bcfdce377559ca86d5711c"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\evidence_json.py",
+                "sha256": "666df4c7ac7fffefef2cb62eaf3aad9323ab447e211a0e974d04808a417a738f"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\qualification_cells.py",
+                "sha256": "1ee14acdd379bab3cba214b79232dd4f8955cc7d4e3aaf710ffb5e5dea7a95fd"
+              }
+            ]
+          }
+        }
+      ],
+      "result": {
+        "evidence_result": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\564a0881-eac6-4de3-a557-a77f168db0ff\\result.json",
+        "sha256": "5b45f22a3e3eb2f674fccfd85131afc892a00a99ed1ce64377f3da61ef4eb521"
+      },
+      "binary_sha256": "64bb428b5bc61dd2f6042a15ba03314af0e4f21290b0d210091ee9bc4d80adb4"
+    },
+    {
+      "journey": "regex_transform",
+      "status": "PASS",
+      "step_count": 3,
+      "steps": [
+        {
+          "observed": "Generated multiline Unicode source opens unchanged; native regex mode, exact PCRE2 query and complete two-match count are observed.",
+          "status": "PASS",
+          "id": "s1",
+          "artifacts": [
+            {
+              "sha256": "6f6acecdf1bf634cb9191d2c21070d1b0ab4decdc0f6ba440dc17f7e5aeb250d",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\446b8912-c1a0-41af-ba59-b92c8ae0ed43\\scratch\\native-observations.json"
+            },
+            {
+              "sha256": "b8a1417ec9129d09993a018aca83a9513c7323b48116b1a20d563932f4d3adba",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\446b8912-c1a0-41af-ba59-b92c8ae0ed43\\scratch\\fixture\\input.txt"
+            },
+            {
+              "sha256": "5057beca797e91383c795d0ecdaafc0e3ef41c60ae0d614d5085f668f834e7b4",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\446b8912-c1a0-41af-ba59-b92c8ae0ed43\\scratch\\local\\Bareline\\settings.toml"
+            },
+            {
+              "sha256": "25fc0bfdf90d547cab630003d66737c937d46c0938d3fa0ee351b539263130d9",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\446b8912-c1a0-41af-ba59-b92c8ae0ed43\\scratch\\command-trace.jsonl"
+            },
+            {
+              "sha256": "52c2842ad6cfb3e8e16d2b948dab33db235cdc42a6e69a9f3ceba9dea93ea95e",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\446b8912-c1a0-41af-ba59-b92c8ae0ed43\\scratch\\regex-fixture.json"
+            },
+            {
+              "sha256": "bc32fc87bb2e4f1b3748e9c444ed252834cb01d30422494bdfe9f8d5d4cbad86",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\446b8912-c1a0-41af-ba59-b92c8ae0ed43\\scratch\\regex-preview.png"
+            },
+            {
+              "sha256": "4760b3aaee5d3cf2299266fcbd2d643072f8974d1d329f3c4225af40c5ab8426",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\446b8912-c1a0-41af-ba59-b92c8ae0ed43\\scratch\\regex-replaced.bin"
+            },
+            {
+              "sha256": "55c66728211f475fd15f2785f8995c5beafd1ba556f959308994e5c87e9aaaee",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\446b8912-c1a0-41af-ba59-b92c8ae0ed43\\scratch\\editor-1.stdout.log"
+            },
+            {
+              "sha256": "4a26e6dd6be7c45a90ba49280225cbdc6c1fa22634823a4bf4b4f3fa1f6d0d7a",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\446b8912-c1a0-41af-ba59-b92c8ae0ed43\\scratch\\editor-1.stderr.log"
+            }
+          ],
+          "fixture": {
+            "procedure": "regex_transform-v1",
+            "encoding": "utf-8",
+            "eol": "lf",
+            "fixture_sha256": "e54981ef07a60bac3791f169e4743b0c216ab01f0689f9525981543e07cdc719"
+          },
+          "adapter": {
+            "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_adapter.py",
+            "sha256": "2dab80f191f91e7cf71e89b7ee5d26cc1add01bd08fa48410407bfe56408d9ee",
+            "driver_path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_driver.ps1",
+            "driver_sha256": "7ddd647c01c5aa6120e9eb414320c49e5688a321760043c6e5e7d1d5ed11d94f",
+            "manifest_sha256": "f24b9accc9d8ed9fc606696fd37342765d603e10b5023bb31344f436244e960e",
+            "auxiliary_sources": [
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\lab_fixture.py",
+                "sha256": "af60b47c201b12a008e298d683dec637022fd177aa9204cb87a8449f5123e1a0"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_lab.ps1",
+                "sha256": "3029079c83c4cca3c4a80ab3e195da32c36a7c94416b4fb85cfd18e054ccca38"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_lab_driver.ps1",
+                "sha256": "77cbe845cb0c5784ea1b8e2c0b4856ec37de8de06d3bca7ded3ce44eb6e67f5c"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\code_config_fixture.py",
+                "sha256": "4f445819f60befa3a4809291fbd3fdcb9664a0d177955808f75280bda8f153f8"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_code_config.ps1",
+                "sha256": "6909fa60311a4c3acfe688bfe4e3cbe798785123334d87b50cd098dd856f3a56"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_visual.cs",
+                "sha256": "8cf398a8afa01e92cb286bfed616d3385c30a7602f652e6e9c09d2b26096f4f7"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\regex_transform_fixture.py",
+                "sha256": "9a360a7c2c80b338e27041d24da8b1294483e4ee61c5a38754d4152417f8abc8"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_regex_transform.ps1",
+                "sha256": "12d105d8ac8390c9cee7fb706c25e6a430b60d50cb8370b95c2d7437b2098144"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\column_fixture.py",
+                "sha256": "37de4b9f4094dfa72c6430f6bc7596482ff8dd3aa9e093f53c5d56c7c3f6a4b2"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_column.ps1",
+                "sha256": "8fba8d6579a61814968ebdac8b754f21e56c8ea728fb607a6f7952e8f7925599"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\udl_fixture.py",
+                "sha256": "6ea8897bd0aaee3b757f22525465fa3441f43dfd7ca66ef445c1c04caafa54ea"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_udl.ps1",
+                "sha256": "693633d5769f0a3d8df613979dc1bd46de3ad7585237cdf62b89f98305521bec"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_session.ps1",
+                "sha256": "213f6b02f9f3a9d195b39327920f347eb8744b574af48acc5c01d024e0d089de"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\split_fixture.py",
+                "sha256": "4b9ec9dab46ac1764f04c71f38fccccf52ce537f9b4aa73abea65d180cb4544e"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_split.ps1",
+                "sha256": "d90f1a9ef817781ba2cb1d42abb3902af87f092b1895eb535edea3d01925cd97"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\workspace_fixture.py",
+                "sha256": "94f84799508cba311dc8721a5cac67dab99c4337bd0a06f7be36f94ff669ac22"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_workspace.ps1",
+                "sha256": "a9ccf9463ac98003f280f7851f3c8f280f644b60d120dbc186d3c3c533572503"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\portable_fixture.py",
+                "sha256": "fffe329e82f9b83dea75f8bb00cbc89a347c24d0855278162147e64e93399ccc"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_portable.ps1",
+                "sha256": "bac801d20317cabe0583e3939b77db56e9cd296e2cd2e8fffe2f4267196a0693"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\huge_log_fixture.py",
+                "sha256": "239f9e4b1a9c0a9a8fd93b677d45783b94c7fdf4534abef13dc5c7a30e1db230"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_huge_log.ps1",
+                "sha256": "02614f66ba6f32ea365c14ee62dc62a10490fbfc0413282b9cb7e4fd45bd455f"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\macro_fixture.py",
+                "sha256": "99f49543c1004b216170734f6c601fd907c082d06918b4ef8dfd48327543f6ee"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\external_fixture.py",
+                "sha256": "e044214f6c1e79c2fa44d961954c17ee81765a8b76efdaaf5693342e4aef5a83"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_macro.ps1",
+                "sha256": "5c32df124cc564f50203d2b8cc5c7713e2722fb904bcfdce377559ca86d5711c"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\evidence_json.py",
+                "sha256": "666df4c7ac7fffefef2cb62eaf3aad9323ab447e211a0e974d04808a417a738f"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\qualification_cells.py",
+                "sha256": "1ee14acdd379bab3cba214b79232dd4f8955cc7d4e3aaf710ffb5e5dea7a95fd"
+              }
+            ]
+          }
+        },
+        {
+          "observed": "Read-only preview expands named and numbered captures for exactly two multiline matches; Apply changes one open document, native Save writes exact expected UTF-8/LF bytes.",
+          "status": "PASS",
+          "id": "s2",
+          "artifacts": [
+            {
+              "sha256": "6f6acecdf1bf634cb9191d2c21070d1b0ab4decdc0f6ba440dc17f7e5aeb250d",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\446b8912-c1a0-41af-ba59-b92c8ae0ed43\\scratch\\native-observations.json"
+            },
+            {
+              "sha256": "b8a1417ec9129d09993a018aca83a9513c7323b48116b1a20d563932f4d3adba",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\446b8912-c1a0-41af-ba59-b92c8ae0ed43\\scratch\\fixture\\input.txt"
+            },
+            {
+              "sha256": "5057beca797e91383c795d0ecdaafc0e3ef41c60ae0d614d5085f668f834e7b4",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\446b8912-c1a0-41af-ba59-b92c8ae0ed43\\scratch\\local\\Bareline\\settings.toml"
+            },
+            {
+              "sha256": "25fc0bfdf90d547cab630003d66737c937d46c0938d3fa0ee351b539263130d9",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\446b8912-c1a0-41af-ba59-b92c8ae0ed43\\scratch\\command-trace.jsonl"
+            },
+            {
+              "sha256": "52c2842ad6cfb3e8e16d2b948dab33db235cdc42a6e69a9f3ceba9dea93ea95e",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\446b8912-c1a0-41af-ba59-b92c8ae0ed43\\scratch\\regex-fixture.json"
+            },
+            {
+              "sha256": "bc32fc87bb2e4f1b3748e9c444ed252834cb01d30422494bdfe9f8d5d4cbad86",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\446b8912-c1a0-41af-ba59-b92c8ae0ed43\\scratch\\regex-preview.png"
+            },
+            {
+              "sha256": "4760b3aaee5d3cf2299266fcbd2d643072f8974d1d329f3c4225af40c5ab8426",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\446b8912-c1a0-41af-ba59-b92c8ae0ed43\\scratch\\regex-replaced.bin"
+            },
+            {
+              "sha256": "55c66728211f475fd15f2785f8995c5beafd1ba556f959308994e5c87e9aaaee",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\446b8912-c1a0-41af-ba59-b92c8ae0ed43\\scratch\\editor-1.stdout.log"
+            },
+            {
+              "sha256": "4a26e6dd6be7c45a90ba49280225cbdc6c1fa22634823a4bf4b4f3fa1f6d0d7a",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\446b8912-c1a0-41af-ba59-b92c8ae0ed43\\scratch\\editor-1.stderr.log"
+            }
+          ],
+          "fixture": {
+            "procedure": "regex_transform-v1",
+            "encoding": "utf-8",
+            "eol": "lf",
+            "fixture_sha256": "e54981ef07a60bac3791f169e4743b0c216ab01f0689f9525981543e07cdc719"
+          },
+          "adapter": {
+            "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_adapter.py",
+            "sha256": "2dab80f191f91e7cf71e89b7ee5d26cc1add01bd08fa48410407bfe56408d9ee",
+            "driver_path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_driver.ps1",
+            "driver_sha256": "7ddd647c01c5aa6120e9eb414320c49e5688a321760043c6e5e7d1d5ed11d94f",
+            "manifest_sha256": "f24b9accc9d8ed9fc606696fd37342765d603e10b5023bb31344f436244e960e",
+            "auxiliary_sources": [
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\lab_fixture.py",
+                "sha256": "af60b47c201b12a008e298d683dec637022fd177aa9204cb87a8449f5123e1a0"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_lab.ps1",
+                "sha256": "3029079c83c4cca3c4a80ab3e195da32c36a7c94416b4fb85cfd18e054ccca38"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_lab_driver.ps1",
+                "sha256": "77cbe845cb0c5784ea1b8e2c0b4856ec37de8de06d3bca7ded3ce44eb6e67f5c"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\code_config_fixture.py",
+                "sha256": "4f445819f60befa3a4809291fbd3fdcb9664a0d177955808f75280bda8f153f8"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_code_config.ps1",
+                "sha256": "6909fa60311a4c3acfe688bfe4e3cbe798785123334d87b50cd098dd856f3a56"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_visual.cs",
+                "sha256": "8cf398a8afa01e92cb286bfed616d3385c30a7602f652e6e9c09d2b26096f4f7"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\regex_transform_fixture.py",
+                "sha256": "9a360a7c2c80b338e27041d24da8b1294483e4ee61c5a38754d4152417f8abc8"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_regex_transform.ps1",
+                "sha256": "12d105d8ac8390c9cee7fb706c25e6a430b60d50cb8370b95c2d7437b2098144"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\column_fixture.py",
+                "sha256": "37de4b9f4094dfa72c6430f6bc7596482ff8dd3aa9e093f53c5d56c7c3f6a4b2"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_column.ps1",
+                "sha256": "8fba8d6579a61814968ebdac8b754f21e56c8ea728fb607a6f7952e8f7925599"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\udl_fixture.py",
+                "sha256": "6ea8897bd0aaee3b757f22525465fa3441f43dfd7ca66ef445c1c04caafa54ea"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_udl.ps1",
+                "sha256": "693633d5769f0a3d8df613979dc1bd46de3ad7585237cdf62b89f98305521bec"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_session.ps1",
+                "sha256": "213f6b02f9f3a9d195b39327920f347eb8744b574af48acc5c01d024e0d089de"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\split_fixture.py",
+                "sha256": "4b9ec9dab46ac1764f04c71f38fccccf52ce537f9b4aa73abea65d180cb4544e"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_split.ps1",
+                "sha256": "d90f1a9ef817781ba2cb1d42abb3902af87f092b1895eb535edea3d01925cd97"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\workspace_fixture.py",
+                "sha256": "94f84799508cba311dc8721a5cac67dab99c4337bd0a06f7be36f94ff669ac22"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_workspace.ps1",
+                "sha256": "a9ccf9463ac98003f280f7851f3c8f280f644b60d120dbc186d3c3c533572503"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\portable_fixture.py",
+                "sha256": "fffe329e82f9b83dea75f8bb00cbc89a347c24d0855278162147e64e93399ccc"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_portable.ps1",
+                "sha256": "bac801d20317cabe0583e3939b77db56e9cd296e2cd2e8fffe2f4267196a0693"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\huge_log_fixture.py",
+                "sha256": "239f9e4b1a9c0a9a8fd93b677d45783b94c7fdf4534abef13dc5c7a30e1db230"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_huge_log.ps1",
+                "sha256": "02614f66ba6f32ea365c14ee62dc62a10490fbfc0413282b9cb7e4fd45bd455f"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\macro_fixture.py",
+                "sha256": "99f49543c1004b216170734f6c601fd907c082d06918b4ef8dfd48327543f6ee"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\external_fixture.py",
+                "sha256": "e044214f6c1e79c2fa44d961954c17ee81765a8b76efdaaf5693342e4aef5a83"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_macro.ps1",
+                "sha256": "5c32df124cc564f50203d2b8cc5c7713e2722fb904bcfdce377559ca86d5711c"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\evidence_json.py",
+                "sha256": "666df4c7ac7fffefef2cb62eaf3aad9323ab447e211a0e974d04808a417a738f"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\qualification_cells.py",
+                "sha256": "1ee14acdd379bab3cba214b79232dd4f8955cc7d4e3aaf710ffb5e5dea7a95fd"
+              }
+            ]
+          }
+        },
+        {
+          "observed": "One native Undo restores the entire original document; disk retains the replacement until Save then exactly restores original Unicode and LF bytes.",
+          "status": "PASS",
+          "id": "s3",
+          "artifacts": [
+            {
+              "sha256": "6f6acecdf1bf634cb9191d2c21070d1b0ab4decdc0f6ba440dc17f7e5aeb250d",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\446b8912-c1a0-41af-ba59-b92c8ae0ed43\\scratch\\native-observations.json"
+            },
+            {
+              "sha256": "b8a1417ec9129d09993a018aca83a9513c7323b48116b1a20d563932f4d3adba",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\446b8912-c1a0-41af-ba59-b92c8ae0ed43\\scratch\\fixture\\input.txt"
+            },
+            {
+              "sha256": "5057beca797e91383c795d0ecdaafc0e3ef41c60ae0d614d5085f668f834e7b4",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\446b8912-c1a0-41af-ba59-b92c8ae0ed43\\scratch\\local\\Bareline\\settings.toml"
+            },
+            {
+              "sha256": "25fc0bfdf90d547cab630003d66737c937d46c0938d3fa0ee351b539263130d9",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\446b8912-c1a0-41af-ba59-b92c8ae0ed43\\scratch\\command-trace.jsonl"
+            },
+            {
+              "sha256": "52c2842ad6cfb3e8e16d2b948dab33db235cdc42a6e69a9f3ceba9dea93ea95e",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\446b8912-c1a0-41af-ba59-b92c8ae0ed43\\scratch\\regex-fixture.json"
+            },
+            {
+              "sha256": "bc32fc87bb2e4f1b3748e9c444ed252834cb01d30422494bdfe9f8d5d4cbad86",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\446b8912-c1a0-41af-ba59-b92c8ae0ed43\\scratch\\regex-preview.png"
+            },
+            {
+              "sha256": "4760b3aaee5d3cf2299266fcbd2d643072f8974d1d329f3c4225af40c5ab8426",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\446b8912-c1a0-41af-ba59-b92c8ae0ed43\\scratch\\regex-replaced.bin"
+            },
+            {
+              "sha256": "55c66728211f475fd15f2785f8995c5beafd1ba556f959308994e5c87e9aaaee",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\446b8912-c1a0-41af-ba59-b92c8ae0ed43\\scratch\\editor-1.stdout.log"
+            },
+            {
+              "sha256": "4a26e6dd6be7c45a90ba49280225cbdc6c1fa22634823a4bf4b4f3fa1f6d0d7a",
+              "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\446b8912-c1a0-41af-ba59-b92c8ae0ed43\\scratch\\editor-1.stderr.log"
+            }
+          ],
+          "fixture": {
+            "procedure": "regex_transform-v1",
+            "encoding": "utf-8",
+            "eol": "lf",
+            "fixture_sha256": "e54981ef07a60bac3791f169e4743b0c216ab01f0689f9525981543e07cdc719"
+          },
+          "adapter": {
+            "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_adapter.py",
+            "sha256": "2dab80f191f91e7cf71e89b7ee5d26cc1add01bd08fa48410407bfe56408d9ee",
+            "driver_path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_driver.ps1",
+            "driver_sha256": "7ddd647c01c5aa6120e9eb414320c49e5688a321760043c6e5e7d1d5ed11d94f",
+            "manifest_sha256": "f24b9accc9d8ed9fc606696fd37342765d603e10b5023bb31344f436244e960e",
+            "auxiliary_sources": [
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\lab_fixture.py",
+                "sha256": "af60b47c201b12a008e298d683dec637022fd177aa9204cb87a8449f5123e1a0"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_lab.ps1",
+                "sha256": "3029079c83c4cca3c4a80ab3e195da32c36a7c94416b4fb85cfd18e054ccca38"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_lab_driver.ps1",
+                "sha256": "77cbe845cb0c5784ea1b8e2c0b4856ec37de8de06d3bca7ded3ce44eb6e67f5c"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\code_config_fixture.py",
+                "sha256": "4f445819f60befa3a4809291fbd3fdcb9664a0d177955808f75280bda8f153f8"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_code_config.ps1",
+                "sha256": "6909fa60311a4c3acfe688bfe4e3cbe798785123334d87b50cd098dd856f3a56"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_visual.cs",
+                "sha256": "8cf398a8afa01e92cb286bfed616d3385c30a7602f652e6e9c09d2b26096f4f7"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\regex_transform_fixture.py",
+                "sha256": "9a360a7c2c80b338e27041d24da8b1294483e4ee61c5a38754d4152417f8abc8"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_regex_transform.ps1",
+                "sha256": "12d105d8ac8390c9cee7fb706c25e6a430b60d50cb8370b95c2d7437b2098144"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\column_fixture.py",
+                "sha256": "37de4b9f4094dfa72c6430f6bc7596482ff8dd3aa9e093f53c5d56c7c3f6a4b2"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_column.ps1",
+                "sha256": "8fba8d6579a61814968ebdac8b754f21e56c8ea728fb607a6f7952e8f7925599"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\udl_fixture.py",
+                "sha256": "6ea8897bd0aaee3b757f22525465fa3441f43dfd7ca66ef445c1c04caafa54ea"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_udl.ps1",
+                "sha256": "693633d5769f0a3d8df613979dc1bd46de3ad7585237cdf62b89f98305521bec"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_session.ps1",
+                "sha256": "213f6b02f9f3a9d195b39327920f347eb8744b574af48acc5c01d024e0d089de"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\split_fixture.py",
+                "sha256": "4b9ec9dab46ac1764f04c71f38fccccf52ce537f9b4aa73abea65d180cb4544e"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_split.ps1",
+                "sha256": "d90f1a9ef817781ba2cb1d42abb3902af87f092b1895eb535edea3d01925cd97"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\workspace_fixture.py",
+                "sha256": "94f84799508cba311dc8721a5cac67dab99c4337bd0a06f7be36f94ff669ac22"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_workspace.ps1",
+                "sha256": "a9ccf9463ac98003f280f7851f3c8f280f644b60d120dbc186d3c3c533572503"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\portable_fixture.py",
+                "sha256": "fffe329e82f9b83dea75f8bb00cbc89a347c24d0855278162147e64e93399ccc"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_portable.ps1",
+                "sha256": "bac801d20317cabe0583e3939b77db56e9cd296e2cd2e8fffe2f4267196a0693"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\huge_log_fixture.py",
+                "sha256": "239f9e4b1a9c0a9a8fd93b677d45783b94c7fdf4534abef13dc5c7a30e1db230"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_huge_log.ps1",
+                "sha256": "02614f66ba6f32ea365c14ee62dc62a10490fbfc0413282b9cb7e4fd45bd455f"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\macro_fixture.py",
+                "sha256": "99f49543c1004b216170734f6c601fd907c082d06918b4ef8dfd48327543f6ee"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\external_fixture.py",
+                "sha256": "e044214f6c1e79c2fa44d961954c17ee81765a8b76efdaaf5693342e4aef5a83"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_macro.ps1",
+                "sha256": "5c32df124cc564f50203d2b8cc5c7713e2722fb904bcfdce377559ca86d5711c"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\evidence_json.py",
+                "sha256": "666df4c7ac7fffefef2cb62eaf3aad9323ab447e211a0e974d04808a417a738f"
+              },
+              {
+                "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\qualification_cells.py",
+                "sha256": "1ee14acdd379bab3cba214b79232dd4f8955cc7d4e3aaf710ffb5e5dea7a95fd"
+              }
+            ]
+          }
+        }
+      ],
+      "result": {
+        "evidence_result": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\446b8912-c1a0-41af-ba59-b92c8ae0ed43\\result.json",
+        "sha256": "c460cbaea14316798135abdea67fce89c9d3781e695a66c1b29562e5d97ba702"
+      },
+      "binary_sha256": "64bb428b5bc61dd2f6042a15ba03314af0e4f21290b0d210091ee9bc4d80adb4"
+    }
+  ],
+  "installed_payload": {
+    "status": "PASS",
+    "installed_at_utc": "2026-09-16T10:27:52.4823844+00:00",
+    "installer": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\dist\\windows\\0.1.0-full-suite-20260916\\bareline-0.1.0-windows-x64-setup.exe",
+    "installer_sha256": "73af9647ab0e967b09db901173bb846705ed2e863d762cb76b5e955b8d813311",
+    "installer_exit_code": 0,
+    "mode": "per-user unsigned preview",
+    "installation_path": "C:\\Users\\Woovee\\AppData\\Local\\Programs\\Bareline",
+    "shortcut": "C:\\Users\\Woovee\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Bareline\\Bareline.lnk",
+    "shortcut_target": "C:\\Users\\Woovee\\AppData\\Local\\Programs\\Bareline\\bareline.exe",
+    "uninstall_command": "\"C:\\Users\\Woovee\\AppData\\Local\\Programs\\Bareline\\unins000.exe\"",
+    "association_keys_unchanged": true,
+    "files": [
+      {
+        "name": "bareline.exe",
+        "sha256": "64bb428b5bc61dd2f6042a15ba03314af0e4f21290b0d210091ee9bc4d80adb4",
+        "length": 10099200,
+        "matches_payload": true
+      },
+      {
+        "name": "bareline-update-helper.exe",
+        "sha256": "7d644603b9871ceffd0f62f4dc8992028f6db82bcd1e6926adb8a57baa7f06f5",
+        "length": 118784,
+        "matches_payload": true
+      },
+      {
+        "name": "LICENSE",
+        "sha256": "3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04",
+        "length": 16726,
+        "matches_payload": true
+      },
+      {
+        "name": "THIRD-PARTY-NOTICES.md",
+        "sha256": "eae5e931265d66e3dc4c2eb6136524b4dfd3459e1e90414bfc56bac019811f8a",
+        "length": 1051082,
+        "matches_payload": true
+      },
+      {
+        "name": "SBOM.json",
+        "sha256": "543ee648ae5cc2eea12edd8149d095fcd02fb22e23eedd0a80c799733e961dd0",
+        "length": 165455,
+        "matches_payload": true
+      }
+    ],
+    "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\full-suite-20260916\\installer.log"
+  },
+  "notes": [
+    "Do not aggregate nested test summaries as independent full-suite totals.",
+    "Each capture preserves its original source identity; stages span multiple revisions.",
+    "Large fixture and distribution binaries are pinned by their producing manifests; retained evidence does not imply independent acceptance."
+  ]
+}

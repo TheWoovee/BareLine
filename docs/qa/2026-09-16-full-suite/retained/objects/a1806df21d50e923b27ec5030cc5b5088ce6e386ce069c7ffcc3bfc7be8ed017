@@ -1,0 +1,6 @@
+    Checking bareline-editor-surface v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\crates\editor-surface)
+    Checking bareline-app v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\crates\app)
+    Checking bareline-platform-windows v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\crates\platform-windows)
+    Checking xtask v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\xtask)
+    Checking bareline v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\apps\bareline)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.23s

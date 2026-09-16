@@ -1,0 +1,13 @@
+$ErrorActionPreference = 'Stop'
+$before = (Get-FileHash -LiteralPath Cargo.lock -Algorithm SHA256).Hash
+$started = [DateTime]::UtcNow
+& ./target/package-20260908/cyclonedx/cargo-cyclonedx.exe cyclonedx --format json --all --target x86_64-pc-windows-msvc --override-filename bom
+if ($LASTEXITCODE) { throw 'SBOM generation failed' }
+foreach ($path in @('apps/bareline/bom.json', 'apps/update-helper/bom.json')) {
+    if (!(Test-Path -LiteralPath $path -PathType Leaf)) { throw "Missing $path" }
+    if ((Get-Item -LiteralPath $path).LastWriteTimeUtc -lt $started) { throw "Stale $path" }
+}
+if ((Get-FileHash -LiteralPath Cargo.lock -Algorithm SHA256).Hash -ne $before) { throw 'Cargo.lock changed' }
+& ./packaging/windows/generate-sbom.ps1 -CargoSbom apps/bareline/bom.json -HelperCargoSbom apps/update-helper/bom.json -OutputFile target/qualification/full-suite-20260916/SBOM.json
+if ($LASTEXITCODE) { throw 'SBOM normalization failed' }
+Write-Output 'PASS: fresh editor/helper CycloneDX inputs and normalized package SBOM; lockfile unchanged.'

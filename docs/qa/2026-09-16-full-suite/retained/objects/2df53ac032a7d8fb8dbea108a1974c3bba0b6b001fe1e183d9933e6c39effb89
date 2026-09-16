@@ -1,0 +1,202 @@
+﻿2026-09-16T11:18:48.6873526Z Current runner version: '2.337.0'
+2026-09-16T11:18:48.6891338Z ##[group]Runner Image Provisioner
+2026-09-16T11:18:48.6891774Z Hosted Compute Agent
+2026-09-16T11:18:48.6892106Z Version: 20260828.587
+2026-09-16T11:18:48.6892434Z Commit: abac92662cab4cc7352de4f9f9d2e2419aad9c29
+2026-09-16T11:18:48.6892812Z Build Date: 2026-08-28T16:44:25Z
+2026-09-16T11:18:48.6893171Z Worker ID: {abbd3f29-40c0-4ac9-82d5-248e1f065880}
+2026-09-16T11:18:48.6893538Z Azure Region: westus2
+2026-09-16T11:18:48.6893837Z ##[endgroup]
+2026-09-16T11:18:48.6894823Z ##[group]Operating System
+2026-09-16T11:18:48.6895238Z Microsoft Windows Server 2022
+2026-09-16T11:18:48.6895580Z 10.0.20348
+2026-09-16T11:18:48.6895845Z Datacenter
+2026-09-16T11:18:48.6896136Z ##[endgroup]
+2026-09-16T11:18:48.6896416Z ##[group]Runner Image
+2026-09-16T11:18:48.6896708Z Image: windows-2022
+2026-09-16T11:18:48.6897060Z Version: 20260907.297.1
+2026-09-16T11:18:48.6897907Z Included Software: https://github.com/actions/runner-images/blob/win22/20260907.297/images/windows/Windows2022-Readme.md
+2026-09-16T11:18:48.6898694Z Image Release: https://github.com/actions/runner-images/releases/tag/win22%2F20260907.297
+2026-09-16T11:18:48.6899178Z ##[endgroup]
+2026-09-16T11:18:48.6899775Z ##[group]GITHUB_TOKEN Permissions
+2026-09-16T11:18:48.6900825Z Contents: read
+2026-09-16T11:18:48.6901138Z Metadata: read
+2026-09-16T11:18:48.6901422Z ##[endgroup]
+2026-09-16T11:18:48.6902714Z Secret source: Actions
+2026-09-16T11:18:48.6903151Z Cache mode: write
+2026-09-16T11:18:48.6903522Z Prepare workflow directory
+2026-09-16T11:18:48.7099856Z Prepare all required actions
+2026-09-16T11:18:48.7131013Z Getting action download info
+2026-09-16T11:18:49.0917824Z Download action repository 'actions/checkout@11d5960a326750d5838078e36cf38b85af677262' (SHA:11d5960a326750d5838078e36cf38b85af677262)
+2026-09-16T11:18:49.2186864Z Download action repository 'actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093' (SHA:d3f86a106a0bac45b974a628896c90dbdf5c8093)
+2026-09-16T11:18:49.7542261Z Complete job name: reproducibility
+2026-09-16T11:18:49.8588126Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-09-16T11:18:49.8594336Z ##[group]Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+2026-09-16T11:18:49.8594763Z with:
+2026-09-16T11:18:49.8594984Z   persist-credentials: false
+2026-09-16T11:18:49.8595251Z   repository: TheWoovee/BareLine
+2026-09-16T11:18:49.8597296Z   token: ***
+2026-09-16T11:18:49.8597507Z   ssh-strict: true
+2026-09-16T11:18:49.8597723Z   ssh-user: git
+2026-09-16T11:18:49.8597937Z   clean: true
+2026-09-16T11:18:49.8598163Z   sparse-checkout-cone-mode: true
+2026-09-16T11:18:49.8598428Z   fetch-depth: 1
+2026-09-16T11:18:49.8598646Z   fetch-tags: false
+2026-09-16T11:18:49.8598891Z   show-progress: true
+2026-09-16T11:18:49.8599138Z   lfs: false
+2026-09-16T11:18:49.8599341Z   submodules: false
+2026-09-16T11:18:49.8599570Z   set-safe-directory: true
+2026-09-16T11:18:49.8599826Z   allow-unsafe-pr-checkout: false
+2026-09-16T11:18:49.8600146Z ##[endgroup]
+2026-09-16T11:18:49.9583774Z Syncing repository: TheWoovee/BareLine
+2026-09-16T11:18:49.9584810Z ##[group]Getting Git version info
+2026-09-16T11:18:49.9585117Z Working directory is 'D:\a\BareLine\BareLine'
+2026-09-16T11:18:50.3065111Z [command]"C:\Program Files\Git\bin\git.exe" version
+2026-09-16T11:18:51.2127019Z git version 2.55.0.windows.5
+2026-09-16T11:18:51.2154274Z ##[endgroup]
+2026-09-16T11:18:51.2166452Z Temporarily overriding HOME='D:\a\_temp\d6e6ab79-58a7-4a2f-8fdf-1ddc9af33886' before making global git config changes
+2026-09-16T11:18:51.2166956Z Adding repository directory to the temporary git global config as a safe directory
+2026-09-16T11:18:51.2173691Z [command]"C:\Program Files\Git\bin\git.exe" config --global --add safe.directory D:\a\BareLine\BareLine
+2026-09-16T11:18:51.4564649Z Deleting the contents of 'D:\a\BareLine\BareLine'
+2026-09-16T11:18:51.4567811Z ##[group]Initializing the repository
+2026-09-16T11:18:51.4573544Z [command]"C:\Program Files\Git\bin\git.exe" init D:\a\BareLine\BareLine
+2026-09-16T11:18:51.5314472Z Initialized empty Git repository in D:/a/BareLine/BareLine/.git/
+2026-09-16T11:18:51.5343555Z [command]"C:\Program Files\Git\bin\git.exe" remote add origin https://github.com/TheWoovee/BareLine
+2026-09-16T11:18:51.5722751Z ##[endgroup]
+2026-09-16T11:18:51.5723095Z ##[group]Disabling automatic garbage collection
+2026-09-16T11:18:51.5729353Z [command]"C:\Program Files\Git\bin\git.exe" config --local gc.auto 0
+2026-09-16T11:18:51.5878269Z ##[endgroup]
+2026-09-16T11:18:51.5878636Z ##[group]Setting up auth
+2026-09-16T11:18:51.5886671Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp core\.sshCommand
+2026-09-16T11:18:51.6034215Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :\""
+2026-09-16T11:18:53.2201879Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-09-16T11:18:53.2410699Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :\""
+2026-09-16T11:18:53.5422251Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-09-16T11:18:53.5594995Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "git config --local --show-origin --name-only --get-regexp remote.origin.url"
+2026-09-16T11:18:53.8702781Z [command]"C:\Program Files\Git\bin\git.exe" config --local http.https://github.com/.extraheader "AUTHORIZATION: basic ***"
+2026-09-16T11:18:53.8861178Z ##[endgroup]
+2026-09-16T11:18:53.8861559Z ##[group]Fetching the repository
+2026-09-16T11:18:53.8870312Z [command]"C:\Program Files\Git\bin\git.exe" -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +6badda3bba8038cec1f7c470555bae4c811af3ca:refs/remotes/origin/master
+2026-09-16T11:18:57.7891342Z From https://github.com/TheWoovee/BareLine
+2026-09-16T11:18:57.7891986Z  * [new ref]         6badda3bba8038cec1f7c470555bae4c811af3ca -> origin/master
+2026-09-16T11:18:57.7922882Z ##[endgroup]
+2026-09-16T11:18:57.7923136Z ##[group]Determining the checkout info
+2026-09-16T11:18:57.7924464Z ##[endgroup]
+2026-09-16T11:18:57.7933059Z [command]"C:\Program Files\Git\bin\git.exe" sparse-checkout disable
+2026-09-16T11:18:57.8239932Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset-all extensions.worktreeConfig
+2026-09-16T11:18:57.8400747Z ##[group]Checking out the ref
+2026-09-16T11:18:57.8406978Z [command]"C:\Program Files\Git\bin\git.exe" checkout --progress --force -B master refs/remotes/origin/master
+2026-09-16T11:18:58.9142882Z Updating files:  82% (2918/3531)
+2026-09-16T11:18:58.9191878Z Updating files:  83% (2931/3531)
+2026-09-16T11:18:58.9227221Z Updating files:  84% (2967/3531)
+2026-09-16T11:18:58.9261817Z Updating files:  85% (3002/3531)
+2026-09-16T11:18:58.9340606Z Updating files:  86% (3037/3531)
+2026-09-16T11:18:58.9380558Z Updating files:  87% (3072/3531)
+2026-09-16T11:18:58.9805067Z Updating files:  88% (3108/3531)
+2026-09-16T11:18:58.9858295Z Updating files:  89% (3143/3531)
+2026-09-16T11:18:59.0025849Z Updating files:  90% (3178/3531)
+2026-09-16T11:18:59.0237609Z Updating files:  91% (3214/3531)
+2026-09-16T11:18:59.0352347Z Updating files:  92% (3249/3531)
+2026-09-16T11:18:59.0402137Z Updating files:  93% (3284/3531)
+2026-09-16T11:18:59.0448168Z Updating files:  94% (3320/3531)
+2026-09-16T11:18:59.0480458Z Updating files:  95% (3355/3531)
+2026-09-16T11:18:59.0548357Z Updating files:  96% (3390/3531)
+2026-09-16T11:18:59.0588165Z Updating files:  97% (3426/3531)
+2026-09-16T11:18:59.0625517Z Updating files:  98% (3461/3531)
+2026-09-16T11:18:59.0668695Z Updating files:  99% (3496/3531)
+2026-09-16T11:18:59.0668915Z Updating files: 100% (3531/3531)
+2026-09-16T11:18:59.0972817Z Updating files: 100% (3531/3531), done.
+2026-09-16T11:18:59.0973040Z Reset branch 'master'
+2026-09-16T11:18:59.0986529Z branch 'master' set up to track 'origin/master'.
+2026-09-16T11:18:59.1114457Z ##[endgroup]
+2026-09-16T11:18:59.1367449Z [command]"C:\Program Files\Git\bin\git.exe" log -1 --format=%H
+2026-09-16T11:18:59.1508565Z 6badda3bba8038cec1f7c470555bae4c811af3ca
+2026-09-16T11:18:59.1533653Z ##[group]Removing auth
+2026-09-16T11:18:59.1539904Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp core\.sshCommand
+2026-09-16T11:18:59.1698156Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :\""
+2026-09-16T11:18:59.5300128Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-09-16T11:18:59.5438265Z http.https://github.com/.extraheader
+2026-09-16T11:18:59.5463401Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset-all http.https://github.com/.extraheader
+2026-09-16T11:18:59.5625402Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :\""
+2026-09-16T11:18:59.9053070Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-09-16T11:18:59.9218864Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "git config --local --show-origin --name-only --get-regexp remote.origin.url"
+2026-09-16T11:19:00.2624350Z ##[endgroup]
+2026-09-16T11:19:00.2865333Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-09-16T11:19:00.2866527Z ##[group]Run actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+2026-09-16T11:19:00.2866730Z with:
+2026-09-16T11:19:00.2866842Z   pattern: clean-build-*
+2026-09-16T11:19:00.2866957Z   path: evidence
+2026-09-16T11:19:00.2867064Z   merge-multiple: false
+2026-09-16T11:19:00.2867191Z   repository: TheWoovee/BareLine
+2026-09-16T11:19:00.2867319Z   run-id: 35088392024
+2026-09-16T11:19:00.2867422Z ##[endgroup]
+2026-09-16T11:19:00.4044915Z (node:6724) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-09-16T11:19:00.4045695Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-09-16T11:19:00.7605880Z Found 5 artifact(s)
+2026-09-16T11:19:00.7606653Z Filtering artifacts by pattern 'clean-build-*'
+2026-09-16T11:19:00.7619388Z Preparing to download the following artifacts:
+2026-09-16T11:19:00.7619848Z - clean-build-b (ID: 10443796808, Size: 1162, Expected Digest: sha256:0eac61082ed57441f8e2ece823d05ae2998dab1fd44e3d22dd060534ed2bfe89)
+2026-09-16T11:19:00.7620376Z - clean-build-a (ID: 10443662590, Size: 1162, Expected Digest: sha256:436c75b4d8f72d764f629c6cf576443f2d94751b8a3020b437afcbfeda789072)
+2026-09-16T11:19:01.0245669Z Redirecting to blob download url: https://productionresultssa15.blob.core.windows.net/actions-results/09f4761c-de2e-497e-abba-ed10a96730e1/workflow-job-run-527f52ba-302f-5e60-b20d-da8d1b6c5ed1/artifacts/316d580995a333d0089ed4e161728f4042480af3e810f371300c0e5e7befaa3c.zip
+2026-09-16T11:19:01.0248062Z Starting download of artifact to: D:\a\BareLine\BareLine\evidence\clean-build-b
+2026-09-16T11:19:01.1581268Z Redirecting to blob download url: https://productionresultssa15.blob.core.windows.net/actions-results/09f4761c-de2e-497e-abba-ed10a96730e1/workflow-job-run-43fb340e-2fbf-5e9f-9806-17ef4d4aed9f/artifacts/9123a3d28ecc35c3d002be0b8bde00e30d48be9ae2eac49e100cf056ceca500b.zip
+2026-09-16T11:19:01.1582278Z Starting download of artifact to: D:\a\BareLine\BareLine\evidence\clean-build-a
+2026-09-16T11:19:01.3236292Z (node:6724) [DEP0005] DeprecationWarning: Buffer() is deprecated due to security and usability issues. Please use the Buffer.alloc(), Buffer.allocUnsafe(), or Buffer.from() methods instead.
+2026-09-16T11:19:01.3276766Z SHA256 digest of downloaded artifact is 0eac61082ed57441f8e2ece823d05ae2998dab1fd44e3d22dd060534ed2bfe89
+2026-09-16T11:19:01.3277076Z Artifact download completed successfully.
+2026-09-16T11:19:01.4421891Z SHA256 digest of downloaded artifact is 436c75b4d8f72d764f629c6cf576443f2d94751b8a3020b437afcbfeda789072
+2026-09-16T11:19:01.4422237Z Artifact download completed successfully.
+2026-09-16T11:19:01.4422409Z Total of 2 artifact(s) downloaded
+2026-09-16T11:19:01.4427759Z Download artifact has finished successfully
+2026-09-16T11:19:01.4638134Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-09-16T11:19:01.4638916Z ##[group]Run actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+2026-09-16T11:19:01.4639123Z with:
+2026-09-16T11:19:01.4639243Z   pattern: unsigned-payload-*
+2026-09-16T11:19:01.4639373Z   path: payloads
+2026-09-16T11:19:01.4639485Z   merge-multiple: false
+2026-09-16T11:19:01.4639623Z   repository: TheWoovee/BareLine
+2026-09-16T11:19:01.4639751Z   run-id: 35088392024
+2026-09-16T11:19:01.4639883Z ##[endgroup]
+2026-09-16T11:19:01.5885932Z (node:2688) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-09-16T11:19:01.8316022Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-09-16T11:19:01.8327274Z Found 5 artifact(s)
+2026-09-16T11:19:01.8328020Z Filtering artifacts by pattern 'unsigned-payload-*'
+2026-09-16T11:19:01.8341304Z Preparing to download the following artifacts:
+2026-09-16T11:19:01.8341788Z - unsigned-payload-a (ID: 10443747360, Size: 5015078, Expected Digest: sha256:ba1f43056ba8d8c287ce1e81d12837ea86300c822ce9c513387bbd04b91de891)
+2026-09-16T11:19:01.8342303Z - unsigned-payload-b (ID: 10443144525, Size: 5015078, Expected Digest: sha256:88fbb5a531b6b1fd699bc1265e9f6478a44748cf916ebde497dc27810c7f8b10)
+2026-09-16T11:19:02.0814190Z Redirecting to blob download url: https://productionresultssa15.blob.core.windows.net/actions-results/09f4761c-de2e-497e-abba-ed10a96730e1/workflow-job-run-43fb340e-2fbf-5e9f-9806-17ef4d4aed9f/artifacts/7c8a2726c3043194d878054bf9e1dd2057181931d956de09e2119c5838fcf7f3.zip
+2026-09-16T11:19:02.0815236Z Starting download of artifact to: D:\a\BareLine\BareLine\payloads\unsigned-payload-a
+2026-09-16T11:19:02.1984855Z Redirecting to blob download url: https://productionresultssa15.blob.core.windows.net/actions-results/09f4761c-de2e-497e-abba-ed10a96730e1/workflow-job-run-527f52ba-302f-5e60-b20d-da8d1b6c5ed1/artifacts/f21a7788aafbb0e5993b7aea79ac95e27b54a11eb717623e5bad58b304e48491.zip
+2026-09-16T11:19:02.1985948Z Starting download of artifact to: D:\a\BareLine\BareLine\payloads\unsigned-payload-b
+2026-09-16T11:19:02.4251639Z (node:2688) [DEP0005] DeprecationWarning: Buffer() is deprecated due to security and usability issues. Please use the Buffer.alloc(), Buffer.allocUnsafe(), or Buffer.from() methods instead.
+2026-09-16T11:19:03.1057400Z SHA256 digest of downloaded artifact is ba1f43056ba8d8c287ce1e81d12837ea86300c822ce9c513387bbd04b91de891
+2026-09-16T11:19:03.1057961Z Artifact download completed successfully.
+2026-09-16T11:19:03.2071469Z SHA256 digest of downloaded artifact is 88fbb5a531b6b1fd699bc1265e9f6478a44748cf916ebde497dc27810c7f8b10
+2026-09-16T11:19:03.2071840Z Artifact download completed successfully.
+2026-09-16T11:19:03.2072013Z Total of 2 artifact(s) downloaded
+2026-09-16T11:19:03.2077066Z Download artifact has finished successfully
+2026-09-16T11:19:03.2293940Z ##[group]Run foreach ($name in @('commit.txt', 'toolchain.txt', 'SHA-256SUMS', 'package-SHA-256SUMS')) {
+2026-09-16T11:19:03.2294414Z [36;1mforeach ($name in @('commit.txt', 'toolchain.txt', 'SHA-256SUMS', 'package-SHA-256SUMS')) {[0m
+2026-09-16T11:19:03.2294761Z [36;1m  $a = Get-Content -Raw -LiteralPath (Join-Path evidence/clean-build-a $name)[0m
+2026-09-16T11:19:03.2295072Z [36;1m  $b = Get-Content -Raw -LiteralPath (Join-Path evidence/clean-build-b $name)[0m
+2026-09-16T11:19:03.2295451Z [36;1m  if ($a -cne $b) { throw "Clean builds differ: $name. Retain evidence and fix/document the nondeterminism before release." }[0m
+2026-09-16T11:19:03.2295770Z [36;1m}[0m
+2026-09-16T11:19:03.2296070Z [36;1m./packaging/windows/compare-payloads.ps1 -First payloads/unsigned-payload-a -Second payloads/unsigned-payload-b[0m
+2026-09-16T11:19:03.2362546Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+2026-09-16T11:19:03.2362770Z ##[endgroup]
+2026-09-16T11:19:03.6115541Z PASS: independent normalized payload bytes match
+2026-09-16T11:19:03.6683243Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-09-16T11:19:03.6683974Z Post job cleanup.
+2026-09-16T11:19:03.7709583Z [command]"C:\Program Files\Git\bin\git.exe" version
+2026-09-16T11:19:03.7858323Z git version 2.55.0.windows.5
+2026-09-16T11:19:03.7905838Z Temporarily overriding HOME='D:\a\_temp\cb124ee1-6c29-4864-976d-660863c48c5b' before making global git config changes
+2026-09-16T11:19:03.7906476Z Adding repository directory to the temporary git global config as a safe directory
+2026-09-16T11:19:03.7913166Z [command]"C:\Program Files\Git\bin\git.exe" config --global --add safe.directory D:\a\BareLine\BareLine
+2026-09-16T11:19:03.8088510Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp core\.sshCommand
+2026-09-16T11:19:03.8243212Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :\""
+2026-09-16T11:19:04.2096885Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-09-16T11:19:04.2247908Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :\""
+2026-09-16T11:19:04.5433058Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-09-16T11:19:04.5596101Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "git config --local --show-origin --name-only --get-regexp remote.origin.url"
+2026-09-16T11:19:04.8844812Z Cleaning up orphan processes
+2026-09-16T11:19:04.8897433Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@11d5960a326750d5838078e36cf38b85af677262, actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/

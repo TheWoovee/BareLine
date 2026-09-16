@@ -1,0 +1,4 @@
+   Compiling bareline-extension-host v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\apps\extension-host)
+   Compiling bareline-platform-windows v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\crates\platform-windows)
+warning: bareline-extension-host@0.1.0: prepared release configuration ignored because no release feature was selected
+    Finished `release` profile [optimized + debuginfo] target(s) in 3m 28s

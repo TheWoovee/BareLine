@@ -1,0 +1,45 @@
+"""Retain GitHub Actions status and completed job logs without inferring passes."""
+import argparse
+import datetime
+import json
+from pathlib import Path
+import subprocess
+
+parser = argparse.ArgumentParser()
+parser.add_argument('--output', type=Path, default=Path('target/qualification/full-suite-20260916/hosted-ci-snapshot-v2.json'))
+parser.add_argument('--logs', action='store_true')
+args = parser.parse_args()
+root = Path('target/qualification/full-suite-20260916')
+runs = [35078535683, 35078535715, 35080399857, 35080399884, 35080879768, 35080879707,
+        35082658511, 35082658708, 35084447795, 35084447657, 35085034067, 35085034198,
+        35085954726, 35085954301, 35086471735, 35086471704, 35087642458, 35087642380,
+        35088391989, 35088392024]
+results = []
+for run in runs:
+    result = subprocess.run(['gh', 'run', 'view', str(run), '--json',
+        'databaseId,headSha,workflowName,status,conclusion,url,jobs'],
+        check=True, capture_output=True, timeout=45)
+    document = json.loads(result.stdout)
+    results.append(document)
+    if args.logs:
+        for job in document['jobs']:
+            if job['status'] != 'completed' or job['conclusion'] == 'skipped':
+                continue
+            # Retain all final source job logs and every failed job, plus the
+            # successful Windows job for the installed product source.
+            if run not in (35088391989, 35088392024) and job['conclusion'] != 'failure' and job['databaseId'] != 104755857088:
+                continue
+            path = root / f"ci-job-{job['databaseId']}.log"
+            if not path.exists():
+                raw = subprocess.run(['gh', 'api',
+                    f"repos/TheWoovee/BareLine/actions/jobs/{job['databaseId']}/logs", '--allow-escape-sequences'],
+                    check=True, capture_output=True, timeout=60).stdout
+                path.write_bytes(raw)
+    if run in runs[-2:]:
+        print(json.dumps({'run': run, 'status': document['status'], 'conclusion': document['conclusion'],
+                          'jobs': [(j['name'], j['status'], j['conclusion']) for j in document['jobs']]}), flush=True)
+args.output.write_text(json.dumps({
+    'schema_version': 1,
+    'captured_at_utc': datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    'scope': 'Historical run states and final code 6badda3; skipped jobs are not passes or release acceptance',
+    'runs': results}, indent=2) + '\n', encoding='utf-8')

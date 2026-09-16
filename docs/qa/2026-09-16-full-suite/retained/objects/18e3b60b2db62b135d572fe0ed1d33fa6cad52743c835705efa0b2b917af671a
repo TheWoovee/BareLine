@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "command": [
+    "cargo",
+    "test",
+    "--locked",
+    "-p",
+    "bareline-file-io",
+    "checkpoint_waits_for_retirement_acknowledgment_before_reusing_a_slot"
+  ],
+  "cwd": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor",
+  "source_before": {
+    "available": true,
+    "head": "a576de58e3115fb59bfe529d3dd5fe2924f335df",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "366a70d62ca007f0b003c2ea8e5ab251bde176ddf7aa7dd5737e2934710bb608"
+  },
+  "source_after": {
+    "available": true,
+    "head": "a576de58e3115fb59bfe529d3dd5fe2924f335df",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "366a70d62ca007f0b003c2ea8e5ab251bde176ddf7aa7dd5737e2934710bb608"
+  },
+  "source_changed_during_run": false,
+  "status": "completed",
+  "exit_code": 101,
+  "elapsed_ms": 17204,
+  "top_level_total": 1,
+  "top_level_passed": 0,
+  "top_level_failed": 1,
+  "observed_nested_or_parent_summaries": [
+    "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 94 filtered out; finished in 0.00s"
+  ],
+  "summary_lines_are_not_aggregate_counts": true,
+  "stdout": {
+    "path": "target\\qualification\\full-suite-20260916\\27-recovery-regression-before.json.stdout.log",
+    "sha256": "ea797f318f0e2ae101ccfb564e9dde242e830fd04094b3a34454680060fecd41"
+  },
+  "stderr": {
+    "path": "target\\qualification\\full-suite-20260916\\27-recovery-regression-before.json.stderr.log",
+    "sha256": "e18e3afb1cf62e43efd655cc660cc0849074461eec4a8be59770d11c273aeab8"
+  }
+}

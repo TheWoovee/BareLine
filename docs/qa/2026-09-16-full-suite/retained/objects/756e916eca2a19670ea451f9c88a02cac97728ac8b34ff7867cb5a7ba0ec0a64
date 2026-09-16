@@ -1,0 +1,10 @@
+schema_version = 1
+id = "org.bareline.xml-tools"
+version = "0.1.0"
+publisher = "Bareline"
+minimum_protocol = 1
+maximum_protocol = 1
+entry_component = "extension.wasm"
+commands = ["ext.xml.format", "ext.xml.validate", "ext.xml.xpath"]
+panels = ["ext.xml.xpath"]
+capabilities = ["DocumentRead", "DocumentEdit", "UiPanel"]

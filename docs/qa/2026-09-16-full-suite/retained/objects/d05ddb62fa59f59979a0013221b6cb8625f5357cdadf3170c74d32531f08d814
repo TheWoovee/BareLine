@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "command": [
+    "pwsh",
+    "-NoProfile",
+    "-File",
+    "target/qualification/full-suite-20260916/check-sbom.ps1"
+  ],
+  "cwd": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor",
+  "source_before": {
+    "available": true,
+    "head": "a576de58e3115fb59bfe529d3dd5fe2924f335df",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "9c550ee0fb3e3a206c05ba7d67c8d4d39f1084175673d216b5ab21d716a690d3"
+  },
+  "source_after": {
+    "available": true,
+    "head": "a576de58e3115fb59bfe529d3dd5fe2924f335df",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "87b99d05955bc9768926a9f032fa0b2d2f24080dbde905c961f098a0946081d0"
+  },
+  "source_changed_during_run": true,
+  "status": "completed",
+  "exit_code": 0,
+  "elapsed_ms": 2659,
+  "top_level_total": 1,
+  "top_level_passed": 1,
+  "top_level_failed": 0,
+  "observed_nested_or_parent_summaries": [],
+  "summary_lines_are_not_aggregate_counts": true,
+  "stdout": {
+    "path": "target\\qualification\\full-suite-20260916\\29-ci-sbom.json.stdout.log",
+    "sha256": "a30bbdd6275887af6f3f7d6ee20c56263ca8fa7ceef3b429ce70a291979d0302"
+  },
+  "stderr": {
+    "path": "target\\qualification\\full-suite-20260916\\29-ci-sbom.json.stderr.log",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+}
